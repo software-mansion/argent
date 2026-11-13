@@ -66,10 +66,12 @@ interface RenderInput {
   mallocStackLogging?: boolean | null;
   /**
    * xctrace: false when the trace has no leak data (no leaks export, or one with
-   * no Leaks detail), so the report must not read as leak-free. Undefined
-   * (Android) leaves the report unchanged.
+   * no Leaks detail) or Instruments could not capture it, so the report must not
+   * read as leak-free. Undefined (Android) leaves the report unchanged.
    */
   leaksRecorded?: boolean;
+  /** Why no leak was recorded, said with the not-recorded note when known. */
+  leaksNotRecordedCause?: string;
   /**
    * Mac apps: true when a note in freshnessNote says that the trace can miss
    * findings (the app ended during the recording, or no leak check finished), so
@@ -98,6 +100,7 @@ export async function renderNativeProfilerReport(
     cpuDiagnostic,
     mallocStackLogging,
     leaksRecorded,
+    leaksNotRecordedCause,
     mayMissFindings,
   } = input;
   const exportErrors = input.exportErrors ?? {};
@@ -116,7 +119,8 @@ export async function renderNativeProfilerReport(
           freshnessNote,
           cpuDiagnostic,
           leaksRecorded,
-          mayMissFindings
+          mayMissFindings,
+          leaksNotRecordedCause
         )
       : renderFullReport(
           payload,
@@ -128,7 +132,8 @@ export async function renderNativeProfilerReport(
           freshnessNote,
           mallocStackLogging,
           cpuDiagnostic,
-          leaksRecorded
+          leaksRecorded,
+          leaksNotRecordedCause
         );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
@@ -142,7 +147,8 @@ export async function renderNativeProfilerReport(
           freshnessNote,
           cpuDiagnostic,
           leaksRecorded,
-          mayMissFindings
+          mayMissFindings,
+          leaksNotRecordedCause
         )
       : renderFullReport(
           payload,
@@ -154,7 +160,8 @@ export async function renderNativeProfilerReport(
           freshnessNote,
           mallocStackLogging,
           cpuDiagnostic,
-          leaksRecorded
+          leaksRecorded,
+          leaksNotRecordedCause
         );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
@@ -237,7 +244,8 @@ function renderAllClear(
   freshnessNote?: string,
   cpuDiagnostic?: string,
   leaksRecorded?: boolean,
-  mayMissFindings?: boolean
+  mayMissFindings?: boolean,
+  leaksNotRecordedCause?: string
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -251,7 +259,7 @@ function renderAllClear(
 
   if (freshnessNote) lines.push(freshnessNote, ``);
   if (cpuDiagnostic) lines.push(`> ⚠️ **CPU sampling:** ${cpuDiagnostic}`, ``);
-  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(), ``);
+  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(leaksNotRecordedCause), ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -290,7 +298,8 @@ function renderFullReport(
   freshnessNote?: string,
   mallocStackLogging?: boolean | null,
   cpuDiagnostic?: string,
-  leaksRecorded?: boolean
+  leaksRecorded?: boolean,
+  leaksNotRecordedCause?: string
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -312,7 +321,7 @@ function renderFullReport(
 
   if (freshnessNote) lines.push(freshnessNote, ``);
   if (cpuDiagnostic) lines.push(`> ⚠️ **CPU sampling:** ${cpuDiagnostic}`, ``);
-  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(), ``);
+  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(leaksNotRecordedCause), ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -620,8 +629,11 @@ export const MAC_UNATTRIBUTED_LEAKS =
   "allocations, not confirmed app leaks. To attribute them, record again with " +
   "`malloc_stack_logging: true`.";
 
-function renderLeaksNotRecordedNote(): string {
-  return `> ⚠️ **Memory leaks:** ${LEAKS_NOT_RECORDED} Do not report the app as leak-free.`;
+function renderLeaksNotRecordedNote(cause?: string): string {
+  return (
+    `> ⚠️ **Memory leaks:** ${LEAKS_NOT_RECORDED}${cause ? ` ${cause}` : ""} ` +
+    `Do not report the app as leak-free.`
+  );
 }
 
 /**

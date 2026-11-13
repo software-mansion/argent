@@ -20,7 +20,7 @@ import { InvalidToolInputError } from "../../../utils/capability";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
-import { leaksDetailExported } from "../../../utils/ios-profiler/pipeline/xml-parser";
+import { leaksWereRecorded } from "../../../utils/ios-profiler/pipeline/xml-parser";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
 import {
@@ -403,11 +403,12 @@ async function loadNativeSession(
     );
   }
 
-  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
+  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks, leaksDetailExported } =
+    await runIosProfilerPipeline(files);
   // Stop writes no raw_leaks.xml when the trace had no Leaks table, or (Xcode 26.6)
-  // one with no Leaks detail in it.
-  const leaksRecorded =
-    files.leaks != null && (memoryLeaks.length > 0 || (await leaksDetailExported(files.leaks)));
+  // one with no Leaks detail in it. The run errors of xctrace are not in these
+  // files, so a trace whose leak capture failed (leaksCaptureError) reads as checked.
+  const leaksRecorded = leaksWereRecorded({ memoryLeaks, leaksDetailExported });
 
   // raw_*.xml carry no start time, so the frozen anchor is null and the combined
   // report reports a missing native anchor rather than mis-anchoring to residue.
@@ -429,6 +430,7 @@ async function loadNativeSession(
   api.cpuFilterPid = null;
   api.appEndedDuringCapture = false;
   api.exportSkipReason = null;
+  api.leaksCaptureError = null;
   api.recordedMs = null;
   api.appSuspensions = null;
   api.wallClockStartMs = null;

@@ -358,12 +358,23 @@ export function parseLeaksXml(xml: string): RawLeak[] {
  * `<trace-query-result>` with no node in it and exits 0. The xctrace of Xcode 27.2
  * fails that export.
  */
-export async function leaksDetailExported(filePath: string): Promise<boolean> {
-  try {
-    return /<node[\s>]/.test(await fs.readFile(filePath, "utf8"));
-  } catch {
-    return false;
-  }
+function leaksDetailExported(xml: string): boolean {
+  return /<node[\s>]/.test(xml);
+}
+
+/**
+ * Whether the trace's leaks were checked: its leaks export has a leak, or the Leaks
+ * detail with no row. No leaks export, or one with no Leaks detail, is no leak data,
+ * not zero leaks, and so is an empty export of a recording whose leak capture failed.
+ */
+export function leaksWereRecorded(
+  output: { memoryLeaks: readonly unknown[]; leaksDetailExported?: boolean },
+  leaksCaptureError: string | null = null
+): boolean {
+  return (
+    output.memoryLeaks.length > 0 ||
+    (leaksCaptureError === null && output.leaksDetailExported === true)
+  );
 }
 
 export async function parseCpuFile(
@@ -389,12 +400,15 @@ export async function parseHangsFile(filePath: string | null): Promise<RawHang[]
   }
 }
 
-export async function parseLeaksFile(filePath: string | null): Promise<RawLeak[]> {
-  if (!filePath) return [];
+/** The rows of a leaks export, and whether it holds the Leaks detail (leaksDetailExported). */
+export async function parseLeaksFile(
+  filePath: string | null
+): Promise<{ leaks: RawLeak[]; detailExported: boolean }> {
+  if (!filePath) return { leaks: [], detailExported: false };
   try {
     const xml = await fs.readFile(filePath, "utf8");
-    return parseLeaksXml(xml);
+    return { leaks: parseLeaksXml(xml), detailExported: leaksDetailExported(xml) };
   } catch {
-    return [];
+    return { leaks: [], detailExported: false };
   }
 }

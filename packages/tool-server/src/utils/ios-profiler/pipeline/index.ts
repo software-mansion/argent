@@ -15,6 +15,8 @@ interface PipelineOutput {
   uiHangs: UiHang[];
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
+  /** Whether the leaks export holds the trace's Leaks detail, also when it has no row. */
+  leaksDetailExported?: boolean;
   /** CPU time of the libraries argent and Instruments load into the app, which the hotspots leave out. */
   toolingCpuMs: { argent: number; instruments: number };
   /** CPU time of the samples with a stack, the tools' included: what the hotspot shares are of. */
@@ -40,7 +42,7 @@ export async function runIosProfilerPipeline(
   files: Record<string, string | null>,
   options: PipelineOptions = {}
 ): Promise<PipelineOutput> {
-  const [cpuSamples, rawHangs, rawLeaks] = await Promise.all([
+  const [cpuSamples, rawHangs, { leaks: rawLeaks, detailExported }] = await Promise.all([
     parseCpuFile(files.cpu ?? null, options.cpuFilterPid ?? null),
     parseHangsFile(files.hangs ?? null),
     parseLeaksFile(files.leaks ?? null),
@@ -69,6 +71,7 @@ export async function runIosProfilerPipeline(
     uiHangs,
     cpuHotspots,
     memoryLeaks,
+    leaksDetailExported: detailExported,
     toolingCpuMs: {
       argent: Math.round(tooling.argent / 1_000_000),
       instruments: Math.round(tooling.instruments / 1_000_000),

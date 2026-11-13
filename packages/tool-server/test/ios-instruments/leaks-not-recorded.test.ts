@@ -25,18 +25,14 @@ import {
   LEAKS_NOT_RECORDED,
   renderNativeProfilerReport,
 } from "../../src/utils/ios-profiler/render";
-import type { ProfilerPayload, UiHang } from "../../src/utils/ios-profiler/types";
+import type { MemoryLeak, ProfilerPayload, UiHang } from "../../src/utils/ios-profiler/types";
 
-// Zero bottlenecks from the pipeline, so analyze takes the all-clear path.
-vi.mock("../../src/utils/ios-profiler/pipeline/index", () => ({
-  runIosProfilerPipeline: vi.fn(async () => ({
-    bottlenecks: [],
-    cpuSamples: [],
-    uiHangs: [],
-    cpuHotspots: [],
-    memoryLeaks: [],
-  })),
-}));
+// The real pipeline, so the leaks export decides whether leaks were recorded. The
+// CPU and hangs exports are empty: zero bottlenecks, and analyze takes the all-clear path.
+vi.mock("../../src/utils/ios-profiler/pipeline/index", async (importActual) => {
+  const actual = await importActual<typeof import("../../src/utils/ios-profiler/pipeline/index")>();
+  return { ...actual, runIosProfilerPipeline: vi.fn(actual.runIosProfilerPipeline) };
+});
 
 // profiler-load reads saved sessions from getDebugDir(); point it at the test dir.
 // The rest of the module stays real: the combined report reads commits with it.
@@ -52,6 +48,7 @@ vi.mock("../../src/utils/android-profiler/pipeline/index", async (importActual) 
 }));
 
 import { getDebugDir } from "../../src/utils/react-profiler/debug/dump";
+import { runIosProfilerPipeline } from "../../src/utils/ios-profiler/pipeline/index";
 import { loadAndroidCombinedData } from "../../src/utils/android-profiler/pipeline/index";
 import { analyzeNativeProfilerIos } from "../../src/tools/profiler/native-profiler/platforms/ios";
 import {
@@ -199,6 +196,18 @@ const hang: UiHang = {
   appCallChains: [],
 };
 
+const leak: MemoryLeak = {
+  type: "memory_leak",
+  platform: "ios",
+  objectType: "ProbeLeakNode",
+  count: 200,
+  totalSizeBytes: 9600,
+  responsibleFrame: "-[ProbeLeaker leak]",
+  responsibleLibrary: "ProfProbe",
+  attributed: true,
+  severity: "RED",
+};
+
 describe("iOS reports when no leak data was recorded", () => {
   it("analyze says leaks were not checked instead of all clear", async () => {
     const api = await buildIosSession(null);
@@ -240,6 +249,44 @@ describe("iOS reports when no leak data was recorded", () => {
     expect(res.report).not.toContain("memory issues detected");
     expect(res.exportErrors).toEqual({});
     expect(await leakStacks(api)).toContain(LEAKS_NOT_RECORDED);
+  });
+
+  it("analyze says leaks were not checked, and why, when xctrace could not capture them", async () => {
+    // The Leaks detail with no row, from a recording whose leak checks failed.
+    const leaks = path.join(dir, "raw_leaks.xml");
+    await fs.writeFile(leaks, LEAKS_CHECKED_NONE_FOUND);
+    const api = await buildIosSession(leaks);
+    api.leaksCaptureError = "Failed to handshake with LeakAgent (pid: 46018)";
+    const res = await analyzeNativeProfilerIos(api);
+
+    expect(api.parsedData?.leaksRecorded).toBe(false);
+    expect(res.report).toContain(
+      `${LEAKS_NOT_RECORDED} xctrace reported that Instruments could not capture the leak data: ` +
+        `Failed to handshake with LeakAgent (pid: 46018). Record again to check for leaks.`
+    );
+    expect(res.report).not.toContain("memory issues detected");
+    expect(res.exportErrors).toEqual({});
+    expect(await leakStacks(api)).toContain(LEAKS_NOT_RECORDED);
+  });
+
+  it("analyze keeps the leaks that a check found before the leak capture failed", async () => {
+    vi.mocked(runIosProfilerPipeline).mockResolvedValueOnce({
+      bottlenecks: [],
+      cpuSamples: [],
+      uiHangs: [],
+      cpuHotspots: [],
+      memoryLeaks: [leak],
+      toolingCpuMs: { argent: 0, instruments: 0 },
+      totalCpuMs: 0,
+    });
+    const leaks = path.join(dir, "raw_leaks.xml");
+    await fs.writeFile(leaks, LEAKS_CHECKED_NONE_FOUND);
+    const api = await buildIosSession(leaks);
+    api.leaksCaptureError = "Failed to handshake with LeakAgent (pid: 46018)";
+    const res = await analyzeNativeProfilerIos(api);
+
+    expect(api.parsedData?.leaksRecorded).toBe(true);
+    expect(res.report).not.toContain(LEAKS_NOT_RECORDED);
   });
 
   it("analyze treats a leaks export that vanished before analyze as not recorded", async () => {

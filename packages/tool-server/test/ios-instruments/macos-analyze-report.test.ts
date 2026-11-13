@@ -19,6 +19,7 @@ vi.mock("../../src/utils/ios-profiler/pipeline/index", () => ({
 import { runIosProfilerPipeline } from "../../src/utils/ios-profiler/pipeline/index";
 import { analyzeNativeProfilerIos } from "../../src/tools/profiler/native-profiler/platforms/ios";
 import { aggregateCpuHotspots } from "../../src/utils/ios-profiler/pipeline/02-aggregate";
+import { parseLeaksFile } from "../../src/utils/ios-profiler/pipeline/xml-parser";
 import { renderNativeProfilerReport } from "../../src/utils/ios-profiler/render";
 import type { Bottleneck } from "../../src/utils/ios-profiler/types";
 
@@ -60,6 +61,7 @@ function makeApi(platform: "ios" | "macos"): NativeProfilerSessionApi {
     recordingAppEnded: false,
     appEndedDuringCapture: false,
     exportSkipReason: null,
+    leaksCaptureError: null,
     recordedMs: null,
     startReturnedMs: null,
     stopInProgress: null,
@@ -90,14 +92,19 @@ function pipeline(
   bottlenecks: Bottleneck[] = [],
   uiHangs: PipelineResult["uiHangs"] = []
 ): void {
-  vi.mocked(runIosProfilerPipeline).mockResolvedValue({
-    bottlenecks,
-    cpuSamples: [],
-    uiHangs,
-    cpuHotspots: [],
-    memoryLeaks: [],
-    ...tooling,
-  } as PipelineResult);
+  // The leaks export stays real: whether it holds the Leaks detail decides "not recorded".
+  vi.mocked(runIosProfilerPipeline).mockImplementation(
+    async (files) =>
+      ({
+        bottlenecks,
+        cpuSamples: [],
+        uiHangs,
+        cpuHotspots: [],
+        memoryLeaks: [],
+        leaksDetailExported: (await parseLeaksFile(files.leaks ?? null)).detailExported,
+        ...tooling,
+      }) as PipelineResult
+  );
 }
 
 /** A real hotspot, so the report takes its full (not all-clear) form. */

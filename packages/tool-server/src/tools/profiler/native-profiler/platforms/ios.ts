@@ -23,7 +23,7 @@ import {
 } from "../../../../utils/ios-profiler/app-suspensions";
 import type { ExportDiagnostics, IosExportKey } from "../../../../utils/ios-profiler/export";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
-import { leaksDetailExported } from "../../../../utils/ios-profiler/pipeline/xml-parser";
+import { leaksWereRecorded } from "../../../../utils/ios-profiler/pipeline/xml-parser";
 import {
   selectIosCaptureStrategy,
   resolveIosCaptureStrategy,
@@ -699,6 +699,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
       ? skippedTraceExport(runErrors.skipReason)
       : await exportIosTraceData(traceFile, ended);
     api.exportedFiles = exportedFiles;
+    api.leaksCaptureError = runErrors?.leaksCaptureError ?? null;
     // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
     api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
     // Pair the exports with the capture mode of the recording that just ended.
@@ -787,6 +788,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     ? skippedTraceExport(runErrors.skipReason)
     : await exportIosTraceData(api.traceFile, ended);
   api.exportedFiles = exportedFiles;
+  api.leaksCaptureError = runErrors?.leaksCaptureError ?? null;
   // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
   api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
   // Pair the exports with the capture mode of the recording that just ended.
@@ -817,14 +819,24 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
  */
 const NOT_RECORDED = /^Failed to start the recording/;
 /**
+ * Run errors after which the trace holds no leak check. Measured with Xcode 27.2
+ * on an iOS 27.0 simulator: "An error occurred trying to capture Leaks data." and
+ * "Failed to handshake with LeakAgent (pid: 46018)", and a Leaks export with no
+ * row, which read as "no leak".
+ */
+const LEAKS_NOT_CAPTURED =
+  /^(?:An error occurred trying to capture Leaks data|Failed to handshake with LeakAgent)/;
+
+/**
  * What the run errors that xctrace printed mean for the recording: the warning,
- * and why to export nothing when xctrace recorded nothing (each export of an
- * empty trace waits out its timeout). Null when xctrace printed no run error.
+ * why to export nothing when xctrace recorded nothing (each export of an empty
+ * trace waits out its timeout), and the errors that say Instruments captured no
+ * leak data. Null when xctrace printed no run error.
  */
 function readRunErrors(
   api: NativeProfilerSessionApi,
   runErrors: string[]
-): { warning: string; skipReason?: string } | null {
+): { warning: string; skipReason?: string; leaksCaptureError?: string } | null {
   if (runErrors.length === 0) return null;
   const reported = runErrors.join(" ");
   if (runErrors.some((line) => line.startsWith("Failed to attach to target process"))) {
@@ -843,8 +855,10 @@ function readRunErrors(
       skipReason: "xctrace could not start the recording, so the trace holds no data.",
     };
   }
+  const leakErrors = runErrors.filter((line) => LEAKS_NOT_CAPTURED.test(line));
   return {
     warning: `xctrace reported errors for this recording, so the data may be incomplete: ${reported}`,
+    ...(leakErrors.length > 0 ? { leaksCaptureError: leakErrors.join(" ") } : {}),
   };
 }
 
@@ -984,6 +998,7 @@ export async function analyzeNativeProfilerIos(
     uiHangs,
     cpuHotspots,
     memoryLeaks,
+    leaksDetailExported,
     toolingCpuMs,
     totalCpuMs,
     suspensionAdjustment,
@@ -996,11 +1011,12 @@ export async function analyzeNativeProfilerIos(
   // has the Leaks instrument exports an empty table when nothing leaked. The
   // all-processes fallback records the built-in Time Profiler template, which
   // has none. A leaks file that stop wrote but is now gone or unreadable is no
-  // leak data either, and neither is a leaks export with no Leaks detail in it.
-  const leaksRecorded =
-    api.exportedFiles.leaks != null &&
-    !leaksMissing &&
-    (memoryLeaks.length > 0 || (await leaksDetailExported(api.exportedFiles.leaks)));
+  // leak data either, and neither is a leaks export with no Leaks detail in it,
+  // nor an empty one of a recording whose leak capture failed.
+  const leaksRecorded = leaksWereRecorded(
+    { memoryLeaks, leaksDetailExported },
+    api.leaksCaptureError
+  );
 
   api.parsedData = {
     cpuSamples,
@@ -1097,6 +1113,12 @@ export async function analyzeNativeProfilerIos(
     // unattributed-leaks note then goes by the attributed-leak count instead).
     mallocStackLogging: api.mallocStackLogging,
     leaksRecorded,
+    leaksNotRecordedCause:
+      !leaksRecorded && api.leaksCaptureError
+        ? `xctrace reported that Instruments could not capture the leak data: ` +
+          `${api.leaksCaptureError}${/[.!?]$/.test(api.leaksCaptureError) ? "" : "."} ` +
+          `Record again to check for leaks.`
+        : undefined,
     mayMissFindings: api.appEndedDuringCapture || shortLeakNote !== null,
     cpuDiagnostic: toolingNote(toolingCpuMs, totalCpuMs, api.platform === "macos"),
   });

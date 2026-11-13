@@ -41,7 +41,9 @@ export interface NativeProfilerParsedData {
   /**
    * False when THIS data has no leak data: no leaks export, or one with no
    * Leaks detail (a template without the Leaks instrument, or a failed export).
-   * An empty `memoryLeaks` then means "not checked" rather than "no leaks". See
+   * analyze also sets false when the leaks export holds no leak and xctrace
+   * reported that Instruments could not capture the leak data. An empty
+   * `memoryLeaks` then means "not checked" rather than "no leaks". See
    * LEAKS_NOT_RECORDED in ios-profiler/render.ts.
    */
   leaksRecorded: boolean;
@@ -133,6 +135,13 @@ export interface NativeProfilerSessionApi {
    * profiler-load.
    */
   exportSkipReason: string | null;
+  /**
+   * xctrace only: what xctrace reported when Instruments could not capture the
+   * leak data of the recording in `exportedFiles` (for example, a failed
+   * handshake with its LeakAgent), null otherwise. Analyze then says that leaks
+   * were not checked. Stamped at stop; cleared by profiler-load.
+   */
+  leaksCaptureError: string | null;
   /**
    * Mac apps only: how long the last recording ran, from the return of the start
    * to the stop. Stamped at stop, null when xctrace ended before the stop;
@@ -304,6 +313,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       recordingAppEnded: false,
       appEndedDuringCapture: false,
       exportSkipReason: null,
+      leaksCaptureError: null,
       recordedMs: null,
       startReturnedMs: null,
       stopInProgress: null,

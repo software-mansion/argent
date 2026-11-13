@@ -102,6 +102,7 @@ async function buildSessionWithTrace(): Promise<{
     recordingAppEnded: false,
     appEndedDuringCapture: false,
     exportSkipReason: null,
+    leaksCaptureError: null,
     recordedMs: null,
     startReturnedMs: null,
     stopInProgress: null,

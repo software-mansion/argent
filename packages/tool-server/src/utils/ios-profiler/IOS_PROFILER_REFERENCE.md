@@ -168,7 +168,7 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 
 `renderNativeProfilerReport` produces a markdown document with these sections:
 
-1. **Header** — trace filename, platform, timestamp, any export warnings. When the trace has no leak data (the `all-processes` capture, or a leaks export that failed), a warning that memory leaks were not checked and that the app must not be reported as leak-free.
+1. **Header** — trace filename, platform, timestamp, any export warnings. When the trace has no leak data (the `all-processes` capture, a leaks export that failed, or a recording with no leak for which xctrace reported that Instruments could not capture the leak data), a warning that memory leaks were not checked and that the app must not be reported as leak-free. In the last case, the warning gives xctrace's error.
 2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks). Memory Leaks reads `not recorded` when the trace has no leak data.
 3. **CPU Hotspots** — table of dominant function, thread, weight (ms / %), sample count, `duringHang` flag, severity. Per hotspot: top 3 call chains and either burst windows or active range.
 4. **UI Hangs** — table of type / start (`MM:SS.mmm`) / duration / severity. Per hang: top app call chains during the hang window with sample counts (or top suspected functions if chain extraction was empty).

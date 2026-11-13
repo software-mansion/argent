@@ -569,6 +569,8 @@ These recordings have no leak data:
 
 Then `native-profiler-analyze` and `profiler-load` tell that memory leaks were not checked.
 
+Sometimes xctrace reports that Instruments could not capture the leak data. When the trace then contains no leak, `native-profiler-analyze` tells that memory leaks were not checked. The report gives the error. `profiler-load` cannot see this error, because the exported tables do not contain it.
+
 On an iOS simulator and on a Mac app, xctrace first reports that the recording starts. Then xctrace reports that tracing started. The instruments start to record some time after this second report. Thus `native-profiler-start` returns 1.5 seconds after the second report. When the first report does not come in 10 seconds after the start of xctrace, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_TIMEOUT`. When the second report does not come in 10 seconds after the first report, the tool returns 1.5 seconds after these 10 seconds. When xctrace quits before the tool returns, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_EXITED`. The error contains the last output of xctrace.
 
 macOS lets one recording at a time use the kernel trace that Instruments uses for CPU samples. When a second recording starts, the second recording fails. The first recording then records no more CPU samples. Thus `native-profiler-start` on an iOS simulator or a Mac app fails with `NATIVE_PROFILER_HOST_RECORDING_RUNNING` in these conditions:
