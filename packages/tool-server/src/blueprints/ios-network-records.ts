@@ -32,6 +32,10 @@ import {
 const RUN_TAG = randomBytes(2).toString("hex");
 
 export const IOS_NATIVE_REQUEST_ID = /^ios-[0-9a-f]{4}-\d+$/;
+export const MACOS_NATIVE_REQUEST_ID = /^macos-[0-9a-f]{4}-\d+$/;
+
+/** The layers of the in-app NSURLProtocol agent: on an iOS simulator, and in a Mac app. */
+export type AppleNativeLayer = "ios-native" | "macos-native";
 
 /** Shared by every store of the tool-server, so ids never repeat across apps or devices. */
 let nextRecordNumber = 1;
@@ -136,14 +140,17 @@ export interface IosNetworkRecordStore extends IosNetworkRecords {
 /**
  * One app's records. They belong to the app, not to a connection, so a
  * reconnect and a relaunch keep the history. `state` reads the app's live
- * connection, which the native-devtools service owns. While `recording` is
- * false, a new request gets no record; the events of a recorded one still fold.
+ * connection, which the native-devtools service owns, or a Mac app's service.
+ * While `recording` is false, a new request gets no record; the events of a
+ * recorded one still fold. `layer` names the records and starts their ids.
  */
 export function createIosNetworkRecords(
   state: () => IosNetworkCaptureState,
   link: IosAgentLink,
-  recording: () => boolean = () => true
+  recording: () => boolean = () => true,
+  layer: AppleNativeLayer = "ios-native"
 ): IosNetworkRecordStore {
+  const idPrefix = layer === "macos-native" ? "macos" : "ios";
   const records: NativeNetworkRecord[] = [];
   let recordChars = 0;
   const recordSizes = new WeakMap<NativeNetworkRecord, number>();
@@ -183,8 +190,8 @@ export function createIosNetworkRecords(
           : Date.now();
     const postData = typeof req.postData === "string" ? req.postData : "";
     const record: NativeNetworkRecord = {
-      id: `ios-${RUN_TAG}-${nextRecordNumber++}`,
-      layer: "ios-native",
+      id: `${idPrefix}-${RUN_TAG}-${nextRecordNumber++}`,
+      layer,
       layerId,
       connection,
       state: "pending",

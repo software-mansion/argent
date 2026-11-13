@@ -25,6 +25,7 @@ import { runDirective } from "../src/tools/flows/flow-actions";
 import { parseFlow, parseRequires } from "../src/tools/flows/flow-utils";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
+import { CAPTURE_CAPABILITY } from "../src/tools/network/network-capture";
 
 const flag = useMacosAppsFlag();
 
@@ -60,10 +61,9 @@ describe("the macos-apps flag gate", () => {
       "no macos support declared"
     );
     expect(() => assertSupported("button", NOT_MAC_CAPABLE, device)).toThrow("use keyboard");
+    // The network capture tools take a Mac app.
     for (const id of ["network-capture-start", "network-capture-stop"]) {
-      expect(() => assertSupported(id, NOT_MAC_CAPABLE, device)).toThrow(
-        "stop-simulator-server or stop-all-simulator-servers for the app ends it"
-      );
+      expect(() => assertSupported(id, CAPTURE_CAPABILITY, device)).not.toThrow();
     }
     expect(() => assertMacosAppsEnabled("boot-device")).not.toThrow();
   });

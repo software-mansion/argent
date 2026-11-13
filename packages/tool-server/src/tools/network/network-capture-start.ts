@@ -34,6 +34,8 @@ import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
 import { xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
+import { macosAppServices } from "../../utils/macos-input";
+import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
@@ -58,8 +60,8 @@ export function createNetworkCaptureStartTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StartedLayer>> {
   return {
     id: "network-capture-start",
-    description: `Start network capture for an app on every layer that sees its requests: the app's JS runtime and the native layer (NSURLProtocol on iOS; OkHttp on Android, which needs a debuggable build).
-Use when you are about to trigger requests you need to inspect, also as a step of an e2e test. Unlike native-network-logs and view-network-logs, which on iOS and Android only read and say capture is not started until this runs, this turns capture on and waits a few seconds for each layer to arm. A second call keeps the requests captured so far.
+    description: `Start network capture for an app on every layer that sees its requests: the app's JS runtime and the native layer (NSURLProtocol on iOS; OkHttp on Android, which needs a debuggable build).<flag:macos-apps> On a Mac app, only its native NSURLProtocol layer.</flag:macos-apps>
+Use when you are about to trigger requests you need to inspect, also as a step of an e2e test. Unlike native-network-logs and view-network-logs, which on iOS, Android<flag:macos-apps> and Mac apps</flag:macos-apps> only read and say capture is not started until this runs, this turns capture on and waits a few seconds for each layer to arm. A second call keeps the requests captured so far.
 Returns { status, layers }: per layer, armed, and a reason when it is not armed (unavailable: true when nothing arms it without a change you must make). A native layer that is not armed yet arms by itself, for example at the app's next launch, and native capture follows the app into later processes that launch-app and restart-app start, until network-capture-stop. The JS layer arms only at a call of this tool: call it again once the app's JavaScript has loaded, and after a reload or relaunch. Capture can slow the app.
 Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
     zodSchema: captureSchema,
@@ -71,9 +73,26 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
         `Failed to start network capture for ${params.bundleId}: ${failureSignal.error_code}`,
     },
     // Each layer resolves its own service, so one that fails leaves the others running.
-    services: () => ({}),
-    async execute(_services, params) {
+    // A Mac app has one layer, in the app's own service.
+    services: (params) => {
       const device = resolveDevice(params.udid);
+      return device.platform === "macos" ? macosAppServices(device) : {};
+    },
+    async execute(services, params) {
+      const device = resolveDevice(params.udid);
+      if (device.platform === "macos") {
+        const app = requireMacosAppOfBundle(
+          services,
+          device,
+          "network-capture-start",
+          params.bundleId
+        );
+        const layer = await withCaptureLock(params.udid, params.bundleId, async () => {
+          const { armed, reason } = await app.startNetworkCapture();
+          return { layer: "macos-native" as const, armed, ...(reason ? { reason } : {}) };
+        });
+        return { status: "ok", layers: [layer] };
+      }
       await ensureDeps(
         device.platform === "android"
           ? ["adb"]

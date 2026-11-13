@@ -1978,7 +1978,7 @@ describe("the tool definitions", () => {
   });
 
   it.each(tools)(
-    "network-capture-$verb.2 runs on iOS simulators, remote simulators and Android, and refuses the rest",
+    "network-capture-$verb.2 runs on iOS simulators, remote simulators, Android and Mac apps, and refuses the rest",
     ({ make }) => {
       const tool = make(new Registry());
 
@@ -1986,6 +1986,7 @@ describe("the tool definitions", () => {
         apple: { simulator: true },
         appleRemote: { simulator: true },
         android: { emulator: true, device: true },
+        macos: { app: true },
       });
       for (const id of [IOS_UDID, `remote:${IOS_UDID}`, SERIAL, "R5CT1234567"]) {
         expect(() => assertSupported(tool.id, tool.capability, resolveDevice(id))).not.toThrow();
