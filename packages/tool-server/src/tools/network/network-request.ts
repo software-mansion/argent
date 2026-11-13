@@ -145,7 +145,9 @@ interface NetworkRequestDetails {
     url: string;
     method: string;
     status: number;
-    statusText: string;
+    statusText?: string;
+    /** Chromium: the Location header of this hop's response. */
+    location?: string;
     /** The headers sent on the wire with this hop, when the agent reported them. */
     requestHeaders?: Record<string, string>;
     /** The headers of this hop's response, such as Location; absent when it had none. */
@@ -190,6 +192,7 @@ export const networkRequestTool: ToolDefinition<
   id: "view-network-request-details",
   description: `Get full details of a specific network request by its requestId.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
+On Chromium, a redirected request also lists each earlier hop in "redirects" (method, URL, status, Location); the request and response fields describe the final hop.
 Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted. Use when you need headers, body, or timing for a specific request after listing logs.
 Returns an error message string if the requestId is not found.`,
   zodSchema,
@@ -246,6 +249,15 @@ Returns an error message string if the requestId is not found.`,
         errorText: rec.errorText,
         initiator: rec.initiator,
       };
+      if (rec.redirects) {
+        details.redirects = rec.redirects.map((hop) => ({
+          method: hop.method,
+          url: hop.url,
+          status: hop.status,
+          statusText: hop.statusText,
+          location: hop.location,
+        }));
+      }
       if (rec.url) {
         details.request = {
           url: rec.url,
