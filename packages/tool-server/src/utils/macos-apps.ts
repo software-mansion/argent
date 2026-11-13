@@ -486,6 +486,25 @@ export async function processRunsExecutable(pid: number, executable: string): Pr
   }
 }
 
+/**
+ * True when the process `pid` was started with `assignment` (`NAME=value`) in
+ * its environment. `ps e` shows the environment that a process of the same
+ * user was started with, also of a hardened or a sandboxed app. False when the
+ * process is gone or `ps` fails.
+ */
+export async function processStartedWithEnv(pid: number, assignment: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      PS_BIN,
+      ["eww", "-o", "command=", "-p", String(pid)],
+      psOptions()
+    );
+    return stdout.trim().split(/\s+/).includes(assignment);
+  } catch {
+    return false;
+  }
+}
+
 /** The record for `bundleId` while its process is alive and still the app. */
 export async function runningTrackedApp(bundleId: string): Promise<TrackedMacosApp | undefined> {
   const app = getTrackedMacosApp(bundleId);

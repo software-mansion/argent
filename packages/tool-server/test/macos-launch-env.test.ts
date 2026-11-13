@@ -35,7 +35,7 @@ import { Registry } from "@argent/registry";
 import { macosAppBlueprint, macosAppRef, type MacosAppApi } from "../src/blueprints/macos-app";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { resolveDevice } from "../src/utils/device-info";
-import { getTrackedMacosApp } from "../src/utils/macos-apps";
+import { getTrackedMacosApp, processStartedWithEnv } from "../src/utils/macos-apps";
 
 const BUNDLE_ID = `com.argent.envfake${process.pid}`;
 const DEVICE_ID = `macos-app-${BUNDLE_ID}`;
@@ -139,6 +139,8 @@ describe.skipIf(process.platform !== "darwin")("a Mac app launch with extra envi
     expect(helperEnvs()).toHaveLength(1);
     expect(helperEnvs()[0]!.MallocStackLogging).toBe("1");
     expect(processEnv(first.pid)).toContain("MallocStackLogging=1");
+    // What native-profiler-start reads to warn that the process still logs.
+    expect(await processStartedWithEnv(first.pid, "MallocStackLogging=1")).toBe(true);
 
     // restart-app starts the app again without it.
     await registry.invokeTool("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
@@ -148,6 +150,7 @@ describe.skipIf(process.platform !== "darwin")("a Mac app launch with extra envi
     expect(helperEnvs()).toHaveLength(2);
     expect(helperEnvs()[1]!.MallocStackLogging).toBeUndefined();
     expect(processEnv(second)).not.toContain("MallocStackLogging");
+    expect(await processStartedWithEnv(second, "MallocStackLogging=1")).toBe(false);
   });
 
   it("does not let an extra variable replace one of the library's", async () => {

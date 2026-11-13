@@ -57,6 +57,7 @@ vi.mock("../src/utils/macos-apps", async (importOriginal) => ({
   getTrackedMacosApp: vi.fn(() => undefined),
   readCodeSignature: vi.fn(async () => null),
   inBackgroundSession: vi.fn(async () => false),
+  processStartedWithEnv: vi.fn(async () => false),
 }));
 vi.mock("../src/utils/ios-profiler/export", () => ({
   exportIosTraceData: vi.fn(async () => {
@@ -85,6 +86,7 @@ import { waitForXctraceReady } from "../src/utils/ios-profiler/startup";
 import {
   getTrackedMacosApp,
   inBackgroundSession,
+  processStartedWithEnv,
   readCodeSignature,
   runningTrackedApp,
 } from "../src/utils/macos-apps";
@@ -106,13 +108,11 @@ const runningMock = vi.mocked(runningTrackedApp);
 const trackedMock = vi.mocked(getTrackedMacosApp);
 const signatureMock = vi.mocked(readCodeSignature);
 const readyMock = vi.mocked(waitForXctraceReady);
+const envMock = vi.mocked(processStartedWithEnv);
 
 const TEMPLATE = "/tmp/Custom.tracetemplate";
 
-/**
- * Each test profiles its own bundle id: the start remembers per bundle id which
- * process it restarted with malloc stack logging, for the whole module.
- */
+/** Each test profiles its own bundle id. */
 let bundleId = "";
 let deviceId = "";
 let sessions: NativeProfilerSessionApi[] = [];
@@ -229,6 +229,8 @@ beforeEach(() => {
   trackedMock.mockReturnValue(undefined);
   signatureMock.mockReset();
   signatureMock.mockResolvedValue(signature(true));
+  envMock.mockReset();
+  envMock.mockResolvedValue(false);
 });
 
 afterEach(() => {
@@ -453,6 +455,10 @@ describe("startNativeProfilerMacos with malloc_stack_logging", () => {
 
   it("a later plain start of the same process warns that it still logs, and a restarted one does not", async () => {
     const { app } = fakeMacosApp(7777);
+    // The process that the malloc_stack_logging start below starts.
+    envMock.mockImplementation(async (pid, assignment) => {
+      return pid === 7777 && assignment === "MallocStackLogging=1";
+    });
     const api = await session();
     await start(api, app, {
       device_id: deviceId,
@@ -467,6 +473,7 @@ describe("startNativeProfilerMacos with malloc_stack_logging", () => {
       device_id: deviceId,
       template_path: TEMPLATE,
     });
+    expect(envMock).toHaveBeenCalledWith(7777, "MallocStackLogging=1");
     expect(same.warning).toContain(`${bundleId} still runs with MallocStackLogging=1`);
     expect(same.warning).toContain("restart-app");
     // It still logs, so its leaks carry backtraces as in a malloc_stack_logging capture.
@@ -556,26 +563,20 @@ describe("startNativeProfilerMacos with malloc_stack_logging", () => {
     expect((err as Error).message).toBe("xctrace record exited before recording started");
   });
 
-  it("does not warn about another app's malloc stack logging", async () => {
-    const { app } = fakeMacosApp(7777);
-    const api = await session();
-    await start(api, app, {
-      device_id: deviceId,
-      template_path: TEMPLATE,
-      malloc_stack_logging: true,
-    });
-
-    // Another bundle id whose process happens to have the same pid.
-    bundleId = `${bundleId}other`;
-    deviceId = `macos-app-${bundleId}`;
-    const { app: otherApp } = fakeMacosApp(7777);
+  it("warns about a process that an earlier tool-server restarted with the logging", async () => {
+    // No malloc_stack_logging start in this tool-server: only the process tells.
+    const { app, launch } = fakeMacosApp(7777);
     runningMock.mockResolvedValue(trackedApp(7777));
-    const other = await start(await session(), otherApp, {
-      device_id: deviceId,
-      template_path: TEMPLATE,
+    envMock.mockImplementation(async (pid, assignment) => {
+      return pid === 7777 && assignment === "MallocStackLogging=1";
     });
+    const api = await session();
 
-    expect(other.warning).toBeUndefined();
+    const result = await start(api, app, { device_id: deviceId, template_path: TEMPLATE });
+
+    expect(launch).not.toHaveBeenCalled();
+    expect(result.warning).toContain(`${bundleId} still runs with MallocStackLogging=1`);
+    expect(api.recordingMallocStackLogging).toBe(true);
   });
 });
 

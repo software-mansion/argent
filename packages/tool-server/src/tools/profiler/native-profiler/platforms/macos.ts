@@ -8,6 +8,7 @@ import { waitForChildExit } from "../../../../utils/profiler-shared/lifecycle";
 import {
   getTrackedMacosApp,
   inBackgroundSession,
+  processStartedWithEnv,
   readCodeSignature,
   runningTrackedApp,
 } from "../../../../utils/macos-apps";
@@ -36,13 +37,6 @@ interface MacosStartParams {
   template_path?: string;
   malloc_stack_logging?: boolean;
 }
-
-/**
- * The pid of each app that argent last started with MallocStackLogging=1, by
- * bundle id: a later capture of that same process is told that its timings
- * carry the logging's overhead.
- */
-const mallocStackLoggingPids = new Map<string, number>();
 
 /**
  * Refuses an app whose signature has no get-task-allow. In the user's desktop
@@ -124,7 +118,6 @@ export async function startNativeProfilerMacos(
     // or a dialog of the app holds up the quit.
     const launched = await macosApp.launch({ restart: true, env: { MallocStackLogging: "1" } });
     pid = launched.pid;
-    mallocStackLoggingPids.set(bundleId, pid);
     restartNote =
       `argent restarted ${bundleId} (pid ${pid}) with MallocStackLogging=1, so its earlier ` +
       `state is gone. It keeps running with malloc stack logging, which slows it down, until ` +
@@ -149,7 +142,9 @@ export async function startNativeProfilerMacos(
     }
     pid = app.pid;
     await assertDebuggable(bundleId, pid, params.template_path);
-    if (mallocStackLoggingPids.get(bundleId) === pid) {
+    // From the process itself, which can outlive the tool-server that restarted it:
+    // a later capture of it is told that its timings carry the logging's overhead.
+    if (await processStartedWithEnv(pid, "MallocStackLogging=1")) {
       stillLogs = true;
       notes.push(
         `${bundleId} still runs with MallocStackLogging=1 from an earlier malloc_stack_logging ` +
