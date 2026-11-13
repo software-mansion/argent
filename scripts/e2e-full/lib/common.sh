@@ -4,7 +4,8 @@
 # assertion helpers.
 #
 # The assertions rest on `argent run <tool>` exiting 0 on success (result on
-# stdout) and non-zero on validation error, unknown tool or service failure.
+# stdout) and non-zero on validation error, unknown tool, service failure, or a
+# result that reports a failure (see `argent run --help`), such as an unmet wait.
 
 # No `set -e`: assertions must keep running after an individual tool call fails.
 set -uo pipefail

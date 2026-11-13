@@ -32,8 +32,9 @@ function isSystemLibraryPath(path: string): boolean {
 }
 
 /**
- * The xctrace export uses an id/ref system: `<frame id="N">`, `<backtrace id="N">` and
- * `<binary id="N">` define and register an element; `<... ref="N"/>` reuses a prior one.
+ * The xctrace export uses an id/ref system: `<frame id="N">`, `<backtrace id="N">`,
+ * `<tagged-backtrace id="N">` and `<binary id="N">` define and register an element;
+ * `<... ref="N"/>` reuses a prior one.
  */
 export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSample[] {
   const frameRegistry = new Map<string, StackFrame>();
@@ -75,7 +76,9 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
     if (sampleTimeMatch) {
       timestampNs = parseInt(sampleTimeMatch[1], 10);
     } else if (sampleTimeRef) {
-      // No sample-time ref registry; the second pass skips these rows too.
+      // No sample-time ref registry; the second pass skips these rows too. Their
+      // stack still registers its ids, which later rows refer back to.
+      resolveBacktrace(row, frameRegistry, backtraceRegistry, binaryRegistry);
       continue;
     }
 
@@ -164,6 +167,28 @@ function resolveBacktrace(
   backtraceRegistry: Map<string, StackFrame[]>,
   binaryRegistry: Map<string, { name: string; path: string }>
 ): StackFrame[] {
+  // Xcode 26 and later wrap the stack in a <tagged-backtrace>: 26.x nests a
+  // <backtrace> in it, 27 lists the frames in it directly. Ids are unique across
+  // element types, so the one registry holds both kinds.
+  const tagged = rowXml.match(/<tagged-backtrace\b([^>]*?)(\/?)>/);
+  if (tagged) {
+    const taggedRef = tagged[1].match(/\bref="(\d+)"/);
+    if (taggedRef) return backtraceRegistry.get(taggedRef[1]) ?? [];
+
+    let content = "";
+    if (!tagged[2]) {
+      const start = tagged.index! + tagged[0].length;
+      const end = rowXml.indexOf("</tagged-backtrace>", start);
+      content = rowXml.substring(start, end === -1 ? rowXml.length : end);
+    }
+    const frames = /<backtrace[\s>]/.test(content)
+      ? resolveBacktrace(content, frameRegistry, backtraceRegistry, binaryRegistry)
+      : resolveFrames(content, frameRegistry, binaryRegistry);
+    const taggedId = tagged[1].match(/\bid="(\d+)"/);
+    if (taggedId) backtraceRegistry.set(taggedId[1], frames);
+    return frames;
+  }
+
   const btRefMatch = rowXml.match(/<backtrace\s+ref="(\d+)"\s*\/>/);
   if (btRefMatch) {
     return backtraceRegistry.get(btRefMatch[1]) ?? [];
