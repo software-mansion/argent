@@ -52,6 +52,11 @@ interface AggregatorOptions {
   platform: "ios" | "android";
   /** Timestamps that fell inside a UI hang window — set `duringHang`. */
   hangSampleTimestamps?: Set<number>;
+  /**
+   * Weight of samples left out of `rows` that still counts in the total the
+   * percentages (and so the severities and the floor) are taken against.
+   */
+  excludedWeightNs?: number;
 }
 
 /**
@@ -64,7 +69,7 @@ export function aggregateCpuHotspots(
   options: AggregatorOptions
 ): CpuHotspot[] {
   if (rows.length === 0) return [];
-  const { platform, hangSampleTimestamps = new Set<number>() } = options;
+  const { platform, hangSampleTimestamps = new Set<number>(), excludedWeightNs = 0 } = options;
 
   interface Acc {
     sampleCount: number;
@@ -82,7 +87,7 @@ export function aggregateCpuHotspots(
   }
 
   const groups = new Map<string, Acc>();
-  let totalWeightNs = 0;
+  let totalWeightNs = excludedWeightNs;
 
   for (const row of rows) {
     const key = `${row.dominantFunction}|||${row.thread}`;

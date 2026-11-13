@@ -55,7 +55,7 @@ An e2e test names one bundle id in its `launch` step. To test the build of a wor
 
 ## What works
 
-The agent uses the interaction tools of the other platforms, and records and replays [e2e tests](/docs/features/e2e). The agent also chooses commands in the menu bar and answers file panels.
+The agent uses the interaction tools of the other platforms, and records and replays [e2e tests](/docs/features/e2e). The agent also chooses commands in the menu bar, answers file panels and profiles the app.
 
 ### Text
 
@@ -80,6 +80,26 @@ The agent can prepare an answer before it opens a panel. Only a panel of the kin
 ### React Native
 
 A Debug build of a react-native-macos app loads its JavaScript from Metro. Start Metro before the agent starts the app.
+
+### Profiling
+
+The agent records a [native profile](/docs/features/profiling) of the app with Xcode Instruments: the CPU time, the UI hangs and the memory leaks. The React profiler is not available on a Mac app, also not in a react-native-macos app.
+
+- The agent profiles an app that Argent started. The profiler attaches to the app while the app runs. The profiler does not start the app again, except for malloc stack logging. See below.
+- macOS lets Instruments record an app without a system dialog only when the app allows debugging. Thus the app must have the entitlement `com.apple.security.get-task-allow`. Xcode adds this entitlement to each build that it signs for development, a Release build too. An archived build does not have it, for example a notarized build or an App Store build.
+- Argent refuses to profile an app without this entitlement. For such an app, macOS asks for the password of an administrator in a system dialog. Instruments records nothing while this dialog waits.
+- macOS shows this dialog only in the desktop session of the user. When the tool-server runs in a background session, for example over SSH, macOS shows no dialog. There, the Time Profiler template records an app without the entitlement, and the agent can profile the app with `template_path: "Time Profiler"`. The default template of Argent also records memory leaks, and its instruments for leaks cannot attach to such an app. Thus Argent refuses the default template for such an app also in a background session.
+- The hardened runtime and the App Sandbox do not prevent a profile. [The hardened runtime](#the-hardened-runtime) tells which builds Argent can start.
+
+By default, a memory leak has an allocation backtrace only when the app allocated the leaked object after the start of the recording. For the leaks of older objects, the agent can start the recording with malloc stack logging. Argent then starts the app again with malloc stack logging on, and the app loses its state. The app stays slower until the next restart.
+
+The stop of a short recording takes about 15 to 25 seconds, because Instruments completes the trace and exports it. The stop of a long recording takes more time.
+
+- When the app quits, crashes or starts again during the recording, Instruments keeps only a part of the data. Argent tells the agent this in the stop result and in the report. Profile the scenario again, and do not quit the app before the stop.
+- Sometimes Instruments cannot attach to the app, and records nothing. Argent tells the agent this at the stop. Start the recording again.
+- Instruments checks the app for memory leaks about every 11 seconds, and macOS suspends the whole app for several seconds during each check. Argent watches for this during the recording. A tap, a `describe` or another call to the app waits until the app runs again, and the report takes the suspended time out of each hang. A hang that was only the suspension is left out, and the report says how many hangs changed.
+- A leak check can take several seconds, and a leak is in the profile only after a check has ended. When a recording shorter than 20 seconds found no leak, the report says that it can hold no finished check.
+- Sometimes Instruments does not end after the stop of a recording. This fault also occurs without Argent. When Instruments does no work for some time, Argent ends it and tells the agent. The data of this recording can be incomplete.
 
 ## E2E tests on a Mac
 
@@ -129,6 +149,7 @@ Argent does not start an Electron app or a Chromium browser as a Mac app. Argent
 | The app is missing from the device list                                          | The list shows only the apps that Argent started. Ask the agent to start the app.                                                                                                                                 |
 | The app runs already without the Argent library                                  | Quit the app yourself, or let the agent start the app with `force`. A start with `force` loses the unsaved changes in that copy. Xcode Run and `react-native run-macos` start the app without the Argent library. |
 | The start fails because of the hardened runtime                                  | For a Debug build, do one of the steps in [The hardened runtime](#the-hardened-runtime). For a Release build, start the Debug build instead.                                                                      |
+| The profiler does not start because the app does not allow debugging             | Profile a build that Xcode signed for development, for example the Debug build. See [Profiling](#profiling).                                                                                                      |
 | The start fails because a different build runs                                   | Quit that copy if it is yours. To run both builds, give this build a bundle id of its own. See [Several agents and git worktrees](#several-agents-and-git-worktrees).                                             |
 | An e2e test launch warns that it started another worktree's build                | Quit the copy of the other build if it is yours. Then ask the agent to start the build of this worktree, and run the e2e test again.                                                                              |
 | A call says that Argent reaches the app only through the connection of its start | Quit the app, or ask the agent to start the app again with `force`. To prevent this, give the build a shorter bundle id. See [Limits](#limits).                                                                   |
@@ -167,6 +188,6 @@ Each tool that does not support a Mac app fails with a `not supported on macos a
 - Argent drives an app through a standard window. The start fails for a menu bar app that shows no standard window, and for an app that shows only panels or borderless windows.
 - The tree does not show web content in a closed shadow root or in an iframe from a different origin.
 - While the Mac is locked, the tree does not show an open context menu, a `hidden` check does not pass, and a screenshot of a window that is partly off the screen can fail. Clicks, typing and other screenshots still work.
-- Screen recording, profiling, the JavaScript debugger tools, hardware buttons, rotate, shake, `reinstall-app` and `settings-permissions` are not available.
+- Screen recording, the React profiler, the JavaScript debugger tools, hardware buttons, rotate, shake, `reinstall-app` and `settings-permissions` are not available.
 
 The [tools reference](/docs/reference/tools#mac-apps) contains the tools and their behavior on a Mac app.

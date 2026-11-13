@@ -486,6 +486,25 @@ export async function processRunsExecutable(pid: number, executable: string): Pr
   }
 }
 
+/**
+ * True when the process `pid` was started with `assignment` (`NAME=value`) in
+ * its environment. `ps e` shows the environment that a process of the same
+ * user was started with, also of a hardened or a sandboxed app. False when the
+ * process is gone or `ps` fails.
+ */
+export async function processStartedWithEnv(pid: number, assignment: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      PS_BIN,
+      ["eww", "-o", "command=", "-p", String(pid)],
+      psOptions()
+    );
+    return stdout.trim().split(/\s+/).includes(assignment);
+  } catch {
+    return false;
+  }
+}
+
 /** The record for `bundleId` while its process is alive and still the app. */
 export async function runningTrackedApp(bundleId: string): Promise<TrackedMacosApp | undefined> {
   const app = getTrackedMacosApp(bundleId);
@@ -733,6 +752,43 @@ export function parseCodesignDisplay(
 }
 
 /**
+ * The code signature of a running process (by pid), which can differ from its
+ * bundle's after a rebuild, or of an app bundle (by path). Null when `codesign`
+ * cannot read it, for example because the process has quit.
+ */
+export async function readCodeSignature(
+  target: number | string
+): Promise<ReturnType<typeof parseCodesignDisplay> | null> {
+  // `+<pid>` reads the signature that the kernel holds for the process. A bare
+  // number reads the file that is now at the process's path.
+  const operand = typeof target === "number" ? `+${target}` : target;
+  try {
+    return parseCodesignDisplay(
+      await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", operand], {
+        timeout: 10_000,
+        maxBuffer: 4 * 1024 * 1024,
+      })
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether this process runs in a Background launchd session, for example over
+ * SSH: `launchctl managername` prints "Background" there and "Aqua" in the
+ * user's desktop session. False when it cannot tell.
+ */
+export async function inBackgroundSession(): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("launchctl", ["managername"], { timeout: 5_000 });
+    return stdout.trim() === "Background";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Reads what a launch needs from the bundle: `Info.plist` (bundle id,
  * executable, name) and the code signature. An unsigned app is neither
  * hardened nor sandboxed.
@@ -780,17 +836,9 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
     throw badBundle(`The executable ${executable} named by ${plist} does not exist.`);
   }
 
-  let codesign: { stdout: string; stderr: string } | null;
-  try {
-    codesign = await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", resolved], {
-      timeout: 10_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-  } catch {
-    // Not signed at all, or a signature codesign cannot read: neither carries
-    // the runtime flag nor entitlements that dyld would honour.
-    codesign = null;
-  }
+  // Not signed at all, or a signature codesign cannot read: neither carries the
+  // runtime flag nor entitlements that dyld would honour.
+  const signature = (await readCodeSignature(resolved)) ?? parseCodesignDisplay(null);
 
   const chromium = chromiumKind(resolved);
   return {
@@ -798,7 +846,7 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
     bundleId,
     name: bundleName ?? path.basename(resolved, ".app"),
     executable,
-    ...parseCodesignDisplay(codesign),
+    ...signature,
     ...(chromium ? { chromium } : {}),
     catalyst: isCatalystExecutable(executable),
     uiElement: [uiElement, backgroundOnly].some((v) => v !== null && /^(true|yes|1)$/i.test(v)),

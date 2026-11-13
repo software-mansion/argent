@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import type { CpuSample, RawHang, RawLeak, StackFrame } from "../types";
-import { SYSTEM_LIBRARY_PATH_PREFIXES } from "../config";
+import { SYSTEM_LIBRARY_PATH_PREFIXES, TOOLING_LIBRARIES } from "../config";
 
 function decodeXml(str: string): string {
   return str
@@ -229,23 +229,32 @@ function resolveFrames(
     const frameName = nameMatch ? decodeXml(nameMatch[1]) : "???";
 
     let isSystem = false;
-    // Window for the frame's <binary> child: simulator paths can exceed 300 chars.
-    const frameFullMatch = backtraceContent.substring(fm.index!, fm.index! + fm[0].length + 2000);
-    const binaryIdMatch = frameFullMatch.match(/<binary\s+id="(\d+)"[^>]*path="([^"]*)"[^>]*\/?>/);
-    const binaryRefMatch = frameFullMatch.match(/<binary\s+ref="(\d+)"\s*\/>/);
+    let binaryName: string | undefined;
+    // The frame's own <binary> child, never that of a later frame in the
+    // backtrace: a self-closing frame has none, and frames do not nest.
+    let ownContent = "";
+    if (!fm[0].endsWith("/>")) {
+      const end = backtraceContent.indexOf("</frame>", frameRe.lastIndex);
+      if (end !== -1) ownContent = backtraceContent.substring(frameRe.lastIndex, end);
+    }
+    const binaryIdMatch = ownContent.match(/<binary\s+id="(\d+)"[^>]*path="([^"]*)"[^>]*\/?>/);
+    const binaryRefMatch = ownContent.match(/<binary\s+ref="(\d+)"\s*\/>/);
 
     if (binaryIdMatch) {
       isSystem = isSystemLibraryPath(binaryIdMatch[2]);
-      binaryRegistry.set(binaryIdMatch[1], {
-        name: attr(binaryIdMatch[0], "name") ?? "",
-        path: binaryIdMatch[2],
-      });
+      binaryName = attr(binaryIdMatch[0], "name") ?? "";
+      binaryRegistry.set(binaryIdMatch[1], { name: binaryName, path: binaryIdMatch[2] });
     } else if (binaryRefMatch) {
       const bin = binaryRegistry.get(binaryRefMatch[1]);
-      if (bin) isSystem = isSystemLibraryPath(bin.path);
+      if (bin) {
+        isSystem = isSystemLibraryPath(bin.path);
+        binaryName = bin.name;
+      }
     }
 
     const frame: StackFrame = { name: frameName, isSystemLibrary: isSystem };
+    const tooling = binaryName === undefined ? undefined : TOOLING_LIBRARIES.get(binaryName);
+    if (tooling) frame.tooling = tooling;
     if (idMatch) frameRegistry.set(idMatch[1], frame);
     frames.push(frame);
   }

@@ -108,6 +108,10 @@ function handle(socket, msg) {
       return reply({ error: { message: params.message ?? "boom from the library" } });
     case "Hang":
       return;
+    case "Slow":
+      // Answers params.ms after the request, or as soon as the app runs again
+      // after a suspension that lasted past that, as a busy handler does.
+      return setTimeout(() => reply({ result: { params } }), params.ms ?? 0);
     case "Window.list":
       return reply({ result: { windows: windows() } });
     case "Application.terminate":

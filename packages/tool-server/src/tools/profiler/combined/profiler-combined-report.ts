@@ -22,7 +22,7 @@ import {
   isCaptureInFlight,
   inFlightGuardMessage,
 } from "../../../utils/profiler-shared/capture-guard";
-import { renderUnattributedLeaksNote } from "../../../utils/ios-profiler/render";
+import { hangSuspendedNote, renderUnattributedLeaksNote } from "../../../utils/ios-profiler/render";
 import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipeline/index";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
@@ -312,7 +312,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
           const topCommit = overlappingCommits[0]!;
 
           lines.push(
-            `### ${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms) ↔ Commit #${topCommit.commit.commitIndex} (${topCommit.commit.totalRenderMs}ms)`
+            `### ${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms${hangSuspendedNote(hang)}) ↔ Commit #${topCommit.commit.commitIndex} (${topCommit.commit.totalRenderMs}ms)`
           );
           lines.push("");
 
@@ -380,7 +380,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
         for (const corr of uncorrelated) {
           const { hang } = corr;
           lines.push(
-            `- **${hang.hangType}** at ${hang.startTimeFormatted} (${hang.durationMs}ms)` +
+            `- **${hang.hangType}** at ${hang.startTimeFormatted} (${hang.durationMs}ms${hangSuspendedNote(hang)})` +
               (hang.suspectedFunctions.length > 0 ? ` — \`${hang.suspectedFunctions[0]}\`` : "")
           );
         }

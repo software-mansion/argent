@@ -18,7 +18,11 @@ import {
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
 import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-shared/format";
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
-import { LEAKS_NOT_RECORDED } from "../../../utils/ios-profiler/render";
+import {
+  LEAKS_NOT_RECORDED,
+  MAC_UNATTRIBUTED_LEAKS,
+  hangSuspendedNote,
+} from "../../../utils/ios-profiler/render";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const stackQueryMode = {
@@ -43,7 +47,7 @@ function getIosParsedData(api: NativeProfilerSessionApi) {
   return api.parsedData;
 }
 
-function renderHangStacksIos(
+export function renderHangStacksIos(
   cpuSamples: CpuSample[],
   uiHangs: UiHang[],
   hangIndex: number,
@@ -57,7 +61,7 @@ function renderHangStacksIos(
   const suspectedSet = new Set(hang.suspectedFunctions);
 
   const lines: string[] = [
-    `## Hang #${hangIndex} — ${hang.hangType} (${hang.durationMs}ms at ${hang.startTimeFormatted})`,
+    `## Hang #${hangIndex} — ${hang.hangType} (${hang.durationMs}ms at ${hang.startTimeFormatted}${hangSuspendedNote(hang)})`,
     "",
     `**Severity:** ${hang.severity}`,
     "",
@@ -246,7 +250,8 @@ export function renderLeakStacksIos(
   objectTypeFilter: string | undefined,
   topN: number,
   mallocStackLogging?: boolean | null,
-  leaksRecorded?: boolean
+  leaksRecorded?: boolean,
+  macApp = false
 ): string {
   // Empty because nothing was recorded, not because nothing leaked.
   if (leaksRecorded === false) return `_${LEAKS_NOT_RECORDED}_`;
@@ -291,7 +296,13 @@ export function renderLeakStacksIos(
     "",
   ];
 
-  if (unattributedCount > 0) {
+  if (unattributedCount > 0 && macApp && mallocStackLogging !== true) {
+    lines.push(
+      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
+        `(\`<Call stack limit reached>\`, no library). ${MAC_UNATTRIBUTED_LEAKS}`,
+      ""
+    );
+  } else if (unattributedCount > 0) {
     const cause = mallocWasOn
       ? "the capture ran with malloc stack logging, but no allocation backtrace was recorded " +
         "for these (freed-region reuse, truncated stack logs, or allocations outside the " +
@@ -359,7 +370,8 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         params.object_type,
         params.top_n,
         data.mallocStackLogging,
-        data.leaksRecorded
+        data.leaksRecorded,
+        api.platform === "macos"
       );
     default:
       throw new FailureError(`Unknown mode: ${params.mode}`, {
@@ -398,7 +410,9 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
 }
 
 const zodSchema = z.object({
-  device_id: metroDeviceIdParam("iOS Simulator UDID or Android serial."),
+  device_id: metroDeviceIdParam(
+    "iOS Simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial."
+  ),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe("Query mode; see Modes in the tool description."),
@@ -426,7 +440,7 @@ Modes:
 - hang_stacks: Full CPU context during a specific hang (by hang_index).
 - function_callers: Who calls function_name and what it calls.
 - thread_breakdown: CPU time split by thread, optionally filtered.
-- leak_stacks: Memory leak details (iOS only), optionally filtered by object_type.
+- leak_stacks: Memory leak details (iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only), optionally filtered by object_type.
 Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after native-profiler-analyze.
 Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
 Fails if native-profiler-stop → native-profiler-analyze has not been run or no parsed trace data is in memory.`,
@@ -441,6 +455,7 @@ Fails if native-profiler-stop → native-profiler-analyze has not been run or no
   capability: {
     apple: { simulator: true },
     android: { emulator: true, device: true, unknown: true },
+    macos: { app: true },
   },
   // The Android branch re-queries the .pftrace, so a cold trace-processor engine
   // re-pays the full parse past the 30s MCP fetch timeout, whose abort replays

@@ -19,6 +19,8 @@ import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-
 import { macosAppIdFromBundleId, parseMacosAppBundleId } from "../utils/device-info";
 import { pidIsAlive, pollPidsUntilGone, signalGroupThenPid } from "../utils/process-kill";
 import { settleWithin, sleep } from "../utils/timing";
+import { startSuspensionWatch, type SuspensionWatch } from "../utils/macos-suspension-watch";
+import type { AppSuspensionWindow } from "../utils/ios-profiler/app-suspensions";
 import {
   chromiumRefusal,
   findMacosAppByBundleId,
@@ -92,6 +94,12 @@ interface MacosLaunchOptions {
   args?: string[];
   /** Omitted `args` start the app with no arguments. */
   noLastArgs?: boolean;
+  /**
+   * Extra environment variables for this start only, such as
+   * `MallocStackLogging` for a profile. A later start does not repeat them,
+   * and they cannot replace the variables of the argent library.
+   */
+  env?: Readonly<Record<string, string>>;
   /** How long the library gets to answer after the spawn. Default 20 s. */
   handshakeTimeoutMs?: number;
   /** How long a new process gets to show its first window. Default 10 s. */
@@ -142,6 +150,14 @@ export interface MacosAppApi {
   isConnected(): boolean;
   handshake(): MacosLibraryHandshake | null;
   /**
+   * Watches when macOS holds the app (process `pid`) suspended, which
+   * Instruments does while it checks the app for leaks during a native
+   * profile. While it watches, a call waits until the app runs again before it
+   * is sent, and its timeout leaves out the time the app was suspended. `end()`
+   * stops the watch and returns what it saw. Null when the helper cannot watch.
+   */
+  watchSuspensions(pid: number): Promise<{ end(): AppSuspensionWindow[] } | null>;
+  /**
    * Turns on the library's network capture, as the first `native-network-logs`
    * call does on iOS. It stays on: each later connection, also the one to a
    * restarted app, turns it on again.
@@ -174,6 +190,18 @@ const PROMPT_KINDS = ["alert", "sheet", "file-panel"];
 const SIGNAL_GRACE_MS = 2_000;
 const POLL_MS = 100;
 const WINDOW_TIMEOUT_MS = 10_000;
+/**
+ * The longest a call waits for a suspended app before it is sent. Instruments'
+ * leak checks suspended an app that argent drove for up to about 25 s (most for
+ * 1 to 10 s).
+ */
+const MAX_SUSPENDED_WAIT_MS = 25_000;
+/**
+ * The suspension watch of each app, by bundle id: module-wide, as a
+ * stop-simulator-server disposes the service instance while the native profile
+ * that started the watch keeps it until its stop.
+ */
+const suspensionWatches = new Map<string, SuspensionWatch>();
 
 /** Replaces the library's bare "No window", which leaves the agent without a way back. */
 export const MACOS_NO_WINDOW_MESSAGE =
@@ -414,21 +442,34 @@ class LibraryChannel {
     );
   }
 
+  /**
+   * @param suspensions when set, a timeout says how long the app was suspended
+   *   while it waited. The library drops a request that is past its deadline
+   *   when the app runs again, with no answer, so waiting longer would not help.
+   */
   request(
     method: string,
     params: Record<string, unknown>,
     timeoutMs: number,
-    runLate = false
+    runLate = false,
+    suspensions?: SuspensionWatch
   ): Promise<unknown> {
     if (this.closeError) return Promise.reject(this.closeError);
     const id = this.nextId++;
-    const deadline = runLate ? undefined : Date.now() + timeoutMs;
+    const sentAt = Date.now();
+    const deadline = runLate ? undefined : sentAt + timeoutMs;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (!this.pending.delete(id)) return;
+        const suspendedMs = suspensions?.suspendedMsBetween(sentAt, Date.now()) ?? 0;
         reject(
           macosFailure(
-            `${this.bundleId} did not answer ${method} within ${timeoutMs} ms.`,
+            suspendedMs > 0
+              ? `${this.bundleId} did not answer ${method} within ${timeoutMs} ms: macOS held it ` +
+                  `suspended for ${Math.round(suspendedMs)} ms of that time, as Instruments does ` +
+                  `while it checks an app for leaks. The ${method} may or may not have happened: ` +
+                  `look at the app (describe) before you repeat it.`
+              : `${this.bundleId} did not answer ${method} within ${timeoutMs} ms.`,
             FAILURE_CODES.MACOS_APP_RPC_TIMEOUT,
             "macos_app_rpc",
             "timeout"
@@ -553,11 +594,16 @@ const FINDER_ENV_KEYS = [
  * the app, even a sandboxed one, drive the tool-server. The bootstrap travels
  * as `--insert-library`.
  */
-function macosLaunchEnv(bundleId: string, listenSocketEnv: string | undefined): NodeJS.ProcessEnv {
+function macosLaunchEnv(
+  bundleId: string,
+  listenSocketEnv: string | undefined,
+  extra: Readonly<Record<string, string>> = {}
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of FINDER_ENV_KEYS) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
+  Object.assign(env, extra);
   env.ARGENT_INJECT_BUNDLE_ID = bundleId;
   env.NATIVE_DEVTOOLS_FD = "3";
   if (listenSocketEnv) env.NATIVE_DEVTOOLS_LISTEN_SOCKET = listenSocketEnv;
@@ -631,6 +677,27 @@ const lifecycles = new Map<
  * as a stop-simulator-server between the two calls disposes the service instance.
  */
 const heldQuits = new Map<string, { pid: number; openBefore: Set<unknown> }>();
+
+/**
+ * Sending a request to a suspended app starts its deadline while nothing in the
+ * app can run: a suspension longer than the deadline drops the request. So the
+ * request waits until the app runs again, as an iOS simulator app gets its touch
+ * after the suspension.
+ */
+async function waitWhileSuspended(watch: SuspensionWatch, method: string): Promise<void> {
+  const since = watch.suspendedSince();
+  if (since === null) return;
+  if (await watch.waitUntilRunning(MAX_SUSPENDED_WAIT_MS)) return;
+  throw macosFailure(
+    `macOS has held the app suspended for ${Math.round((Date.now() - since) / 1000)} s, so argent ` +
+      `did not send ${method}: Instruments suspends an app while it checks it for leaks (up ` +
+      `to about 25 s), and a debugger while it stops it. Try again; if the app stays ` +
+      `suspended, continue it in the debugger or stop the native profile.`,
+    FAILURE_CODES.MACOS_APP_RPC_TIMEOUT,
+    "macos_app_rpc",
+    "timeout"
+  );
+}
 
 function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () => void } {
   let channel: LibraryChannel | null = null;
@@ -1077,7 +1144,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       // The app inherits the working directory, which a Finder launch sets to /.
       {
         stdio: ["ignore", "pipe", "pipe", "pipe"],
-        env: macosLaunchEnv(bundleId, listen?.env),
+        env: macosLaunchEnv(bundleId, listen?.env, opts.env),
         cwd: "/",
       }
     );
@@ -1195,7 +1262,9 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       try {
         const ch = await ensureChannel();
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return (await ch.request(method, params, timeoutMs, opts.runLate)) as T;
+        const suspensions = suspensionWatches.get(bundleId);
+        if (suspensions) await waitWhileSuspended(suspensions, method);
+        return (await ch.request(method, params, timeoutMs, opts.runLate, suspensions)) as T;
       } catch (err) {
         if (errorCode(err) === FAILURE_CODES.MACOS_APP_CONNECTION_CLOSED) {
           throw closedByArgentError(bundleId, method);
@@ -1223,6 +1292,25 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       void entry.settled.then(() => (entry.pending = false));
       lifecycles.set(bundleId, entry);
       return run;
+    },
+    async watchSuspensions(pid) {
+      suspensionWatches.get(bundleId)?.end();
+      suspensionWatches.delete(bundleId);
+      let helper: string;
+      try {
+        helper = macosArtifacts().helper;
+      } catch {
+        return null;
+      }
+      const watch = await startSuspensionWatch(helper, pid);
+      if (!watch) return null;
+      suspensionWatches.set(bundleId, watch);
+      return {
+        end: () => {
+          if (suspensionWatches.get(bundleId) === watch) suspensionWatches.delete(bundleId);
+          return watch.end();
+        },
+      };
     },
     isConnected: () => Boolean(channel?.isOpen && channel.handshake),
     handshake: () => (channel?.isOpen ? channel.handshake : null),

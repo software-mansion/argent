@@ -10,15 +10,16 @@ import {
 import { assertExternalCapability } from "../utils/external-devices";
 import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
+import type { AppSuspensionSpan, AppSuspensionWindow } from "../utils/ios-profiler/app-suspensions";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { adbShell } from "../utils/adb";
 import { adbCommandPrefix } from "../utils/adb-server";
 import { recordReapedSession } from "../utils/reaped-sessions";
 import { disposeWarmEngine } from "@argent/native-devtools-android";
 
-// Cross-platform session for the `native-profiler-*` tools: iOS drives an xctrace
-// child, Android an `adb shell perfetto` child, both behind the shared
-// `capturePid`/`captureProcess` fields so only the platform helpers branch.
+// Cross-platform session for the `native-profiler-*` tools: iOS simulators and Mac
+// apps drive an xctrace child, Android an `adb shell perfetto` child, all behind the
+// shared `capturePid`/`captureProcess` fields so only the platform helpers branch.
 export const NATIVE_PROFILER_SESSION_NAMESPACE = "NativeProfilerSession";
 
 type NativeProfilerSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
@@ -31,7 +32,7 @@ export function nativeProfilerSessionRef(device: DeviceInfo): ServiceRef {
 }
 
 export interface NativeProfilerParsedData {
-  /** iOS only — on Android `parsedData` stays null and drill-down re-queries the .pftrace. */
+  /** xctrace only (iOS and macOS) - on Android `parsedData` stays null and drill-down re-queries the .pftrace. */
   cpuSamples: CpuSample[];
   uiHangs: UiHang[];
   cpuHotspots: CpuHotspot[];
@@ -57,13 +58,21 @@ export interface NativeProfilerParsedData {
   wallClockStartMs: number | null;
 }
 
+/** The session platforms: `ios` and `macos` record with xctrace, `android` with Perfetto. */
+export type NativeProfilerPlatform = "ios" | "android" | "macos";
+
+/** True for the platforms that record with xctrace and share the Instruments pipeline. */
+export function recordsWithXctrace(platform: NativeProfilerPlatform): boolean {
+  return platform === "ios" || platform === "macos";
+}
+
 export interface NativeProfilerSessionApi {
   deviceId: string;
-  platform: "ios" | "android";
+  platform: NativeProfilerPlatform;
   appProcess: string | null;
-  /** iOS: xctrace PID. Android: on-device perfetto daemon PID — NOT the adb-shell PID (which exits after `--background-wait`). */
+  /** iOS and macOS: xctrace PID. Android: on-device perfetto daemon PID - NOT the adb-shell PID (which exits after `--background-wait`). */
   capturePid: number | null;
-  /** iOS: the xctrace ChildProcess. Android: the `adb shell perfetto` ChildProcess, which exits once the daemon is up. */
+  /** iOS and macOS: the xctrace ChildProcess. Android: the `adb shell perfetto` ChildProcess, which exits once the daemon is up. */
   captureProcess: ChildProcess | null;
   traceFile: string | null;
   exportedFiles: Record<string, string | null> | null;
@@ -71,14 +80,14 @@ export interface NativeProfilerSessionApi {
   wallClockStartMs: number | null;
   parsedData: NativeProfilerParsedData | null;
   /**
-   * iOS-only: PID the exported CPU samples must be filtered to, or null to
+   * xctrace only (iOS and macOS): PID the exported CPU samples must be filtered to, or null to
    * keep all samples. Taken from the capture strategy at start — only the
    * host-wide all-processes fallback needs it. See
    * utils/ios-profiler/capture-strategy.
    */
   cpuFilterPid: number | null;
   /**
-   * iOS-only: whether the IN-FLIGHT (or most recently attempted) recording was
+   * xctrace only (iOS and macOS): whether the IN-FLIGHT (or most recently attempted) recording was
    * cold-launched with MallocStackLogging=1 (native-profiler-start's
    * malloc_stack_logging flag). Stop copies it into `mallocStackLogging`; the
    * split keeps a new start from re-labeling the previous capture's
@@ -86,13 +95,58 @@ export interface NativeProfilerSessionApi {
    */
   recordingMallocStackLogging: boolean | null;
   /**
-   * iOS-only: capture mode of the data in `exportedFiles` (and, via analyze,
+   * xctrace only (iOS and macOS): capture mode of the data in `exportedFiles` (and, via analyze,
    * `parsedData`), so the report layer names it instead of inferring it from
    * the attributed-leak count. Stamped at stop; cleared by profiler-load (the
    * raw_*.xml carry no capture-mode sidecar). Null before any stop, on
    * Android, or after a load.
    */
   mallocStackLogging: boolean | null;
+  /**
+   * Mac apps only: the pid of the app that the in-flight (or most recent)
+   * recording attached to. Null on iOS and Android.
+   */
+  recordingAppPid: number | null;
+  /**
+   * Mac apps only: the app was gone when the in-flight recording ended without a
+   * stop (the 10-minute cap, or xctrace exiting on its own). The stop that
+   * exports that recording reads it.
+   */
+  recordingAppEnded: boolean;
+  /**
+   * Mac apps only: the app quit, crashed or was restarted while the data in
+   * `exportedFiles` was recorded, so the trace holds only part of it. Stamped
+   * at stop; cleared by profiler-load.
+   */
+  appEndedDuringCapture: boolean;
+  /**
+   * Why the last stop exported no table (ExportDiagnostics.skipped), for analyze
+   * to say instead of a missing table. Stamped at stop; cleared by profiler-load.
+   */
+  exportSkipReason: string | null;
+  /**
+   * Mac apps only: how long the last recording ran, from the return of the start
+   * to the stop. Stamped at stop, null when xctrace ended before the stop;
+   * cleared by profiler-load.
+   */
+  recordedMs: number | null;
+  /**
+   * xctrace only: the native-profiler-stop that is ending the recording and
+   * exporting its trace, null otherwise. A second stop returns it; analyze waits
+   * for it, or it would pair the previous recording's exports with this trace.
+   */
+  stopInProgress: Promise<unknown> | null;
+  /**
+   * Mac apps only: the watch of the app's suspensions that runs with the
+   * recording. `end()` stops it and returns what it saw. Null when nothing watches.
+   */
+  suspensionWatch: { end(): AppSuspensionWindow[] } | null;
+  /**
+   * Mac apps only: when macOS held the app suspended during the recording in
+   * `exportedFiles`, on the trace's timeline. Null when argent did not watch the
+   * app or the trace's start is unknown. Stamped at stop; cleared by profiler-load.
+   */
+  appSuspensions: AppSuspensionSpan[] | null;
   /**
    * Set by `dispose()` and never cleared: `Registry._teardown` nulls the
    * node's instance, so the next resolve builds a fresh api.
@@ -158,6 +212,8 @@ function androidSalvage(midCapture: boolean, onDeviceTracePath: string | null): 
 }
 
 function clearLiveState(state: NativeProfilerSessionApi): void {
+  state.suspensionWatch?.end();
+  state.suspensionWatch = null;
   state.profilingActive = false;
   state.capturePid = null;
   state.captureProcess = null;
@@ -192,7 +248,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       );
     }
     const { device } = opts;
-    if (device.platform !== "ios" && device.platform !== "android") {
+    if (device.platform !== "ios" && device.platform !== "android" && device.platform !== "macos") {
       throw new FailureError(
         `${NATIVE_PROFILER_SESSION_NAMESPACE}: unsupported platform "${device.platform}" for device '${device.id}'.`,
         {
@@ -224,6 +280,14 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       cpuFilterPid: null,
       recordingMallocStackLogging: null,
       mallocStackLogging: null,
+      recordingAppPid: null,
+      recordingAppEnded: false,
+      appEndedDuringCapture: false,
+      exportSkipReason: null,
+      recordedMs: null,
+      stopInProgress: null,
+      suspensionWatch: null,
+      appSuspensions: null,
       disposed: false,
       recordingTimeout: null,
       recordingTimedOut: false,
@@ -263,7 +327,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
         const abandonedCapture = midCapture || endedCapture;
         const abandonedTrace = state.traceFile;
 
-        if (state.platform === "ios") {
+        if (recordsWithXctrace(state.platform)) {
           const child = state.captureProcess;
           try {
             // Regardless of `profilingActive`: `attemptStart` hands the child

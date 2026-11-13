@@ -66,3 +66,77 @@ describe("Mac app text with the macos-apps flag on", () => {
     expect(text).toMatch(/appPath\?, args\?/);
   });
 });
+
+describe("the native profiler tools' Mac app text", () => {
+  const definitions = definitionsById(createRegistry());
+
+  function advertised(id: string, flagOn: boolean) {
+    const def = definitions.get(id)!;
+    const text = renderFlagGated(
+      { description: def.description, inputSchema: advertisedSchema(def) },
+      (f) => flagOn && f === MACOS_APPS_FLAG
+    );
+    const schema = text.inputSchema as { properties: Record<string, { description: string }> };
+    return { description: text.description, properties: schema.properties };
+  }
+
+  it.each([
+    "native-profiler-start",
+    "native-profiler-stop",
+    "native-profiler-analyze",
+    "profiler-stack-query",
+  ])("%s takes a Mac app id only with the flag on", (id) => {
+    expect(advertised(id, true).properties.device_id!.description).toMatch(
+      /UDID, Mac app id or Android serial/
+    );
+    const off = advertised(id, false);
+    // The sentence still reads without the span.
+    expect(off.properties.device_id!.description).toMatch(/UDID or Android serial/);
+    expect(JSON.stringify(off)).not.toMatch(MAC_TEXT);
+  });
+
+  it.each(["native-profiler-start", "native-profiler-stop", "native-profiler-analyze"])(
+    "%s names Mac apps as an xctrace platform only with the flag on",
+    (id) => {
+      expect(advertised(id, true).description).toMatch(/iOS and Mac apps/);
+      expect(advertised(id, false).description).not.toMatch(/Mac app/);
+    }
+  );
+
+  it("native-profiler-start says what app_process, malloc_stack_logging and its warning do on a Mac app", () => {
+    const on = advertised("native-profiler-start", true);
+    expect(on.properties.app_process!.description).toMatch(/Not used for a Mac app/);
+    expect(on.properties.malloc_stack_logging!.description).toMatch(
+      /On a Mac app, argent restarts the app with MallocStackLogging=1 and then attaches/
+    );
+    expect(on.properties.template_path!.description).toMatch(/^iOS and Mac apps only\./);
+    // The leak-check note of a Mac app report names a built-in template.
+    expect(on.properties.template_path!.description).toMatch(
+      /or the name of a built-in template such as "Time Profiler"/
+    );
+    expect(on.description).toMatch(/On a Mac app, a warning says when the app runs with malloc/);
+
+    const off = advertised("native-profiler-start", false);
+    expect(off.properties.app_process!.description).toMatch(/picks the wrong app\.$/);
+    expect(off.properties.malloc_stack_logging!.description).toMatch(/^iOS only\..*no leaks\.$/s);
+    expect(off.properties.template_path!.description).toMatch(/^iOS only\./);
+  });
+
+  it("profiler-stack-query names Mac apps for leak_stacks only with the flag on", () => {
+    expect(advertised("profiler-stack-query", true).description).toMatch(
+      /leak_stacks: Memory leak details \(iOS and Mac apps only\)/
+    );
+    expect(advertised("profiler-stack-query", false).description).toMatch(
+      /leak_stacks: Memory leak details \(iOS only\)/
+    );
+  });
+
+  it("profiler-load names Mac apps for load_native only with the flag on", () => {
+    expect(advertised("profiler-load", true).description).toMatch(
+      /load_native: .*\(xctrace XML on iOS and Mac apps, \.pftrace on Android\)/
+    );
+    const off = advertised("profiler-load", false);
+    expect(off.description).toMatch(/load_native: .*\(xctrace XML on iOS, \.pftrace on Android\)/);
+    expect(JSON.stringify(off)).not.toMatch(MAC_TEXT);
+  });
+});

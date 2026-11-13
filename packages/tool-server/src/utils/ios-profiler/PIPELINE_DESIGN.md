@@ -47,6 +47,10 @@ Each hang has a `startNs` and `durationNs`. The correlator filters CPU samples w
 
 Top 5 suspected functions and top 3 call chains (ranked by sample frequency within the window) are attached to each hang.
 
+### Mac apps: hangs without the app's suspensions
+
+Instruments' leak check suspends the whole Mac app, so a hang that began just before a check lasts as long as the check in the trace. During a recording the tool-server watches the app's suspend count (`argent-macos-helper watch-suspension`), and the stop puts the windows on the trace's timeline (`<start-date>` of the table of contents). Before the correlation, `removeSuspendedTime` (`app-suspensions.ts`) drops each hang with under 250 ms of its own, so its samples flag no hotspot. Each other hang keeps its recorded window for the correlation, and `withoutSuspendedTime` then gives it its own length, the label of that length (microhang from 250 ms, hang from 500 ms, severe hang from 2 s, as xctrace labels them) and `suspendedMs`. An overlap under 20 ms is not counted: the watch reads the count every 10 ms.
+
 ### Call chain extraction
 
 App call chains are the non-system, non-hex-address frames from a stack, preserved in stack order. They form readable paths like `MyComponent > render > measureText`. Chains are aggregated by frequency within each CPU hotspot group so the report shows the most common execution path, not a random sample.

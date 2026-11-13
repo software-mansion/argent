@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
+  recordsWithXctrace,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
@@ -49,6 +50,7 @@ type StopResult = IosStopArtifacts | AndroidStopArtifacts;
 const capability = {
   apple: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  macos: { app: true },
 } as const;
 
 /**
@@ -89,13 +91,13 @@ function registerTrace(store: ArtifactStore, traceFile: string): Promise<Artifac
 
 const zodSchema = z.object({
   device_id: metroDeviceIdParam(
-    "Target device id from `list-devices` (iOS UDID or Android serial)."
+    "Target device id from `list-devices` (iOS UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial)."
   ),
 });
 
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
-  description: `Stop native profiling and export trace data: CPU, hangs, and leaks XML from xctrace on iOS; the Perfetto .pftrace on Android.
+  description: `Stop native profiling and export trace data: CPU, hangs, and leaks XML from xctrace on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>; the Perfetto .pftrace on Android.
 Use when the user has finished the interaction to profile and you need to export the trace.
 Returns { traceFile, exportedFiles, exportDiagnostics? }; traceFile is the raw trace bundle and exportedFiles the exports, all downloadable artifacts materialized to local paths.
 Fails if no active native-profiler-start session exists for the given device_id.`,
@@ -117,10 +119,10 @@ Fails if no active native-profiler-start session exists for the given device_id.
     assertSupported("native-profiler-stop", capability, device);
 
     // Kept per branch rather than merged so the return type preserves the
-    // iOS/Android distinction: iOS always carries exportDiagnostics, Android
-    // never does. The artifact store is resolved only after a successful stop —
+    // xctrace/Android distinction: xctrace (iOS and macOS) always carries
+    // exportDiagnostics, Android never does. The artifact store is resolved only after a successful stop -
     // the "no active session" error path never needs it.
-    if (api.platform === "ios") {
+    if (recordsWithXctrace(api.platform)) {
       await ensureDeps(["xcrun"]);
       const ios: IosStopResult = await stopNativeProfilerIos(api);
       const artifacts = requireArtifacts(ctx);
