@@ -206,6 +206,248 @@ describe("Registry — failure signals", () => {
     });
   });
 
+  it("classifies a tool that throws on its caller's abort as cancelled", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "slow-tool",
+      services: () => ({}),
+      execute: async (_services: unknown, _params: unknown, ctx: { signal: AbortSignal }) => {
+        controller.abort();
+        const err = new Error(`aborted: ${ctx.signal.aborted}`);
+        err.name = "AbortError";
+        throw err;
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("slow-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("aborted: true");
+
+    expect(getFailureSignal(emittedError)).toEqual({
+      error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED,
+      failure_stage: "registry_tool_cancelled",
+      failure_area: "registry",
+      error_kind: "cancelled",
+    });
+  });
+
+  it("hands the cancelled signal to the tool's failedMsg", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "drag-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        throw new Error("lift refused");
+      },
+      interaction: {
+        failedMsg: ({ failureSignal }: { failureSignal: { error_code: string } }) =>
+          `Failed to drag: ${failureSignal.error_code}`,
+      },
+    } as never);
+
+    let failedMsg: string | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, _error, _duration, msg) => {
+      failedMsg = msg;
+    });
+
+    await expect(
+      registry.invokeTool("drag-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("lift refused");
+
+    expect(failedMsg).toBe(`Failed to drag: ${FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED}`);
+  });
+
+  it("classifies an unclassified failure after its caller's abort as cancelled", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "adb-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        throw new Error("adb exited with SIGTERM");
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("adb-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("adb exited with SIGTERM");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED
+    );
+  });
+
+  it("keeps the tool's own classification when it fails after the caller aborted", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    const ownSignal = {
+      error_code: FAILURE_CODES.VEGA_BOOT_TIMEOUT,
+      failure_stage: "boot_timeout",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    } as const;
+    registry.registerTool({
+      id: "slow-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        throw withFailureSignal(new Error("boot timed out"), ownSignal);
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("slow-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("boot timed out");
+
+    expect(getFailureSignal(emittedError)).toEqual(ownSignal);
+  });
+
+  it("classifies an abort the tool wrapped in its own failure as cancelled", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "fetching-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        throw withFailureSignal(
+          new Error("request timed out", { cause: controller.signal.reason }),
+          {
+            error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
+            failure_stage: "simulator_server_network",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+          }
+        );
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("fetching-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("request timed out");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED
+    );
+  });
+
+  it("classifies a tool's own AbortError as cancelled even when a classified failure is its cause", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "gesture-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        const liftFailure = withFailureSignal(new Error("lift refused"), {
+          error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
+          failure_stage: "simulator_server_network",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        });
+        const abortError = new Error("gesture cancelled", { cause: liftFailure });
+        abortError.name = "AbortError";
+        throw abortError;
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("gesture-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("gesture cancelled");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED
+    );
+  });
+
+  it("keeps a tool's own timeout that Node raised as an AbortError after the caller aborted", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    const ownTimeout = AbortSignal.timeout(1);
+    await new Promise((resolve) => ownTimeout.addEventListener("abort", resolve));
+    registry.registerTool({
+      id: "runner-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        const nodeAbort = new Error("The operation was aborted", { cause: ownTimeout.reason });
+        nodeAbort.name = "AbortError";
+        throw withFailureSignal(new Error("runner request timed out", { cause: nodeAbort }), {
+          error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
+          failure_stage: "simulator_server_network",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        });
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("runner-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("runner request timed out");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT
+    );
+  });
+
+  it("keeps the tool's own classification when the caller did not abort", async () => {
+    const registry = new Registry();
+    registry.registerTool({
+      id: "failing-tool",
+      services: () => ({}),
+      execute: async () => {
+        throw new Error("boom");
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("failing-tool", {}, { signal: new AbortController().signal })
+    ).rejects.toThrow("boom");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_TOOL_EXECUTION_FAILED
+    );
+  });
+
   it("derives only safe subprocess metadata", () => {
     expect(
       subprocessFailureMetadata(

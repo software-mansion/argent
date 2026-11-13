@@ -25,7 +25,7 @@
     "lint:fix": "eslint . --fix",
     "knip": "knip --include nsExports,nsTypes --max-issues 0",
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
-    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs scripts/extract-tools.test.mjs scripts/next-canary-version.test.mjs scripts/check-workspace-versions.test.mjs",
+    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs scripts/sync-next-tag-workflow.test.mjs scripts/extract-tools.test.mjs scripts/next-canary-version.test.mjs scripts/check-workspace-versions.test.mjs",
     "check:versions": "node scripts/check-workspace-versions.mjs",
     "harness-check": "node scripts/harness-check/harness-check.mjs",
     "render:agent-context": "node scripts/render-agent-context.mjs"

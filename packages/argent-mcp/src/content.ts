@@ -315,7 +315,10 @@ export async function flowRunToMcpContent(
     const glyph = step.status ? `${STATUS_GLYPH[step.status] ?? "•"} ` : "";
     // `error` is the legacy spelling of `reason`.
     const reason = step.reason ?? step.error;
-    const suffix = reason ? ` — ${reason}` : "";
+    // A reason can quote a multi-line error: its later lines stay indented
+    // under the step, as its artifact lines are.
+    const continued = `\n  ${stepIndent(step.depth)}`;
+    const suffix = reason ? ` — ${String(reason).replaceAll("\n", continued)}` : "";
     const warning = step.warning ? ` ⚠ ${step.warning}` : "";
     const timing = step.kind === "echo" ? "" : durationSuffix(step.durationMs);
     blocks.push({

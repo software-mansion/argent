@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { FAILURE_CODES, Registry, withFailureSignal } from "@argent/registry";
 import { attachRegistryTelemetry } from "../src/registry-listener.js";
+import { sanitize } from "../src/sanitize.js";
 import { scopeHome } from "./helpers.js";
 import * as telemetry from "../src/index.js";
 
@@ -206,6 +207,35 @@ describe("attachRegistryTelemetry", () => {
     );
     expect(JSON.stringify(trackSpy.mock.calls[0]![1])).not.toContain("/Users/alice");
 
+    handle.detach();
+  });
+
+  it("tracks a call its caller cancelled as a cancelled tool:fail", async () => {
+    const trackSpy = vi.spyOn(telemetry, "track");
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "gesture-swipe",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        throw Object.assign(new Error("Swipe cancelled"), { name: "AbortError" });
+      },
+    });
+    const handle = attachRegistryTelemetry(registry);
+
+    await expect(
+      registry.invokeTool("gesture-swipe", {}, { signal: controller.signal })
+    ).rejects.toThrow("Swipe cancelled");
+
+    const failProps = trackSpy.mock.calls.find(([event]) => event === "tool:fail")![1];
+    expect(sanitize("tool:fail", failProps as Record<string, unknown>)).toMatchObject({
+      tool: "gesture-swipe",
+      error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED,
+      failure_stage: "registry_tool_cancelled",
+      failure_area: "registry",
+      error_kind: "cancelled",
+    });
     handle.detach();
   });
 

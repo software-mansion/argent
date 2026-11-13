@@ -48,6 +48,7 @@ function stubRegistry(): Registry {
           inputSchema: { type: "object", properties: {} },
           alwaysLoad: true,
           searchHint: "always loaded discovery",
+          longRunning: true,
           services: () => ({}),
           execute: async () => ({}),
         };
@@ -149,6 +150,18 @@ describe("GET /tools progressive-loading metadata", () => {
 
     expect(byName.get("hinted-tool")).toMatchObject({ readOnly: true });
     expect(byName.get("plain-tool")).not.toHaveProperty("readOnly");
+  });
+
+  it("passes longRunning through on /tools response only for tools that set it", async () => {
+    // The MCP adapter reads it from this listing to drop its per-attempt fetch
+    // timeout, whose abort replays a mutating call.
+    const res = await request(handle.app).get("/tools").expect(200);
+    const byName = new Map<string, Record<string, unknown>>(
+      (res.body.tools as Record<string, unknown>[]).map((t) => [t.name as string, t])
+    );
+
+    expect(byName.get("always-tool")).toMatchObject({ longRunning: true });
+    expect(byName.get("plain-tool")).not.toHaveProperty("longRunning");
   });
 
   it("lists a hideFromMcp tool with the flag set, and still runs it", async () => {

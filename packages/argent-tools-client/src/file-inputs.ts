@@ -302,6 +302,10 @@ async function uploadTar(
   signal?: AbortSignal
 ): Promise<string> {
   const { size } = await stat(tarPath);
+  // fetch can settle without reading the body (an early error reply): the
+  // stream then keeps its fd, or its deferred open fails after the caller
+  // removes the archive, with nothing listening.
+  const body = createReadStream(tarPath).on("error", () => {});
   // `duplex: "half"` is required to stream a Node Readable request body via
   // undici's fetch, but it isn't in the DOM RequestInit type.
   const init: RequestInit & { duplex: "half" } = {
@@ -310,22 +314,26 @@ async function uploadTar(
       "content-type": "application/gzip",
       ...(endpoint.token ? { Authorization: `Bearer ${endpoint.token}` } : {}),
     },
-    body: createReadStream(tarPath) as unknown as BodyInit,
+    body: body as unknown as BodyInit,
     duplex: "half",
     signal,
   };
-  const res = await fetch(`${endpoint.url}/upload`, init);
-  if (!res.ok) {
-    let text = "";
-    try {
-      text = await res.text();
-    } catch {
-      // The status alone still says what failed.
+  try {
+    const res = await fetch(`${endpoint.url}/upload`, init);
+    if (!res.ok) {
+      let text = "";
+      try {
+        text = await res.text();
+      } catch {
+        // The status alone still says what failed.
+      }
+      throw uploadFailure(endpoint.url, res, text, size);
     }
-    throw uploadFailure(endpoint.url, res, text, size);
+    const json = (await res.json()) as { uploadId: string };
+    return json.uploadId;
+  } finally {
+    body.destroy();
   }
-  const json = (await res.json()) as { uploadId: string };
-  return json.uploadId;
 }
 
 /** Tar `sourcePath`, stream it to `POST /upload`, and return what the wire names it by. */

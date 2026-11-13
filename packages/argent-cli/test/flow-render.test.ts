@@ -364,6 +364,21 @@ describe("flow report rendering", () => {
     );
   });
 
+  it("renderStepLine indents a multi-line reason's later lines under the step", () => {
+    const step: StepReport = {
+      index: 0,
+      kind: "idle",
+      status: "error",
+      reason: "could not read the UI tree to settle: line1\nline2",
+    };
+    expect(renderStepLine(step, 2, "f")).toBe(
+      "  ✗  2 idle — could not read the UI tree to settle: line1\n       line2"
+    );
+    expect(renderStepLine({ ...step, depth: 1 }, 100, "f")).toBe(
+      "  ✗ 100   idle — could not read the UI tree to settle: line1\n          line2"
+    );
+  });
+
   it("formats a duration as tenths under a minute and minutes plus seconds from one", () => {
     const line = (durationMs: unknown) =>
       renderStepLine({ index: 0, kind: "tap", status: "pass", durationMs } as StepReport, 1, "f");

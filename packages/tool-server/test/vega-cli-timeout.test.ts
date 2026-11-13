@@ -69,6 +69,7 @@ const SENTINEL_OVERFLOW_ERR = sentinel(5);
 const SENTINEL_LINGER_NEAR_DEADLINE = sentinel(6);
 const SENTINEL_LINGER_GROUPED = sentinel(7);
 const SENTINEL_SWEEP = sentinel(8);
+const SENTINEL_ORPHAN = sentinel(9);
 let dir: string;
 let prevPath: string | undefined;
 
@@ -97,14 +98,34 @@ if (cmd === "hang") {
   // A worker that ESCAPES the launcher's process group (detached → its own session/
   // pgid, like the real CLI's setsid'd worker), so the group-only SIGKILL can't reach
   // it — only the descendant sweep does. It also inherits our stdout, reproducing the
-  // pipe-held-open freeze. \`secs\` is a per-test sentinel so pgrep finds strays
-  // unambiguously.
-  const worker = spawn("sh", ["-c", "trap '' TERM; exec sleep " + secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
+  // pipe-held-open freeze; it sleeps only while that stdout is our pipe (a socket), so the
+  // reap test's count of its workers pins the inheritance. \`secs\` is a per-test sentinel
+  // so pgrep finds strays unambiguously.
+  const worker = spawn("sh", ["-c", "trap '' TERM; [ -S /dev/stdout ] && exec sleep " + secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
   worker.unref();
   // The launcher itself also hangs so it stays alive to be timed out and snapshotted.
   // This sleep is a descendant, so the sweep reaps it before the group kill runs.
   spawnSync("sleep", [secs]);
   process.exit(0);
+}
+if (cmd === "hang-self") {
+  // The launcher wedges itself with no child under it, like a real \`vega\` blocked on its
+  // device-agent socket: the descendant sweep finds nothing, so only the group kill reaps
+  // it. \`secs\` bounds its life, as it does a sentinel worker's.
+  setTimeout(() => process.exit(0), Number(secs) * 1000);
+  return;
+}
+if (cmd === "orphan") {
+  // A worker holding our stdio that neither reap reaches: the double fork leaves the
+  // launcher no ppid edge to it, and \`detached\` puts it in its own group. It sleeps only
+  // while both are our pipes, as \`hang\`'s does. The launcher then wedges as \`hang-self\` does.
+  const holder =
+    'require("node:child_process").spawn("sh", ["-c", ' +
+    JSON.stringify("[ -S /dev/stdout ] && [ -S /dev/stderr ] && exec sleep " + secs) + '], ' +
+    '{ detached: true, stdio: ["ignore", "inherit", "inherit"] }).unref()';
+  spawn(process.execPath, ["-e", holder], { stdio: ["ignore", "inherit", "inherit"] });
+  setTimeout(() => process.exit(0), Number(secs) * 1000);
+  return;
 }
 if (cmd === "fail") {
   // A fast, non-timeout failure: exit non-zero with stderr (like "device offline").
@@ -139,11 +160,12 @@ if (cmd === "flood-err") {
 }
 if (cmd === "linger") {
   // A CLEAN exit whose \`close\` is delayed: fork a detached worker that INHERITS our
-  // stdout (holding the write end open) and unref it, then write the result and let
-  // the launcher exit 0 naturally. \`close\` on our parent won't fire until the worker
+  // stdout and stderr (holding the write ends open) and unref it, then write the result
+  // and let the launcher exit 0 naturally. \`close\` on our parent won't fire until the worker
   // dies (its sentinel sleep), but \`exit\` fires now — runVega must resolve from the
-  // exit + drain grace with the captured stdout instead of waiting out the timeout.
-  const worker = spawn("sleep", [secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
+  // exit + drain grace with the captured stdout instead of waiting out the timeout. It
+  // sleeps only while both are our pipes, as \`hang\`'s does.
+  const worker = spawn("sh", ["-c", "[ -S /dev/stdout ] && [ -S /dev/stderr ] && exec sleep " + secs], { detached: true, stdio: ["ignore", "inherit", "inherit"] });
   worker.unref();
   process.stdout.write("OK-linger");
   // No process.exit: with the worker unref'd nothing keeps our loop alive, so we exit
@@ -280,9 +302,15 @@ async function waitForWorkerGroups(
   return sample;
 }
 
-function strayCount(sentinel: string): number {
+// A wedged launcher's own command line, as it is no `sleep` worker for sweep() to match.
+// `$` scopes it to this run, as in cmdlinePattern, and keeps out execSync's wrapper.
+function launcherPattern(cmd: "hang-self" | "orphan", tag: string): string {
+  return `/vega ${cmd} ${tag.replaceAll(".", "\\.")}$`;
+}
+
+function strayCount(pattern: string): number {
   try {
-    const out = execSync(`pgrep -f '${cmdlinePattern(sentinel)}' || true`, { encoding: "utf-8" });
+    const out = execSync(`pgrep -f '${pattern}' || true`, { encoding: "utf-8" });
     return out.split("\n").filter((l) => l.trim()).length;
   } catch {
     // -1, not 0: 0 is the pass value of every clearance assertion, so a look that never
@@ -293,17 +321,24 @@ function strayCount(sentinel: string): number {
   }
 }
 
-// Poll `strayCount` until it reaches `want`, or the deadline passes. Returns the final
-// count, so the caller asserts on a number rather than on having timed out.
-async function waitForCount(sentinel: string, want: number, timeoutMs = 3_000): Promise<number> {
+// Returns the final count, so callers assert on the number rather than on a timeout.
+async function pollCount(read: () => number, want: number, timeoutMs: number): Promise<number> {
   const deadline = Date.now() + timeoutMs;
-  let count = strayCount(sentinel);
+  let count = read();
   while (count !== want && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50));
-    count = strayCount(sentinel);
+    count = read();
   }
   return count;
 }
+
+async function waitForCount(sentinel: string, want: number, timeoutMs = 3_000): Promise<number> {
+  return pollCount(() => strayCount(cmdlinePattern(sentinel)), want, timeoutMs);
+}
+
+// Our open pipe ends, runVega's stdio included.
+const openPipes = (): number =>
+  process.getActiveResourcesInfo().filter((k) => k === "PipeWrap").length;
 
 // Signal delivery and teardown are asynchronous, so poll rather than sample once.
 async function waitForClear(sentinel: string, timeoutMs = 3_000): Promise<number> {
@@ -332,8 +367,8 @@ describe("runVega timeout (real subprocess)", () => {
     // message match but re-introduce the stacked ~40s stall; this assertion catches it.
     expect(getFailureSignal(err)?.error_kind).toBe("timeout");
     const elapsed = Date.now() - start;
-    // Settles right around the 400ms deadline — proving it does NOT wait on the
-    // worker that holds the stdout pipe open.
+    // Settles near the 400ms deadline. The reap kills the pipe-holding worker within
+    // milliseconds, so this cannot tell settling at the deadline from waiting on `close`.
     expect(elapsed).toBeLessThan(2_500);
   });
 
@@ -369,6 +404,43 @@ describe("runVega timeout (real subprocess)", () => {
     expect(await waitForClear(SENTINEL_REAP)).toBe(0);
   });
 
+  it("reaps a launcher wedged with nothing under it (the group kill alone)", async () => {
+    const pattern = launcherPattern("hang-self", SENTINEL_PREFIX);
+    const HANG_SELF_DEADLINE_MS = 4_000;
+    const run = runVega(["hang-self", SENTINEL_PREFIX], { timeoutMs: HANG_SELF_DEADLINE_MS }).catch(
+      (e: unknown) => e
+    );
+    try {
+      expect(await pollCount(() => strayCount(pattern), 1, HANG_SELF_DEADLINE_MS)).toBe(1);
+      const err = await run;
+      expect((err as Error).message).toMatch(/timed out/i);
+      expect(await pollCount(() => strayCount(pattern), 0, 3_000)).toBe(0);
+    } finally {
+      // Outside sweep()'s `sleep` namespace.
+      execSync(`pkill -9 -f '${pattern}' || true`);
+    }
+  });
+
+  it("closes its stdio on timeout when a worker neither reap reaches holds the pipe", async () => {
+    const pattern = launcherPattern("orphan", SENTINEL_ORPHAN);
+    const before = openPipes();
+    const ORPHAN_DEADLINE_MS = 3_000;
+    const run = runVega(["orphan", SENTINEL_ORPHAN], { timeoutMs: ORPHAN_DEADLINE_MS }).catch(
+      (e: unknown) => e
+    );
+    try {
+      expect(await waitForCount(SENTINEL_ORPHAN, 1, ORPHAN_DEADLINE_MS)).toBe(1);
+      expect(((await run) as Error).message).toMatch(/timed out/i);
+      expect(await pollCount(() => strayCount(pattern), 0, 3_000)).toBe(0);
+      // The worker outlives the reap, so only runVega dropping its read ends closes the pipes.
+      expect(await waitForCount(SENTINEL_ORPHAN, 0, 1_000)).toBe(1);
+      expect(await pollCount(openPipes, before, 3_000)).toBe(before);
+    } finally {
+      // Outside sweep()'s `sleep` namespace.
+      execSync(`pkill -9 -f '${pattern}' || true`);
+    }
+  });
+
   it("returns normally, leaving no timer armed, when the CLI responds before the deadline", async () => {
     const timeouts = () => process.getActiveResourcesInfo().filter((k) => k === "Timeout").length;
     const before = timeouts();
@@ -386,6 +458,7 @@ describe("runVega timeout (real subprocess)", () => {
     // timeout and then reject it as a timeout — discarding valid output. runVega instead
     // falls back to `exit` + a short drain grace and resolves with the captured stdout.
     const start = Date.now();
+    const pipesBefore = openPipes();
     await expect(runVega(["linger", SENTINEL_LINGER], { timeoutMs: 10_000 })).resolves.toEqual({
       stdout: "OK-linger",
       stderr: "",
@@ -393,6 +466,12 @@ describe("runVega timeout (real subprocess)", () => {
     // Settles around the ~1s drain grace, well under the 10s timeout — proving it does
     // not wait out the timeout (which would also have rejected rather than resolved).
     expect(Date.now() - start).toBeLessThan(5_000);
+    // The worker still holds both pipes, so only runVega dropping its read ends closes
+    // them; a held one keeps accumulating whatever the worker writes.
+    expect(await pollCount(openPipes, pipesBefore, 3_000)).toBe(pipesBefore);
+    // Alive past the drain's group reap: escaping the group is what sets this worker apart
+    // from `linger-grouped`'s.
+    expect(await waitForCount(SENTINEL_LINGER, 0, 1_000)).toBe(1);
   });
 
   it("resolves a clean exit whose drain grace outlasts the deadline (does not reject as timeout)", async () => {

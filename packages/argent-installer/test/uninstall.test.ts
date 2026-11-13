@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { stripVTControlCharacters } from "node:util";
 import {
   ALL_ADAPTERS,
   getMcpEntry,
@@ -783,6 +784,28 @@ describe("uninstall — scoped config cleanup", () => {
 
     const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
     expect(calls.some(([, args]) => args.includes("-g"))).toBe(false);
+  });
+
+  it("--yes reports only the allowlists it removed", async () => {
+    fs.mkdirSync(path.join(projDir, ".git"));
+    writeFile(
+      path.join(projDir, ".claude", "settings.json"),
+      JSON.stringify({ permissions: { allow: ["mcp__argent"] } })
+    );
+    writeFile(
+      path.join(tmpDir, ".claude", "settings.json"),
+      JSON.stringify({ permissions: { allow: ["Bash(ls)"] } })
+    );
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    const clack = await import("@clack/prompts");
+    const lines = vi
+      .mocked(clack.note)
+      .mock.calls.flatMap(([body]) => stripVTControlCharacters(String(body)).split("\n"))
+      .filter((line) => line.includes("allowlist"));
+    expect(lines).toEqual(["+ Removed Claude Code allowlist (local)"]);
   });
 
   // `npx skills add` links .kiro/skills/<name> -> ../../.agents/skills/<name>

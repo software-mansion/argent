@@ -88,6 +88,8 @@ run_phase() {
   assert_ok   "$P" run-sequence seq "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"button\",\"args\":{\"button\":\"home\"}},{\"tool\":\"gesture-tap\",\"args\":{\"x\":0.5,\"y\":0.5}}]}"
 
   assert_true "$P" open-url url "{\"udid\":\"$DEV\",\"url\":\"https://example.com\"}" '.opened'
+  # A cold Chrome start paints a black window first, below MIN_SHOT_BYTES.
+  run_tool await-screen-idle "{\"udid\":\"$DEV\",\"timeoutMs\":15000}" >/dev/null 2>&1 || true
 
   # Declared empty: a failed capture leaves its variable unassigned, and reading
   # one under `set -u` would abort the run.

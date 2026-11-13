@@ -563,6 +563,7 @@ function describeValue(value) {
   const type = typeof value;
   if (type === "number") {
     if (Number.isNaN(value)) return "NaN";
+    if (Number.isFinite(value)) return "a number";
     return value > 0 ? "Infinity" : "-Infinity";
   }
   if (type === "function") return "a function";
@@ -571,8 +572,17 @@ function describeValue(value) {
   if (type === "string") return "a string";
   if (type === "boolean") return "a boolean";
   if (Array.isArray(value)) return "an array";
-  const name = value.constructor && value.constructor.name;
-  return name ? `a ${name}` : "an object with an unusual prototype";
+  // `constructor` is inherited: on `Object.create({})` it is Object, the one
+  // class such a value is not.
+  const ctor = value.constructor;
+  const name =
+    typeof ctor === "function" &&
+    (ctor !== Object || Object.getPrototypeOf(value) === Object.prototype)
+      ? ctor.name
+      : "";
+  if (!name) return "an object with an unusual prototype";
+  // `U` takes "a": Uint8Array, URL, User.
+  return `${/^[aeio]/i.test(name) ? "an" : "a"} ${name}`;
 }
 
 function describeBytes(bytes) {

@@ -18,7 +18,9 @@ import {
   ToolNotFoundError,
   ToolExecutionError,
   FailureError,
+  getFailureSignal,
   getFailureSignalOrFallback,
+  withFailureSignal,
 } from "./errors";
 import { FAILURE_CODES } from "./failure-codes";
 import { canonicalToolArgs, ToolParamAliasError } from "./tool-ids";
@@ -237,6 +239,17 @@ export class Registry {
           : new ToolExecutionError(toolId, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
+      // After the caller's abort, the cancel is a failure the tool did not
+      // classify, an AbortError it threw, or one carrying the abort's reason.
+      const signal = options?.signal;
+      if (
+        signal?.aborted &&
+        (!getFailureSignal(error) ||
+          (error instanceof Error && error.name === "AbortError") ||
+          hasCause(error, signal.reason))
+      ) {
+        withFailureSignal(wrappedError, CANCELLED_SIGNAL);
+      }
       const failureSignal = getFailureSignalOrFallback(wrappedError);
       const failedMsg = formatInteractionMessage(
         () =>
@@ -482,6 +495,22 @@ export class Registry {
     this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
   }
 }
+
+function hasCause(error: unknown, cause: unknown): boolean {
+  let current = error;
+  for (let depth = 0; current instanceof Error && depth < 16; depth++) {
+    if (current === cause) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+const CANCELLED_SIGNAL = {
+  error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED,
+  failure_stage: "registry_tool_cancelled",
+  failure_area: "registry",
+  error_kind: "cancelled",
+} as const;
 
 /**
  * Cause for the ServiceInitializationErrors raised when a resolve races an

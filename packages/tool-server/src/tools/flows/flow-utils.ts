@@ -1289,7 +1289,7 @@ export function describeSelector(s: FlowSelector): string {
     .map(([k, v]) =>
       k === "textMatches"
         ? `text=/${escapeInline(String(v))}/`
-        : `${k === "identifier" ? "id" : k}=${JSON.stringify(String(v))}`
+        : `${k === "identifier" ? "id" : k}=${escapeInline(JSON.stringify(String(v)))}`
     )
     .join(" ");
   // The universal selector prints as CSS spells it, so a relation-only target
@@ -1321,9 +1321,9 @@ export function describeTextExpectation(
   const mode = textMatch ?? "contains";
   switch (mode) {
     case "contains":
-      return `${verbForm === "infinitive" ? "contain" : mode} ${JSON.stringify(expected)}`;
+      return `${verbForm === "infinitive" ? "contain" : mode} ${escapeInline(JSON.stringify(expected))}`;
     case "equals":
-      return `${verbForm === "infinitive" ? "equal" : mode} ${JSON.stringify(expected)}`;
+      return `${verbForm === "infinitive" ? "equal" : mode} ${escapeInline(JSON.stringify(expected))}`;
     case "matches":
       return `${verbForm === "infinitive" ? "match" : mode} /${expected}/`;
   }

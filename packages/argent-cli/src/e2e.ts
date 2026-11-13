@@ -329,9 +329,13 @@ function stepLabel(s: StepReport, topFlow: string | undefined): string {
 }
 
 export function renderStepLine(s: StepReport, n: number, topFlow: string | undefined): string {
-  const reason = s.reason ? ` — ${s.reason}` : "";
+  // A reason can quote a multi-line error (a YAML code frame, a child's
+  // stderr): its later lines go under the step, not to column 0.
+  const [head, ...more] = s.reason ? String(s.reason).split("\n") : [];
+  const reason = head !== undefined ? ` — ${head}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${stepLabel(s, topFlow)}${durationSuffix(s.durationMs)}${reason}`;
+  const line = `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${stepLabel(s, topFlow)}${durationSuffix(s.durationMs)}${reason}`;
+  return [line, ...more.map((text) => renderUnderStepLine(s, n, text))].join("\n");
 }
 
 /**

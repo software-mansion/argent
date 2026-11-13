@@ -74,11 +74,18 @@ export function makeArtifactRoute(registry: Registry) {
 
     const stream = createReadStream(entry.path);
     stream.on("error", () => {
-      if (!res.headersSent) res.status(500).json({ error: `Failed to read artifact "${id}"` });
+      if (!res.headersSent) sendDownloadError(res, `Failed to read artifact "${id}"`);
       else res.destroy();
     });
     stream.pipe(res);
   };
+}
+
+// Drops the download headers first: `res.json` keeps an existing Content-Type.
+function sendDownloadError(res: Response, error: string): void {
+  res.removeHeader("Content-Type");
+  res.removeHeader("Content-Disposition");
+  res.status(500).json({ error });
 }
 
 /** Express handler for `GET /artifacts`: the inventory, minus host paths. */
@@ -107,7 +114,7 @@ function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response)
   });
   child.on("error", (err) => {
     if (!res.headersSent) {
-      res.status(500).json({ error: `Failed to archive artifact "${id}": ${err.message}` });
+      sendDownloadError(res, `Failed to archive artifact "${id}": ${err.message}`);
     } else {
       res.destroy();
     }

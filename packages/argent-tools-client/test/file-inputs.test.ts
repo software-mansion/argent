@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { rmSync, type ReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -264,6 +265,55 @@ describe("prepareFileInputs — tar-upload kind", () => {
         { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
       )
     ).rejects.toThrow(/failed/i);
+  });
+
+  it("releases an upload body that an error reply left unread", async () => {
+    const appDir = path.join(tmpDir, "MyApp.app");
+    await fs.mkdir(appDir);
+    const bodies: ReadStream[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: { body: ReadStream }) => {
+        bodies.push(init.body);
+        return { ok: false, status: 500, statusText: "Boom", text: async () => "" };
+      })
+    );
+
+    await expect(
+      prepareFileInputs(
+        specs,
+        { appPath: appDir },
+        { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
+      )
+    ).rejects.toThrow(/failed/i);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.destroyed).toBe(true);
+  });
+
+  it("raises nothing when the unread body's open lands after the archive is removed", async () => {
+    const appDir = path.join(tmpDir, "MyApp.app");
+    await fs.mkdir(appDir);
+    const bodies: ReadStream[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: { body: ReadStream }) => {
+        // The stream opens on a later tick, so removing the archive here
+        // forces the ENOENT ordering a loaded machine produces.
+        rmSync(init.body.path);
+        bodies.push(init.body);
+        return { ok: false, status: 500, statusText: "Boom", text: async () => "" };
+      })
+    );
+
+    await expect(
+      prepareFileInputs(
+        specs,
+        { appPath: appDir },
+        { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
+      )
+    ).rejects.toThrow(/failed/i);
+    // An unheard ENOENT is raised as an uncaught error before the stream closes.
+    if (!bodies[0]!.closed) await new Promise((resolve) => bodies[0]!.once("close", resolve));
   });
 
   it("skips upload and sends a path-only wrapper when the path is not local", async () => {

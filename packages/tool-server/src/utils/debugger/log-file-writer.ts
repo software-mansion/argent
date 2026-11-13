@@ -51,9 +51,6 @@ const STALE_LOG_MS = 24 * 60 * 60 * 1000;
 const CLUSTER_KEY_LENGTH = 80;
 const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 
-// [L:<id>] <timestamp> <LEVEL> <source> | <message>
-const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
-
 const liveLogFiles = new Set<string>();
 
 export class LogFileWriter {
@@ -102,15 +99,15 @@ export class LogFileWriter {
     const source =
       sourceFile !== undefined && sourceLine !== undefined ? `${sourceFile}:${sourceLine}` : "-";
 
-    // The flat format is one line per entry
+    // One line per entry: [L:<id>] <timestamp> <LEVEL> <source> | <message>
     const flatMessage = entry.message.replace(/\n/g, " ");
     // Pad for alignment but never truncate: CDP types such as "warning" and
-    // "assert" exceed 5 chars and must round-trip back through parseFlatLine.
+    // "assert" exceed 5 chars, and a grep for the full level must find them.
     const levelDisplay = entry.level.toUpperCase().padEnd(5);
     const line = `[L:${entry.id}] ${entry.timestamp} ${levelDisplay} ${source} | ${flatMessage}\n`;
 
-    // Nothing reopens the file, and readAll() serves it alone, so a line with
-    // no file has no reader: the entry lives on only in the counts and clusters.
+    // Nothing reopens the file, so a line with no open file is lost: the entry
+    // survives only in the counts and clusters.
     if (this.ready && this.fd !== null) {
       const buf = Buffer.from(line);
       fs.writeSync(this.fd, buf);
@@ -166,33 +163,6 @@ export class LogFileWriter {
       sourceFile: c.sourceFile,
       sourceLine: c.sourceLine,
     }));
-  }
-
-  readAll(): RichLogEntry[] {
-    if (this.closed || !this.ready) return [];
-    try {
-      const content = fs.readFileSync(this.filePath, "utf-8");
-      return content
-        .split("\n")
-        .filter((line) => line.length > 0)
-        .map(parseFlatLine)
-        .filter((entry): entry is RichLogEntry => entry !== null);
-    } catch {
-      return [];
-    }
-  }
-
-  readFiltered(opts: { level?: string; limit?: number }): {
-    entries: RichLogEntry[];
-    total: number;
-  } {
-    const all = this.readAll();
-    let filtered = opts.level ? all.filter((e) => e.level === opts.level) : all;
-    const total = filtered.length;
-    if (opts.limit) {
-      filtered = filtered.slice(-opts.limit);
-    }
-    return { entries: filtered, total };
   }
 
   /** `keepFile` leaves the log to the sweep, 24h after the close. */
@@ -264,19 +234,4 @@ function cleanSourceUrl(url: string): string | null {
   } catch {
     return null;
   }
-}
-
-function parseFlatLine(line: string): RichLogEntry | null {
-  const match = LINE_RE.exec(line);
-  if (!match) return null;
-  const [, idStr, timestamp, levelRaw, , message] = match;
-  const level = levelRaw.toLowerCase().trim();
-  return {
-    marker: `[L:${idStr}]`,
-    id: parseInt(idStr, 10),
-    timestamp,
-    level,
-    message,
-    // stackTrace is not stored in the flat file
-  };
 }

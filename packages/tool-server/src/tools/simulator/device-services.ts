@@ -209,10 +209,9 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
  * target a udid or serial means and makes the caller re-target with the
  * `logicalDeviceId` Metro echoed — an opaque per-connection handle
  * `list-devices` never mints, which the debugger URN then embeds. A teardown
- * scoped to real device ids leaves that session holding its CDP socket, a bound
- * loopback server and a log file handle, while the caller's serial still
- * matches the device's OTHER services and so is not reported `unmatched`
- * either.
+ * scoped to real device ids leaves that session holding its CDP socket and a log
+ * file handle, while the caller's serial still matches the device's OTHER
+ * services and so is not reported `unmatched` either.
  *
  * Which ids those are is recorded by the connect that minted the URN, not
  * inferred from it (see {@link isLogicalKeyedDevice}). A session another agent

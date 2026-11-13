@@ -25,8 +25,9 @@ jobs:
     permissions:
       contents: read
     # A manual dispatch always runs; an automatic run only follows a
-    # *successful* publish (a failed publish has nothing new to sync).
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # *successful*, real publish (a failed publish or a dry run has nothing new
+    # to sync). publish-npm.yml's run-name marks a dry run.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.display_title != 'Publish npm package (dry run)') }}
 
     steps:
       - uses: actions/checkout@v7
