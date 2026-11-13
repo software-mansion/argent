@@ -201,7 +201,7 @@ Top-N is configurable (default 15).
 Lists prior `.trace` directories under the debug dir (`<os.tmpdir()>/argent-profiler-cwd/`, e.g. `/var/folders/.../T/argent-profiler-cwd/` on macOS) and re-parses them on demand:
 
 - `mode=list` — enumerate sessions on disk.
-- `mode=load_instruments session_id=<ts> device_id=<UDID>` — re-runs the parsing pipeline on the stored XMLs and re-hydrates the session so query tools work again.
+- `mode=load_native session_id=<ts> device_id=<UDID>` — re-runs the parsing pipeline on the stored XMLs and re-hydrates the session so query tools work again.
 - (Also supports `mode=load_react` for Hermes profiler sessions; same idea, different files.)
 
 This is what makes before/after comparisons possible without keeping the original capture session alive.
