@@ -74,6 +74,7 @@ describe("renderProfilingReport — annotation reference frame", () => {
       reactCommits: 51,
       annotations: ANNOTATIONS,
       debugDir,
+      sessionId: "20260101-000000",
     });
 
     // 216ms after "tap post".
@@ -103,6 +104,7 @@ describe("renderProfilingReport — annotation reference frame", () => {
       anyRuntimeCompilerDetected: false,
       reactCommits: 51,
       debugDir,
+      sessionId: "20260101-000000",
     });
 
     expect(report).toContain("### Commit #50");

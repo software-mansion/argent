@@ -82,6 +82,7 @@ async function report(file: string): Promise<string> {
     anyRuntimeCompilerDetected: false,
     reactCommits: 1,
     debugDir,
+    sessionId: "20260101-000000",
   });
   return out.report;
 }
