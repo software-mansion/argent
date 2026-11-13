@@ -37,6 +37,22 @@ export function iosDevice(overrides: Record<string, unknown> = {}): Record<strin
   };
 }
 
+export const IPHONE_UDID = "00008110-000978540290401E";
+
+/** A physical iPhone a provider relays: cabled to another machine, usbmuxd on a local port. */
+export function relayedIphone(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    capabilities: ["usbmuxd"],
+    kind: "device",
+    name: "iPhone 15 (desk 2)",
+    nativeId: IPHONE_UDID,
+    platform: "ios",
+    state: "connected",
+    usbmuxd: "127.0.0.1:15038",
+    ...overrides,
+  };
+}
+
 export function descriptor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     devices: [iosDevice()],
