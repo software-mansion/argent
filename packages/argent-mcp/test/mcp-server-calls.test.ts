@@ -93,6 +93,20 @@ const RUN_REPORT = {
 /** What the stub answers `e2e-execute` with: RUN_REPORT unless a test swaps it. */
 let runReport: Record<string, unknown> = RUN_REPORT;
 
+const DEVICES = {
+  devices: [
+    { platform: "ios", udid: "BOOTED", name: "iPhone 17", state: "Booted", runtimeKind: "mobile" },
+    {
+      platform: "ios",
+      udid: "STOPPED",
+      name: "iPad",
+      state: "Shutdown",
+      runtime: "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+    },
+  ],
+  avds: [],
+};
+
 type Route = (res: http.ServerResponse) => void | Promise<void>;
 
 /**
@@ -135,6 +149,9 @@ async function startStub({
       }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/list-devices") {
+        return json(200, { data: DEVICES });
       }
       // Both made while a profiler records on the device.
       if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
@@ -294,6 +311,24 @@ describe("startMcpServer tool calls", () => {
     expect(textOf(described)).not.toContain("profiler");
   });
 
+  it("renders list-devices in the short form", async () => {
+    const result = await client.callTool({ name: "list-devices", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    // One block: the short text replaces the JSON, it does not go out beside it.
+    expect(result.content).toHaveLength(1);
+    expect(textOf(result)).toBe(
+      [
+        '{"devices":[',
+        '{"platform":"ios","udid":"BOOTED","name":"iPhone 17","state":"Booted"}',
+        "],",
+        '"avds":[]}',
+        "iOS simulators that are shut down, one per line (platform, udid, name, runtime, state, tags); start one with boot-device:",
+        'ios STOPPED "iPad" iOS 27.0 Shutdown',
+      ].join("\n")
+    );
+  });
+
   it("uploads a tar-upload input and returns the tool result", async () => {
     const result = await client.callTool({
       name: "reinstall-app",
@@ -438,6 +473,8 @@ describe("startMcpServer screen capture after an interaction", () => {
   let settled: boolean;
   let idleStatus: number;
   let screenshotStatus: number;
+  let describeHint: string | undefined;
+  let describeText: string;
   let waitResult: Record<string, unknown>;
   // A hanging route never answers, as a read of a frozen device's tree.
   let idleHangs: boolean;
@@ -461,11 +498,15 @@ describe("startMcpServer screen capture after an interaction", () => {
     settled = true;
     idleStatus = 200;
     screenshotStatus = 200;
+    describeHint = undefined;
+    describeText = "button Done (0.1,0.2,0.3,0.1)";
     waitResult = { success: true, elapsed: 120 };
     idleHangs = false;
     describeHangs = false;
     const describeRoute = slow("describe", (res) =>
-      send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
+      send(res, 200, {
+        data: { description: describeText, hint: describeHint },
+      })
     );
     stub = await startStub({
       routes: {
@@ -540,6 +581,29 @@ describe("startMcpServer screen capture after an interaction", () => {
     ]);
     expect(content[0]!.text).toContain('"tapped": true');
     expect(content.at(-1)!.text).toContain("button Done");
+  });
+
+  it("keeps describe's hint with the element tree", async () => {
+    describeHint = "1 element(s) lie outside the app window and were omitted.";
+
+    const result = await tap();
+
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)!.text).toBe(
+      "--- Elements after action (describe) ---\n" +
+        "Hint: 1 element(s) lie outside the app window and were omitted.\n" +
+        "button Done (0.1,0.2,0.3,0.1)"
+    );
+  });
+
+  it("shows a hint once when the tree already contains it", async () => {
+    describeHint = "No focusable elements. Wait and call describe again.";
+    describeText = `Focused: (none)\nFocusable: (none reported)\n\nNote: ${describeHint}`;
+
+    const result = await tap();
+
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)!.text).toBe(`--- Elements after action (describe) ---\n${describeText}`);
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {
