@@ -476,17 +476,41 @@ async function spawnSimulatorServerProcess(
 }
 
 /**
- * Keeps the server capturing on demand while a profiler records on the device.
- * A server without the command rejects it at once, which is ignored. Not for
- * MoQ, whose control track has no such command.
+ * A physical Android phone captures on demand for the whole session. Its
+ * screen-sharing agent otherwise H.264-encodes the display nonstop from the
+ * moment the server starts, at about 60 frames per second whenever pixels
+ * change: CPU and battery on the phone, and bandwidth on every hop between
+ * it and this host, for frames nobody reads between two screenshots. On
+ * demand, the agent streams for about a second around each screenshot and
+ * while a recording or MJPEG viewer is connected; taps and swipes do not
+ * start it. A screenshot then takes up to about half a second longer.
+ *
+ * A provider's own word on the kind comes first, because `device.kind` is read
+ * from the shape of the id.
+ */
+function capturesOnDemandAlways(device: DeviceInfo, claim?: ExternalDevice): boolean {
+  return device.platform === "android" && (claim?.kind ?? device.kind) === "device";
+}
+
+/**
+ * Keeps the server capturing on demand while a profiler records on the device,
+ * or for its whole life on a device that always captures on demand. A server
+ * without the command rejects it at once, which is ignored. Not for MoQ, whose
+ * control track has no such command.
  */
 function withCaptureOnDemand(
-  deviceId: string,
-  instance: ServiceInstance<SimulatorServerApi>
+  device: DeviceInfo,
+  instance: ServiceInstance<SimulatorServerApi>,
+  claim?: ExternalDevice
 ): ServiceInstance<SimulatorServerApi> {
-  const unregister = registerCaptureOnDemandSender(deviceId, instance.api.apiUrl, (enabled) => {
-    sendCommand(instance.api, { cmd: "capture_on_demand", enabled }).catch(() => {});
-  });
+  const unregister = registerCaptureOnDemandSender(
+    device.id,
+    instance.api.apiUrl,
+    (enabled) => {
+      sendCommand(instance.api, { cmd: "capture_on_demand", enabled }).catch(() => {});
+    },
+    capturesOnDemandAlways(device, claim)
+  );
   return {
     ...instance,
     dispose: async () => {
@@ -553,7 +577,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     const claim = externalClaimForAnyId(device.id);
 
     if (claim) {
-      return withCaptureOnDemand(device.id, await buildAttachedInstance(device, claim));
+      return withCaptureOnDemand(device, await buildAttachedInstance(device, claim), claim);
     }
 
     if (device.platform === "ios-remote") {
@@ -637,6 +661,6 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     // The first command a foldable gets must already name its live panel, so
     // the probe runs before the instance is handed out.
     await attachFoldableDisplay(instance.api, device);
-    return withCaptureOnDemand(device.id, instance);
+    return withCaptureOnDemand(device, instance);
   },
 };

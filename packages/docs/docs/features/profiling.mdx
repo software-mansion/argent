@@ -39,10 +39,8 @@ A profiling session has four steps. The agent does each step with one tool.
 A screen capture uses CPU on the device. On a phone, it also raises the clock speeds and makes the app look faster than it is. Thus Argent keeps the screen capture low while a profiler records:
 
 - Argent does not add the screenshot and the element tree after each interaction. The agent can still take a screenshot or read the element tree when it must see the screen. Each interaction still waits until the screen stops changing, so they show the screen after the interaction.
-- On an Android emulator or device, Argent tells the simulator-server to capture the screen only for a screenshot. This needs a simulator-server version with on-demand screenshots.
-  - On an emulator, a screenshot takes one frame in about 100 ms. The capture does not start.
-  - On a physical device, a screenshot takes about 150 ms to 200 ms. It starts the capture for a short time.
-  - Taps and swipes do not start the capture.
+- On an Android emulator, Argent tells the simulator-server to capture the screen only for a screenshot. This needs a simulator-server version with on-demand screenshots. A screenshot takes one frame in about 100 ms. The capture does not start. Taps and swipes do not start the capture either.
+- A physical Android device captures the screen only for a screenshot at all times, not only while a profiler records. See [Supported platforms](/docs/fundamentals/supported-platforms#touch-targets).
 
 When two or more devices use one Metro, Argent finds the device of the React profile from a line that the app writes to the device log. Argent reads this log on Android devices and iOS simulators. On other devices, Argent keeps the screenshot and the element tree after each interaction.
 
