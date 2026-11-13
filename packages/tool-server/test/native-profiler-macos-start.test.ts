@@ -767,6 +767,87 @@ describe("startNativeProfilerMacos: the wait after the recording starts", () => 
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  describe("when xctrace says that it starts the recording before tracing starts", () => {
+    const STARTING = "Starting recording with the Argent template. Attaching to: Example (4321).\n";
+    const TRACING = "Ctrl-C to stop the recording\n";
+    /** How long the start waits for the "Ctrl-C to stop" line after "Starting recording". */
+    const TRACING_STARTED_TIMEOUT_MS = 10_000;
+
+    /** A start with the real readiness wait, which ends at the first line. */
+    async function startWithReadiness() {
+      const actual = await vi.importActual<typeof import("../src/utils/ios-profiler/startup")>(
+        "../src/utils/ios-profiler/startup"
+      );
+      readyMock.mockImplementationOnce(actual.waitForXctraceReady);
+      const api = await session();
+      const { app } = fakeMacosApp();
+      runningMock.mockResolvedValue(trackedApp(4321));
+      const pending = startNativeProfilerMacos(api, app, {
+        device_id: deviceId,
+        template_path: TEMPLATE,
+      });
+      const state = track(pending);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const child = spawnMock.mock.results[0]!.value as unknown as FakeXctrace;
+      return { api, pending, state, child };
+    }
+
+    it("waits from the Ctrl-C to stop line, which comes when tracing starts", async () => {
+      const { api, pending, state, child } = await startWithReadiness();
+
+      child.stdout.emit("data", Buffer.from(STARTING));
+      // Tracing started 1.2 to 1.7 s after this line with Xcode 27.2 and 26.6.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(state.done).toBe(false);
+      expect(api.profilingActive).toBe(false);
+
+      child.stdout.emit("data", Buffer.from(TRACING));
+      await vi.advanceTimersByTimeAsync(ARM_SETTLE_MS - 1);
+      expect(state.done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state).toEqual({ done: true, error: undefined });
+      await expect(pending).resolves.toMatchObject({ status: "recording" });
+      expect(api.profilingActive).toBe(true);
+    });
+
+    it("waits only the settle time when both lines come together", async () => {
+      const { pending, state, child } = await startWithReadiness();
+
+      child.stdout.emit("data", Buffer.from(STARTING + TRACING));
+      await vi.advanceTimersByTimeAsync(ARM_SETTLE_MS - 1);
+      expect(state.done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toMatchObject({ status: "recording" });
+    });
+
+    it("records after a time limit when the Ctrl-C to stop line does not come", async () => {
+      const { pending, state, child } = await startWithReadiness();
+
+      child.stdout.emit("data", Buffer.from(STARTING));
+      await vi.advanceTimersByTimeAsync(TRACING_STARTED_TIMEOUT_MS + ARM_SETTLE_MS - 1);
+      expect(state.done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toMatchObject({ status: "recording" });
+    });
+
+    it("fails with xctrace's exit when it quits before tracing starts", async () => {
+      const { api, state, child } = await startWithReadiness();
+
+      child.stdout.emit("data", Buffer.from(STARTING));
+      await vi.advanceTimersByTimeAsync(500);
+      child.exitWith(null, 2);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(getFailureSignal(state.error)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_EXITED
+      );
+      expect((state.error as Error).message).toContain("xctrace quit right after the recording");
+      expect(api.profilingActive).toBe(false);
+      expect(api.captureProcess).toBeNull();
+    });
+  });
 });
 
 describe("startNativeProfilerMacos and the app's code signature", () => {

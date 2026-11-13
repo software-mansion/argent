@@ -528,7 +528,7 @@ With `malloc_stack_logging: true`, Argent quits the app and starts it again with
 
 Without `malloc_stack_logging`, a memory leak has an allocation backtrace only when the app allocated the object after the start of the recording. With `malloc_stack_logging`, the leaks of older objects also have an allocation backtrace.
 
-`native-profiler-start` on a Mac app returns 1.5 seconds after xctrace reports the start of the recording, because the instruments start to record some time after this report. When xctrace quits in this time, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_EXITED`, and the error contains the last output of xctrace.
+`native-profiler-start` on a Mac app returns 1.5 seconds after xctrace reports that tracing started, because the instruments start to record some time after this report. When xctrace quits in this time, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_EXITED`, and the error contains the last output of xctrace.
 
 `native-profiler-stop` on a Mac app takes about 15 to 25 seconds for a short recording, because xctrace completes the trace and exports it. A long recording takes more time. The result has the same fields as on iOS: `traceFile`, `exportedFiles` and `exportDiagnostics`.
 
