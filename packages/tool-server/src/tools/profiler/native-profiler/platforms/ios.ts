@@ -1,11 +1,17 @@
 import { execFileSync, type ChildProcess } from "child_process";
-import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  subprocessFailureMetadata,
+} from "@argent/registry";
 import { promises as fs } from "fs";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
 import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
+import { SIMCTL_KILL_SIGNAL } from "../../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
 import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData, skippedTraceExport } from "../../../../utils/ios-profiler/export";
@@ -16,7 +22,6 @@ import {
   type SuspensionAdjustment,
 } from "../../../../utils/ios-profiler/app-suspensions";
 import type { ExportDiagnostics, IosExportKey } from "../../../../utils/ios-profiler/export";
-import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
 import {
   selectIosCaptureStrategy,
@@ -37,32 +42,21 @@ import {
   assertNoCaptureRunning,
   waitForStop,
   commitXctraceRecording,
+  endXctrace,
+  kernelTraceBusyNote,
   newTraceOutputPath,
   resolveDefaultTemplatePath,
+  settleAfterStart,
   spawnXctraceRecording,
-  xctraceProgressProbe,
-  xctraceRunErrors,
+  startAloneOnHost,
+  unfinishedRecordingReason,
+  xctraceEndWarning,
 } from "./xctrace";
 
 const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
 const MAX_START_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 1_200;
 const COLD_START_SIGNATURE = "Cannot find process matching name:";
-
-// Ceiling, not a fixed wait — 30s SIGTERM'd xctrace mid-package.
-const STOP_GRACE_MS = 300_000;
-const STOP_TERM_MS = 5_000;
-const STOP_KILL_MS = 5_000;
-/**
- * How long a stopping xctrace may make no progress (Mac apps only) before the
- * stop ends it: a fifth of the recording, within 30 s to 2 min. A healthy stop
- * starts with a wait that grows with the recording: after a 5 min recording,
- * 23 s in which xctrace's CPU time or the trace bundle changed at least every
- * 11 s.
- */
-function stallIdleMs(recordedMs: number): number {
-  return Math.min(120_000, Math.max(30_000, Math.round(recordedMs / 5)));
-}
 
 interface AppInfo {
   CFBundleExecutable: string;
@@ -82,6 +76,8 @@ interface DetectedApp {
    * matching name". Null when the target is not running; then we attach by name.
    */
   pid: number | null;
+  /** Why the running apps could not be read, when that left `pid` null. */
+  listFailure?: FailureError;
 }
 
 /**
@@ -100,6 +96,7 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        killSignal: SIMCTL_KILL_SIGNAL,
         maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
       }
     );
@@ -218,7 +215,7 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
   } catch (err) {
     // A refused `simctl` says nothing about the app, so this is not "it isn't running yet".
     if (err instanceof XcodeFirstLaunchPendingError) throw err;
-    return { executable: name, pid: null };
+    return { executable: name, pid: null, ...listFailure(err) };
   }
   const matched = runningUserApps.find(
     ({ info }) => info.CFBundleExecutable === name || info.CFBundleDisplayName === name
@@ -227,6 +224,17 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
     return { executable: matched.info.CFBundleExecutable, pid: matched.pid };
   }
   return { executable: name, pid: null };
+}
+
+const LIST_FAILURES: ReadonlySet<string> = new Set([
+  FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_LIST_FAILED,
+  FAILURE_CODES.NATIVE_PROFILER_APP_LIST_FAILED,
+]);
+
+/** A failure to read the apps says nothing about whether the app runs. */
+function listFailure(err: unknown): { listFailure?: FailureError } {
+  const code = getFailureSignal(err)?.error_code;
+  return err instanceof FailureError && code && LIST_FAILURES.has(code) ? { listFailure: err } : {};
 }
 
 function getInstalledApps(udid: string): Record<string, AppInfo> {
@@ -244,6 +252,7 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        killSignal: SIMCTL_KILL_SIGNAL,
         maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
       }
     );
@@ -284,6 +293,7 @@ function getAppBundlePath(udid: string, bundleId: string): string {
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        killSignal: SIMCTL_KILL_SIGNAL,
       }
     ).trim();
   } catch (err) {
@@ -433,16 +443,21 @@ export async function startNativeProfilerIos(
   // Warm the UDID → device-set cache; the synchronous simctl helpers below read it
   // via simctlArgsForUdidSync and would otherwise target the wrong set.
   await deviceSetForUdid(params.device_id);
+  await waitForStop(api);
+  assertNoCaptureRunning(api);
+  return startAloneOnHost(api, () => startIosRecording(api, params));
+}
 
+async function startIosRecording(
+  api: NativeProfilerSessionApi,
+  params: IosStartParams
+): Promise<{ status: "recording"; pid: number; traceFile: string }> {
   /**
    * `xctrace --device` resolves a CoreSimulator UDID, and the `ext:` prefix a
    * provider-supplied id carries means nothing outside Argent. simctl argv is
    * substituted by {@linkcode simctlArgsForUdidSync}, this one isn't.
    */
   const xctraceDevice = externalNativeId(params.device_id);
-
-  await waitForStop(api);
-  assertNoCaptureRunning(api);
 
   const templatePath = params.template_path ?? resolveDefaultTemplatePath();
 
@@ -500,6 +515,7 @@ export async function startNativeProfilerIos(
         ),
         {
           timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+          killSignal: SIMCTL_KILL_SIGNAL,
           stdio: "ignore",
         }
       );
@@ -523,6 +539,7 @@ export async function startNativeProfilerIos(
     strategy = selectIosCaptureStrategy();
     // The all-processes fallback isolates the app by PID, so it needs a live target.
     if (strategy.name === "all-processes" && detected.pid == null) {
+      if (detected.listFailure) throw detected.listFailure;
       throw new FailureError(
         `The all-processes capture fallback needs the target app to be running so its ` +
           `samples can be isolated by PID, but no running PID was found for "${appProcess}". ` +
@@ -607,10 +624,12 @@ export async function startNativeProfilerIos(
   let started: { child: ChildProcess; pid: number };
   try {
     started = await startWithRetry();
+    await settleAfterStart(api, started.child);
   } catch (err) {
     // The malloc path terminated the running app; if the capture never started,
     // relaunch it. The attach path never terminates, so only this path needs this.
-    if (mallocRelaunchBundleId) {
+    // Not after a teardown, as for one that the commit below reports.
+    if (mallocRelaunchBundleId && !api.disposed) {
       try {
         execFileSync(
           "xcrun",
@@ -621,6 +640,7 @@ export async function startNativeProfilerIos(
           ),
           {
             timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+            killSignal: SIMCTL_KILL_SIGNAL,
             stdio: "ignore",
           }
         );
@@ -663,30 +683,51 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     const traceFile = api.traceFile;
     const wasTimeout = api.recordingTimedOut;
     const exitInfo = api.lastExitInfo;
+    // The cap ended xctrace as a stop does, and xctrace may still save the trace.
+    const cappedEnd = wasTimeout && api.cappedEnd ? await api.cappedEnd : null;
+    api.cappedEnd = null;
     api.recordingTimedOut = false;
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
 
     const ended = api.recordingAppEnded;
     const suspensions = endSuspensionWatch(api);
-    const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile, ended);
+    // The cap's end read them when xctrace exited, as a stop does.
+    const runErrors = readRunErrors(api, cappedEnd?.runErrors ?? exitInfo?.runErrors ?? []);
+    const { files: exportedFiles, diagnostics } = runErrors?.skipReason
+      ? skippedTraceExport(runErrors.skipReason)
+      : await exportIosTraceData(traceFile, ended);
     api.exportedFiles = exportedFiles;
+    // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
+    api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
     // Pair the exports with the capture mode of the recording that just ended.
     api.mallocStackLogging = api.recordingMallocStackLogging;
     api.appEndedDuringCapture = ended;
-    api.exportSkipReason = diagnostics.skipped ?? null;
+    api.exportSkipReason =
+      diagnostics.skipped ?? (cappedEnd ? unfinishedRecordingReason(cappedEnd) : null);
     api.recordedMs = null;
     api.appSuspensions = suspensionSpans(suspensions, diagnostics);
 
-    let warning = wasTimeout
-      ? "Recording timed out at 10 min cap; exported the partial trace. " +
-        "Call native-profiler-start again for a fresh recording."
-      : `xctrace exited before stop was called (code=${exitInfo?.code ?? "?"}, ` +
-        `signal=${exitInfo?.signal ?? "?"}); exported the partial trace. ` +
-        (api.platform === "macos"
-          ? "Common causes: restart-app or launch-app started the app again, or xctrace was ended from outside. "
-          : "Common causes: attached app terminated, simulator daemon restart. ") +
-        "Call native-profiler-start again for a fresh recording.";
+    // When xctrace did not end on the cap's SIGINT, its warning says what is left
+    // of the data and to record again.
+    const endWarning = cappedEnd ? xctraceEndWarning(cappedEnd) : undefined;
+    const causes = wasTimeout
+      ? ""
+      : api.platform === "macos"
+        ? "Common causes: restart-app or launch-app started the app again, or xctrace was ended from outside. "
+        : "Common causes: attached app terminated, simulator daemon restart. ";
+    let warning =
+      (wasTimeout
+        ? "Recording timed out at 10 min cap; "
+        : `xctrace exited before stop was called (code=${exitInfo?.code ?? "?"}, ` +
+          `signal=${exitInfo?.signal ?? "?"}); `) +
+      (runErrors?.skipReason
+        ? runErrors.warning
+        : endWarning
+          ? [runErrors?.warning, endWarning].filter(Boolean).join(" ")
+          : "exported the partial trace. " +
+            (runErrors ? `${runErrors.warning} ` : causes) +
+            "Call native-profiler-start again for a fresh recording.");
     if (ended) warning = `${warning} ${APP_ENDED_NOTE}`;
     process.stderr.write(`[native-profiler] ${warning}\n`);
 
@@ -719,42 +760,13 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   }
 
   const child = api.captureProcess;
-  const recordedMs = Date.now() - (api.wallClockStartMs ?? Date.now());
-  const idleMs = stallIdleMs(recordedMs);
+  const recordedMs = Date.now() - (api.startReturnedMs ?? Date.now());
   // Before xctrace saves the trace and the exports run: an app that quits during
   // them did not quit during the recording.
   const ended = appEnded(api);
-  const result = await shutdownChild(child, {
-    graceMs: STOP_GRACE_MS,
-    termMs: STOP_TERM_MS,
-    killMs: STOP_KILL_MS,
-    // On a Mac app, xctrace sometimes hangs after SIGINT for good, also with no
-    // argent in the app: idle, and writing nothing.
-    ...(api.platform === "macos"
-      ? {
-          stall: {
-            probe: xctraceProgressProbe(child, api.traceFile),
-            idleMs,
-            pollMs: 2_000,
-          },
-        }
-      : {}),
-  });
-
-  let warning: string | undefined;
-  if (result.stalled) {
-    warning =
-      `xctrace hung while it ended the recording: for ${Math.round(idleMs / 1000)} s it used ` +
-      `no CPU and wrote nothing to the trace. This is a fault of xctrace, which also happens ` +
-      `without argent. argent ended it with ${result.signalUsed}, so the exported data may be ` +
-      `incomplete or missing. Call native-profiler-start again for a new recording.`;
-    process.stderr.write(`[native-profiler] ${warning}\n`);
-  } else if (!result.clean) {
-    warning =
-      `xctrace did not respond to SIGINT${result.signalUsed === "SIGKILL" ? "/SIGTERM" : ""}; ` +
-      `${result.signalUsed} was used. Trace bundle may be incomplete.`;
-    process.stderr.write(`[native-profiler] ${warning}\n`);
-  }
+  const end = await endXctrace(child, api.traceFile, recordedMs);
+  let warning = xctraceEndWarning(end);
+  if (warning) process.stderr.write(`[native-profiler] ${warning}\n`);
 
   api.profilingActive = false;
   api.capturePid = null;
@@ -764,31 +776,23 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   // After xctrace ended: it suspends the app until then.
   const suspensions = endSuspensionWatch(api);
 
-  // On a Mac app, xctrace can fail to attach and still write an empty trace.
-  const runErrors = api.platform === "macos" ? xctraceRunErrors(child) : [];
-  const attachFailed = runErrors.some((line) =>
-    line.startsWith("Failed to attach to target process")
-  );
-  if (runErrors.length > 0) {
-    const reported = runErrors.join(" ");
-    const issues = attachFailed
-      ? `xctrace could not attach to ${api.appProcess}, so nothing was recorded. xctrace ` +
-        `reported: ${reported} Call native-profiler-start again.`
-      : `xctrace reported errors for this recording, so the data may be incomplete: ${reported}`;
-    process.stderr.write(`[native-profiler] ${issues}\n`);
-    warning = warning ? `${warning} ${issues}` : issues;
+  const runErrors = readRunErrors(api, end.runErrors);
+  if (runErrors) {
+    process.stderr.write(`[native-profiler] ${runErrors.warning}\n`);
+    warning = warning ? `${warning} ${runErrors.warning}` : runErrors.warning;
   }
 
-  // Each export of an empty trace waits out its timeout.
-  const { files: exportedFiles, diagnostics } = attachFailed
-    ? skippedTraceExport("xctrace did not attach to the app, so the trace holds no data.")
+  const { files: exportedFiles, diagnostics } = runErrors?.skipReason
+    ? skippedTraceExport(runErrors.skipReason)
     : await exportIosTraceData(api.traceFile, ended);
   api.exportedFiles = exportedFiles;
+  // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
+  api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
   // Pair the exports with the capture mode of the recording that just ended.
   api.mallocStackLogging = api.recordingMallocStackLogging;
   api.appEndedDuringCapture = ended;
-  api.exportSkipReason = diagnostics.skipped ?? null;
-  api.recordedMs = api.platform === "macos" && api.wallClockStartMs !== null ? recordedMs : null;
+  api.exportSkipReason = diagnostics.skipped ?? unfinishedRecordingReason(end);
+  api.recordedMs = api.platform === "macos" && api.startReturnedMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
   if (ended) {
     // xctrace keeps recording when the app crashes, and the trace then lacks
@@ -803,6 +807,44 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   };
   if (warning) stopResult.warning = warning;
   return stopResult;
+}
+
+/**
+ * Run errors after which the trace holds nothing. Measured with Xcode 27.2 next to
+ * another recording: "Failed to start the recording: _lockKPerf: could not lock
+ * kperf. Likely another session just started.", in a trace of 1.1 s.
+ */
+const NOT_RECORDED = /^Failed to start the recording/;
+/**
+ * What the run errors that xctrace printed mean for the recording: the warning,
+ * and why to export nothing when xctrace recorded nothing (each export of an
+ * empty trace waits out its timeout). Null when xctrace printed no run error.
+ */
+function readRunErrors(
+  api: NativeProfilerSessionApi,
+  runErrors: string[]
+): { warning: string; skipReason?: string } | null {
+  if (runErrors.length === 0) return null;
+  const reported = runErrors.join(" ");
+  if (runErrors.some((line) => line.startsWith("Failed to attach to target process"))) {
+    return {
+      warning:
+        `xctrace could not attach to ${api.appProcess}, so nothing was recorded. xctrace ` +
+        `reported: ${reported} Call native-profiler-start again.`,
+      skipReason: "xctrace did not attach to the app, so the trace holds no data.",
+    };
+  }
+  if (runErrors.some((line) => NOT_RECORDED.test(line))) {
+    return {
+      warning:
+        `xctrace could not record: ${reported}${kernelTraceBusyNote(reported)} ` +
+        `Call native-profiler-start again.`,
+      skipReason: "xctrace could not start the recording, so the trace holds no data.",
+    };
+  }
+  return {
+    warning: `xctrace reported errors for this recording, so the data may be incomplete: ${reported}`,
+  };
 }
 
 /** Ends the Mac app's suspension watch: what it saw, or null when nothing watched. */

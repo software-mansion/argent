@@ -79,6 +79,8 @@ describe("clear-argent-env suite guard", () => {
       "test/setup/clear-argent-env.ts",
       "test/setup/stub-status-bar.ts",
       "test/setup/stub-xcode-first-launch.ts",
+      "test/setup/isolate-kernel-traces.ts",
+      "test/setup/stub-xctrace-processes.ts",
       "test/setup/ignore-device-providers.ts",
       "test/setup/assert-env-restored.ts",
     ]);

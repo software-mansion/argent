@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { withoutSettleAfterStart } from "../helpers/without-settle-after-start";
 import { EventEmitter } from "events";
 import {
   nativeProfilerSessionBlueprint,
@@ -10,6 +11,12 @@ import {
 const COLD_START_ERROR =
   "xctrace record exited before recording started (code=19, signal=null). " +
   "stderr: Cannot find process matching name: MyApp";
+
+/** A readiness wait that fails as xctrace exits with the cold-start signature. */
+async function coldStartExit(child: StartFakeChild): Promise<never> {
+  child.exitCode = 19;
+  throw new Error(COLD_START_ERROR);
+}
 
 class StartFakeChild extends EventEmitter {
   pid = 9999;
@@ -38,13 +45,14 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doUnmock("../../src/utils/react-profiler/debug/dump");
     vi.doUnmock("../../src/utils/ios-profiler/notify");
     vi.doUnmock("../../src/utils/ios-profiler/startup");
+    vi.doUnmock("../../src/tools/profiler/native-profiler/platforms/xctrace");
   });
 
   it("retries once when xctrace fails with the cold-start signature, then resolves", async () => {
     const spawnFn = vi.fn(() => new StartFakeChild());
     const waitForReady = vi
       .fn()
-      .mockRejectedValueOnce(new Error(COLD_START_ERROR))
+      .mockImplementationOnce(coldStartExit)
       .mockResolvedValueOnce({ stderrBuffer: "" });
 
     vi.doMock("child_process", () => ({
@@ -63,6 +71,10 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
     }));
+    vi.doMock(
+      "../../src/tools/profiler/native-profiler/platforms/xctrace",
+      withoutSettleAfterStart
+    );
     vi.doMock("../../src/utils/check-deps", () => ({
       ensureDeps: vi.fn(async () => {}),
       ensureDep: vi.fn(async () => {}),
@@ -91,7 +103,7 @@ describe("native-profiler-start cold-start retry", () => {
 
   it("throws a classified cold-start error after exhausting attempts", async () => {
     const spawnFn = vi.fn(() => new StartFakeChild());
-    const waitForReady = vi.fn().mockRejectedValue(new Error(COLD_START_ERROR));
+    const waitForReady = vi.fn(coldStartExit);
 
     vi.doMock("child_process", () => ({
       spawn: spawnFn,
@@ -109,6 +121,10 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
     }));
+    vi.doMock(
+      "../../src/tools/profiler/native-profiler/platforms/xctrace",
+      withoutSettleAfterStart
+    );
     vi.doMock("../../src/utils/check-deps", () => ({
       ensureDeps: vi.fn(async () => {}),
       ensureDep: vi.fn(async () => {}),
@@ -160,6 +176,10 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
     }));
+    vi.doMock(
+      "../../src/tools/profiler/native-profiler/platforms/xctrace",
+      withoutSettleAfterStart
+    );
     vi.doMock("../../src/utils/check-deps", () => ({
       ensureDeps: vi.fn(async () => {}),
       ensureDep: vi.fn(async () => {}),
