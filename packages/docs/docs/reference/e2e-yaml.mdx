@@ -466,12 +466,12 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 
 `argent e2e run` replays an e2e test without an agent and exits non-zero on failure. The command sends the e2e test to the tool-server that the CLI uses. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-| Command                      | Description                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist |
-| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                            |
-| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                         |
-| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                     |
+| Command                      | Description                                                                                                     |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist                |
+| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                                           |
+| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                                        |
+| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`. A directory that cannot be read gives exit code 2 |
 
 | Option               | Description                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -493,7 +493,7 @@ argent e2e run .argent/e2e --recursive
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
 
-When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. With `--output`, Argent writes the screenshot to `<dir>/<test>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
+When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. This rule includes the steps of an e2e test that a `tool: e2e-execute` step runs, and the steps of the e2e tests that run it. With `--output`, Argent writes the screenshot to `<dir>/<test>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
 
 Each step line shows the time of the step before the reason, for example `(1.2s)`. A step that did not run shows no time. The time of a `when` or `run` step does not include the steps in its block or fragment. The last line of an e2e test run shows the time of the run. The summary of a directory run shows the time of all e2e tests, for example `(1m 32s)`.
 
@@ -522,8 +522,8 @@ The outcome line of an e2e test that produced a report gives the result, the ste
 The `Failed e2e tests` section has one entry for each e2e test that failed. Each entry holds these items:
 
 - The e2e test path.
-- The first step that failed or errored, with its number. An e2e test without a report gives its outcome line instead.
-- The reason of that step, or the error message of an e2e test without a report.
+- The first step that failed or errored, with its number. An e2e test without a report gives its outcome line instead. An e2e test whose only failure is a baseline that the CLI could not write gives `baselines not written`.
+- The reason of that step, or the error message of an e2e test without a report. Then each baseline that the CLI could not write, with the path and the reason.
 - A `re-run:` command that runs only that e2e test. The command uses the same `--device`, `--platform` and `--update-baselines` options as the directory run. If the directory run has `--output`, the command writes the images of that e2e test to the same directory as the directory run.
 
 The section does not include the e2e tests that Argent skipped.
@@ -544,7 +544,7 @@ Failed e2e tests (2)
 FAIL — 4 e2e tests: 2 passed, 2 failed, 0 skipped (10.2s)
 ```
 
-When a single e2e test run fails its steps, Argent prints the first step that failed or errored, and its reason, again above the last line.
+When a single e2e test run fails its steps, Argent prints the first step that failed or errored, and its reason, again above the last line. Under the reason, Argent prints `baseline not written:` with the path and the reason of each baseline that the CLI could not write. When the only failure is such a baseline, Argent prints `baselines not written` and the path and the reason of each such baseline there instead.
 
 `--json` and `--json-stream` print no header, no outcome line, no `Failed e2e tests` section and no summary.
 
@@ -618,7 +618,7 @@ For an e2e test with `snapshot:` steps, the CLI also uploads baselines from the 
 
 When a run that compares and a run that updates use the same directory, the CLI uploads the content of each baseline that the run that compares reads. It uploads the name of each other baseline.
 
-When a run updates baselines, the tool-server returns each new baseline in the result, also the baselines of nested runs. The CLI writes each one into the directory of its run after the run, and into no other directory. When the CLI cannot write a baseline, it prints the path and the reason. The run then fails with exit code 1. When the connection closes before the result, the CLI writes no baseline.
+When a run updates baselines, the tool-server returns each new baseline in the result, also the baselines of nested runs. The CLI writes each one into the directory of its run after the run, and into no other directory. When the CLI cannot write a baseline, it prints the path and the reason. The run then fails: the summary line says `FAIL`, the report holds `"ok": false`, and the exit code is 1. When the connection closes before the result, the CLI writes no baseline.
 
 The CLI does not upload a baseline that links out of the directories above, or a `.png` name that links to a file that is not a PNG file. A `snapshot:` step that reads or writes such a baseline reports `error`. When the `__baselines__/<test>/` directory itself links out of these directories, the CLI uploads no baseline and writes none.
 
@@ -661,7 +661,7 @@ Over a link, both sources send these files with the call, and the tool-server ru
 - the snapshot baselines of each run
 - the file arguments of the `tool:` steps
 
-The client sends these files with the rules of [E2E tests over a link](#e2e-tests-over-a-link). The `project_root` argument is the project root. When a run of the call updates baselines, the client writes each new baseline into the `__baselines__/<test>/` directory of its e2e test when the run ends. When the client cannot write a baseline, the report shows `baseline not written` with the path and the reason. When the call sets `updateBaselines`, a `tool: e2e-execute` step in the e2e test also updates the baselines of its e2e test, unless the step sets `updateBaselines` itself.
+The client sends these files with the rules of [E2E tests over a link](#e2e-tests-over-a-link). The `project_root` argument is the project root. When a run of the call updates baselines, the client writes each new baseline into the `__baselines__/<test>/` directory of its e2e test when the run ends. When the client cannot write a baseline, the result holds `{ "path": "<path>", "error": "<reason>" }` for it in `baselineWrites`. `argent e2e run` and the MCP server then report the run as failed, with the path and the reason. When the call sets `updateBaselines`, a `tool: e2e-execute` step in the e2e test also updates the baselines of its e2e test, unless the step sets `updateBaselines` itself.
 
 Before the first step, Argent checks the e2e test and each fragment and nested e2e test that the client sends, at any depth. Argent rejects these:
 

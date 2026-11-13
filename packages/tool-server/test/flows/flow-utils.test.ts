@@ -166,6 +166,10 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([]);
   });
 
+  it("returns empty steps for content of only whitespace", async () => {
+    expect(parseFlow(" \n\t\n")).toEqual({ executionPrerequisite: "", steps: [] });
+  });
+
   it("defaults executionPrerequisite to empty string when missing", async () => {
     const content = "steps:\n  - echo: Hello\n";
     const flow = parseFlow(content);
@@ -224,6 +228,19 @@ describe("parseFlow", () => {
     // locate the syntax error.
     expect((thrown as Error).message).toContain("Invalid e2e test file:");
     expect((thrown as Error).message).toContain("line 1");
+  });
+
+  it("reports a syntax error at its line in the file when the file starts with blank lines", () => {
+    expect(() => parseFlow("\n\n\nsteps:\n  - echo: start\n  - echo: [unclosed\n")).toThrow(
+      "at line 6, column 20"
+    );
+  });
+
+  it.each([
+    ["spaces", "  executionPrerequisite: x\nsteps:\n  - echo: hi\n"],
+    ["a tab after blank lines", "\n\n\tsteps:\n  - echo: hi\n"],
+  ])("parses a file whose first content line is indented with %s", (_, content) => {
+    expect(parseFlow(content).steps).toEqual([{ kind: "echo", message: "hi" }]);
   });
 
   // `step must be an object` is spelled twice — here for a top-level entry, and

@@ -151,11 +151,11 @@ export interface ActionEnv {
    * frame space, for the directives that turn a UI-space direction into it
    * (`swipe: down`, `scroll-to`; see `flow-orientation.ts`) and for the
    * selector relations and picks that go by reading order (`after`, `next`,
-   * `any: true`, a `text` condition; see `ui-tree-match.ts`). Written by every
-   * read that goes through {@link readFlowTree} — the settle a swipe or a
-   * scroll round makes before it dispatches is the read that fills it, and
-   * every selector resolves against the tree of the read that just filled it
-   * — and one holder per run, shared with nested `run:` flows like
+   * `any: true`; see `ui-tree-match.ts`). Written by every read that goes
+   * through {@link readFlowTree} — the settle a swipe or a scroll round makes
+   * before it dispatches is the read that fills it, and every selector
+   * resolves against the tree of the read that just filled it — and one
+   * holder per run, shared with nested `run:` flows like
    * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
    * `ActionEnv` by hand, which leaves every direction, and reading order, in
    * the frame space.
@@ -1741,7 +1741,9 @@ async function waitForCondition(
 ): Promise<DirectiveOutcome> {
   const deadline = Date.now() + timeoutMs;
 
+  // The last TRUSTED read's matches, with the orientation they were read in.
   let lastMatches: ReturnType<typeof findAll> = [];
+  let lastMatchesOrientation: UiOrientation | undefined;
   let fetchError: string | undefined;
   let everMatched = false;
   // Date.now() of the most recent TRUSTED read — undefined until one lands.
@@ -1760,11 +1762,15 @@ async function waitForCondition(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
       const data = await readFlowTree(env);
-      lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
+      const matches = flowFindAll(data.tree, step.selector, data.uiOrientation);
       fetchError = undefined;
-      everMatched ||= lastMatches.length > 0;
+      everMatched ||= matches.length > 0;
       const blind = isBlindRead(data, everMatched, step.condition);
-      if (!blind) lastTrustedReadAt = Date.now();
+      if (!blind) {
+        lastMatches = matches;
+        lastMatchesOrientation = data.uiOrientation;
+        lastTrustedReadAt = Date.now();
+      }
       lastReadTrusted = !blind;
       fallbackHint =
         blind && step.condition === "hidden" && data.source === "macos-fallback"
@@ -1775,7 +1781,7 @@ async function waitForCondition(
         evaluateCondition(
           step.condition,
           step.expectedText,
-          lastMatches,
+          matches,
           step.textMatch,
           data.uiOrientation,
           env.device.platform === "macos"
@@ -1786,7 +1792,7 @@ async function waitForCondition(
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
       // A throw is as blind as an empty tree — `lastMatches` still holds the
-      // previous successful read, which must not pass for current evidence.
+      // previous trusted read, which must not pass for current evidence.
       lastReadTrusted = false;
     }
     if (Date.now() >= deadline) {
@@ -1875,9 +1881,7 @@ async function waitForCondition(
         step.expectedText,
         step.textMatch,
         lastMatches,
-        // The read `lastMatches` came from is the last one that answered, and
-        // only a read that answers writes the orientation.
-        readingOrientation(env),
+        lastMatchesOrientation,
         env.device.platform === "macos"
       ) + blipNote,
   };

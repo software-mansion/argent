@@ -32,7 +32,7 @@ npx @swmansion/argent@latest init --local --no-telemetry
 
 The two files merge restrictively: `false` in either one turns telemetry off. A project file can therefore never re-enable telemetry that a developer turned off globally, and `argent telemetry enable` on one machine does not override a committed project opt-out. `argent telemetry status` names the file that made the decision.
 
-The project file is found from the working directory of the process, at the nearest parent that contains `.argent`, `.git` or `package.json`. Editors start the MCP server in the workspace root, so it and the tool-server it launches read the project file. The tool-server is shared by every editor on the machine; it reads the project file of the workspace that started it.
+The project file is found from the working directory of the process, at the nearest parent that contains `.argent`, `.git` or `package.json`. An editor that starts the MCP server in the workspace root has it and the tool-server it launches read the project file. The tool-server is shared by every editor on the machine; it reads the project file of the workspace that started it.
 
 The environment variable `DO_NOT_TRACK=1` still turns telemetry off regardless of either file.
 

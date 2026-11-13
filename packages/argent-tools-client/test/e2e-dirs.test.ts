@@ -415,6 +415,29 @@ describe("a call by name whose test hides a legacy test of the same name", () =>
     }
   );
 
+  it("says so for a project_root relative to the working directory", async () => {
+    await write(e2e("both.yaml"));
+    await write(legacy("both.yaml"));
+    const { client } = stubServer(newerTools, true);
+
+    const cwd = process.cwd();
+    process.chdir(path.dirname(root));
+    try {
+      const { data } = await client.callTool("e2e-read-prerequisite", {
+        name: "both",
+        project_root: path.basename(root),
+      });
+      // The cwd chdir sets is the realpath; macOS tmpdir is a symlink.
+      const real = await fs.realpath(root);
+      expect(data).toEqual({
+        ok: true,
+        warning: warning().replaceAll(root, real),
+      });
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   it("keeps the warning a tool-server returns", async () => {
     await write(e2e("both.yaml"));
     await write(legacy("both.yaml"));

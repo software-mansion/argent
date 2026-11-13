@@ -44,8 +44,11 @@ export {
   interpolateFileInputPath,
   hasToolFileExtension,
   isClientFileArgument,
+  isUnexpandedPath,
   toolStepFiles,
 } from "./file-inputs";
+export { LAUNCH_PLATFORMS, SELECTABLE_PLATFORMS } from "./flow-platforms";
+export type { SelectablePlatform } from "./flow-platforms";
 export type {
   FileInputWire,
   FileInputKind,
@@ -63,6 +66,7 @@ export {
   collectFlowRequests,
   completeRunExtension,
   flowMemberKey,
+  flowYamlSource,
   MAX_RUN_DEPTH,
   nestedFlowTarget,
   resolveFlowRelativeFile,
