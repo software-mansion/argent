@@ -27,6 +27,11 @@ import {
 } from "../../../utils/profiler-shared/capture-guard";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
+import {
+  parseRenderSummary,
+  formatRenderTime,
+  type RenderSummary,
+} from "../../../utils/react-profiler/render-summary";
 
 // session_id is interpolated into on-disk file paths, so restrict it to a token
 // that cannot traverse out of the debug dir.
@@ -43,34 +48,6 @@ function assertSafeSessionId(sessionId: string): void {
     );
   }
 }
-
-const zodSchema = z.object({
-  mode: z
-    .enum(["list", "load_react", "load_native"])
-    .describe(
-      "list: show available sessions on disk. " +
-        "load_react: load a React profiler session into memory for query tools. " +
-        "load_native: re-parse native profiler XML files (xctrace on iOS) into memory for query tools."
-    ),
-  session_id: z
-    .string()
-    .regex(SESSION_ID_PATTERN, "session_id may only contain letters, digits, '_' and '-'")
-    .optional()
-    .describe(
-      "Timestamp-based session identifier (e.g. '20250313-143022') from the list output. " +
-        "Required for load_react and load_native modes."
-    ),
-  port: metroPortField,
-  device_id: metroDeviceIdParam(
-    "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
-  ),
-  app_process: z
-    .string()
-    .optional()
-    .describe(
-      "Android package name to use when restoring older load_native .pftrace sessions that do not have a metadata sidecar."
-    ),
-});
 
 async function listSessions(debugDir: string): Promise<string> {
   let entries: string[];
@@ -244,12 +221,14 @@ async function loadReactSession(
   let deviceName: string | null = null;
   let projectRoot: string | null = null;
   let commitCount = 0;
+  let renderSummary: RenderSummary | null = null;
   let sampleInfo = "not available";
 
   if (hasCommits) {
     try {
       const onDisk = await readCommitTree(commitsPath);
-      commitCount = onDisk.commits.length;
+      // The file holds one entry per fiber, not per commit.
+      commitCount = new Set(onDisk.commits.map((c) => c.commitIndex)).size;
       if (onDisk.meta) {
         detectedArchitecture = onDisk.meta.detectedArchitecture ?? null;
         anyCompilerOptimized = onDisk.meta.anyCompilerOptimized ?? null;
@@ -258,6 +237,7 @@ async function loadReactSession(
         appName = onDisk.meta.appName ?? null;
         deviceName = onDisk.meta.deviceName ?? null;
         projectRoot = onDisk.meta.projectRoot ?? null;
+        renderSummary = parseRenderSummary(onDisk.meta.renderSummary);
       }
     } catch {
       // non-fatal — file may be corrupted
@@ -284,6 +264,7 @@ async function loadReactSession(
     anyCompilerOptimized,
     hotCommitIndices,
     totalReactCommits,
+    loadedFromDisk: true,
   };
 
   cacheProfilerPaths(port, sessionPaths, deviceId);
@@ -297,6 +278,10 @@ async function loadReactSession(
     `- CPU profile: ${sampleInfo}`,
     `- Commits persisted (hot ±1 margin, ≥16ms): ${commitCount}`,
     `- Total React commits: ${totalReactCommits ?? "unknown"}`,
+    // Older sessions lack the summary; say so here, before render_counts does.
+    renderSummary
+      ? `- React render time (all commits): ${formatRenderTime(renderSummary)}`
+      : `- Render counts over all commits: not available for this session`,
     `- Architecture: ${detectedArchitecture ?? "unknown"}`,
     "",
     "Query tools (`profiler-cpu-query`, `profiler-commit-query`) are now ready to use against this data.",
@@ -425,6 +410,8 @@ async function loadNativeSession(
     uiHangs,
     cpuHotspots,
     memoryLeaks,
+    // Stop writes no raw_leaks.xml when the trace had no Leaks table.
+    leaksRecorded: files.leaks != null,
     mallocStackLogging: null,
     wallClockStartMs: null,
   };
@@ -444,15 +431,13 @@ async function loadNativeSession(
     `- CPU samples: ${cpuSamples.length}`,
     `- UI hangs: ${uiHangs.length}`,
     `- CPU hotspots: ${cpuHotspots.length}`,
-    `- Memory leaks: ${memoryLeaks.length}`,
+    `- Memory leaks: ${files.leaks ? memoryLeaks.length : "not recorded"}`,
     "",
     "Query tools (`profiler-stack-query`) are now ready to use against this data.",
   ];
 
   return lines.join("\n");
 }
-
-type Params = z.infer<typeof zodSchema>;
 
 const profilerLoadAction = {
   list: {
@@ -479,25 +464,47 @@ const profilerLoadAction = {
   }
 >;
 
+const zodSchema = z.object({
+  mode: z
+    .enum(["list", "load_react", "load_native"])
+    .describe("What to do; see Modes in the tool description."),
+  session_id: z
+    .string()
+    .regex(SESSION_ID_PATTERN, "session_id may only contain letters, digits, '_' and '-'")
+    .optional()
+    .describe("Timestamp-based session identifier (e.g. '20250313-143022') from the list output."),
+  port: metroPortField,
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
+  ),
+  app_process: z
+    .string()
+    .optional()
+    .describe(
+      "Android package name to pass when restoring an older load_native .pftrace session that has no metadata sidecar."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const profilerLoadTool: ToolDefinition<Params, string> = {
   id: "profiler-load",
+  description: `Fetch and restore a profiling session that react-profiler-stop or native-profiler-stop saved to disk, so the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query) can read it.
+Use when you need to revisit past session data without capturing a new recording.
+Modes:
+- list: Show all available profiling sessions in the project's debug directory.
+- load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
+- load_native: Load a native profiler session (xctrace XML on iOS, .pftrace on Android). Requires session_id.
+Loading replaces the session in memory for this device_id (and Metro port, for React): the one the query tools and react-profiler-analyze read. The replaced session stays on disk; load it again by its session_id.
+Returns a summary of the loaded session or a session list for the list mode.
+Fails if the session_id is not found or the session's trace files are missing from disk.`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) => profilerLoadAction[params.mode].started(params),
     completedMsg: ({ params }) => profilerLoadAction[params.mode].completed(params),
     failedMsg: ({ params, failureSignal }) =>
       `Failed to ${profilerLoadAction[params.mode].failure} saved profiles: ${failureSignal.error_code}`,
   },
-  description: `Fetch and restore a previously captured profiling session from disk into memory so query tools can operate on it.
-This is the disk-restore counterpart to react-profiler-stop/native-profiler-stop, which write data, and to the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query), which read it.
-Use when you need to revisit past session data without capturing a new recording.
-Modes:
-- list: Show all available profiling sessions in the project's debug directory.
-- load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
-- load_native: Re-parse native profiler XML files into memory. Requires session_id and device_id.
-  For Android .pftrace restores, pass app_process for older sessions that do not have a metadata sidecar.
-Returns a summary of the loaded session or a session list for the list mode.
-Fails if the session_id is not found or required XML files are missing from disk.`,
-  zodSchema,
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
   capability: RN_ONLY_TOOL_CAPABILITY,

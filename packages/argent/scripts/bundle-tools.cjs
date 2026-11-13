@@ -250,6 +250,17 @@ const ASSETS = [
     copiedLabel: "tvos-hid-daemon binary",
     missLabel: "tvos-hid-daemon binary",
   },
+  // argent-macos-helper, the host binary that starts a native Mac app. The two
+  // macOS dylibs ship in dylibs/macos/ with the recursive dylibs/ copy.
+  {
+    kind: "file",
+    src: path.resolve(BIN_SRC_ROOT, "darwin/argent-macos-helper"),
+    dest: path.resolve(BIN_DIR, "darwin/argent-macos-helper"),
+    mode: 0o755,
+    required: false,
+    copiedLabel: "argent-macos-helper binary",
+    missLabel: "argent-macos-helper binary",
+  },
   // Android host-side Perfetto trace processor: the third-party WASM engine
   // (trace_processor.wasm + emscripten glue + engine.mjs decoder + LICENSE).
   // wasm-trace-processor.ts resolves them at `<pkg>/assets/trace-processor/`,
@@ -676,10 +687,10 @@ if (fs.existsSync(RESOURCES_SRC)) {
   console.warn(`⚠ screen-sharing agent resources not found at ${RESOURCES_SRC} — skipping`);
 }
 
-// The Android helper APK is the only Android native artifact left (the trace
-// processor ships as WASM under assets/trace-processor/). Its filename is
-// version-stamped from manifest.json's versionName (see bundledHelperApkPath());
-// it is required at runtime, so a missing one throws.
+// The Android helper APK's filename is version-stamped from manifest.json's
+// versionName (see bundledHelperApkPath()); it is required at runtime, so a
+// missing one throws. (The trace processor ships as WASM under
+// assets/trace-processor/.)
 const manifest = JSON.parse(fs.readFileSync(ANDROID_MANIFEST_SRC, "utf8"));
 const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
 const apkSrc = path.join(ANDROID_APK_SRC_DIR, apkName);
@@ -692,4 +703,18 @@ if (fs.existsSync(apkSrc)) {
       `Run: bash scripts/download-native-binaries.sh (fetches from argent-private-releases)\n` +
       `or: bash packages/native-devtools-android/scripts/build.sh`
   );
+}
+
+// The network inspector agent is optional at runtime: without it,
+// native-network-logs reports the Android app as not attachable and points to
+// the JS layer. So a local build without it only warns; publish-npm.yml fails a
+// release that lacks it.
+const NETWORK_INSPECTOR_SRC = path.join(ANDROID_APK_SRC_DIR, "network-inspector");
+if (fs.existsSync(NETWORK_INSPECTOR_SRC)) {
+  fs.cpSync(NETWORK_INSPECTOR_SRC, path.join(BIN_DIR, "network-inspector"), { recursive: true });
+  console.log(
+    `✓ Copied network inspector agent → ${path.relative(process.cwd(), BIN_DIR)}/network-inspector`
+  );
+} else {
+  console.warn(`⚠ network inspector agent not found at ${NETWORK_INSPECTOR_SRC} — skipping`);
 }

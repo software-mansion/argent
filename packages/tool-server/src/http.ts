@@ -44,6 +44,7 @@ import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inpu
 import {
   assertSupported,
   InvalidToolInputError,
+  isFlagOffered,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
@@ -71,6 +72,7 @@ import {
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 import { renderFlagGated } from "./utils/flag-gated-text";
+import { directCallFailure } from "./utils/tool-result-verdict";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -103,7 +105,7 @@ function isToolExposed(
   def: { featureFlag?: string; hideWhen?: () => boolean } | undefined
 ): boolean {
   if (!def) return false;
-  if (def.featureFlag && !isFlagEnabled(def.featureFlag)) return false;
+  if (def.featureFlag && !isFlagOffered(def.featureFlag)) return false;
   if (def.hideWhen?.()) return false;
   return true;
 }
@@ -176,16 +178,18 @@ function extractDeviceArg(data: unknown): string | null {
 }
 
 /**
- * Whether the call names a physical iPhone as the device it acts on. Reads
+ * The physical iPhone the call names as the device it acts on, if any. Reads
  * `device` as well as the three spellings above: `flow-execute` names its
  * target that way, and a session that only replays flows on the phone must
  * still be handed the signing note.
  */
-function targetsIosPhysicalDevice(data: unknown): boolean {
+function targetedIosPhysicalDevice(data: unknown): string | null {
   const record = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
   const flowDevice = typeof record?.device === "string" ? record.device : null;
   const deviceArg = extractDeviceArg(data) ?? flowDevice;
-  return deviceArg !== null && isIosPhysicalDevice(resolveDevice(deviceArg));
+  if (deviceArg === null) return null;
+  const device = resolveDevice(deviceArg);
+  return isIosPhysicalDevice(device) ? device.id : null;
 }
 
 type InvocationMeta = {
@@ -694,18 +698,18 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           aliasOf?: string;
         } = {
           name: def.id,
-          description: renderFlagGated(def.description ?? "", isFlagEnabled),
+          description: renderFlagGated(def.description ?? "", isFlagOffered),
           inputSchema: renderFlagGated(
             def.inputSchema ?? { type: "object", properties: {} },
-            isFlagEnabled
+            isFlagOffered
           ),
         };
-        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagEnabled);
+        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagOffered);
         if (def.fileInputs && def.fileInputs.length > 0) {
           entry.fileInputs = withFormerParamSpecs(def.id, def.fileInputs);
         }
         if (def.alwaysLoad) entry.alwaysLoad = true;
-        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagEnabled);
+        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagOffered);
         if (def.longRunning) entry.longRunning = true;
         if (def.hideFromMcp) entry.hideFromMcp = true;
         if (def.readOnly) entry.readOnly = true;
@@ -1071,13 +1075,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
         const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
         if (shouldNotify) {
-          // A persistence failure must not fail the user's tool call; worst case the
-          // note appears again on the next request.
-          try {
-            suppressUpdateNote(AUTO_SUPPRESS_MS);
-          } catch {
-            // ignore
-          }
+          suppressUpdateNote(AUTO_SUPPRESS_MS);
         }
         const notes: string[] = shouldNotify
           ? [buildUpdateNote(currentVersion, installableVersion ?? "unknown")]
@@ -1088,13 +1086,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (activeRecordings.length > 0) {
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
         }
-        // Staged once when keychain team detection first signs the on-device
-        // runner (utils/ios-device/team-detect); drained here into the first
-        // completed call that targets a physical iPhone, so the agent driving
-        // the hardware learns which team was picked and how to override, and a
-        // caller on another platform sharing this tool-server never does.
-        const signingNote = targetsIosPhysicalDevice(parsedData)
-          ? consumePendingSigningDetectionNote()
+        // Staged once per phone and team when keychain team detection signs the
+        // on-device runner (utils/ios-device/team-detect); drained here into the
+        // first completed call that targets that phone, so the agent driving it
+        // learns which team was picked and how to override, and a caller on
+        // another phone or platform sharing this tool-server never does.
+        const targetedPhone = targetedIosPhysicalDevice(parsedData);
+        const signingNote = targetedPhone
+          ? consumePendingSigningDetectionNote(targetedPhone)
           : null;
         if (signingNote) {
           notes.push(signingNote);
@@ -1112,11 +1111,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           deviceArg && isProfiling(canonicalDeviceId(deviceArg) ?? deviceArg)
             ? { profiling: true }
             : {};
+        // A failure the tool returned rather than threw, so a client that only
+        // checks for an error (`argent run`'s exit status) still sees it.
+        const failure = directCallFailure(name, data);
+        const failurePayload = failure !== undefined ? { failure } : {};
         if (wantsStream) {
-          writeLine({ event: "result", data, ...notePayload, ...profilingPayload });
+          writeLine({
+            event: "result",
+            data,
+            ...notePayload,
+            ...profilingPayload,
+            ...failurePayload,
+          });
           res.end();
         } else {
-          res.json({ data, ...notePayload, ...profilingPayload });
+          res.json({ data, ...notePayload, ...profilingPayload, ...failurePayload });
         }
       } catch (err: unknown) {
         /**

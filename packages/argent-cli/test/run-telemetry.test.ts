@@ -4,6 +4,7 @@ import { run } from "../src/run.js";
 const toolsClientMock = vi.hoisted(() => ({
   fetchTool: vi.fn(),
   callTool: vi.fn(),
+  baseUrl: vi.fn(async () => ({ url: "http://127.0.0.1:1", token: undefined })),
 }));
 
 const telemetryMock = vi.hoisted(() => ({
@@ -12,7 +13,8 @@ const telemetryMock = vi.hoisted(() => ({
   track: vi.fn(),
 }));
 
-vi.mock("@argent/tools-client", () => ({
+vi.mock("@argent/tools-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/tools-client")>()),
   createToolsClient: vi.fn(() => toolsClientMock),
 }));
 
@@ -47,6 +49,24 @@ describe("argent run telemetry", () => {
     exitSpy.mockRestore();
     errorSpy.mockRestore();
     logSpy.mockRestore();
+  });
+
+  it("emits cli:run_fail when the result reports a failure", async () => {
+    toolsClientMock.callTool.mockResolvedValue({ data: { ok: false }, failure: "it failed" });
+
+    await expect(run(["sample-tool"], { paths: {} as never })).rejects.toThrow("process.exit:1");
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "cli:run_fail",
+      expect.objectContaining({
+        tool: "sample-tool",
+        error_code: "CLI_RUN_TOOL_RESULT_FAILED",
+        failure_stage: "cli_run_tool_result",
+        failure_area: "cli",
+        error_kind: "unknown",
+      })
+    );
+    expect(telemetryMock.shutdown).toHaveBeenCalledTimes(1);
   });
 
   it("emits cli:run_fail, not tool:fail, when tool-server call fails", async () => {

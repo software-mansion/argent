@@ -31,6 +31,7 @@ import type {
 } from "@argent/registry";
 import {
   appIdForPlatform,
+  appLaunchArgs,
   authoringPlatform,
   assertSafeFlowName,
   assertValidProjectRoot,
@@ -38,7 +39,6 @@ import {
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
   flowNameCasingError,
-  iosLaunchArgs,
   isBlockStep,
   parseFlow,
   precedesLeadingLaunch,
@@ -74,17 +74,19 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { supportsFlowTree } from "./flow-tree";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
-import { isUnmetUiWaitResult } from "../await-ui-element";
-import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
+  deviceResolutionError,
   resolveFlowDevice,
+  assertDeviceMeetsRequires,
+  assertPlatformMeetsRequires,
   bindDeviceArgs,
   flowRequiresDevice,
   flowScopesDevice,
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
-import { isNestedOrchestratorTool, nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import { isNestedOrchestratorTool } from "./flow-nested-outcome";
+import { toolResultVerdict } from "../../utils/tool-result-verdict";
 import {
   runDirective,
   invokeOnDevice,
@@ -111,80 +113,21 @@ import {
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
-import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import {
+  isIosPhysicalDevice,
+  isMacosBundleId,
+  macosAppIdFromBundleId,
+  parseChromiumCdpPort,
+  resolveDevice,
+} from "../../utils/device-info";
+import { assertSupported, MACOS_APPS_FLAG } from "../../utils/capability";
+import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
+import { getTrackedMacosApp, otherWorktreeOfBuild } from "../../utils/macos-apps";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import type { ArtifactHandle } from "../../artifacts";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
-
-const zodSchema = z
-  .object({
-    name: z
-      .string()
-      .optional()
-      .describe(
-        'Name of a saved e2e test to run from `.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore"). Omit when e2e_test_path is set.'
-      ),
-    project_root: z
-      .string()
-      .describe(
-        "Absolute path to the calling agent's project root: the cwd it is working in. With name, the saved e2e test is read from `.argent/e2e/<name>.yaml`, else `.argent/flows/<name>.yaml`, under this root; with e2e_test_path, the e2e test, its run: siblings, its script: paths and baselines all resolve beside the YAML instead, so pass the agent's cwd. A script still RUNS in this root whichever source was used."
-      ),
-    e2e_test_file: z
-      .string()
-      .optional()
-      .describe(
-        "Path to the e2e test .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
-      ),
-    e2e_test_path: z
-      .string()
-      .optional()
-      .describe(
-        "Omit when name is set. Absolute path to an e2e test .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file, its run: fragments and the snapshot baselines of each run, and the tool-server runs those copies. Keep run: fragments under project_root or beside the e2e test file. With updateBaselines, the client writes the new baselines when the run ends. The client also uploads each absolute .png or .yaml path that a tool: step takes as a file argument, when the file is under project_root or beside the e2e test file. A tool: e2e-execute step that names an e2e test with name and an absolute project_root without a .. segment runs: the client also uploads that e2e test and its own files. Over a link, the uploaded e2e tests must not have: script: steps; tool: steps that run an e2e test another way or record an e2e test; tool: steps that take a directory, an app or an output directory; tool: steps whose tool builds a file path from several arguments; tool: steps that name a relative path or a file other than .png or .yaml. Without a link, the tool-server reads the files in place and all step kinds run."
-      ),
-    device: z
-      .string()
-      .optional()
-      .describe(
-        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform`); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
-      ),
-    platform: z
-      .enum(SELECTABLE_PLATFORMS)
-      .optional()
-      .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; pass `ios-remote` to select a remote one. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for a standalone e2e test - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or a standalone e2e test's launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
-      ),
-    updateBaselines: z
-      .boolean()
-      .optional()
-      .describe(
-        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself."
-      ),
-    prerequisiteAcknowledged: z
-      .boolean()
-      .optional()
-      .describe(
-        "Set to true to confirm the execution prerequisite has been met. Required (LLM path) when a fragment defines an executionPrerequisite."
-      ),
-  })
-  .superRefine((params, ctx) => {
-    if ((params.name === undefined) === (params.e2e_test_path === undefined)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          params.name !== undefined
-            ? "Pass exactly one e2e test source: name or e2e_test_path."
-            : "Pass exactly one e2e test source: name or e2e_test_path. e2e-execute needs the e2e test's " +
-              "name in `name` — it resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.",
-        // The ROOT, not `e2e_test_path`: the rule spans both source fields, and a
-        // path would prefix the message with "`e2e_test_path`:".
-        path: [],
-      });
-    }
-  });
-
-type Params = z.infer<typeof zodSchema>;
 
 // A dual-source call (name + e2e_test_path) must be diagnosed by the schema's
 // exactly-one rule, not by whether either unused file happens to exist:
@@ -234,7 +177,9 @@ export interface StepReport {
    * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited.
+   * from one that waited. Also raised by a launch whose Android native network
+   * capture note differs from the last one reported for that app
+   * ({@link networkCaptureWarning}).
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -677,7 +622,34 @@ async function treeSourceGate(
       );
     }
   }
+  // A Mac app needs no gate: restart-app returns once its library has connected.
   return null;
+}
+
+/**
+ * The `networkCapture` note an Android launch-app or restart-app result carries
+ * while native network capture, started earlier by `native-network-logs`, is on
+ * for the app: whether the capture followed the app into the new process.
+ * Reported as a step warning: the step passed, but the app may run
+ * instrumented. A flow that relaunches the same app repeats a note only when it
+ * differs from the last one reported for that app, so a later launch that
+ * attached is not hidden behind an earlier one that did not. Numbers are
+ * ignored in that comparison, so a new pid alone does not make a note differ.
+ */
+function networkCaptureWarning(
+  state: ExecState,
+  bundleId: unknown,
+  result: unknown
+): string | undefined {
+  if (typeof bundleId !== "string" || typeof result !== "object" || result === null) {
+    return undefined;
+  }
+  const note = (result as { networkCapture?: unknown }).networkCapture;
+  if (typeof note !== "string" || note === "") return undefined;
+  const key = note.replace(/\d+/g, "#");
+  if (state.networkCaptureNoted.get(bundleId) === key) return undefined;
+  state.networkCaptureNoted.set(bundleId, key);
+  return note;
 }
 
 /**
@@ -714,8 +686,15 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // The previous app is terminating and the new one has not started, so a
   // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
-  // An ios `{ app, args }` entry's args reach only an iOS device.
-  const launchArgs = authoringPlatform(device.platform) === "ios" ? iosLaunchArgs(app) : undefined;
+  // An `{ app, args }` entry's args reach only its own platform. A Mac app
+  // declared without args gets none, not the arguments of its last start.
+  const key = authoringPlatform(device.platform);
+  const launchArgs =
+    key === "ios"
+      ? appLaunchArgs(app, "ios")
+      : key === "macos"
+        ? (appLaunchArgs(app, "macos") ?? [])
+        : undefined;
   let restart: unknown;
   try {
     restart = await invokeOnDevice(env, "restart-app", {
@@ -744,7 +723,31 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // A FRESH object every time, never a mutation of the previous target: the
   // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
   state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
-  return { ok: true };
+  // A Mac app's note: argent force-quit its own copy, or the new process
+  // showed no window in time. The launch worked either way.
+  const warnings = [
+    (restart as { note?: string } | null)?.note,
+    networkCaptureWarning(state, bundleId, restart),
+  ];
+  // Host mode only: in client mode `projectRoot` is a path on the client, which
+  // git on this host cannot compare with the build's worktree.
+  if (device.platform === "macos" && state.project.mode === "host") {
+    // restart-app starts the build argent recorded last for the bundle id,
+    // whoever booted it: in one worktree that can be another worktree's build.
+    const appPath = getTrackedMacosApp(bundleId)?.appPath;
+    const other = appPath ? await otherWorktreeOfBuild(appPath, state.projectRoot) : null;
+    if (other) {
+      warnings.push(
+        `launch started ${bundleId} from ${appPath}, a build of another worktree (${other}), ` +
+          `so this e2e test may run that worktree's code. argent does not replace a copy of ` +
+          `another build: quit that copy if it is yours (menu-bar can choose its Quit command), ` +
+          `then boot this worktree's build with boot-device. Give each worktree's build a ` +
+          `bundle id of its own when several run at once.`
+      );
+    }
+  }
+  const warning = warnings.filter(Boolean).join(" ");
+  return warning ? { ok: true, warning } : { ok: true };
 }
 
 /**
@@ -1110,6 +1113,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   attachedAppPath?: string;
   projectRoot: string;
   scriptLogBudget: FlowScriptLogBudget;
+  /**
+   * The last native network capture note this run reported for each app (see
+   * {@link networkCaptureWarning}). Shared with nested `run:` flows.
+   */
+  networkCaptureNoted: Map<string, string>;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -1501,11 +1509,91 @@ function assertUploadSelfContained(
   );
 }
 
+const zodSchema = z
+  .object({
+    name: z
+      .string()
+      .optional()
+      .describe(
+        'Name of a saved e2e test to run from `<project_root>/.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore").'
+      ),
+    project_root: z
+      .string()
+      .describe(
+        "Absolute path to the calling agent's project root: the cwd it is working in, also with e2e_test_path, where the e2e test, its run: siblings, its script: paths and baselines resolve beside the YAML instead. A script still RUNS in this root."
+      ),
+    e2e_test_file: z
+      .string()
+      .optional()
+      .describe(
+        "Path to the e2e test .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
+      ),
+    e2e_test_path: z
+      .string()
+      .optional()
+      .describe("Absolute path to an e2e test .yaml on the client."),
+    device: z
+      .string()
+      .optional()
+      .describe(
+        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id<flag:macos-apps>, Mac app id</flag:macos-apps>), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform` and the e2e test's `requires:` block); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
+      ),
+    platform: z
+      .enum(SELECTABLE_PLATFORMS)
+      .optional()
+      .describe(
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map, or a `requires:` block that allows only chromium, does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`.<flag:macos-apps> `macos` with no `device` runs a standalone e2e test on the Mac app its `launch` names, which need not be running (a single-key `launch: { macos: … }` map does this on its own). Auto-detection never picks a Mac app otherwise.</flag:macos-apps>"
+      )
+      .meta({ [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } }),
+    updateBaselines: z
+      .boolean()
+      .optional()
+      .describe(
+        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself. Over a link, the client writes the new baselines when the run ends."
+      ),
+    prerequisiteAcknowledged: z
+      .boolean()
+      .optional()
+      .describe(
+        "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite: without it, the call runs no step and returns the prerequisite text. Not a dry run: an e2e test with no prerequisite runs in full. To read a prerequisite without running, read executionPrerequisite in the YAML file."
+      ),
+  })
+  .superRefine((params, ctx) => {
+    if ((params.name === undefined) === (params.e2e_test_path === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          params.name !== undefined
+            ? "Pass exactly one e2e test source: name or e2e_test_path."
+            : "Pass exactly one e2e test source: name or e2e_test_path. e2e-execute needs the e2e test's " +
+              "name in `name` — it resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.",
+        // The ROOT, not `e2e_test_path`: the rule spans both source fields, and a
+        // path would prefix the message with "`e2e_test_path`:".
+        path: [],
+      });
+    }
+  });
+
+type Params = z.infer<typeof zodSchema>;
+
 export function createRunFlowTool(
   registry: Registry
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "e2e-execute",
+    description: `Run a saved YAML e2e test end to end. Use when
+asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
+one-off interaction use the gesture tools instead, and to author an e2e test use e2e-start-recording. Pass
+exactly one e2e test source: name (under project_root) or e2e_test_path.
+Returns a per-step report: the first failure stops the run and the rest report as skipped.
+Over a link (argent link or ARGENT_TOOLS_URL), the client uploads the e2e test with the run: fragments,
+snapshot baselines and absolute .png/.yaml file arguments its steps use, from under project_root or beside
+the e2e test file. The run fails if a step needs any other project file (a script: step, a recording tool,
+a nested e2e-execute not called by name with an absolute project_root, a directory, app or output-directory
+argument, a file path built from several arguments, a relative path): it stops before the first step and the
+error lists each such step. An absolute .png/.yaml argument from anywhere else fails only when its step runs.
+Without a link, every step kind runs.`,
+    zodSchema,
     aliases: ["flow-execute"],
     interaction: {
       startedMsg: ({ params }) => `Running e2e test ${displayFlowName(params)}`,
@@ -1513,13 +1601,7 @@ export function createRunFlowTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to run e2e test ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
-    description: `Run a saved YAML e2e test end to end. Use when
-asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
-one-off interaction use the gesture tools instead, and to author an e2e test use e2e-start-recording. Pass
-exactly one e2e test source: name (under project_root) or e2e_test_path.
-Returns a per-step report: the first failure stops the run and the rest report as skipped.`,
     longRunning: true,
-    zodSchema,
     fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
@@ -1650,12 +1732,27 @@ Returns a per-step report: the first failure stops the run and the rest report a
         }
       }
 
+      // After the file checks, so an invalid test never reads as a skip, and before the
+      // prerequisite handshake asks the caller to set up a run that cannot happen.
+      if (params.device) {
+        await assertDeviceMeetsRequires(resolveDevice(params.device), flow.requires);
+      } else if (params.platform) {
+        assertPlatformMeetsRequires(
+          params.platform,
+          flow.requires,
+          `the ${params.platform} target this run was pointed at`
+        );
+      }
+
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
       // launch step cannot declare one — validated at parse, and a leading
       // run: chain into a launch is rejected just above unless that launch
       // merely attaches). The chromium-pinned run exempted above lands here and
       // takes the ordinary notice/acknowledge path.
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
+        // Fail now rather than ask the caller to set up a run that cannot happen. No boot is
+        // possible here: a leading launch was refused above unless the run is pinned to a device.
+        await resolveRunDevice(registry, ctx, flow, params, flowsDir, seed, viaUpload, project);
         return {
           e2eTest: flowName,
           flow: flowName,
@@ -1745,6 +1842,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
         snapshotApps: new Map(),
         projectRoot: params.project_root,
         scriptLogBudget: createScriptLogBudget(),
+        networkCaptureNoted: new Map(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -1803,7 +1901,9 @@ Returns a per-step report: the first failure stops the run and the rest report a
  * `device` is given, this boots a fresh Electron instance from the launch's
  * app path and returns it for teardown — a fragment whose leading `run:` chain
  * reaches a chromium standalone flow boots just the same ({@link leadingLaunch}).
- * Otherwise it attaches to an already-booted device. An explicit `device`
+ * When that launch is unambiguously macOS, the run device is the Mac app it
+ * names ({@link macosLaunchDeviceId}), running or not: its launch step starts
+ * it. Otherwise it attaches to an already-booted device. An explicit `device`
  * never boots here — only a launch step beyond the first moves off it onto an
  * instance the runner owns ({@link bootChromiumForLaunch}). `flowDir` is the
  * root flow file's canonical directory — the base for a relative chromium app
@@ -1827,8 +1927,17 @@ async function resolveRunDevice(
     // The executor's own runStack seed, so a boot can never precede a chain it
     // then refuses.
     const leading = await leadingLaunch(flow, runStack, { registry, project });
-    const spec = leading && chromiumBootSpec(leading.app, params.platform);
+    // A block that allows only chromium (or only macos) picks that entry of a multi-platform launch.
+    const only = flow.requires?.platform?.length === 1 ? flow.requires.platform[0] : undefined;
+    const platform =
+      params.platform ?? (only === "chromium" || only === "macos" ? only : undefined);
+    const spec = leading && chromiumBootSpec(leading.app, platform);
     if (spec) {
+      assertPlatformMeetsRequires(
+        "chromium",
+        flow.requires,
+        "the chromium app its leading launch boots"
+      );
       let booted: BootedChromium;
       try {
         booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
@@ -1836,6 +1945,15 @@ async function resolveRunDevice(
         throw hoistedBootFailure(err);
       }
       return { device: resolveDevice(booted.deviceId), booted };
+    }
+    // A Mac app is the device, and its id is built from the bundle id, so a
+    // flow led by a macOS launch needs nothing running: the launch starts the
+    // app. Resolved as an explicit id, so the flag refusal applies.
+    const macosDevice = leading && macosLaunchDeviceId(leading.app, platform);
+    if (macosDevice) {
+      const device = await resolveFlowDevice(registry, ctx, { device: macosDevice });
+      await assertDeviceMeetsRequires(device, flow.requires);
+      return { device, booted: null };
     }
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
@@ -1854,16 +1972,29 @@ async function resolveRunDevice(
       // path exists to avoid.
       try {
         return {
-          device: await resolveFlowDevice(registry, ctx, resolveOpts(params)),
+          device: await resolveFlowDevice(registry, ctx, {
+            ...resolveOpts(params),
+            requires: flow.requires,
+          }),
           booted: null,
         };
       } catch (err) {
-        if (getFailureSignal(err)?.error_code !== FAILURE_CODES.FLOW_DEVICE_RESOLUTION) throw err;
+        const signal = getFailureSignal(err);
+        // An unreadable `requires.runtimeKind` shares the code but is a failed probe.
+        if (
+          signal?.error_code !== FAILURE_CODES.FLOW_DEVICE_RESOLUTION ||
+          signal.failure_stage === "flow_requirements"
+        ) {
+          throw err;
+        }
         return { device: null, booted: null };
       }
     }
   }
-  const device = await resolveFlowDevice(registry, ctx, resolveOpts(params));
+  const device = await resolveFlowDevice(registry, ctx, {
+    ...resolveOpts(params),
+    requires: flow.requires,
+  });
   return { device, booted: null };
 }
 
@@ -2048,6 +2179,26 @@ function chromiumBootSpec(
 ): { path: string; args?: string[] } | null {
   if (launchTargetPlatform(app, platform) !== "chromium") return null;
   return chromiumLaunchSpec(app);
+}
+
+/**
+ * The Mac app device id (`macos-app-<bundle id>`) for a run whose leading
+ * launch is unambiguously a macOS one - `--platform macos`, or a single-key
+ * `{ macos: ... }` map - or null. The bundle id is read as the launch step
+ * reads it ({@link appIdForPlatform}: the `macos` key, else `native`, else the
+ * bare string). A launch that declares no macOS app is left to the device
+ * list, and the launch step then reports the missing entry.
+ */
+function macosLaunchDeviceId(app: Launch, platform: string | undefined): string | null {
+  if (launchTargetPlatform(app, platform) !== "macos") return null;
+  const bundleId = appIdForPlatform(app, "macos");
+  if (bundleId === null) return null;
+  if (!isMacosBundleId(bundleId)) {
+    throw deviceResolutionError(
+      `launch names "${bundleId}" for macos, which is not a bundle id: use letters, digits, "." and "-", starting with a letter or digit.`
+    );
+  }
+  return macosAppIdFromBundleId(bundleId);
 }
 
 /**
@@ -2674,6 +2825,15 @@ async function execRunStep(
   const refusal = fragmentLoadRefusal(state.registry, fragment, target);
   if (refusal !== undefined) return fail(refusal);
 
+  // A failure, not a skip: a fragment that silently did not run would leave a green report.
+  if (state.device) {
+    try {
+      await assertDeviceMeetsRequires(state.device, fragment.requires, `Fragment "${target}"`);
+    } catch (err) {
+      return fail(errMsg(err));
+    }
+  }
+
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory
   // becomes the anchor for `run:` paths inside it; baselines stay anchored to
@@ -2772,6 +2932,10 @@ async function runFold(
     ...(step.angle !== undefined ? { angle: step.angle } : {}),
   });
   try {
+    // The capability refusal a raw `tool: fold` step gets (see execLeafStep).
+    if (device.platform === "macos") {
+      assertSupported("fold", registry.getTool("fold")?.capability, device);
+    }
     const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
       activeScreen?: number;
       screen?: { panel?: string; width?: number; height?: number };
@@ -2827,7 +2991,12 @@ async function execLeafStep(
       // A run cancelled mid-launch is a skip (matching the pre-step guard and
       // the directives), never a step failure — the app did nothing wrong.
       if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-      return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
+      return {
+        ...base,
+        status: r.ok ? "pass" : "error",
+        reason: r.reason,
+        ...(r.warning !== undefined ? { warning: r.warning } : {}),
+      };
     }
 
     case "tap":
@@ -2980,6 +3149,13 @@ async function execLeafStep(
       // sent with the call for its own steps.
       let prepared: PreparedToolStep | undefined;
       try {
+        // `Registry.invokeTool` does not assert capabilities (only the HTTP edge
+        // does), and most tools pick their backend by elimination: on a Mac app
+        // a raw `tool: gesture-pinch` would reach the simulator-server. Refuse it
+        // here with the tool's own capability message instead.
+        if (device?.platform === "macos") {
+          assertSupported(step.name, registry.getTool(step.name)?.capability, device);
+        }
         prepared = await prepareToolStepInputs(
           registry,
           state.project,
@@ -2994,57 +3170,15 @@ async function execLeafStep(
             ? { flowStack: scope.runStack }
             : {}),
         });
-        if (isUnmetUiWaitResult(step.name, result)) {
-          const note = (result as { note?: string }).note;
+        // A tool that reports its failure in a result it returns instead of
+        // throwing would otherwise count as a passing step (#606).
+        const verdict = toolResultVerdict(step.name, result);
+        if (verdict) {
           return {
             ...base,
-            status: "fail",
+            status: verdict.status,
             tool: step.name,
-            reason: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
-          };
-        }
-        // `flow-execute` and `run-sequence` run other tools and report what
-        // happened in their result instead of throwing, so without this a
-        // composition that failed everything counted as a passing step (#606).
-        const nested = nestedOrchestratorOutcome(step.name, result);
-        if (nested) {
-          return {
-            ...base,
-            status: nested.status,
-            tool: step.name,
-            reason: nested.reason,
-            result,
-            outputHint,
-            args,
-          };
-        }
-        if (isDebuggerNotConnectedResult(step.name, result)) {
-          // Keep `detail` in the report: it is the only place the underlying
-          // error text lives (device_mismatch's guidance points the agent at
-          // the logicalDeviceId "listed in the detail message", and the
-          // metro_not_running `got:` fragment names what actually answered the
-          // port).
-          return {
-            ...base,
-            status: "fail",
-            tool: step.name,
-            reason: `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}`,
-            result,
-            outputHint,
-            args,
-          };
-        }
-        // Same hazard as the two above, on the native-devtools precheck: it
-        // RESOLVES its block rather than throwing, so a step that never reached
-        // the tool's work read as green. `launch:` already guards its own
-        // `restart-app` (see runLaunch); this is the `tool:` spelling of the
-        // same sub-tools, plus the native-* tools it never covered.
-        if (isNativeDevtoolsBlockResult(step.name, result)) {
-          return {
-            ...base,
-            status: "fail",
-            tool: step.name,
-            reason: `${step.name} did not run (${result.status}): ${result.message}`,
+            reason: verdict.reason,
             result,
             outputHint,
             args,
@@ -3057,13 +3191,23 @@ async function execLeafStep(
         // first" — the very advice the measured diagnosis replaces. UNPINNED,
         // like any other raw tool step. After the invoke, like `runLaunch`: a
         // tool that threw started nothing.
+        let warning: string | undefined;
         if (step.name === "launch-app" || step.name === "restart-app") {
           const launched = (args as { bundleId?: unknown }).bundleId;
           if (typeof launched === "string") {
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
+          warning = networkCaptureWarning(state, launched, result);
         }
-        return { ...base, status: "pass", tool: step.name, result, outputHint, args };
+        return {
+          ...base,
+          status: "pass",
+          tool: step.name,
+          result,
+          outputHint,
+          args,
+          ...(warning !== undefined ? { warning } : {}),
+        };
       } catch (err) {
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
