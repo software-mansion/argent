@@ -41,7 +41,7 @@ const zodSchema = z.object({
       "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
     ),
   port: metroPortField.describe(
-    "The app's Metro port, whose requests are left out of the listing. Omit it to use this device's port, 8081 by default."
+    "The app's Metro port, whose requests are left out of the listing. Omit it to use this device's port, 8081 by default.<flag:macos-apps> A Mac app ignores it.</flag:macos-apps>"
   ),
   limit: z
     .number()
@@ -50,7 +50,7 @@ const zodSchema = z.object({
     .optional()
     .default(50)
     .describe(
-      "Maximum number of requests to return: the most recent ones, oldest first. 0 returns only the header and the total."
+      "Maximum number of requests to return: the most recent ones, oldest first. 0 returns only the header and the total.<flag:macos-apps> On a Mac app, 0 returns no events.</flag:macos-apps>"
     ),
   clear: z
     .boolean()
@@ -141,8 +141,8 @@ On iOS it sees URLSession requests (default and ephemeral session configurations
 Returns { status, header, armed, count, total, requests }: one line per request, oldest first, with its id (ios-3f9a-12, android-3f9a-12), method, URL, state (pending, headers, complete or failed), status, mimeType, durationMs and errorText. The header says whether capture is armed, how many requests there are and the app's pid once read, and why capture is not armed when it is not. Requests to Metro on \`port\` are left out. The history is kept across relaunches of the app, except on a device whose devtools agent argent attached to.
 The first call for an app starts capture, so earlier requests are not captured: repeat the action whose requests you need, then call again.
 On iOS: the first call waits until the app acknowledges capture. When capture started while the app was already running, the header of the first answer says that the app's launch was not recorded; to capture the launch, restart-app and call again, unless the header says the launch cannot be recorded on that device. Capture stays on for later processes of the app (except on a device whose devtools agent argent attached to, where a relaunch ends it).
-<flag:macos-apps>On a Mac app it returns { status, count, events }: NSURLSession events, react-native-macos fetch included. Capture stays on across restart-app, with a new log per process.
-</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+<flag:macos-apps>On a Mac app: { status, count, events } of NSURLSession requests, react-native-macos fetch included; capture stays on across restart-app, a new log per process.
+</flag:macos-apps>On iOS, if status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
 On Android: needs a debuggable build. The first call usually returns armed: false. Call it again every few seconds until armed is true, then repeat the action whose requests you need.
 Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
