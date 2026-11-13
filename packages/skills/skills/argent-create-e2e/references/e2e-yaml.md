@@ -254,6 +254,8 @@ Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
 `path` is relative to the test file that contains the step. Include `.mjs` and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
 
+A script reads the run's device from `ARGENT_DEVICE_ID` (the `list-devices` id), `ARGENT_DEVICE_PLATFORM` (for example `ios`, `ios-remote`, `android`, `chromium`) and `ARGENT_DEVICE_KIND` (`simulator`, `emulator`, `device`, `vvd` or `app`). A run without a device leaves all three unset. An `ext:` id (device provider) or an `ios-remote` id is not one that `xcrun simctl` or `adb` accepts. When the test runs on a device, pass that device's id as `udid` to `e2e-add-script`, so the recorded run gets the same values as a replay; omit it for a test of script steps alone. The id is not written to the test file.
+
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
 
 ## Snapshots and CLI runs

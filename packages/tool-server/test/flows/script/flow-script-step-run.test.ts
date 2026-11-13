@@ -639,6 +639,77 @@ describe("a script step and the run's device", () => {
   });
 });
 
+describe("the device values a script step gets", () => {
+  const DEVICE_ENV_NAMES = ["ARGENT_DEVICE_ID", "ARGENT_DEVICE_PLATFORM", "ARGENT_DEVICE_KIND"];
+  const PRINT_DEVICE_ENV =
+    `const names = ${JSON.stringify(DEVICE_ENV_NAMES)};\n` +
+    `console.log(JSON.stringify(Object.fromEntries(names.map((n) => [n, process.env[n] ?? null]))));`;
+
+  function printedEnv(scriptLog: string | undefined): Record<string, string | null> {
+    return JSON.parse(scriptLog!.trim()) as Record<string, string | null>;
+  }
+
+  it.each([
+    { device: DEVICE, platform: "ios", kind: "simulator" },
+    { device: "00008110-001C64D10A13801E", platform: "ios", kind: "device" },
+    { device: "emulator-5554", platform: "android", kind: "emulator" },
+    { device: "R58N12ABCDE", platform: "android", kind: "device" },
+    { device: "chromium-cdp-9222", platform: "chromium", kind: "app" },
+  ])("names $device as $platform $kind", async ({ device, platform, kind }) => {
+    await write("scripts/device.mjs", PRINT_DEVICE_ENV);
+    await flow("device", "steps:\n  - script: { path: ../../scripts/device.mjs }\n");
+
+    const { result } = await runFlow("device", { device });
+
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "pass" });
+    expect(printedEnv(result.steps[0]!.scriptLog)).toEqual({
+      ARGENT_DEVICE_ID: device,
+      ARGENT_DEVICE_PLATFORM: platform,
+      ARGENT_DEVICE_KIND: kind,
+    });
+  });
+
+  it("gives a script in a run: fragment the device the run detected", async () => {
+    await write("scripts/device.mjs", PRINT_DEVICE_ENV);
+    await write(
+      path.join(".argent", "flows", "seed.yaml"),
+      "steps:\n  - script: { path: ../../scripts/device.mjs }\n"
+    );
+    await flow("composed", "steps:\n  - run: seed.yaml\n");
+
+    const { result } = await runFlow("composed", { booted: [DEVICE] });
+
+    const script = result.steps.find((s) => s.kind === "script");
+    expect(script).toMatchObject({ status: "pass" });
+    expect(printedEnv(script!.scriptLog)).toEqual({
+      ARGENT_DEVICE_ID: DEVICE,
+      ARGENT_DEVICE_PLATFORM: "ios",
+      ARGENT_DEVICE_KIND: "simulator",
+    });
+  });
+
+  it("leaves them unset in a run with no device, whatever the tool-server's environment holds", async () => {
+    const saved = process.env.ARGENT_DEVICE_ID;
+    process.env.ARGENT_DEVICE_ID = "inherited-from-the-tool-server";
+    try {
+      await write("scripts/device.mjs", PRINT_DEVICE_ENV);
+      await flow("deviceless", "steps:\n  - script: { path: ../../scripts/device.mjs }\n");
+
+      const { result } = await runFlow("deviceless", { booted: [] });
+
+      expect(result.device).toBe("");
+      expect(printedEnv(result.steps[0]!.scriptLog)).toEqual({
+        ARGENT_DEVICE_ID: null,
+        ARGENT_DEVICE_PLATFORM: null,
+        ARGENT_DEVICE_KIND: null,
+      });
+    } finally {
+      if (saved === undefined) delete process.env.ARGENT_DEVICE_ID;
+      else process.env.ARGENT_DEVICE_ID = saved;
+    }
+  });
+});
+
 describe("a script step in an uploaded flow", () => {
   it("is rejected before anything executes", async () => {
     const uploaded = await write(

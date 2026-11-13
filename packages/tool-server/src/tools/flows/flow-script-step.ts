@@ -5,6 +5,7 @@ import {
   canonicalFlowPath,
   resolveFlowRelativeFile,
   SCRIPT_FILE_NAME_PATTERN,
+  type DeviceInfo,
 } from "@argent/registry";
 import type { FlowStep } from "./flow-utils";
 import {
@@ -44,8 +45,28 @@ interface FlowScriptStepRequest {
   flowDir: string;
   step: Extract<FlowStep, { kind: "script" }>;
   projectRoot: string;
+  /**
+   * The device the run is on when this step starts. A run reads it at each
+   * step, not once, because a Chromium relaunch moves the run onto a new
+   * instance. None for a run that resolved no device.
+   */
+  device?: DeviceInfo | null;
   logBudget?: FlowScriptLogBudget;
   signal?: AbortSignal;
+}
+
+/**
+ * The run's device as environment values. All three are left unset, not set
+ * empty, when the run has no device, so `process.env.ARGENT_DEVICE_ID ===
+ * undefined` is the whole check a script needs.
+ */
+function scriptDeviceEnv(device: DeviceInfo | null | undefined): Record<string, string> | null {
+  if (!device) return null;
+  return {
+    ARGENT_DEVICE_ID: device.id,
+    ARGENT_DEVICE_PLATFORM: device.platform,
+    ARGENT_DEVICE_KIND: device.kind,
+  };
 }
 
 export async function runFlowScriptStep(
@@ -90,9 +111,11 @@ export async function runFlowScriptStep(
     };
   }
 
+  const deviceEnv = scriptDeviceEnv(request.device);
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
     output: {},
+    ...(deviceEnv ? { env: deviceEnv } : {}),
     ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
     projectRoot: request.projectRoot,
     flowDir,
