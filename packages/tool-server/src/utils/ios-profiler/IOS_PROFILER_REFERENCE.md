@@ -97,17 +97,18 @@ All three are wired through `native-profiler-session` (per-device service, keyed
 
 ### `native-profiler-stop`
 
-1. `process.kill(xctracePid, "SIGINT")` and poll `process.kill(pid, 0)` until the child exits (xctrace needs a moment to finalise the trace bundle).
-2. Run **schema-aware export**:
+1. **End xctrace** - sends SIGINT and waits until xctrace exits, at most 5 minutes: xctrace saves the trace bundle in that time. Until xctrace prints `Stopping recording`, the stop sends SIGINT again every 5 s, because xctrace ignores a SIGINT that comes before it starts to trace. A stall watch reads xctrace's CPU time and the bytes in the bundle. When neither grows for a fifth of the recording time (30 s to 2 min), xctrace is taken as hung. Until `Stopping recording`, the CPU time counts only when it grows by 1% of a core. After a hang or the 5 minutes, the stop sends SIGTERM, and SIGKILL 5 s later.
+2. **Run errors** - reads the errors that xctrace printed under `Run issues were detected`. After `Failed to attach to target process` or `Failed to start the recording`, the trace holds no data: the stop exports nothing, `exportDiagnostics.skipped` and the error of each table give the reason, and `native-profiler-analyze` reports the analysis as failed.
+3. Otherwise, run **schema-aware export**:
    - First call `xctrace export --toc` to discover what schemas the trace actually contains.
    - Pick the first match from `["time-profile", "cpu-profile", "time-sample"]` for CPU.
    - Fall back to brute-forcing each candidate if TOC parsing fails.
    - For Leaks, a single `xctrace export --xpath` of the `Leaks` track detail — no extra flags.
-3. Three XMLs land next to the `.trace` bundle:
+4. Three XMLs land next to the `.trace` bundle:
    - `<base>_raw_cpu.xml` — `time-profile` table
    - `<base>_raw_hangs.xml` — `potential-hangs` table
    - `<base>_raw_leaks.xml` — `Leaks` track detail
-4. Returns `{ traceFile, exportedFiles, exportDiagnostics }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data.
+5. Returns `{ traceFile, exportedFiles, exportDiagnostics, warning? }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data. `warning` says when argent ended a hung xctrace (the data can be incomplete or missing), which run errors xctrace reported, and when the app ended during the recording.
 
 ### `native-profiler-analyze`
 

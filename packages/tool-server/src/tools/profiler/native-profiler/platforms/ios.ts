@@ -42,7 +42,6 @@ import {
   spawnXctraceRecording,
   unfinishedRecordingReason,
   xctraceEndWarning,
-  xctraceRunErrors,
 } from "./xctrace";
 
 const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
@@ -659,7 +658,11 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
 
     const ended = api.recordingAppEnded;
     const suspensions = endSuspensionWatch(api);
-    const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile, ended);
+    // The cap's end read them when xctrace exited, as a stop does.
+    const runErrors = readRunErrors(api, cappedEnd?.runErrors ?? exitInfo?.runErrors ?? []);
+    const { files: exportedFiles, diagnostics } = runErrors?.skipReason
+      ? skippedTraceExport(runErrors.skipReason)
+      : await exportIosTraceData(traceFile, ended);
     api.exportedFiles = exportedFiles;
     // Pair the exports with the capture mode of the recording that just ended.
     api.mallocStackLogging = api.recordingMallocStackLogging;
@@ -672,16 +675,23 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     // When xctrace did not end on the cap's SIGINT, its warning says what is left
     // of the data and to record again.
     const endWarning = cappedEnd ? xctraceEndWarning(cappedEnd) : undefined;
-    let warning = wasTimeout
-      ? "Recording timed out at 10 min cap; " +
-        (endWarning ??
-          "exported the partial trace. Call native-profiler-start again for a fresh recording.")
-      : `xctrace exited before stop was called (code=${exitInfo?.code ?? "?"}, ` +
-        `signal=${exitInfo?.signal ?? "?"}); exported the partial trace. ` +
-        (api.platform === "macos"
-          ? "Common causes: restart-app or launch-app started the app again, or xctrace was ended from outside. "
-          : "Common causes: attached app terminated, simulator daemon restart. ") +
-        "Call native-profiler-start again for a fresh recording.";
+    const causes = wasTimeout
+      ? ""
+      : api.platform === "macos"
+        ? "Common causes: restart-app or launch-app started the app again, or xctrace was ended from outside. "
+        : "Common causes: attached app terminated, simulator daemon restart. ";
+    let warning =
+      (wasTimeout
+        ? "Recording timed out at 10 min cap; "
+        : `xctrace exited before stop was called (code=${exitInfo?.code ?? "?"}, ` +
+          `signal=${exitInfo?.signal ?? "?"}); `) +
+      (runErrors?.skipReason
+        ? runErrors.warning
+        : endWarning
+          ? [runErrors?.warning, endWarning].filter(Boolean).join(" ")
+          : "exported the partial trace. " +
+            (runErrors ? `${runErrors.warning} ` : causes) +
+            "Call native-profiler-start again for a fresh recording.");
     if (ended) warning = `${warning} ${APP_ENDED_NOTE}`;
     process.stderr.write(`[native-profiler] ${warning}\n`);
 
@@ -730,24 +740,14 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   // After xctrace ended: it suspends the app until then.
   const suspensions = endSuspensionWatch(api);
 
-  // On a Mac app, xctrace can fail to attach and still write an empty trace.
-  const runErrors = api.platform === "macos" ? xctraceRunErrors(child) : [];
-  const attachFailed = runErrors.some((line) =>
-    line.startsWith("Failed to attach to target process")
-  );
-  if (runErrors.length > 0) {
-    const reported = runErrors.join(" ");
-    const issues = attachFailed
-      ? `xctrace could not attach to ${api.appProcess}, so nothing was recorded. xctrace ` +
-        `reported: ${reported} Call native-profiler-start again.`
-      : `xctrace reported errors for this recording, so the data may be incomplete: ${reported}`;
-    process.stderr.write(`[native-profiler] ${issues}\n`);
-    warning = warning ? `${warning} ${issues}` : issues;
+  const runErrors = readRunErrors(api, end.runErrors);
+  if (runErrors) {
+    process.stderr.write(`[native-profiler] ${runErrors.warning}\n`);
+    warning = warning ? `${warning} ${runErrors.warning}` : runErrors.warning;
   }
 
-  // Each export of an empty trace waits out its timeout.
-  const { files: exportedFiles, diagnostics } = attachFailed
-    ? skippedTraceExport("xctrace did not attach to the app, so the trace holds no data.")
+  const { files: exportedFiles, diagnostics } = runErrors?.skipReason
+    ? skippedTraceExport(runErrors.skipReason)
     : await exportIosTraceData(api.traceFile, ended);
   api.exportedFiles = exportedFiles;
   // Pair the exports with the capture mode of the recording that just ended.
@@ -769,6 +769,48 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   };
   if (warning) stopResult.warning = warning;
   return stopResult;
+}
+
+/**
+ * Run errors after which the trace holds nothing. Measured with Xcode 27.2 next to
+ * another recording: "Failed to start the recording: _lockKPerf: could not lock
+ * kperf. Likely another session just started.", in a trace of 1.1 s.
+ */
+const NOT_RECORDED = /^Failed to start the recording/;
+const KERNEL_TRACE = /kperf|ktrace|kernel trace/i;
+
+/**
+ * What the run errors that xctrace printed mean for the recording: the warning,
+ * and why to export nothing when xctrace recorded nothing (each export of an
+ * empty trace waits out its timeout). Null when xctrace printed no run error.
+ */
+function readRunErrors(
+  api: NativeProfilerSessionApi,
+  runErrors: string[]
+): { warning: string; skipReason?: string } | null {
+  if (runErrors.length === 0) return null;
+  const reported = runErrors.join(" ");
+  if (runErrors.some((line) => line.startsWith("Failed to attach to target process"))) {
+    return {
+      warning:
+        `xctrace could not attach to ${api.appProcess}, so nothing was recorded. xctrace ` +
+        `reported: ${reported} Call native-profiler-start again.`,
+      skipReason: "xctrace did not attach to the app, so the trace holds no data.",
+    };
+  }
+  if (runErrors.some((line) => NOT_RECORDED.test(line))) {
+    const busy = KERNEL_TRACE.test(reported)
+      ? " macOS lets one recording at a time use the kernel trace, and another recording " +
+        "on this Mac used it (Instruments, xctrace or a native-profiler-start for another device)."
+      : "";
+    return {
+      warning: `xctrace could not record: ${reported}${busy} Call native-profiler-start again.`,
+      skipReason: "xctrace could not start the recording, so the trace holds no data.",
+    };
+  }
+  return {
+    warning: `xctrace reported errors for this recording, so the data may be incomplete: ${reported}`,
+  };
 }
 
 /** Ends the Mac app's suspension watch: what it saw, or null when nothing watched. */

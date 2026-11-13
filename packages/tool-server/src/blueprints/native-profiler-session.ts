@@ -171,7 +171,8 @@ export interface NativeProfilerSessionApi {
   cappedEnd: Promise<XctraceEnd> | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
-  lastExitInfo: { code: number | null; signal: string | null } | null;
+  /** `runErrors`, xctrace only: the run errors that it printed before it exited. */
+  lastExitInfo: { code: number | null; signal: string | null; runErrors?: string[] } | null;
   /** Android-only: path of the .pftrace on the device. */
   androidOnDeviceTracePath: string | null;
 }

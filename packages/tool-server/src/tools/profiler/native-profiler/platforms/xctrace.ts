@@ -131,7 +131,8 @@ function resetStartState(api: NativeProfilerSessionApi): void {
 export function handleXctraceExit(
   api: NativeProfilerSessionApi,
   code: number | null,
-  signal: string | null
+  signal: string | null,
+  runErrors: string[] = []
 ): void {
   if (!api.profilingActive) return;
   if (api.recordingTimeout) {
@@ -144,7 +145,7 @@ export function handleXctraceExit(
   if (!api.recordingTimedOut) {
     api.recordingExitedUnexpectedly = true;
   }
-  api.lastExitInfo = { code, signal };
+  api.lastExitInfo = runErrors.length > 0 ? { code, signal, runErrors } : { code, signal };
   // Now, not at the stop: an app that quits after the recording did not quit during it.
   api.recordingAppEnded = appEnded(api);
 }
@@ -340,6 +341,8 @@ export interface XctraceEnd {
   idleMs: number;
   /** xctrace said neither that tracing started nor that it stops the recording. */
   neverTraced: boolean;
+  /** The run errors that xctrace printed when it ended. */
+  runErrors: string[];
 }
 
 /**
@@ -402,7 +405,7 @@ export async function endXctrace(
       },
     });
     const neverTraced = !stopping() && !xctraceOutput(child).includes("Ctrl-C to stop");
-    return { result, idleMs, neverTraced };
+    return { result, idleMs, neverTraced, runErrors: xctraceRunErrors(child) };
   } finally {
     clearTimeout(repeat);
   }
@@ -520,7 +523,7 @@ export function commitXctraceRecording(
   xctraceProcess.on("exit", (code, signal) => {
     // A newer recording's xctrace can be the capture by then.
     if (api.captureProcess !== xctraceProcess) return;
-    handleXctraceExit(api, code, signal);
+    handleXctraceExit(api, code, signal, xctraceRunErrors(xctraceProcess));
     // After the cap, which keeps the process until it ends.
     api.capturePid = null;
     api.captureProcess = null;
