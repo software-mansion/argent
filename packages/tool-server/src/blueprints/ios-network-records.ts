@@ -68,6 +68,8 @@ const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; 
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
 const REQUEST_BODY_GONE = "the agent holds no body for this request";
 const RESPONSE_BODY_GONE = "the agent no longer holds this body";
+/** The Mac library keeps no bodies, so its "No ..." answer is not an eviction. */
+export const MACOS_NO_BODIES = "argent does not keep the bodies of a Mac app's requests";
 const NO_RESPONSE_BODY = "the response has no body";
 
 export interface IosNetworkCaptureState {
@@ -416,6 +418,7 @@ export function createIosNetworkRecords(
         const detail = at === -1 ? message : message.slice(at + marker.length);
         // The agent answers a body it does not hold with an error that says so.
         if (/^no /i.test(detail)) {
+          if (layer === "macos-native") return MACOS_NO_BODIES;
           return kind === "post" ? REQUEST_BODY_GONE : RESPONSE_BODY_GONE;
         }
         return `the agent did not return the body: ${detail}`;

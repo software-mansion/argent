@@ -98,6 +98,7 @@ import { createNetworkCaptureStopTool } from "../src/tools/network/network-captu
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { resolveDevice } from "../src/utils/device-info";
 import { NOT_RECONNECTED } from "../src/utils/native-network-record";
+import { MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
 import {
   chromiumRefusal,
   findRunningCopies,
@@ -731,7 +732,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         response: { status: 200, headers: { "Set-Cookie": "[REDACTED]" } },
       });
       // The fake keeps no bodies, as the Mac library does.
-      expect(found.response.body).toMatch(/^\[unavailable: /);
+      expect(found.response.body).toBe(`[unavailable: ${MACOS_NO_BODIES}]`);
       expect(JSON.stringify(found)).not.toContain("fake-token");
       expect(JSON.stringify(found)).not.toContain("fake-secret");
 
