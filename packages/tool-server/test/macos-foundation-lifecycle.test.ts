@@ -97,6 +97,7 @@ import { createNetworkCaptureStartTool } from "../src/tools/network/network-capt
 import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { resolveDevice } from "../src/utils/device-info";
+import { NOT_RECONNECTED } from "../src/utils/native-network-record";
 import {
   chromiumRefusal,
   findRunningCopies,
@@ -761,25 +762,32 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(log.header).toBe(`macos-native: armed, 2 requests (pid ${pid})`);
     });
 
-    it("keeps an open request when argent reconnects to the same process, and arms the new connection", async () => {
+    it("fails an open request when argent reconnects to the same process, completes it if it ends there, and arms the new connection", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();
       await request("https://example.com/first", { hold: true });
       const app = await macosApp();
       await app.call("Net.drop");
       await waitUntil(() => !app.isConnected());
-      // A read does not reconnect.
+      // A read does not reconnect, and names the call that does.
       expect((await readLog()).header).toBe(
-        `macos-native: not armed, 1 request (the app is not connected; capture arms when argent starts the app or connects to it; ${GAP})`
+        `macos-native: not armed, 1 request (the app is not connected; capture arms when argent starts the app or connects to it, as network-capture-start does; ${GAP})`
       );
 
-      // The next call reconnects through the listening socket, and argent arms
-      // the new connection before the call: the request finishes there.
+      // The next call reconnects through the listening socket. The request
+      // may have ended while argent was not connected, so it fails...
+      await app.call("Echo");
+      expect((await readLog()).requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
+        ["https://example.com/first", "failed", NOT_RECONNECTED],
+      ]);
+      // ...and argent armed the new connection before the call: an end that
+      // comes there completes the request.
       await app.call("Net.finish");
       const log = await readUntil((l) => l.requests[0]?.state === "complete");
-      expect(log.requests.map((r) => [r.url, r.state])).toEqual([
-        ["https://example.com/first", "complete"],
+      expect(log.requests).toEqual([
+        expect.objectContaining({ url: "https://example.com/first", state: "complete" }),
       ]);
+      expect(log.requests[0]).not.toHaveProperty("errorText");
       expect(await request("https://example.com/second")).toEqual({
         active: true,
         activations: 2,
@@ -788,6 +796,21 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         "https://example.com/first",
         "https://example.com/second",
       ]);
+    });
+
+    it("fails an open request once the connection drops while the app runs and argent does not reconnect", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/held", { hold: true });
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      // argent waits for the process to exit, then fails the request as not reconnected.
+      const log = await readUntil((l) => l.requests[0]?.state === "failed");
+      expect(log.requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
+        ["https://example.com/held", "failed", NOT_RECONNECTED],
+      ]);
+      expect(pidAlive(pid)).toBe(true);
     });
 
     it("network-capture-stop turns capture off in the app and keeps the records until the next start", async () => {
@@ -847,7 +870,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         },
       ]);
       expect((await readLog()).header).toBe(
-        "macos-native: not armed, 0 requests (the app is not connected; capture arms when argent starts the app or connects to it)"
+        "macos-native: not armed, 0 requests (the app is not connected; capture arms when argent starts the app or connects to it, as network-capture-start does)"
       );
       const { pid } = await run("boot-device", { macosAppPath: appPath });
       expect(await request("https://example.com/x")).toEqual({ active: true, activations: 1 });

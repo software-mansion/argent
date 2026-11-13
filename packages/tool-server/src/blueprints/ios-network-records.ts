@@ -130,9 +130,11 @@ export interface IosNetworkRecordStore extends IosNetworkRecords {
   /** The store still holds a record that came in on `connection`. */
   holdsRecordsOf(connection: number): boolean;
   /**
-   * Fails the open records of a connection that closed. A connection does not
-   * come back for the same process, so its open records never settle. The
-   * check also decides why a body of the connection can no longer be read.
+   * Fails the open records of a connection that closed. An iOS connection does
+   * not come back for the same process, so its open records never settle. A
+   * Mac app's connection is its process, which argent can reconnect to: a
+   * request that still runs then completes when its end comes. The check also
+   * decides why a body of the connection can no longer be read.
    */
   connectionClosed(connection: number, check: ClosedConnectionCheck): void;
 }
@@ -445,6 +447,8 @@ export function createIosNetworkRecords(
         case "Network.responseReceived": {
           const r = asObject(p.response);
           const status = typeof r.status === "number" ? r.status : 0;
+          // A Mac app's request failed at a reconnect can still finish.
+          delete record.errorText;
           record.state = "headers";
           record.response = {
             // The URL of the final response, after any redirects.
@@ -461,6 +465,7 @@ export function createIosNetworkRecords(
           // A request in flight at a clear lists again once it settles, so
           // polling with clear sees it finish.
           cleared.delete(record);
+          delete record.errorText;
           record.state = "complete";
           if (typeof p.encodedDataLength === "number")
             record.encodedDataLength = p.encodedDataLength;

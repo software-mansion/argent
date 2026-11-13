@@ -102,7 +102,7 @@ The app can run before the capture starts. Then the header line of the first res
 
 The capture follows the app until the agent stops it. Argent starts the capture in each new process of the app when Argent connects to the process, for example after `restart-app`. The requests that the app sends while it starts can be missing.
 
-The network log of this layer keeps the requests of the earlier processes of the app. A request that runs when its process ends shows as failed.
+The network log of this layer keeps the requests of the earlier processes of the app. A request that runs when its process ends shows as failed. A request that runs when the connection to the app drops also shows as failed. If this request ends after Argent connects to the app again, it shows as complete. A read does not connect to the app. `network-capture-start` connects to it.
 
 Each request has an ID such as `macos-3f9a-12`. The agent uses this ID to read the headers. The details do not contain the bodies of the request and of the response. An ID is valid only in the tool-server that listed it. An ID stays valid after the capture stops. An ID is not valid after `stop-simulator-server` or `stop-all-simulator-servers` stops the services of the app, or after the tool-server stops.
 

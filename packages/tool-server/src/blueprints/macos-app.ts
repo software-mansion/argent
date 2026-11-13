@@ -717,11 +717,12 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   let captureStopped = false;
   let captureGap = false;
   /**
-   * The app process whose events the records take. The records number it as
-   * their connection: argent can reconnect to the same process, which keeps
-   * its number, and a new process gets the next one.
+   * The app process whose events the records take, and the channel they come
+   * on. The records number the process as their connection: argent can
+   * reconnect to the same process, which keeps its number, and a new process
+   * gets the next one.
    */
-  let recordedProcess: { pid: number; index: number } | null = null;
+  let recordedProcess: { pid: number; index: number; channel: LibraryChannel } | null = null;
   let nextProcessIndex = 1;
 
   /** The adopted channel, while it is open. */
@@ -734,7 +735,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       return {
         armed: false,
         note: captureStarted
-          ? "the app is not connected; capture arms when argent starts the app or connects to it"
+          ? "the app is not connected; capture arms when argent starts the app or connects to it, as network-capture-start does"
           : "the app is not connected",
       };
     }
@@ -779,14 +780,17 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     closed(ch) {
       const process = recordedProcess;
       if (!ch.handshake || process?.pid !== ch.handshake.pid) return;
-      // argent can connect to the same process again, and its requests then go
-      // on. Only a process that exited fails its open requests.
+      // The app turns capture off when argent's connection closes, so the
+      // open requests get no more events. A reconnect fails them in adopt.
       void pollPidsUntilGone([process.pid], {
         timeoutMs: PROCESS_EXIT_WAIT_MS,
         pollIntervalMs: POLL_MS,
       }).then((left) => {
-        if (left.length === 0 && !disposed) {
+        if (disposed) return;
+        if (left.length === 0) {
           records.connectionClosed(process.index, { superseded: false, running: false });
+        } else if (recordedProcess?.channel === ch) {
+          records.connectionClosed(process.index, { superseded: false, running: true });
         }
       });
     },
@@ -840,8 +844,13 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       if (recordedProcess) {
         records.connectionClosed(recordedProcess.index, { superseded: true });
       }
-      recordedProcess = { pid, index: nextProcessIndex++ };
+      recordedProcess = { pid, index: nextProcessIndex++, channel: ch };
       captureGap = false;
+    } else if (recordedProcess.channel !== ch) {
+      // The open requests of the same process lost their events while argent
+      // was not connected. One that still runs completes when its end comes.
+      records.connectionClosed(recordedProcess.index, { superseded: false, running: true });
+      recordedProcess.channel = ch;
     }
     if (captureStarted) void enableOn(ch);
   };
