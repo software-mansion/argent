@@ -59,9 +59,9 @@ interface RenderInput {
   /**
    * Whether the capture cold-launched the app with MallocStackLogging=1
    * (native-profiler-start's malloc_stack_logging flag). Null/undefined when
-   * unknown — a session restored from disk has no capture-mode sidecar — in
-   * which case the unattributed-leaks note infers it from the attributed-leak
-   * count.
+   * unknown — a session restored from disk has no capture-mode sidecar — and
+   * the unattributed-leaks note then reads it as a capture without malloc stack
+   * logging.
    */
   mallocStackLogging?: boolean | null;
   /**
@@ -531,7 +531,6 @@ function renderFullReport(
           unattributedLeaks,
           attributedLeaks.length,
           mallocStackLogging,
-          payload.metadata.platform.toLowerCase() === "macos",
           customTemplate
         )
       );
@@ -647,15 +646,20 @@ export function renderSystemLibraryLeaksNote(systemLeaks: MemoryLeak[]): string 
   );
 }
 
-/** Why a leak of a Mac app has no allocation backtrace without malloc stack logging. */
-export const MAC_UNATTRIBUTED_LEAKS =
-  "On a Mac app without malloc stack logging, only an object allocated after the start of the " +
-  "recording has an allocation backtrace. These are most likely older objects or benign system " +
-  "allocations, not confirmed app leaks. To attribute them, record again with " +
-  "`malloc_stack_logging: true`.";
+/**
+ * Why a leak has no allocation backtrace when the capture did not run with malloc stack
+ * logging (or its mode is unknown), on a Mac app and on an iOS simulator. Without it, an
+ * iOS simulator app under `xctrace --attach` (Xcode 27.2, iOS 27.0) had a responsible
+ * frame for the objects that it leaked 1 s after the start, as a Mac app has.
+ */
+export const UNATTRIBUTED_WITHOUT_MALLOC_LOGGING =
+  "Without malloc stack logging, Instruments records an allocation backtrace only for an " +
+  "object allocated after the start of the recording. These groups have none, so they are " +
+  "most likely older objects or benign system allocations, not confirmed app leaks. To " +
+  "attribute them, record again with `malloc_stack_logging: true`.";
 
 /** Why no leak has a responsible frame when each names `(null)` (see isLeakAttributed). */
-export const NO_ALLOCATIONS_LEAKS =
+const NO_ALLOCATIONS_LEAKS =
   "The template of this recording has no Allocations instrument, so Instruments gave no leak a " +
   "responsible frame, also not a leak of the app's code. To attribute leaks, record again " +
   "without `template_path`: the bundled Argent template has the Allocations instrument.";
@@ -664,7 +668,7 @@ export const NO_ALLOCATIONS_LEAKS =
  * True when each of these leaks names `(null)` as its frame. A template with Leaks but no
  * Allocations gives `(null)` to every leak, so only with no attributed leak does it mean that.
  */
-export function leaksWithoutAllocations(leaks: MemoryLeak[]): boolean {
+function leaksWithoutAllocations(leaks: MemoryLeak[]): boolean {
   return leaks.length > 0 && leaks.every((b) => b.responsibleFrame.trim() === "(null)");
 }
 
@@ -677,15 +681,13 @@ function renderLeaksNotRecordedNote(cause?: string): string {
 
 /**
  * The single low-confidence caveat line for unattributed leaks, shared with the
- * combined React × native report so the wording can't diverge.
+ * combined React × native report and leak_stacks so the wording can't diverge.
  *
  * `mallocStackLogging` is the capture mode when known (stamped at stop, frozen
- * into parsedData); null/undefined when unknown. It only disambiguates the
- * zero-attributed case: explicit `true` names the malloc capture that recorded
- * nothing, anything else gets the `--attach` framing.
- *
- * On a Mac app, attributed leaks do not prove malloc stack logging: without it,
- * Instruments still records a backtrace for each object allocated after the start.
+ * into parsedData); null/undefined when unknown. Only explicit `true` names the
+ * malloc capture. Attributed leaks do not prove malloc stack logging: without it,
+ * Instruments still records a backtrace for each object allocated after the start,
+ * on a Mac app and on an iOS simulator.
  *
  * `customTemplate` is whether the recording used a template of the caller; null/undefined
  * when unknown. Only such a template can lack the Allocations instrument.
@@ -694,7 +696,6 @@ export function renderUnattributedLeaksNote(
   unattributedLeaks: MemoryLeak[],
   attributedCount: number,
   mallocStackLogging?: boolean | null,
-  macApp = false,
   customTemplate?: boolean | null
 ): string {
   const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
@@ -709,31 +710,20 @@ export function renderUnattributedLeaksNote(
       NO_ALLOCATIONS_LEAKS
     );
   }
-  if (macApp && mallocStackLogging !== true) {
-    return (
-      `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
-      `(${objs} object(s), ${formatBytes(bytes)}): responsible frame ${frame}, no library. ` +
-      MAC_UNATTRIBUTED_LEAKS
-    );
-  }
-  // Attribution evidence decides first: a responsible frame exists only if the
-  // target ran under malloc stack logging — possible even under `--attach`, if
-  // the app was launched with the diagnostic externally — so an explicit
-  // `false` must not claim "no malloc-stack history" above an attributed table.
+  // Without malloc stack logging, a Mac app and an iOS simulator app still get a backtrace
+  // for an object allocated after the start, so no capture has "no malloc-stack history".
   const hint =
-    attributedCount > 0
-      ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
-        `groups carry no allocation backtrace (freed-region reuse, truncated stack logs, or ` +
-        `allocations outside the instrumented malloc zones) and are most likely benign system ` +
-        `allocations rather than confirmed app leaks.`
-      : mallocStackLogging === true
-        ? `This capture ran with malloc stack logging enabled, yet none of these leaks carry an allocation ` +
+    mallocStackLogging !== true
+      ? UNATTRIBUTED_WITHOUT_MALLOC_LOGGING
+      : attributedCount > 0
+        ? `Some leaks here were attributed, and malloc stack logging was active, so these ` +
+          `remaining groups carry no allocation backtrace for another reason (freed-region ` +
+          `reuse, truncated stack logs, or allocations outside the instrumented malloc zones). ` +
+          `They are most likely benign system allocations rather than confirmed app leaks.`
+        : `This capture ran with malloc stack logging enabled, yet none of these leaks carry an allocation ` +
           `backtrace — the allocator recorded no usable stack for them (freed-region reuse, truncated stack ` +
           `logs, or allocations outside the instrumented malloc zones). Most likely benign system allocations ` +
-          `rather than confirmed app leaks; re-running with malloc stack logging again is unlikely to attribute them.`
-        : `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
-          `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
-          `stack logging enabled at launch.`;
+          `rather than confirmed app leaks; re-running with malloc stack logging again is unlikely to attribute them.`;
   return (
     `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
     `(${objs} object(s), ${formatBytes(bytes)}): responsible frame ${frame}, no library. ${hint}`

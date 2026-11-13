@@ -20,11 +20,9 @@ import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-sh
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 import {
   LEAKS_NOT_RECORDED,
-  MAC_UNATTRIBUTED_LEAKS,
-  NO_ALLOCATIONS_LEAKS,
   hangSuspendedNote,
-  leaksWithoutAllocations,
   renderSystemLibraryLeaksNote,
+  renderUnattributedLeaksNote,
 } from "../../../utils/ios-profiler/render";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 import { leakRank } from "../../../utils/ios-profiler/pipeline/01-correlate";
@@ -255,18 +253,15 @@ export function renderLeakStacksIos(
   topN: number,
   mallocStackLogging?: boolean | null,
   leaksRecorded?: boolean,
-  macApp = false,
   customTemplate?: boolean | null
 ): string {
   // Empty because nothing was recorded, not because nothing leaked.
   if (leaksRecorded === false) return `_${LEAKS_NOT_RECORDED}_`;
 
-  // Read from the FULL capture, never the object_type-filtered slice: one
-  // attributed group proves the process ran under malloc stack logging however
-  // it was launched, so an attach-mode flag must not claim "no malloc-stack
-  // history" above a resolved frame. The flag only lifts the zero-attributed
-  // case — same contract as renderUnattributedLeaksNote in ios-profiler/render.ts.
-  const mallocWasOn = memoryLeaks.some((l) => l.attributed) || mallocStackLogging === true;
+  // Read from the FULL capture, never the object_type-filtered slice: the note on
+  // the unattributed groups depends on whether the capture attributed any group,
+  // as in renderUnattributedLeaksNote in ios-profiler/render.ts.
+  const attributedCount = memoryLeaks.filter((l) => l.attributed).length;
   let filtered = memoryLeaks;
   if (objectTypeFilter) {
     filtered = memoryLeaks.filter((l) =>
@@ -291,7 +286,6 @@ export function renderLeakStacksIos(
   const totalCount = sorted.reduce((s, l) => s + l.count, 0);
 
   const unattributed = sorted.filter((l) => !l.attributed);
-  const unattributedCount = unattributed.length;
 
   const lines: string[] = [
     `## Memory Leaks${objectTypeFilter ? ` (filter: "${objectTypeFilter}")` : ""}`,
@@ -300,32 +294,14 @@ export function renderLeakStacksIos(
     "",
   ];
 
-  const nullFrames = leaksWithoutAllocations(unattributed);
-  const frame = nullFrames ? "`(null)`" : "`<Call stack limit reached>`";
-  // A template without Allocations gives `(null)` to every leak, also to the app's, and
-  // the bundled template has the Allocations instrument.
-  if (nullFrames && !memoryLeaks.some((l) => l.attributed) && customTemplate !== false) {
+  if (unattributed.length > 0) {
     lines.push(
-      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
-        `(\`(null)\`, no library). ${NO_ALLOCATIONS_LEAKS}`,
-      ""
-    );
-  } else if (unattributedCount > 0 && macApp && mallocStackLogging !== true) {
-    lines.push(
-      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
-        `(${frame}, no library). ${MAC_UNATTRIBUTED_LEAKS}`,
-      ""
-    );
-  } else if (unattributedCount > 0) {
-    const cause = mallocWasOn
-      ? "the capture ran with malloc stack logging, but no allocation backtrace was recorded " +
-        "for these (freed-region reuse, truncated stack logs, or allocations outside the " +
-        "instrumented malloc zones)"
-      : "captured under `xctrace --attach`, which has no malloc-stack history";
-    lines.push(
-      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
-        `(${frame}, no library) — ${cause}. ` +
-        "Most likely benign system allocations, not confirmed app leaks.",
+      renderUnattributedLeaksNote(
+        unattributed,
+        attributedCount,
+        mallocStackLogging,
+        customTemplate
+      ),
       ""
     );
   }
@@ -388,7 +364,6 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         params.top_n,
         data.mallocStackLogging,
         data.leaksRecorded,
-        api.platform === "macos",
         data.customTemplate
       );
     default:

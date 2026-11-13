@@ -94,6 +94,7 @@ import { profilerStackQueryTool } from "../src/tools/profiler/query/profiler-sta
 import { profilerLoadTool } from "../src/tools/profiler/query/profiler-load";
 import { resolveDevice } from "../src/utils/device-info";
 import { exportIosTraceData } from "../src/utils/ios-profiler/export";
+import { UNATTRIBUTED_WITHOUT_MALLOC_LOGGING } from "../src/utils/ios-profiler/render";
 import { getTrackedMacosApp, runningTrackedApp } from "../src/utils/macos-apps";
 import { ensureDeps } from "../src/utils/check-deps";
 import { adbShell } from "../src/utils/adb";
@@ -275,13 +276,12 @@ describe("the native profiler tools on a Mac app id", () => {
     expect(callers.body.data).not.toContain("not found");
 
     // Without malloc stack logging, a Mac app's attributed leak does not prove it was on.
-    const macLeakNote = "On a Mac app without malloc stack logging, only an object allocated after";
-    expect(report).toContain(macLeakNote);
+    expect(report).toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
     const leaks = await call("profiler-stack-query", { device_id: MAC, mode: "leak_stacks" });
     expect(leaks.status).toBe(200);
     expect(leaks.body.data).toContain("`ExampleNode`");
-    expect(leaks.body.data).toContain(macLeakNote);
-    expect(leaks.body.data).not.toContain("the capture ran with malloc stack logging");
+    expect(leaks.body.data).toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
+    expect(leaks.body.data).not.toContain("malloc stack logging was active");
   });
 });
 

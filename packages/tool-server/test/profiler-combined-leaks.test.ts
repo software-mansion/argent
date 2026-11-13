@@ -14,6 +14,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { renderCombinedMemoryLeaks } from "../src/tools/profiler/combined/profiler-combined-report";
+import { UNATTRIBUTED_WITHOUT_MALLOC_LOGGING } from "../src/utils/ios-profiler/render";
 import type { MemoryLeak } from "../src/utils/profiler-shared/types";
 
 function leak(partial: Partial<MemoryLeak> & Pick<MemoryLeak, "objectType">): MemoryLeak {
@@ -62,12 +63,14 @@ describe("renderCombinedMemoryLeaks", () => {
     expect(out).toContain("🟡");
     expect(out).toContain("1 unattributed leak group(s)");
     expect(out).toContain("`<Call stack limit reached>`");
-    expect(out).toContain("benign system allocations rather than confirmed app leaks");
 
-    // Nothing attributed → the capture was `--attach` (no malloc history), so the
-    // hint DOES advise capturing with malloc stack logging.
-    expect(out).toContain("capture with malloc");
-    expect(out).toContain("stack logging enabled at launch");
+    // Nothing attributed, and no malloc stack logging: only an object allocated after
+    // the start has a backtrace, so the hint advises malloc stack logging. It does not
+    // claim that the capture has no malloc-stack history.
+    expect(out).toContain(
+      "`<Call stack limit reached>`, no library. " + UNATTRIBUTED_WITHOUT_MALLOC_LOGGING
+    );
+    expect(out).not.toContain("--attach");
 
     // With no attributed leaks, it says so explicitly.
     expect(out).toContain("No attributed leaks");
@@ -85,13 +88,13 @@ describe("renderCombinedMemoryLeaks", () => {
     expect(out).toContain("🟡");
     expect(out).toContain("1 unattributed leak group(s)");
 
-    // Attributed + unattributed leaks coexist ONLY when malloc stack logging was
-    // active, so the caveat must NOT tell the user to enable the thing they just
-    // used. It names the active malloc capture and drops the "capture with malloc
-    // stack logging enabled at launch" advice.
-    expect(out).toContain("malloc stack logging was active");
-    expect(out).not.toContain("capture with malloc");
-    expect(out).not.toContain("stack logging enabled at launch");
+    // Attributed + unattributed leaks also coexist without malloc stack logging:
+    // Instruments records a backtrace for each object allocated after the start.
+    // The caveat must not claim malloc stack logging, nor `--attach` with "no
+    // malloc-stack history" above an attributed leak.
+    expect(out).toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
+    expect(out).not.toContain("malloc stack logging was active");
+    expect(out).not.toContain("--attach");
 
     // No "no attributed leaks" line when an attributed leak exists.
     expect(out).not.toContain("No attributed leaks");

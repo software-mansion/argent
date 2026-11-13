@@ -100,10 +100,11 @@ export function classifyHangSeverity(hangType: string): "RED" | "YELLOW" {
 }
 
 /**
- * How xctrace spells "no responsible frame": it records malloc-stack history only
- * for a target cold-launched under malloc_stack_logging, so an attached capture
- * yields the `<Call stack limit reached>` sentinel (or a missing attribute,
- * parsed as "Unknown") for every leak. A template with the Leaks instrument but no
+ * How xctrace spells "no responsible frame": it records the malloc-stack history
+ * of objects allocated before the start only for a target cold-launched under
+ * malloc_stack_logging, so an attached capture yields the `<Call stack limit
+ * reached>` sentinel (or a missing attribute, parsed as "Unknown") for every leak
+ * of such an object. A template with the Leaks instrument but no
  * Allocations instrument gives `(null)` as the frame and the library of every leak
  * (measured: `Time Profiler` plus `--instrument Leaks` on a Mac app, 817 of 817 rows).
  */

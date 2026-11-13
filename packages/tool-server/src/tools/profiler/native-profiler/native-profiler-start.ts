@@ -46,15 +46,15 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only. When true, cold-launches the app under the profiler with Malloc Stack Logging enabled so " +
-        "memory leaks carry an allocation backtrace (responsible frame + library). Without it, leaks " +
-        "carry no backtrace (Instruments reports '<Call stack limit reached>'). Trade-offs: this " +
+        "memory leaks of objects allocated before the start also carry an allocation backtrace " +
+        "(responsible frame + library). Without it, only leaks of objects allocated after the start " +
+        "carry one; the others show '<Call stack limit reached>', so use it only for older objects. Trade-offs: this " +
         "RESTARTS the app (current state is lost), adds memory/CPU overhead, and makes the app " +
         "noticeably slow to launch, so leave it off for pure CPU/hang profiling. Rejected up front " +
         "under the all-processes capture (used where Xcode's `--device` recording is broken, or " +
         "forced with ARGENT_IOS_CAPTURE=all-processes), which cannot cold-launch and records no leaks." +
         "<flag:macos-apps> On a Mac app, argent restarts the app with MallocStackLogging=1 and then attaches, " +
-        "on any Xcode; the app keeps the logging until restart-app. Leaks of objects allocated after " +
-        "the start carry a backtrace also without it, so use it only for older objects.</flag:macos-apps>"
+        "on any Xcode; the app keeps the logging until restart-app.</flag:macos-apps>"
     ),
 });
 

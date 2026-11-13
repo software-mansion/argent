@@ -451,10 +451,9 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
  * The notes come from render.ts's shared `renderSystemLibraryLeaksNote` and
  * `renderUnattributedLeaksNote`, so their wording and capture-mode handling
  * cannot drift from the analyze report.
- * A null/undefined `mallocStackLogging` makes it infer the capture mode from
- * the attributed count. `customTemplate` is whether the recording used a template of
- * the caller, null/undefined when unknown, as for `renderUnattributedLeaksNote`.
- * Exported for unit testing.
+ * `mallocStackLogging` is the capture mode and `customTemplate` whether the
+ * recording used a template of the caller, null/undefined when unknown, as for
+ * `renderUnattributedLeaksNote`. Exported for unit testing.
  */
 export function renderCombinedMemoryLeaks(
   memoryLeaks: MemoryLeak[],
@@ -500,7 +499,6 @@ export function renderCombinedMemoryLeaks(
         unattributedLeaks,
         attributedLeaks.length,
         mallocStackLogging,
-        undefined,
         customTemplate
       )
     );

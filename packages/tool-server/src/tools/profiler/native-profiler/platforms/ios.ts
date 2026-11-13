@@ -465,8 +465,9 @@ async function startIosRecording(
   // Default flow attaches to the running app (preserves state, no overhead).
   // malloc_stack_logging instead cold-launches it *under* xctrace with
   // MallocStackLogging=1, so allocation backtraces exist from the first allocation —
-  // without that, leaks are detected but unattributable ("<Call stack limit
-  // reached>"). `--env` is honoured only with `--launch`, which needs the .app path.
+  // without that, only an object allocated after the start has one, and a leak of an
+  // older object is unattributable ("<Call stack limit reached>"). `--env` is
+  // honoured only with `--launch`, which needs the .app path.
   const useMallocStackLogging = params.malloc_stack_logging === true;
   let appProcess: string;
   let launchBundlePath: string | null = null;
@@ -1115,7 +1116,7 @@ export async function analyzeNativeProfilerIos(
         .join("\n\n") || undefined,
     // Same live-session-only caveat as wallClockStartMs: profiler-load has no
     // capture-mode sidecar, so a restored session renders with null (the
-    // unattributed-leaks note then goes by the attributed-leak count instead).
+    // unattributed-leaks note then reads it as a capture without malloc stack logging).
     mallocStackLogging: api.mallocStackLogging,
     customTemplate: api.customTemplate,
     leaksRecorded,

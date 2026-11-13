@@ -1,13 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { renderNativeProfilerReport } from "../../src/utils/ios-profiler/render";
+import {
+  UNATTRIBUTED_WITHOUT_MALLOC_LOGGING,
+  renderNativeProfilerReport,
+} from "../../src/utils/ios-profiler/render";
 import type { MemoryLeak, ProfilerPayload } from "../../src/utils/ios-profiler/types";
 
 // traceFile: null → no report file is written (pure, side-effect-free render),
 // so we can assert the markdown directly. Attribution is driven by the leak's
-// `attributed` flag (set in the pipeline via isLeakAttributed): captures via
-// `xctrace --attach` have no malloc-stack history, so a leak with no resolved
-// responsible frame comes back unattributed and is demoted to a low-confidence
-// note rather than listed like a real app bug.
+// `attributed` flag (set in the pipeline via isLeakAttributed): without malloc
+// stack logging, an object allocated before the start has no allocation
+// backtrace, so a leak with no resolved responsible frame comes back unattributed
+// and is demoted to a low-confidence note rather than listed like a real app bug.
 
 function leak(attributed: boolean, frame: string, library = ""): MemoryLeak {
   return {
@@ -37,24 +40,45 @@ describe("leak attribution rendering", () => {
       traceFile: null,
     });
     expect(res.report).toContain("unattributed leak group");
-    expect(res.report).toContain("malloc stack logging enabled at launch");
+    expect(res.report).toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
   });
 
-  it("does not advise re-running with malloc when the capture already attributed some leaks", async () => {
-    // A capture with BOTH attributed and unattributed leaks was clearly run under
-    // malloc stack logging (the only way a frame is recorded). The unattributed note
-    // must NOT tell the user to "capture with malloc stack logging enabled" — the
-    // thing they just did — and should instead frame the remainder as pre-existing.
+  it("does not claim malloc stack logging from attributed leaks", async () => {
+    // An iOS simulator app recorded under `xctrace --attach` without
+    // malloc_stack_logging (Xcode 27.2, iOS 27.0): the objects it leaked during
+    // the recording had a responsible frame, and 34 other objects had none. The capture mode is
+    // false after an attach, null after profiler-load and undefined when not given.
+    for (const mallocStackLogging of [false, null, undefined]) {
+      const res = await renderNativeProfilerReport({
+        payload: payload([
+          leak(true, "0x1c15dcf6f", "libswiftCore.dylib"),
+          leak(false, "<Call stack limit reached>"),
+        ]),
+        traceFile: null,
+        mallocStackLogging,
+      });
+      expect(res.report).toContain(
+        "**1 unattributed leak group(s)** (1 object(s), 1008 B): responsible frame " +
+          `\`<Call stack limit reached>\`, no library. ${UNATTRIBUTED_WITHOUT_MALLOC_LOGGING}`
+      );
+      expect(res.report).not.toContain("malloc stack logging was active");
+      // An attributed table is above the note.
+      expect(res.report).not.toContain("--attach");
+    }
+  });
+
+  it("says malloc stack logging was active for a malloc capture that attributed some leaks", async () => {
     const res = await renderNativeProfilerReport({
       payload: payload([
         leak(true, "hermes::vm::JSTypedArrayBase::createBuffer(...)", "hermes"),
         leak(false, "<Call stack limit reached>"),
       ]),
       traceFile: null,
+      mallocStackLogging: true,
     });
-    expect(res.report).toContain("unattributed leak group");
-    expect(res.report).not.toContain("capture with malloc stack logging enabled at launch");
     expect(res.report).toContain("malloc stack logging was active");
+    expect(res.report).not.toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
+    expect(res.report).not.toContain("stack logging enabled at launch");
   });
 
   it("names the malloc capture — never --attach — when malloc_stack_logging was on but nothing attributed", async () => {
@@ -74,50 +98,23 @@ describe("leak attribution rendering", () => {
     expect(res.report).toContain("ran with malloc stack logging enabled");
   });
 
-  it("attribution evidence outranks an explicit attach flag", async () => {
-    // A responsible frame exists ONLY if the target process ran under malloc
-    // stack logging — even when argent itself attached (the app can be launched
-    // with the diagnostic externally, e.g. an Xcode scheme). An attributed
-    // table above a "no malloc-stack history" note would contradict itself, so
-    // attributed>0 must win over mallocStackLogging: false.
-    const res = await renderNativeProfilerReport({
-      payload: payload([
-        leak(true, "hermes::vm::JSTypedArrayBase::createBuffer(...)", "hermes"),
-        leak(false, "<Call stack limit reached>"),
-      ]),
-      traceFile: null,
-      mallocStackLogging: false,
-    });
-    expect(res.report).toContain("malloc stack logging was active");
-    expect(res.report).not.toContain("--attach");
-    expect(res.report).not.toContain("stack logging enabled at launch");
-  });
-
-  it("keeps the --attach hint when the capture mode is explicitly attach", async () => {
-    const res = await renderNativeProfilerReport({
-      payload: payload([leak(false, "<Call stack limit reached>")]),
-      traceFile: null,
-      mallocStackLogging: false,
-    });
-    expect(res.report).toContain("unattributed leak group");
-    expect(res.report).toContain("xctrace --attach");
-    expect(res.report).toContain("malloc stack logging enabled at launch");
-  });
-
-  it("falls back to the attributed-count inference when the capture mode is unknown", async () => {
-    // Sessions restored from disk (profiler-load) have no capture-mode sidecar:
-    // mallocStackLogging is null and the renderer infers the mode the old way —
-    // attributed leaks present ⇒ malloc logging must have been on.
-    const res = await renderNativeProfilerReport({
-      payload: payload([
-        leak(true, "hermes::vm::JSTypedArrayBase::createBuffer(...)", "hermes"),
-        leak(false, "<Call stack limit reached>"),
-      ]),
-      traceFile: null,
-      mallocStackLogging: null,
-    });
-    expect(res.report).toContain("malloc stack logging was active");
-    expect(res.report).not.toContain("stack logging enabled at launch");
+  it("says only newer objects have a backtrace also when no leak is attributed", async () => {
+    // Also with no attributed leak, an iOS simulator app gets a backtrace for each
+    // object allocated after the start, so the note must not claim that the capture
+    // has no malloc-stack history.
+    for (const mallocStackLogging of [false, null, undefined]) {
+      const res = await renderNativeProfilerReport({
+        payload: payload([leak(false, "<Call stack limit reached>")]),
+        traceFile: null,
+        mallocStackLogging,
+      });
+      expect(res.report).toContain(
+        "**1 unattributed leak group(s)** (1 object(s), 1008 B): responsible frame " +
+          `\`<Call stack limit reached>\`, no library. ${UNATTRIBUTED_WITHOUT_MALLOC_LOGGING}`
+      );
+      expect(res.report).not.toContain("--attach");
+      expect(res.report).not.toContain("enabled at launch");
+    }
   });
 
   it("does not surface an unattributed leak as an attributed one", async () => {
@@ -169,22 +166,19 @@ describe("leak attribution rendering on a Mac app", () => {
   }
 
   it("says only newer objects have a backtrace, and does not claim malloc stack logging", async () => {
-    for (const mallocStackLogging of [false, null]) {
-      const res = await renderNativeProfilerReport({
-        payload: macPayload([
-          leak(true, "swift::swift_slowAllocTyped(...)", "libswiftCore.dylib"),
-          leak(false, "<Call stack limit reached>"),
-        ]),
-        traceFile: null,
-        mallocStackLogging,
-      });
-      expect(res.report).toContain(
-        "On a Mac app without malloc stack logging, only an object allocated after the start of " +
-          "the recording has an allocation backtrace."
-      );
-      expect(res.report).not.toContain("malloc stack logging was active");
-      expect(res.report).not.toContain("--attach");
-    }
+    const attributed = leak(true, "swift::swift_slowAllocTyped(...)", "libswiftCore.dylib");
+    // Also with no attributed leak: a Mac app is recorded with `--attach` too.
+    for (const leaks of [[attributed], []])
+      for (const mallocStackLogging of [false, null]) {
+        const res = await renderNativeProfilerReport({
+          payload: macPayload([...leaks, leak(false, "<Call stack limit reached>")]),
+          traceFile: null,
+          mallocStackLogging,
+        });
+        expect(res.report).toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
+        expect(res.report).not.toContain("malloc stack logging was active");
+        expect(res.report).not.toContain("--attach");
+      }
   });
 
   it("keeps the malloc capture's note when malloc_stack_logging was on", async () => {
@@ -194,7 +188,7 @@ describe("leak attribution rendering on a Mac app", () => {
       mallocStackLogging: true,
     });
     expect(res.report).toContain("ran with malloc stack logging enabled");
-    expect(res.report).not.toContain("On a Mac app");
+    expect(res.report).not.toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
   });
 });
 
