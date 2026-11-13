@@ -13,6 +13,7 @@ import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeIosDeviceImpl } from "./platforms/ios-device";
 import { makeAndroidImpl } from "./platforms/android";
 import { makeChromiumImpl } from "./platforms/chromium";
+import { makeMacosImpl } from "./platforms/macos";
 import { vegaImpl } from "./platforms/vega";
 import { harmonyImpl } from "./platforms/harmony";
 
@@ -23,6 +24,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 // `text` and `key` are at-most-one, and the advertised JSON Schema cannot say
@@ -36,7 +38,7 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
     ),
   text: z
     .string()
@@ -62,7 +64,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text`; to do both, send two `keyboard` steps in one `run-sequence`. Not supported on Apple TV / Android TV; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos>"
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text`; to do both, send two `keyboard` steps in one `run-sequence`. Not supported on Apple TV / Android TV; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up, page-down, and shortcuts with modifiers joined by + (command, shift, option, control), e.g. command+a.</flag:macos-apps>"
     ),
   delayMs: z
     .number()
@@ -115,16 +117,17 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     chromium: makeChromiumImpl(registry),
     vega: vegaImpl,
     harmony: harmonyImpl,
+    macos: makeMacosImpl(registry),
   });
   return {
     id: "keyboard",
-    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
+    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, <flag:macos-apps>Mac app, </flag:macos-apps>Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; focus a text field with \`tv-remote\` first (e.g. a search or login box), then type into it with keyboard.
 Tap the field first: with no focus the text is dropped and the call still succeeds.
 Returns { typed: string, keys: number, verified?: boolean, note?: string }. On physical iOS, reactivated: true = app was re-fronted; re-describe.
 On an Android phone or tablet the focused field is read back, because \`adb input text\` can silently drop characters on a field that re-renders per keystroke. verified=true: the field holds the text. verified=false: it does not, and note gives the character counts. verified is absent when the check could not conclude (note says why), and on every other platform, including Android TV: absent means "not checked". A verified=false step stops a \`run-sequence\` and fails an e2e test step.
 Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
-A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
+A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front).<flag:macos-apps> A Mac app types any character.</flag:macos-apps> A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
 React Native: after typing, the next tap outside the field may only close the keyboard. If only the keyboard closed, tap again; where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
     zodSchema,
     alwaysLoad: true,

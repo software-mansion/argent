@@ -6,6 +6,7 @@ import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { FILE_INPUT_MARKER, Registry, TOOL_ID_ALIASES } from "@argent/registry";
 import { createHttpApp } from "../../src/http";
+import { isFlagOffered } from "../../src/utils/capability";
 import { createRegistry } from "../../src/utils/setup-registry";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
@@ -100,11 +101,18 @@ describe("the former flow-* tool ids", () => {
     const mcpNames = tools.filter((t) => !t.hideFromMcp).map((t) => t.name);
     for (const [alias, id] of ALIASES) {
       expect(mcpNames).not.toContain(alias);
-      expect(mcpNames).toContain(id);
+      // A tool hidden from MCP itself (e2e-read-prerequisite) hides both names.
+      if (registry.getTool(id)!.hideFromMcp) expect(mcpNames).not.toContain(id);
+      else expect(mcpNames).toContain(id);
     }
-    expect(tools.filter((t) => t.aliasOf === undefined)).toHaveLength(
-      registry.getSnapshot().tools.length
-    );
+    expect(mcpNames).not.toContain("e2e-read-prerequisite");
+    expect(mcpNames).toContain("e2e-execute");
+    // A tool behind a flag that is off is hidden, so count only the exposed ones.
+    const exposed = registry.getSnapshot().tools.filter((id) => {
+      const flag = registry.getTool(id)!.featureFlag;
+      return !flag || isFlagOffered(flag);
+    });
+    expect(tools.filter((t) => t.aliasOf === undefined)).toHaveLength(exposed.length);
   });
 
   it("run the same flow with the same result through invokeTool and POST /tools", async () => {
@@ -142,6 +150,10 @@ describe("the former flow-* tool ids", () => {
     const byId = await registry.invokeTool("e2e-read-prerequisite", args);
 
     expect(byAlias).toEqual(byId);
+    // Hidden from MCP, where e2e-execute returns the same text, but both names
+    // stay callable for the SDK, `argent run` and e2e tool: steps.
+    expect(flowReadPrerequisiteTool.hideFromMcp).toBe(true);
+    expect(byId).toMatchObject({ executionPrerequisite: "on the form" });
   });
 
   it("log the HTTP failure of an alias call under the current id, with alias_used", async () => {

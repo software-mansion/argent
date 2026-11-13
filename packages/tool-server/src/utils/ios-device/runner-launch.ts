@@ -1,12 +1,15 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { scheduleGroupSigkill, signalGroupThenPid } from "../process-kill";
 import { sleep } from "../timing";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Launch the built runner on a device, learn the port it bound, and kill it again.
@@ -18,6 +21,42 @@ function logsRoot(): string {
 
 function resultsRoot(): string {
   return path.join(os.homedir(), ".argent", "ios-device-runner", "results");
+}
+
+/**
+ * Xcode's defaults for a build-for-testing .xctestrun record the screen for the
+ * whole test and keep attachments on the device until the test passes. The
+ * runner's one test lasts the whole session and is always killed, never passed,
+ * so the recordings pile up on the phone as System Data. Overwrite the three
+ * keys on every launch, which also covers artifacts built before this change.
+ */
+const RUNNER_ATTACHMENT_SETTINGS: ReadonlyArray<[key: string, value: string]> = [
+  ["PreferredScreenCaptureFormat", "screenshots"],
+  ["SystemAttachmentLifetime", "keepNever"],
+  ["UserAttachmentLifetime", "keepNever"],
+];
+
+/** Where the runner's test target sits in a format 1 and a format 2 .xctestrun. */
+const RUNNER_TEST_TARGET_KEY_PATHS = ["ArgentRunnerUITests", "TestConfigurations.0.TestTargets.0"];
+
+/** Best effort: a file plutil cannot patch still launches, as before. */
+export async function disableRunnerAttachments(xctestrunPath: string): Promise<void> {
+  for (const target of RUNNER_TEST_TARGET_KEY_PATHS) {
+    try {
+      for (const [key, value] of RUNNER_ATTACHMENT_SETTINGS) {
+        await execFileAsync(
+          "plutil",
+          ["-replace", `${target}.${key}`, "-string", value, xctestrunPath],
+          {
+            timeout: 10_000,
+          }
+        );
+      }
+      return;
+    } catch {
+      /* not this format; try the next key path */
+    }
+  }
 }
 
 export interface LaunchedRunner {
@@ -50,6 +89,7 @@ export async function launchRunner(opts: {
 
   // xcodebuild refuses to write onto an existing result bundle.
   await fsp.rm(resultBundlePath, { recursive: true, force: true });
+  await disableRunnerAttachments(opts.xctestrunPath);
 
   const logFd = fs.openSync(logPath, "w");
 

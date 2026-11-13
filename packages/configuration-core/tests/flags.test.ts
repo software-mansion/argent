@@ -348,4 +348,11 @@ describe("opt-out (default-on) flags", () => {
     expect(getFlagDefinition("video-watermark")?.defaultEnabled).toBe(true);
     expect(isFeatureEnabled("video-watermark")).toBe(true); // unset ⇒ on
   });
+
+  it("the shipped macos-apps flag is declared opt-out (on by default)", () => {
+    expect(getFlagDefinition("macos-apps")?.defaultEnabled).toBe(true);
+    expect(isFeatureEnabled("macos-apps")).toBe(true); // unset ⇒ on
+    setFlag("macos-apps", false, "global");
+    expect(isFeatureEnabled("macos-apps")).toBe(false);
+  });
 });

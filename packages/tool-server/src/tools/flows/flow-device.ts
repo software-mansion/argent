@@ -1,8 +1,20 @@
-import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
+import type { DeviceInfo, FailureCode, Platform, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { resolveDevice } from "../../utils/device-info";
+import { getAndroidRuntimeKind } from "../../utils/adb";
+import { MACOS_APPS_FLAG_OFF_REASON, macosAppsUnavailableReason } from "../../utils/capability";
+import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { externalNativeId } from "../../utils/external-devices";
+import { getSimulatorRuntimeKind } from "../../utils/ios-devices";
+import { getRemoteSimulatorRuntimeKind } from "../../utils/sim-remote";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { blockSteps, type FlowStep, type SelectablePlatform } from "./flow-utils";
+import {
+  authoringPlatform,
+  blockSteps,
+  type FlowRequires,
+  type FlowRuntimeKind,
+  type FlowStep,
+  type SelectablePlatform,
+} from "./flow-utils";
 
 /**
  * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in flow-utils.
@@ -64,6 +76,7 @@ interface RawDevice {
   id?: string;
   /** Physical iPhone when kind is "device". */
   kind?: string;
+  runtimeKind?: FlowRuntimeKind;
 }
 
 function deviceEntryId(d: RawDevice): string | undefined {
@@ -73,11 +86,12 @@ function deviceEntryId(d: RawDevice): string | undefined {
   if (d.platform === "ios" || d.platform === "ios-remote" || d.platform === "harmony") {
     return d.udid;
   }
-  if (d.platform === "chromium") return d.id;
+  // A Mac app row carries its `macos-app-<bundle id>` id, as a Chromium row does.
+  if (d.platform === "chromium" || d.platform === "macos") return d.id;
   return d.serial; // android, vega
 }
 
-function isBooted(d: RawDevice): boolean {
+function isBooted(d: RawDevice, platform?: FlowPlatform): boolean {
   switch (d.platform) {
     case "ios":
       // Simulators only. A physical iPhone reports `connected` and is never
@@ -97,6 +111,12 @@ function isBooted(d: RawDevice): boolean {
       return d.state === "running" || d.state === "device";
     case "chromium":
       return true; // a discovered chromium device is, by definition, reachable
+    case "macos":
+      // list-devices lists only the Mac apps argent started and that still
+      // run, so a listed app is reachable. It is picked only for `--platform
+      // macos`: apps that other agents keep running would make every other run
+      // ambiguous, and a cleanup flow would then run unscoped.
+      return platform === "macos";
     default:
       return false;
   }
@@ -120,13 +140,33 @@ function connectedIosDeviceHint(devices: RawDevice[], platform?: FlowPlatform): 
   );
 }
 
+/** A listed Mac app is not picked without `--platform macos` ({@link isBooted}). */
+function macosAppHint(devices: RawDevice[], platform?: FlowPlatform): string {
+  if (platform || !devices.some((d) => d.platform === "macos")) return "";
+  return " A Mac app is picked only with --platform macos or --device.";
+}
+
+/**
+ * Why `--platform macos` found nothing, when list-devices adds no Mac app at
+ * all: the flag is off, or the host is not a Mac. Without it the plain "no
+ * device" message would send the caller looking for an app that is running.
+ */
+function macosFlagHint(platform?: FlowPlatform): string {
+  const reason = platform === "macos" ? macosAppsUnavailableReason() : null;
+  if (!reason) return "";
+  return reason === MACOS_APPS_FLAG_OFF_REASON
+    ? " The macos-apps flag is off, so no Mac app is listed. Run: argent enable macos-apps."
+    : ` No Mac app is listed: ${reason}.`;
+}
+
 function describeDevice(d: RawDevice): string {
   return `${deviceEntryId(d) ?? "?"} (${d.platform}${d.state ? `, ${d.state}` : ""})`;
 }
 
-function deviceResolutionError(message: string, all: RawDevice[]): FailureError {
-  const list = all.length ? all.map(describeDevice).join(", ") : "none";
-  return new FailureError(`${message} Available devices: ${list}.`, {
+/** With `all`, the message lists the available devices. */
+export function deviceResolutionError(message: string, all?: RawDevice[]): FailureError {
+  const list = all ? ` Available devices: ${all.map(describeDevice).join(", ") || "none"}.` : "";
+  return new FailureError(message + list, {
     error_code: FAILURE_CODES.FLOW_DEVICE_RESOLUTION,
     failure_stage: "flow_device_resolution",
     failure_area: "tool_server",
@@ -134,41 +174,204 @@ function deviceResolutionError(message: string, all: RawDevice[]): FailureError 
   });
 }
 
+function describeRequires(requires: FlowRequires): string {
+  const parts: string[] = [];
+  if (requires.platform) parts.push(`platform: [${requires.platform.join(", ")}]`);
+  if (requires.runtimeKind) parts.push(`runtimeKind: ${requires.runtimeKind}`);
+  return `requires: { ${parts.join(", ")} }`;
+}
+
+function requirementsError(
+  message: string,
+  code: FailureCode = FAILURE_CODES.FLOW_REQUIREMENTS_UNMET
+): FailureError {
+  return new FailureError(message, {
+    error_code: code,
+    failure_stage: "flow_requirements",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+/** The runtime kinds of the platforms that have only one. HarmonyOS support covers phones only. */
+const CONSTANT_RUNTIME_KIND: Partial<Record<Platform, FlowRuntimeKind>> = {
+  chromium: "mobile",
+  harmony: "mobile",
+  vega: "tv",
+};
+
+function platformMeets(platform: Platform, requires: FlowRequires): boolean {
+  if (requires.platform && !(requires.platform as string[]).includes(authoringPlatform(platform))) {
+    return false;
+  }
+  // A Mac app is neither a tv nor a mobile target.
+  if (requires.runtimeKind && platform === "macos") return false;
+  const constant = CONSTANT_RUNTIME_KIND[platform];
+  return !(requires.runtimeKind && constant && constant !== requires.runtimeKind);
+}
+
+/** Throw unless `platform` can satisfy the flow's requirements; `target` names it in the error. */
+export function assertPlatformMeetsRequires(
+  platform: Platform,
+  requires: FlowRequires | undefined,
+  target: string,
+  subject = "This e2e test"
+): void {
+  if (!requires || platformMeets(platform, requires)) return;
+  throw requirementsError(
+    `${subject} declares ${describeRequires(requires)}, which excludes ${target}.`
+  );
+}
+
+async function probeRuntimeKind(device: DeviceInfo): Promise<FlowRuntimeKind | undefined> {
+  const constant = CONSTANT_RUNTIME_KIND[device.platform];
+  if (constant) return constant;
+  if (isIosPhysicalDevice(device)) return "mobile";
+  switch (device.platform) {
+    case "ios":
+      return getSimulatorRuntimeKind(device.id);
+    case "ios-remote":
+      return getRemoteSimulatorRuntimeKind(device.id);
+    case "android":
+      return getAndroidRuntimeKind(externalNativeId(device.id));
+    default:
+      return undefined;
+  }
+}
+
+/** Throw unless a resolved device satisfies the flow's requirements. */
+export async function assertDeviceMeetsRequires(
+  device: DeviceInfo,
+  requires: FlowRequires | undefined,
+  subject = "This e2e test"
+): Promise<void> {
+  if (!requires) return;
+  assertPlatformMeetsRequires(
+    device.platform,
+    requires,
+    `device ${device.id} (${device.platform})`,
+    subject
+  );
+  if (!requires.runtimeKind) return;
+  const kind = await probeRuntimeKind(device);
+  if (kind === undefined) {
+    throw unknownRuntimeKindError(requires, [`${device.id} (${device.platform})`], subject);
+  }
+  if (kind !== requires.runtimeKind) {
+    throw requirementsError(
+      `${subject} declares ${describeRequires(requires)}, which excludes device ` +
+        `${device.id} (${device.platform}, ${kind}).`
+    );
+  }
+}
+
+/** Unknown is not a mismatch: a directory run would skip the test and hide the broken probe. */
+function unknownRuntimeKindError(
+  requires: FlowRequires,
+  devices: string[],
+  subject = "This e2e test",
+  remedy = ""
+): FailureError {
+  return requirementsError(
+    `${subject} declares ${describeRequires(requires)}, but the runtime kind of ` +
+      `${devices.join(", ")} could not be determined.${remedy}`,
+    FAILURE_CODES.FLOW_DEVICE_RESOLUTION
+  );
+}
+
+function listedRuntimeKind(d: RawDevice): FlowRuntimeKind | undefined {
+  return CONSTANT_RUNTIME_KIND[d.platform] ?? d.runtimeKind;
+}
+
+/** Probes when the listing has no kind, as for an external device or a probe that timed out. */
+async function candidateRuntimeKind(d: RawDevice): Promise<FlowRuntimeKind | undefined> {
+  const id = deviceEntryId(d);
+  return listedRuntimeKind(d) ?? (id ? probeRuntimeKind(resolveDevice(id)) : undefined);
+}
+
 /**
  * Resolve the device a flow runs against. Order: explicit `device` id → the
  * single booted device of `platform` → the single booted device overall →
  * throw, enumerating what is available. A physical iPhone is reachable only
- * through the explicit id; see {@link isBooted}.
+ * through the explicit id, and a Mac app only through it or `platform`; see
+ * {@link isBooted}. `requires` narrows the booted candidates.
+ *
+ * An explicit Mac app id is refused while the macos-apps flag is off, or off
+ * macOS. The id classifies by its shape alone and skips the device list, which
+ * is where the flag and the host check hide Mac apps, so without this check a
+ * flow would go on to steps that can never run here.
  */
 export async function resolveFlowDevice(
   registry: Registry,
   ctx: ToolContext | undefined,
-  opts: { device?: string; platform?: FlowPlatform }
+  opts: { device?: string; platform?: FlowPlatform; requires?: FlowRequires }
 ): Promise<DeviceInfo> {
-  if (opts.device) return resolveDevice(opts.device);
+  if (opts.device) {
+    const device = resolveDevice(opts.device);
+    const macosRefusal = device.platform === "macos" ? macosAppsUnavailableReason() : null;
+    if (macosRefusal) throw deviceResolutionError(`Cannot run on ${device.id}: ${macosRefusal}`);
+    return device;
+  }
 
   const { devices } = (await invokeSubTool(registry, ctx, "list-devices", {})) as {
     devices: RawDevice[];
   };
-  const booted = devices.filter(isBooted);
+  const booted = devices.filter((d) => isBooted(d, opts.platform));
   const scoped = opts.platform ? booted.filter((d) => d.platform === opts.platform) : booted;
+  const requires = opts.requires;
+  const candidates = requires ? scoped.filter((d) => platformMeets(d.platform, requires)) : scoped;
+  const kinds = new Map<RawDevice, FlowRuntimeKind | undefined>();
+  if (requires?.runtimeKind) {
+    const wanted = requires.runtimeKind;
+    const anyMatch = () => candidates.some((d) => kinds.get(d) === wanted);
+    for (const d of candidates) kinds.set(d, listedRuntimeKind(d));
+    // A listed match is enough: probing the other devices can hang on a frozen one.
+    if (!anyMatch()) {
+      for (const d of candidates) {
+        if (kinds.get(d) === undefined) kinds.set(d, await candidateRuntimeKind(d));
+      }
+      const unknown = candidates.filter((d) => kinds.get(d) === undefined);
+      if (!anyMatch() && unknown.length > 0) {
+        throw unknownRuntimeKindError(
+          requires,
+          unknown.map(describeDevice),
+          undefined,
+          " Pass --device or --platform to choose a device."
+        );
+      }
+    }
+  }
+  const eligible = requires?.runtimeKind
+    ? candidates.filter((d) => kinds.get(d) === requires.runtimeKind)
+    : candidates;
 
-  if (scoped.length === 1) {
-    const id = deviceEntryId(scoped[0]);
+  if (eligible.length === 1) {
+    const id = deviceEntryId(eligible[0]);
     if (id) return resolveDevice(id);
   }
-  if (scoped.length === 0) {
+  if (eligible.length === 0 && requires && scoped.length > 0) {
+    const listed = scoped.map((d) => {
+      const known = kinds.get(d) ?? listedRuntimeKind(d);
+      const kind = requires.runtimeKind ? `, ${known ?? "kind unknown"}` : "";
+      return `${deviceEntryId(d) ?? "?"} (${d.platform}${kind})`;
+    });
+    throw requirementsError(
+      `No booted device satisfies this e2e test's ${describeRequires(requires)}. ` +
+        `Booted devices: ${listed.join(", ")}.`
+    );
+  }
+  if (eligible.length === 0) {
     const what = opts.platform
       ? `No booted ${opts.platform} device found.`
       : "No booted device found.";
     throw deviceResolutionError(
-      `${what} Pass a device id or platform explicitly.${connectedIosDeviceHint(devices, opts.platform)}`,
+      `${what} Pass a device id or platform explicitly.${connectedIosDeviceHint(devices, opts.platform)}${macosAppHint(devices, opts.platform)}${macosFlagHint(opts.platform)}`,
       devices
     );
   }
   throw deviceResolutionError(
-    `${scoped.length} booted devices matched — pass --device or --platform to disambiguate.`,
-    scoped
+    `${eligible.length} booted devices matched — pass --device or --platform to disambiguate.`,
+    eligible
   );
 }
 
