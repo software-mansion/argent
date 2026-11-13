@@ -135,7 +135,7 @@ describe("native-profiler-stop recovery branch", () => {
       STOP_CTX
     )) as IosStopArtifacts;
 
-    expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
+    expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE, false);
     // exportedFiles are now artifact handles (materialized client-side), not raw paths.
     expect(result.exportedFiles.cpu).toMatchObject({
       __argentArtifact: true,

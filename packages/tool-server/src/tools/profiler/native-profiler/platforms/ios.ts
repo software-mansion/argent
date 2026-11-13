@@ -669,7 +669,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
 
     const ended = api.recordingAppEnded;
     const suspensions = endSuspensionWatch(api);
-    const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile);
+    const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile, ended);
     api.exportedFiles = exportedFiles;
     // Pair the exports with the capture mode of the recording that just ended.
     api.mallocStackLogging = api.recordingMallocStackLogging;
@@ -782,7 +782,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   // Each export of an empty trace waits out its timeout.
   const { files: exportedFiles, diagnostics } = attachFailed
     ? skippedTraceExport("xctrace did not attach to the app, so the trace holds no data.")
-    : await exportIosTraceData(api.traceFile);
+    : await exportIosTraceData(api.traceFile, ended);
   api.exportedFiles = exportedFiles;
   // Pair the exports with the capture mode of the recording that just ended.
   api.mallocStackLogging = api.recordingMallocStackLogging;

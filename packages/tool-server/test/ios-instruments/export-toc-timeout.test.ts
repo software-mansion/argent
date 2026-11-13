@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /**
- * A trace that holds next to no data (the app crashed or quit early) takes
+ * A trace that holds next to no data (the Mac app crashed or quit early) takes
  * xctrace minutes to export, table of contents included. When even the table
- * of contents runs out of time, the stop exports nothing more: each later
- * export would wait out its own timeout too.
+ * of contents of such a trace runs out of time, the stop exports nothing more:
+ * each later export would wait out its own timeout too. For any other trace
+ * (every iOS one), a slow table of contents is no sign of slow tables.
  */
 const behaviour = vi.hoisted(() => ({
   toc: "ok" as "ok" | "timeout" | "error",
@@ -65,9 +66,9 @@ describe("exportIosTraceData reads the trace's start and length from the table o
 });
 
 describe("exportIosTraceData when the table of contents export", () => {
-  it("times out, exports nothing more and says why for every table", async () => {
+  it("times out after the app ended, exports nothing more and says why for every table", async () => {
     behaviour.toc = "timeout";
-    const { files, diagnostics } = await exportIosTraceData(TRACE);
+    const { files, diagnostics } = await exportIosTraceData(TRACE, true);
 
     expect(behaviour.calls).toHaveLength(1);
     expect(behaviour.calls[0]).toContain("--toc");
@@ -75,6 +76,23 @@ describe("exportIosTraceData when the table of contents export", () => {
     for (const key of ["cpu", "hangs", "leaks"]) {
       expect(diagnostics.errors[key]).toContain("could not list the trace's tables within 60 s");
     }
+    expect(diagnostics.errors.toc).toContain("Command failed");
+  });
+
+  it("times out while the app runs, still tries the CPU schemas and the other tables", async () => {
+    behaviour.toc = "timeout";
+    const { files, diagnostics } = await exportIosTraceData(TRACE);
+
+    // As for any failed table of contents: the CPU schemas by brute force (the
+    // first one exports here), hangs and leaks.
+    expect(behaviour.calls).toHaveLength(4);
+    expect(behaviour.calls[1]).toContain(
+      '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]'
+    );
+    expect(files.cpu).not.toBeNull();
+    expect(files.hangs).not.toBeNull();
+    expect(files.leaks).not.toBeNull();
+    expect(diagnostics.skipped).toBeUndefined();
     expect(diagnostics.errors.toc).toContain("Command failed");
   });
 

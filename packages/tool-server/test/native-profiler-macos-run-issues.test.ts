@@ -263,6 +263,8 @@ describe("native-profiler-stop and the run issues xctrace prints", () => {
     expect(result.warning).toContain("xctrace exited before stop was called (code=0");
     expect(result.warning).toContain("The app quit, crashed or was restarted during the recording");
     expect(api.appEndedDuringCapture).toBe(true);
+    // The export may skip the tables of a trace that holds next to no data.
+    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledWith(api.traceFile, true);
   });
 
   it("on a Mac app, does not take a quit after xctrace ended on its own for one during the recording", async () => {
@@ -334,6 +336,7 @@ describe("native-profiler-stop and the run issues xctrace prints", () => {
     const result = await stopNativeProfilerIos(api);
 
     expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledWith(api.traceFile, false);
     expect(result.exportedFiles.cpu).toBe("/tmp/cpu.xml");
     expect(result.warning).toBeUndefined();
   });

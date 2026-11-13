@@ -78,11 +78,13 @@ async function discoverTraceSchemas(
 
 async function resolveCpuXpath(
   traceFile: string,
-  diagnostics: ExportDiagnostics
+  diagnostics: ExportDiagnostics,
+  appEnded: boolean
 ): Promise<string | null | "toc-timed-out"> {
   const discovered = await discoverTraceSchemas(traceFile, diagnostics);
-  if (discovered === "timed-out") return "toc-timed-out";
-  const tocSchemas = discovered;
+  if (discovered === "timed-out" && appEnded) return "toc-timed-out";
+  // Otherwise a slow table of contents is no sign of slow tables: go on without it.
+  const tocSchemas = discovered === "timed-out" ? [] : discovered;
   diagnostics.tocSchemas = tocSchemas;
 
   if (tocSchemas.length > 0) {
@@ -148,7 +150,14 @@ export function skippedTraceExport(reason: string): {
   return { files: { cpu: null, hangs: null, leaks: null }, diagnostics };
 }
 
-export async function exportIosTraceData(traceFile: string): Promise<{
+/**
+ * `appEnded`: the Mac app ended during the recording, so the trace can hold next
+ * to no data. Then a table of contents that runs out of time ends the export.
+ */
+export async function exportIosTraceData(
+  traceFile: string,
+  appEnded = false
+): Promise<{
   files: Record<IosExportKey, string | null>;
   diagnostics: ExportDiagnostics;
 }> {
@@ -170,7 +179,7 @@ export async function exportIosTraceData(traceFile: string): Promise<{
     const outPath = path.join(dir, `${baseName}${config.suffix}`);
 
     if (key === "cpu") {
-      const resolvedXpath = await resolveCpuXpath(traceFile, diagnostics);
+      const resolvedXpath = await resolveCpuXpath(traceFile, diagnostics, appEnded);
       if (resolvedXpath === "toc-timed-out") {
         // Listing the tables is the lightest export. A trace that holds next to
         // no data (the app crashed or quit early) takes minutes for each one, so

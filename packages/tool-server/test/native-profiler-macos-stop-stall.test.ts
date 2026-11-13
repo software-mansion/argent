@@ -95,7 +95,7 @@ describe("native-profiler-stop and an xctrace that hangs after SIGINT", () => {
     const result = await pending;
     expect(result.warning).toMatch(/^xctrace hung while it ended the recording/);
     expect(result.warning).toContain("argent ended it with SIGTERM");
-    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledWith(TRACE);
+    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledWith(TRACE, false);
     expect(result.exportedFiles.cpu).toBe("/tmp/cpu.xml");
     expect(api.profilingActive).toBe(false);
     expect(api.captureProcess).toBeNull();

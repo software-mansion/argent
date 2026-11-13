@@ -230,7 +230,7 @@ describe("the native profiler tools on a Mac app id", () => {
 
     const stopped = await call("native-profiler-stop", { device_id: MAC });
     expect(stopped.status).toBe(200);
-    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledWith(started.body.data.traceFile);
+    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledWith(started.body.data.traceFile, false);
     expect(stopped.body.data.exportedFiles.cpu).toMatchObject({ kind: "native-profile-cpu" });
     expect(stopped.body.data.warning).toBeUndefined();
 
