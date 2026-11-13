@@ -253,6 +253,8 @@ steps:
 
 When the agent records a `file-panel` `stub` with no `panelKind`, Argent saves the `panelKind` that the stub used. The app writes the file when the save panel gets the answer. Without `panelKind`, a replay finds that file and keeps the answer for the next open panel.
 
+A browser that `boot-device` starts with `browser` has no `launch:` form. Boot it before the run.
+
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the e2e test as a fragment.
 
 ### Swipe
@@ -559,7 +561,7 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
-Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
+Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. A browser booted with `browser` has no app path to boot; give it `--window-size=<w>,<h>` in `electronArgs` instead. A windowed browser also multiplies the capture size by the scale factor of the display, and a headless browser does not. Boot the browser with the same arguments on every run. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
 
 <a id="flows-over-a-link" />
 

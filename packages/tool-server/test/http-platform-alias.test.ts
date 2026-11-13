@@ -46,6 +46,21 @@ describe("http platform inference and the device alias", () => {
     expect(platformFromArgs({ udid: "harmony-127.0.0.1:5555" })).toBe("harmony");
   });
 
+  it("attributes an Electron or browser boot to chromium before it has a port", () => {
+    expect(platformFromArgs({ browser: "chrome" })).toBe("chromium");
+    expect(platformFromArgs({ electronAppPath: "/apps/Foo.app" })).toBe("chromium");
+  });
+
+  it("attributes a Vega boot by its image name", () => {
+    expect(platformFromArgs({ vvdImage: "tv" })).toBe("vega");
+  });
+
+  it("skips an empty target field, as boot-device does", () => {
+    expect(platformFromArgs({ electronAppPath: "", vvdImage: "tv" })).toBe("vega");
+    expect(platformFromArgs({ avdName: "", browser: "chrome" })).toBe("chromium");
+    expect(platformFromArgs({ harmonyInstance: "", electronAppPath: "/a" })).toBe("chromium");
+  });
+
   it("derives the device kind from the aliased id, not the opaque handle", () => {
     // A learned alias to a physical iPhone makes the debugger call count as
     // hardware; the 40-hex handle alone never would.

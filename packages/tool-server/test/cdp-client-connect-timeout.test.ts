@@ -69,6 +69,25 @@ describe("CDPClient.connect", () => {
     expect(cdp.isConnected()).toBe(false);
   });
 
+  it("waits out the handshake deadline its caller passes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const silent = await startSilentUpgradeServer();
+    server = silent.server;
+    const cdp = new CDPClient(silent.url, { sendOrigin: false });
+
+    const settled = cdp.connect(20_000).then(
+      () => "resolved",
+      (err: unknown) => err
+    );
+    socket = await silent.upgraded;
+
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(await Promise.race([settled, Promise.resolve("pending")])).toBe("pending");
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(((await settled) as Error).message).toContain("did not complete within 20000ms.");
+  });
+
   it("leaves an opened connection up once the handshake deadline passes", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const wss = await new Promise<WebSocketServer>((r) => {

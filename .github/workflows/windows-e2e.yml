@@ -4,7 +4,8 @@ name: Windows E2E
 # "Argent on Windows" means the Android + Chromium host control plane.
 #
 # This job, windows-chromium, has the tool-server drive a real headless Chrome
-# over CDP (discover → screenshot → describe → tap → observe the DOM change).
+# over CDP (discover → screenshot → describe → tap → observe the DOM change),
+# once on a Chrome started by hand and once on one `boot-device` launches itself.
 # Chromium control is pure host-side TypeScript, so a hosted Windows runner (no
 # virtualization) verifies it fully. It also runs the cross-platform resolver
 # unit tests natively on Windows and confirms adb.exe resolution.
@@ -33,6 +34,10 @@ on:
       - "packages/tool-server/src/utils/chromium-discovery.ts"
       - "packages/tool-server/src/tools/simulator/stop-metro.ts"
       - "packages/tool-server/src/tools/devices/boot-device.ts"
+      - "packages/tool-server/src/tools/devices/boot-browser.ts"
+      - "packages/tool-server/src/tools/devices/boot-electron.ts"
+      - "packages/tool-server/src/utils/free-port.ts"
+      - "packages/tool-server/src/utils/process-kill.ts"
       - "packages/tool-server/src/utils/device-shutdown.ts"
       # The unit tests this job runs — editing one must re-run it here, and so
       # must editing the config or a setup file every one of them loads.

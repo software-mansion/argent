@@ -77,10 +77,10 @@ describe("boot-device target-selection error", () => {
 
   it("names harmonyInstance only with the flag on", async () => {
     expect(await message(false)).toBe(
-      "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), or `electronAppPath` (Electron)."
+      "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), `electronAppPath` (Electron), or `browser` (web browser)."
     );
     expect(await message(true)).toBe(
-      "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), `harmonyInstance` (HarmonyOS), or `electronAppPath` (Electron)."
+      "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), `harmonyInstance` (HarmonyOS), `electronAppPath` (Electron), or `browser` (web browser)."
     );
   });
 });

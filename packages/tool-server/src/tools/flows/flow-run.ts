@@ -841,8 +841,9 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
 
   let booted: BootedChromium;
   try {
-    booted = await bootChromiumForFlow(spec, state.flowsDir, state.viaUpload);
+    booted = await bootChromiumForFlow(spec, state.flowsDir, state.viaUpload, signal);
   } catch (err) {
+    if (signal?.aborted) return ABORTED_OUTCOME;
     return { ok: false, reason: await chromiumBootFailureReason(state, err) };
   }
   // Recorded before the next await so a cancelled run still reclaims it.
@@ -945,7 +946,7 @@ function singleInstanceLockHint(suspects: LockSuspects): string {
 async function chromiumBootFailureReason(state: ExecState, err: unknown): Promise<string> {
   const base = `could not boot the chromium app: ${errMsg(err)}`;
   if (!singleInstanceLockSignal(err)) return base;
-  return `${base} ${singleInstanceLockHint(await liveLockSuspects(state))}`;
+  return `${base}\n${singleInstanceLockHint(await liveLockSuspects(state))}`;
 }
 
 /**
@@ -1940,7 +1941,7 @@ async function resolveRunDevice(
       );
       let booted: BootedChromium;
       try {
-        booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
+        booted = await bootChromiumForFlow(spec, flowDir, viaUpload, ctx?.signal);
       } catch (err) {
         throw hoistedBootFailure(err);
       }
@@ -2016,7 +2017,7 @@ function resolveOpts(params: Params): { device?: string; platform?: FlowPlatform
 function hoistedBootFailure(err: unknown): unknown {
   const signal = singleInstanceLockSignal(err);
   if (!signal) return err;
-  return wrapFailure(err, signal, `${errMsg(err)} ${singleInstanceLockHint(NO_LOCK_SUSPECTS)}`);
+  return wrapFailure(err, signal, `${errMsg(err)}\n${singleInstanceLockHint(NO_LOCK_SUSPECTS)}`);
 }
 
 /**
@@ -2244,7 +2245,8 @@ async function resolveAppPath(specPath: string, flowDir: string): Promise<string
 async function bootChromiumForFlow(
   spec: { path: string; args?: string[] },
   flowDir: string,
-  viaUpload: boolean
+  viaUpload: boolean,
+  signal: AbortSignal | undefined
 ): Promise<BootedChromium> {
   // An uploaded flow's flowDir is a server temp dir — resolving a relative app
   // path there would produce a misleading ENOENT or launch a same-named host
@@ -2263,7 +2265,7 @@ async function bootChromiumForFlow(
     );
   }
   const appPath = await resolveAppPath(spec.path, flowDir);
-  const res = await bootElectronApp({ appPath, extraArgs: spec.args });
+  const res = await bootElectronApp({ appPath, extraArgs: spec.args, signal });
   return { deviceId: res.id, port: res.port, pid: res.pid, appPath: res.appPath };
 }
 

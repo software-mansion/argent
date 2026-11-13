@@ -98,4 +98,27 @@ describe("guidance platform-correctness", () => {
     expect(chromium.guidance).not.toContain("restart-app");
     expect(chromium.guidance).toContain("electronAppPath");
   });
+
+  it("chromium relaunch guidance covers a browser and never advises force: true", () => {
+    const chromium = { port: 8081, device_id: "chromium-cdp-9222" };
+    const unreachable = buildNotConnected(
+      "cdp_unreachable",
+      coded(FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE),
+      chromium
+    );
+    const unresponsive = buildNotConnected(
+      "runtime_unresponsive",
+      coded(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT),
+      chromium
+    );
+    for (const r of [unreachable, unresponsive]) {
+      // A relaunched browser is a different device, so the caller must switch ids.
+      expect(r.guidance).toMatch(/boot-device with browser starts a fresh .*under a new id/);
+      // boot-device refuses an electronPort the frozen instance still holds.
+      expect(r.guidance).not.toMatch(/force/);
+      expect(r.guidance).toMatch(
+        /for an Electron app, quit .*then boot-device with electronAppPath/
+      );
+    }
+  });
 });

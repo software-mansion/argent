@@ -111,8 +111,8 @@ export interface InvokeToolOptions {
    * arbitrary nesting.
    *
    * The AI client is inherited unchanged; the platform is re-derived from the
-   * sub-tool's own device arg (`udid` / `device_id` / `devices` / `avdName`) and
-   * falls back to the outer request's — an orchestrator has no platform of its
+   * sub-tool's own device arg (`udid` / `device_id` / `devices`, or a boot target
+   * such as `avdName` or `browser`) and falls back to the outer request's — an orchestrator has no platform of its
    * own and a single flow can target several devices. Opaque to the registry.
    */
   recordChildInvocation?: (toolInvocationId: string, childArgs?: unknown) => () => void;

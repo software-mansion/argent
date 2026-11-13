@@ -142,7 +142,7 @@ export class CDPClient {
     this.sendOrigin = options?.sendOrigin !== false;
   }
 
-  connect(): Promise<void> {
+  connect(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     return new Promise((resolve, reject) => {
       // RN >= 0.85 Metro requires an Origin header; Expo matches it exactly
       // against its serverBaseUrl (127.0.0.1), hence the localhost rewrite.
@@ -195,7 +195,7 @@ export class CDPClient {
         reject(
           new FailureError(
             `CDP WebSocket handshake with ${this.wsUrl} did not complete within ` +
-              `${DEFAULT_TIMEOUT_MS}ms. The host may be unreachable, or the target frozen ` +
+              `${timeoutMs}ms. The host may be unreachable, or the target frozen ` +
               `or not a CDP endpoint.`,
             {
               error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED,
@@ -206,7 +206,7 @@ export class CDPClient {
             }
           )
         );
-      }, DEFAULT_TIMEOUT_MS);
+      }, timeoutMs);
       const cleanup = () => {
         clearTimeout(timer);
         ws.removeListener("open", onOpen);

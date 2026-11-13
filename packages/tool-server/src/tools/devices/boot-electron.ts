@@ -6,7 +6,7 @@ import { ensureCdpReachable } from "../../blueprints/chromium-cdp";
 import { chromiumIdFromPort } from "../../utils/device-info";
 import { trackChromiumPort } from "../../utils/chromium-discovery";
 import { electronGuiChildEnv } from "../../utils/electron-env";
-import { pickFreePort } from "../../utils/free-port";
+import { isLoopbackPortAnswering, pickFreePort } from "../../utils/free-port";
 import { scheduleGroupSigkill, signalGroup } from "../../utils/process-kill";
 
 // An Electron app boots as a Chromium/CDP runtime, so the device id, platform
@@ -27,9 +27,32 @@ interface BootElectronOptions {
   extraArgs?: string[];
   /** Defaults to 30s. */
   readyTimeoutMs?: number;
+  /** Names the launcher in failure messages and telemetry. Defaults to "electron". */
+  kind?: LauncherKind;
+  /** Aborting it fails the boot and kills the process it spawned. */
+  signal?: AbortSignal;
+  /**
+   * Runs once the process is gone, or never started. Only fires while this
+   * tool-server is alive.
+   */
+  onProcessGone?: () => void;
 }
 
+type LauncherKind = "electron" | "browser";
+const LABELS: Record<LauncherKind, string> = { electron: "Electron", browser: "Browser" };
+
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
+
+/** How long an exited child's stderr may take to deliver the lines naming the cause. */
+const STDERR_DRAIN_MS = 250;
+const STDERR_TAIL_LINES = 3;
+const STDERR_TAIL_CHARS = 2000;
+
+export function abortedBootError(label: string): Error {
+  const err = new Error(`${label} boot was cancelled.`);
+  err.name = "AbortError";
+  return err;
+}
 
 /**
  * How long a successful readiness probe must hold before boot reports success.
@@ -94,7 +117,12 @@ function resolveLauncher(appPath: string): { command: string; args: string[] } {
   return { command: abs, args: [] };
 }
 
-async function waitForCdpReady(port: number, deadlineMs: number): Promise<void> {
+async function waitForCdpReady(
+  port: number,
+  deadlineMs: number,
+  kind: LauncherKind,
+  stop: AbortSignal
+): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   let lastErr: unknown = null;
   while (Date.now() < deadline) {
@@ -105,13 +133,14 @@ async function waitForCdpReady(port: number, deadlineMs: number): Promise<void> 
       lastErr = err;
       await new Promise((r) => setTimeout(r, 250));
     }
+    if (stop.aborted) return;
   }
   const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
   throw new FailureError(
-    `Electron CDP never became reachable on port ${port} within ${deadlineMs}ms. ${detail}`,
+    `${LABELS[kind]} CDP never became reachable on port ${port} within ${deadlineMs}ms. ${detail}`,
     {
       error_code: FAILURE_CODES.CHROMIUM_ELECTRON_CDP_TIMEOUT,
-      failure_stage: "electron_cdp_ready",
+      failure_stage: `${kind}_cdp_ready`,
       failure_area: "tool_server",
       error_kind: "timeout",
     },
@@ -120,13 +149,35 @@ async function waitForCdpReady(port: number, deadlineMs: number): Promise<void> 
 }
 
 /**
+ * The switch name each of `args` sets, or undefined for an argument. Chromium
+ * trims each one and takes `--` and `-` as switch prefixes, and on Windows `/`
+ * too, case-insensitively. A bare `-` (or `/`) is an argument, and so is
+ * everything after a bare `--`, which itself is neither (its name is "").
+ */
+export function chromiumSwitchNames(
+  args: string[],
+  platform: NodeJS.Platform = process.platform
+): (string | undefined)[] {
+  const win = platform === "win32";
+  let terminated = false;
+  return args.map((arg) => {
+    const trimmed = arg.trim();
+    if (terminated || trimmed === "-" || (win && trimmed === "/")) return undefined;
+    terminated = trimmed === "--";
+    const key = (win ? /^(?:--|-|\/)([^=]*)/ : /^(?:--|-)([^=]*)/).exec(trimmed)?.[1];
+    return win ? key?.toLowerCase() : key;
+  });
+}
+
+/**
  * Drop user-supplied --remote-debugging-port: Chromium honours the last
  * occurrence, so an override would leave Electron listening somewhere other
  * than the port we tracked and reported to the caller.
  */
 function sanitizeExtraArgs(extra: string[]): string[] {
-  return extra.filter((a) => {
-    if (a === "--remote-debugging-port" || a.startsWith("--remote-debugging-port=")) {
+  const names = chromiumSwitchNames(extra);
+  return extra.filter((a, i) => {
+    if (names[i] === "remote-debugging-port") {
       process.stderr.write(
         `[electron-boot] dropping user-supplied "${a}" — Argent manages the CDP port.\n`
       );
@@ -277,9 +328,84 @@ const ANTI_THROTTLING_ARGS = [
   "--disable-renderer-backgrounding",
 ];
 
+function portInUseError(message: string, kind: LauncherKind): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
+    failure_stage: `${kind}_port_in_use`,
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+/** Fixed ports with a boot in progress, whose child may not have bound yet. */
+const bootingPorts = new Set<number>();
+
+/** The killed children of failed fixed-port boots, which hold the port until they are gone. */
+const dyingChildren = new Map<number, ChildProcess>();
+
+/**
+ * Whether something answers on loopback `port` once a failed boot's child there
+ * has exited; until then it may still bind the port.
+ */
+async function portHeld(port: number): Promise<boolean> {
+  const dying = dyingChildren.get(port);
+  dyingChildren.delete(port);
+  const deadline = Date.now() + EXIT_WAIT_TIMEOUT_MS;
+  while (dying?.exitCode === null && dying.signalCode === null && Date.now() < deadline) {
+    await sleepUnref(EXIT_POLL_MS);
+  }
+  return isLoopbackPortAnswering(port);
+}
+
+/**
+ * Refuses a caller-chosen port that is taken: the new instance cannot bind it
+ * yet keeps running, and readiness would accept the existing listener, so boot
+ * would report a device that is really the other process.
+ */
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
-  const port = options.port ?? (await pickFreePort());
-  const launcher = resolveLauncher(options.appPath);
+  const kind = options.kind ?? "electron";
+  const port = options.port;
+  if (port === undefined) return bootOnce(options, kind);
+  if (bootingPorts.has(port)) {
+    options.onProcessGone?.();
+    throw portInUseError(
+      `${LABELS[kind]} boot: another boot on port ${port} is still starting; if it succeeds, ` +
+        `it is chromium-cdp-${port}. Omit \`electronPort\` to get a free port.`,
+      kind
+    );
+  }
+  bootingPorts.add(port);
+  try {
+    return await bootOnce(options, kind);
+  } finally {
+    bootingPorts.delete(port);
+  }
+}
+
+async function bootOnce(
+  options: BootElectronOptions,
+  kind: LauncherKind
+): Promise<ElectronBootResult> {
+  const label = LABELS[kind];
+  const { signal } = options;
+  let port: number;
+  let launcher: { command: string; args: string[] };
+  try {
+    if (options.port !== undefined && (await portHeld(options.port))) {
+      throw portInUseError(
+        `${label} boot: port ${options.port} is already in use on 127.0.0.1. If an app or ` +
+          `browser with remote debugging holds it, drive that one as ` +
+          `chromium-cdp-${options.port}; otherwise omit \`electronPort\` to get a free port.`,
+        kind
+      );
+    }
+    port = options.port ?? (await pickFreePort());
+    launcher = resolveLauncher(options.appPath);
+    if (signal?.aborted) throw abortedBootError(label);
+  } catch (err) {
+    options.onProcessGone?.();
+    throw err;
+  }
   const extra = sanitizeExtraArgs(options.extraArgs ?? []);
 
   const args = [
@@ -303,14 +429,15 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
       env: electronGuiChildEnv({ ELECTRON_ENABLE_LOGGING: "1" }),
     });
   } catch (err) {
+    options.onProcessGone?.();
     throw new FailureError(
-      `Electron boot: failed to spawn ${launcher.command}: ${err instanceof Error ? err.message : String(err)}`,
+      `${label} boot: failed to spawn ${launcher.command}: ${err instanceof Error ? err.message : String(err)}`,
       {
         error_code: FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED,
-        failure_stage: "electron_spawn",
+        failure_stage: `${kind}_spawn`,
         failure_area: "tool_server",
         error_kind: "subprocess",
-        ...subprocessFailureMetadata(err, "electron"),
+        ...subprocessFailureMetadata(err, kind),
       },
       { cause: err instanceof Error ? err : new Error(String(err)) }
     );
@@ -329,13 +456,13 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
         : "";
     reject(
       new FailureError(
-        `Electron boot: failed to launch ${launcher.command}${codeSuffix}: ${err.message}.${installHint}`,
+        `${label} boot: failed to launch ${launcher.command}${codeSuffix}: ${err.message}.${installHint}`,
         {
           error_code: FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED,
-          failure_stage: "electron_spawn_error",
+          failure_stage: `${kind}_spawn_error`,
           failure_area: "tool_server",
           error_kind: "subprocess",
-          ...subprocessFailureMetadata(err, "electron"),
+          ...subprocessFailureMetadata(err, kind),
         },
         { cause: err }
       )
@@ -351,30 +478,34 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   child.once("error", spawnErrorListener);
 
   if (!child.pid) {
+    options.onProcessGone?.();
     // Node leaves pid unset exactly when it queues the spawn error for the next
     // tick; the timer only guards against a runtime that breaks that contract.
     return Promise.race([
       spawnError,
       sleepUnref(1000).then((): never => {
         throw new FailureError(
-          `Electron boot: spawn returned without a pid (binary: ${launcher.command}).`,
+          `${label} boot: spawn returned without a pid (binary: ${launcher.command}).`,
           {
             error_code: FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED,
-            failure_stage: "electron_spawn_no_pid",
+            failure_stage: `${kind}_spawn_no_pid`,
             failure_area: "tool_server",
             error_kind: "subprocess",
-            failure_command: "electron",
+            failure_command: kind,
           }
         );
       }),
     ]);
   }
 
-  // Forward Electron stderr so launch failures are visible to the user / agent.
+  // Forward stderr to the tool-server log; its tail also goes into an early-exit failure.
+  let stderrTail = "";
   child.stderr?.on("data", (chunk: Buffer) => {
     process.stderr.write(`[chromium-cdp-${port}] ${chunk}`);
+    stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_TAIL_CHARS);
   });
   child.unref();
+  if (options.onProcessGone) child.once("exit", options.onProcessGone);
 
   // Race the readiness probe against the child's exit so a startup crash
   // reports "exited with code N" instead of a generic 30s readiness timeout.
@@ -387,43 +518,50 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   const earlyExit = new Promise<never>((_resolve, reject) => {
     earlyExitReject = reject;
   });
-  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+  // Set from a listener, so typed to keep TS from narrowing it to null at the catch.
+  let exitStatus = null as { code: number | null; signal: NodeJS.Signals | null } | null;
+  const onExit = (code: number | null, exitSignal: NodeJS.Signals | null) => {
     if (!earlyExitReject) return;
-    const reason = signal ? `signal ${signal}` : `code ${code ?? "?"}`;
-    earlyExitReject(
-      new FailureError(
-        `Electron boot: child process exited with ${reason} before CDP was ready. Inspect [chromium-cdp-${port}] stderr above for the cause.`,
-        {
-          error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
-          failure_stage: "electron_early_exit",
-          failure_area: "tool_server",
-          error_kind: "subprocess",
-          ...subprocessFailureMetadata({ code, signal }, "electron"),
-        }
-      )
-    );
+    exitStatus = { code, signal: exitSignal };
+    earlyExitReject(new Error("exited before CDP was ready"));
   };
   child.once("exit", onExit);
+
+  let abortReject: ((e: Error) => void) | null = null;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortReject = reject;
+  });
+  const onAbort = () => abortReject?.(abortedBootError(label));
+  signal?.addEventListener("abort", onAbort, { once: true });
 
   const detachBootListeners = () => {
     child.removeListener("error", spawnErrorListener);
     child.removeListener("exit", onExit);
+    signal?.removeEventListener("abort", onAbort);
     spawnErrorReject = null;
     earlyExitReject = null;
+    abortReject = null;
   };
 
+  const readyPoll = new AbortController();
   try {
     await Promise.race([
-      waitForCdpReady(port, options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS),
+      waitForCdpReady(
+        port,
+        options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+        kind,
+        readyPoll.signal
+      ),
       earlyExit,
       spawnError,
+      aborted,
     ]);
     // Winning the race does not prove the app is staying up — see
     // BOOT_CONFIRM_WINDOW_MS. Confirm with the boot listeners still attached so
     // a landed or in-flight exit rejects and the catch below treats it as an
     // early exit; on a clean window detachBootListeners() nulls earlyExit's
     // reject before anything can fire it.
-    await Promise.race([earlyExit, sleepUnref(BOOT_CONFIRM_WINDOW_MS)]);
+    await Promise.race([earlyExit, aborted, sleepUnref(BOOT_CONFIRM_WINDOW_MS)]);
   } catch (err) {
     // CDP didn't come up — terminate the orphan so we don't leak a process.
     //
@@ -431,8 +569,37 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     // no awaits before it, or the boot-time listeners keep firing during
     // cleanup and reject the orphan promises.
     detachBootListeners();
+    readyPoll.abort();
     killChildEscalating(child);
-    throw err;
+    if (options.port !== undefined) dyingChildren.set(options.port, child);
+    if (!exitStatus) throw err;
+    // 'exit' can fire before the last stderr chunk arrives.
+    const stderr = child.stderr;
+    if (stderr && !stderr.readableEnded) {
+      await new Promise<void>((resolve) => {
+        stderr.once("end", resolve);
+        void sleepUnref(STDERR_DRAIN_MS).then(resolve);
+      });
+    }
+    const { code, signal: exitSignal } = exitStatus;
+    const tail = stderrTail
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-STDERR_TAIL_LINES)
+      .join("\n");
+    throw new FailureError(
+      `${label} boot: child process exited with ` +
+        `${exitSignal ? `signal ${exitSignal}` : `code ${code ?? "?"}`} before CDP was ready.` +
+        (tail ? ` Its stderr ended with:\n${tail}` : ""),
+      {
+        error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
+        failure_stage: `${kind}_early_exit`,
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata({ code, signal: exitSignal }, kind),
+      }
+    );
   }
   // Detach the boot-time listeners: the child is intentionally long-lived, and
   // any later exit / error belongs to whoever manages the session next.
