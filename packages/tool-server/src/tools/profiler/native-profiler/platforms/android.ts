@@ -3,6 +3,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
+import { startOldProfilerSessionCleanup } from "../../../../utils/profiler-shared/session-retention";
 import { startPerfetto, stopPerfetto } from "../../../../utils/android-profiler/capture";
 import {
   detectAndroidRunningApp,
@@ -52,6 +53,7 @@ export async function startNativeProfilerAndroid(
   }
 
   const debugDir = await getDebugDir();
+  startOldProfilerSessionCleanup(debugDir);
   const timestamp = new Date()
     .toISOString()
     .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))

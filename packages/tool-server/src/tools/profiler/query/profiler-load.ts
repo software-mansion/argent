@@ -23,6 +23,7 @@ import { leaksWereRecorded } from "../native-profiler/platforms/ios";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
 import { readXctraceSessionMetadata } from "../../../utils/ios-profiler/session-metadata";
+import { markProfilerSessionUsed } from "../../../utils/profiler-shared/session-retention";
 import {
   isCaptureInFlight,
   inFlightGuardMessage,
@@ -215,6 +216,9 @@ async function loadReactSession(
     );
   }
 
+  // So the cleanup of old sessions keeps it while it is in use.
+  await markProfilerSessionUsed([cpuPath, commitsPath, cpuIndexPath]);
+
   let detectedArchitecture: "bridge" | "bridgeless" | null = null;
   let anyCompilerOptimized: boolean | null = null;
   let hotCommitIndices: number[] | null = null;
@@ -348,6 +352,7 @@ async function loadNativeSession(
         }
       );
     }
+    await markProfilerSessionUsed([pftrace]);
     assertNoCaptureInFlight(api);
     api.traceFile = pftrace;
     api.exportedFiles = { pftrace };
@@ -411,6 +416,7 @@ async function loadNativeSession(
     );
   }
 
+  await markProfilerSessionUsed([cpuXml, hangsXml, leaksXml]);
   const traceFile = path.join(debugDir, `native-profiler-${sessionId}.trace`);
   // The raw_*.xml carry none of the capture's own fields. The stop saved them next
   // to the trace; a session saved before that has none, and its fields stay empty.

@@ -94,6 +94,7 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    than blaming a degraded Xcode that isn't present.
 4. **Start gating** — only resolves the tool call once `xctrace` prints `Starting recording` / `Ctrl-C to stop` on stdout. At that point Argent records `Date.now()` (`wallClockStartMs`) — the anchor used later for cross-tool time alignment.
 5. **Safety timeout** — auto-SIGINTs after 10 minutes if `stop` is never called.
+6. **Old sessions** — in the background, the start deletes each saved session in `argent-profiler-cwd` that no tool used for 3 days.
 
 ### `native-profiler-stop`
 

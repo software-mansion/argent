@@ -590,6 +590,8 @@ On an iOS simulator and on a Mac app, these rules apply while `native-profiler-s
 
 On an iOS simulator and on a Mac app, `native-profiler-stop` also writes the file `native-profiler-<session_id>.trace.metadata.json`. This file holds the start time of the recording and other data that the exports do not hold. An example is the times when macOS suspended a Mac app. `profiler-load` with `mode: "load_native"` reads this file. Thus a loaded session gives the same report as the live session, and `profiler-combined-report` works after a load. When the recording is older than 30 minutes, the report also starts with a note that the trace is old. A session that an older version of Argent stored does not have this file. For such a session, `profiler-combined-report` cannot align the two profiles. Also, `native-profiler-analyze` does not write over the report file of the live session.
 
+Argent deletes a stored session when no tool used it for 3 days. A recording, a stop, an analysis and a `profiler-load` of the session use it. Argent does this check when a native recording starts and when `react-profiler-stop` stores a session. Argent deletes all files of such a session in `argent-profiler-cwd`. It also deletes the file `react-profiler-report.md` that older versions of Argent wrote, when no tool wrote it for 3 days. Argent deletes no other files. macOS also deletes the files in the temporary directory that no process read for about 3 days, but it keeps the empty `.trace` folders.
+
 In a report from Instruments, `native-profiler-analyze` gives the CPU time that Argent and Instruments used inside the app during the recording, and the share of all CPU time:
 
 - Argent: the code that Argent runs inside the app, for example for `describe` and taps on a Mac app.
