@@ -254,10 +254,6 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   const phases = exported.lifecycle
     ? parseLifecyclePhases(await fsp.readFile(exported.lifecycle, "utf8"))
     : [];
-  // Optional on both targets: the simulator estimate starts at dyld; a device launch uses it only without a later lifecycle phase.
-  const dyldStartNs = exported.dyld
-    ? earliestDyldStartNs(await fsp.readFile(exported.dyld, "utf8"))
-    : null;
   let endNs = launchEndNs(phases);
   let simulatorLaunchEstimateMs: number | null = null;
   let signpostMissing = false;
@@ -268,6 +264,10 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
           context.executableName
         )
       : null;
+    // Optional: the simulator estimate starts at dyld.
+    const dyldStartNs = exported.dyld
+      ? earliestDyldStartNs(await fsp.readFile(exported.dyld, "utf8"))
+      : null;
     ({ endNs, simulatorLaunchEstimateMs, signpostMissing } = simulatorLaunchWindow(
       signpostNs,
       dyldStartNs
@@ -275,12 +275,12 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   } else if (exported.lifecycle && endNs === null) {
     exportErrors.lifecycle = "Lifecycle export has no first-frame phase; CPU samples are not cut.";
   }
-  const launch = context.simulator ? null : deviceLaunchWindow({ phases, dyldStartNs, endNs });
+  const launch = context.simulator ? null : deviceLaunchWindow({ phases, endNs });
   const crashedOptional = [...crashedExports].filter((table) => table in exportErrors);
   const notes = [
     context.warning,
     context.simulator ? simulatorProfileNote(signpostMissing) : null,
-    launch ? processCreationNote(launch.processCreation, launch.startSource) : null,
+    launch ? processCreationNote(launch.processCreation, launch.launchMs) : null,
     crashedOptional.length > 0
       ? optionalExportCrashNote(crashedOptional, await xcodeVersion())
       : null,
@@ -305,7 +305,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   const launchPhases = phases.filter((phase) => endNs === null || phase.startNs < endNs);
   ctx?.emitProgress?.({ type: "artifact", tracePath });
   return {
-    // First lifecycle phase after Process Creation (else the start of dyld) to the end of the first frame. Null on simulators.
+    // First lifecycle phase after Process Creation to the end of the first frame. Null on simulators.
     launchMs: launch?.launchMs ?? null,
     // Simulator only: earliest dyld activity to the first-frame signpost.
     ...(context.simulator && { simulatorLaunchEstimateMs }),

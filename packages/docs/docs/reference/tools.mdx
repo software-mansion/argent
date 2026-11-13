@@ -634,7 +634,7 @@ If Argent already has an active UI test runner on the selected iPhone, `measure`
 
 `profile` mode accepts `duration_seconds` from 5 to 60, with a default of 8. It records with the Instruments App Launch template. On an iPhone, Argent ends the launch at the end of the `Launching - Initial Frame Rendering` phase. The result includes these fields:
 
-- `launchMs`: on an iPhone, the time from the start of the first lifecycle phase after `Initializing - Process Creation` to the end of the first frame. Argent uses the earliest dyld activity only when the trace has no such phase. Thus the optional dyld export does not change `launchMs`. It is `null` on a simulator.
+- `launchMs`: on an iPhone, the time from the start of the first lifecycle phase after `Initializing - Process Creation` to the end of the first frame. Argent does not use the dyld export for `launchMs`. It is `null` on a simulator.
 - `phases`: the lifecycle phases before the first frame, in milliseconds from the start of the trace.
 - `firstFrameEndMs`: the end of the launch, in milliseconds from the start of the trace.
 - `simulatorLaunchEstimateMs`: on a simulator only, the time from the first dyld activity to the first frame. It is a rough estimate.

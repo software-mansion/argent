@@ -13,11 +13,7 @@ import {
   stalledAtRecordingStart,
   stallsSimulatorLaunchRecording,
 } from "../../src/utils/ios-launch-time/results";
-import {
-  earliestDyldStartNs,
-  launchEndNs,
-  parseLifecyclePhases,
-} from "../../src/utils/ios-launch-time/trace-exports";
+import { launchEndNs, parseLifecyclePhases } from "../../src/utils/ios-launch-time/trace-exports";
 import { parseXcodeVersion } from "../../src/utils/ios-profiler/capture-strategy/select";
 
 describe("launchSampleStats", () => {
@@ -123,7 +119,7 @@ describe("simulatorLaunchWindow", () => {
 });
 
 // Real physical-device exports of the same app on the same iPhone: the full
-// lifecycle tables and the first rows of the dyld tables.
+// lifecycle tables.
 function realTrace(xcode: "26.4.1" | "27.0") {
   const fixture = (table: string) =>
     readFileSync(
@@ -131,19 +127,17 @@ function realTrace(xcode: "26.4.1" | "27.0") {
       "utf8"
     );
   const phases = parseLifecyclePhases(fixture("lifecycle"));
-  return { phases, dyldStartNs: earliestDyldStartNs(fixture("dyld")), endNs: launchEndNs(phases) };
+  return { phases, endNs: launchEndNs(phases) };
 }
 
 describe("deviceLaunchWindow", () => {
   it("starts at the first phase after Process Creation of Xcode 26.4.1", () => {
     const trace = realTrace("26.4.1");
     expect(trace.phases[0]!.period).toBe("Initializing - Process Creation");
-    expect(trace.dyldStartNs).toBe(403_229_208);
     expect(trace.endNs).toBe(656_882_708);
     expect(deviceLaunchWindow(trace)).toEqual({
       launchMs: 257.7,
       startNs: 399_150_333,
-      startSource: "lifecycle",
       processCreation: true,
     });
   });
@@ -154,28 +148,8 @@ describe("deviceLaunchWindow", () => {
     expect(deviceLaunchWindow(trace)).toEqual({
       launchMs: 268.5,
       startNs: 439_406_583,
-      startSource: "lifecycle",
       processCreation: false,
     });
-  });
-
-  it("gives the same launchMs with and without the dyld export", () => {
-    for (const xcode of ["26.4.1", "27.0"] as const) {
-      const trace = realTrace(xcode);
-      expect(deviceLaunchWindow({ ...trace, dyldStartNs: null })).toEqual(
-        deviceLaunchWindow(trace)
-      );
-    }
-  });
-
-  it("falls back to dyld without a phase after Process Creation", () => {
-    expect(
-      deviceLaunchWindow({
-        phases: [{ startNs: 0, period: "Initializing - Process Creation" }],
-        dyldStartNs: 50_000_000,
-        endNs: 300_000_000,
-      })
-    ).toEqual({ launchMs: 250, startNs: 50_000_000, startSource: "dyld", processCreation: true });
   });
 
   it("matches Process Creation by suffix, with either dash", () => {
@@ -184,36 +158,26 @@ describe("deviceLaunchWindow", () => {
         { startNs: 0, period: "Initializing \u2013 Process Creation" },
         { startNs: 100_000_000, period: "Initializing - Static Runtime Initialization" },
       ],
-      dyldStartNs: null,
       endNs: 300_000_000,
     });
     expect(window).toMatchObject({ launchMs: 200, processCreation: true });
   });
 
-  it("does not use a start after the end of the first frame", () => {
-    expect(
-      deviceLaunchWindow({
-        phases: [
-          { startNs: 0, period: "Initializing - Process Creation" },
-          { startNs: 400_000_000, period: "Initializing - Static Runtime Initialization" },
-        ],
-        dyldStartNs: 100_000_000,
-        endNs: 300_000_000,
-      })
-    ).toMatchObject({ launchMs: 200, startSource: "dyld" });
-  });
-
-  it("is null without a first frame or without any start", () => {
+  it("is null without a first frame, without a phase after Process Creation or with a later start", () => {
     expect(deviceLaunchWindow({ ...realTrace("26.4.1"), endNs: null })).toEqual({
       launchMs: null,
       startNs: null,
-      startSource: null,
       processCreation: true,
     });
     expect(
       deviceLaunchWindow({
         phases: [{ startNs: 0, period: "Initializing - Process Creation" }],
-        dyldStartNs: null,
+        endNs: 300_000_000,
+      }).launchMs
+    ).toBeNull();
+    expect(
+      deviceLaunchWindow({
+        phases: [{ startNs: 400_000_000, period: "Initializing - Static Runtime Initialization" }],
         endNs: 300_000_000,
       }).launchMs
     ).toBeNull();
@@ -222,13 +186,13 @@ describe("deviceLaunchWindow", () => {
 
 describe("processCreationNote", () => {
   it("is null without a Process Creation phase", () => {
-    expect(processCreationNote(false, "dyld")).toBeNull();
+    expect(processCreationNote(false, 200)).toBeNull();
   });
 
   it("names the attach time and where launchMs starts", () => {
-    expect(processCreationNote(true, "lifecycle")).toContain("attach");
-    expect(processCreationNote(true, "lifecycle")).toContain("starts at the next lifecycle phase");
-    expect(processCreationNote(true, "dyld")).toContain("starts at dyld");
+    expect(processCreationNote(true, 200)).toContain("attach");
+    expect(processCreationNote(true, 200)).toContain("starts at the next lifecycle phase");
+    expect(processCreationNote(true, null)).toContain("does not include it");
   });
 });
 

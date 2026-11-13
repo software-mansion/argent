@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   cpuTableXpath,
@@ -267,6 +269,14 @@ describe("earliestDyldStartNs", () => {
     const xml = `<node><row><start-time id="1">250000000</start-time></row><row><start-time id="2">120000000</start-time></row><row><start-time ref="1"/></row></node>`;
     expect(earliestDyldStartNs(xml)).toBe(120_000_000);
     expect(earliestDyldStartNs("<node/>")).toBeNull();
+  });
+
+  it("reads the first rows of a real iPhone dyld export", () => {
+    const xml = readFileSync(
+      join(__dirname, "..", "fixtures", "ios-launch-time", "xcode-26.4.1-dyld.xml"),
+      "utf8"
+    );
+    expect(earliestDyldStartNs(xml)).toBe(403_229_208);
   });
 });
 

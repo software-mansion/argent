@@ -98,33 +98,19 @@ function isProcessCreation(period: string): boolean {
  * Creation to the end of the first frame. `xctrace record --launch` spawns the
  * app suspended while Instruments attaches, and Xcode 26.4 counts that wait in
  * Process Creation, so that phase is skipped. The lifecycle export is required
- * on an iPhone, so launchMs does not depend on the optional dyld export, which
- * often crashes on Xcode 26.4.1; dyld starts about 4 ms into that phase. The
- * earliest dyld activity is the start only when no such phase exists. A start
- * after `endNs` is not used.
+ * on an iPhone, so launchMs does not use the optional dyld export, which often
+ * crashes on Xcode 26.4.1. A start after `endNs` is not used.
  */
 export function deviceLaunchWindow(window: {
   phases: Array<{ startNs: number; period: string }>;
-  dyldStartNs: number | null;
   endNs: number | null;
-}): {
-  launchMs: number | null;
-  startNs: number | null;
-  startSource: "dyld" | "lifecycle" | null;
-  processCreation: boolean;
-} {
-  const { phases, dyldStartNs, endNs } = window;
+}): { launchMs: number | null; startNs: number | null; processCreation: boolean } {
+  const { phases, endNs } = window;
   const processCreation = phases.some((phase) => isProcessCreation(phase.period));
-  const candidates: Array<[number | null | undefined, "dyld" | "lifecycle"]> = [
-    [phases.find((phase) => !isProcessCreation(phase.period))?.startNs, "lifecycle"],
-    [dyldStartNs, "dyld"],
-  ];
-  for (const [startNs, startSource] of candidates) {
-    if (endNs !== null && startNs !== null && startNs !== undefined && startNs <= endNs) {
-      return { launchMs: ms(endNs - startNs), startNs, startSource, processCreation };
-    }
-  }
-  return { launchMs: null, startNs: null, startSource: null, processCreation };
+  const startNs = phases.find((phase) => !isProcessCreation(phase.period))?.startNs;
+  return endNs !== null && startNs !== undefined && startNs <= endNs
+    ? { launchMs: ms(endNs - startNs), startNs, processCreation }
+    : { launchMs: null, startNs: null, processCreation };
 }
 
 /**
@@ -133,16 +119,14 @@ export function deviceLaunchWindow(window: {
  */
 export function processCreationNote(
   processCreation: boolean,
-  startSource: "dyld" | "lifecycle" | null
+  launchMs: number | null
 ): string | null {
   if (!processCreation) return null;
   return (
     "Under xctrace the Initializing - Process Creation phase includes the time the recording takes to attach to the app, " +
-    (startSource === "lifecycle"
+    (launchMs !== null
       ? "so launchMs starts at the next lifecycle phase instead."
-      : startSource === "dyld"
-        ? "so launchMs starts at dyld instead (the trace has no later lifecycle phase)."
-        : "so launchMs does not include it.")
+      : "so launchMs does not include it.")
   );
 }
 
