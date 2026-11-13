@@ -5,7 +5,8 @@ import * as path from "node:path";
 import {
   getInstalledVersion,
   getGloballyInstalledVersion,
-  detectPackageManager,
+  isGloballyInstalled,
+  detectGlobalPackageManager,
   globalInstallCommand,
   formatShellCommand,
 } from "../src/utils.js";
@@ -32,15 +33,22 @@ describe("update — version comparison logic", () => {
 
 describe("update — install command generation", () => {
   const original = process.env.npm_config_user_agent;
+  const originalPath = process.env.PATH;
+
+  // No argent on PATH, so the launcher picks the manager.
+  beforeEach(() => {
+    process.env.PATH = ["/usr/bin", "/bin"].join(path.delimiter);
+  });
 
   afterEach(() => {
     if (original === undefined) delete process.env.npm_config_user_agent;
     else process.env.npm_config_user_agent = original;
+    process.env.PATH = originalPath;
   });
 
   it("generates correct npm update command without --registry", () => {
     delete process.env.npm_config_user_agent;
-    const pm = detectPackageManager();
+    const pm = detectGlobalPackageManager();
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@1.0.0`);
     const cmdStr = formatShellCommand(cmd);
     expect(cmdStr).toContain("npm install -g");
@@ -50,7 +58,7 @@ describe("update — install command generation", () => {
 
   it("generates correct pnpm update command", () => {
     process.env.npm_config_user_agent = "pnpm/9.0.0";
-    const pm = detectPackageManager();
+    const pm = detectGlobalPackageManager();
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@1.0.0`);
     const cmdStr = formatShellCommand(cmd);
     expect(cmdStr).toContain("pnpm add -g");
@@ -167,6 +175,50 @@ describe.skipIf(process.platform === "win32")(
       process.env.PATH = [transientBin, persistentBin, SYSTEM_PATH].join(path.delimiter);
 
       expect(getGloballyInstalledVersion()).toBe("9.9.9");
+    });
+
+    it.each([
+      ["pnpm 10+'s cmd-shim-target line", (pkg: string) => `# cmd-shim-target=${pkg}/dist/cli.js`],
+      [
+        "pnpm 9's $basedir path",
+        () => 'exec node "$basedir/global/5/node_modules/@swmansion/argent/dist/cli.js" "$@"',
+      ],
+    ])("reads the version of a pnpm global through %s", (_shape, line) => {
+      const pnpmHome = path.join(tmpDir, "pnpm-home");
+      const pkg = path.join(pnpmHome, "global", "5", "node_modules", PACKAGE_NAME);
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(
+        path.join(pkg, "package.json"),
+        JSON.stringify({ name: PACKAGE_NAME, version: "9.9.9" })
+      );
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      // Exits 1 when run: the version must come from the shim's target alone.
+      fs.writeFileSync(path.join(pnpmHome, "argent"), `#!/bin/sh\nexit 1\n${line(pkg)}\n`);
+      fs.chmodSync(path.join(pnpmHome, "argent"), 0o755);
+      process.env.PATH = `${pnpmHome}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBe("9.9.9");
+    });
+
+    it("reads the version of the global behind a stale version-manager shim", () => {
+      const shims = path.join(tmpDir, "shims");
+      fs.mkdirSync(shims);
+      fs.writeFileSync(path.join(shims, "argent"), "#!/bin/sh\nexit 127\n");
+      fs.chmodSync(path.join(shims, "argent"), 0o755);
+      const binDir = stageInstall(path.join(tmpDir, "persistent"), "9.9.9");
+      process.env.PATH = [shims, binDir, SYSTEM_PATH].join(path.delimiter);
+
+      expect(getGloballyInstalledVersion()).toBe("9.9.9");
+    });
+
+    it("does not count a stale version-manager shim alone as an install", () => {
+      const shims = path.join(tmpDir, "shims");
+      fs.mkdirSync(shims);
+      fs.writeFileSync(path.join(shims, "argent"), "#!/bin/sh\nexit 127\n");
+      fs.chmodSync(path.join(shims, "argent"), 0o755);
+      process.env.PATH = [shims, SYSTEM_PATH].join(path.delimiter);
+
+      expect(isGloballyInstalled()).toBe(false);
     });
 
     it("returns null when no permanent install is on PATH", () => {

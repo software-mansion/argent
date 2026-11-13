@@ -23,7 +23,7 @@ import {
   getGloballyInstalledPackageRoot,
   isGloballyInstalled,
   isNewerVersion,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   localInstallCommand,
@@ -41,6 +41,7 @@ import {
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { reportSkillRefresh } from "./skills.js";
 import { reportRetiredFiles } from "./retired-files.js";
 import { PACKAGE_NAME } from "./constants.js";
@@ -294,7 +295,8 @@ export async function update(args: string[]): Promise<void> {
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
-    const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
+    const pm =
+      mode === "local" ? detectProjectPackageManager(projectRoot) : detectGlobalPackageManager();
     let latest: string | null = null;
     let target: string | null;
     let minReleaseAgeMs = 0;
@@ -471,6 +473,8 @@ export async function update(args: string[]): Promise<void> {
             UPDATE_PACKAGE_ACTION_FAILED
           );
           p.log.error(`${installed ? "Update" : "Install"} failed: ${installError}`);
+          const note = yarnClassicNote(cmd);
+          if (note) p.log.info(`Run ${pc.cyan(cmdStr)}${note}.`);
           return { failed: UPDATE_PACKAGE_ACTION_FAILED };
         }
         p.log.warn(

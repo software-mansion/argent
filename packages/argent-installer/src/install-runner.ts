@@ -6,7 +6,7 @@ import {
   getGloballyInstalledVersion,
   getLatestVersion,
   isNewerVersion,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   localInstallCommand,
@@ -21,6 +21,7 @@ import {
   getLocallyInstalledVersion,
   isYarnPnp,
 } from "./utils.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { reportSkillRefresh } from "./skills.js";
@@ -218,6 +219,7 @@ async function runGlobal(opts: {
   const { fromTar, nonInteractive, tel } = opts;
   let version = opts.version;
   const globallyInstalled = isGloballyInstalled();
+  const pm = detectGlobalPackageManager();
 
   if (!globallyInstalled) {
     // No consent prompt here: choosing "Globally" (or --global) in the
@@ -225,7 +227,6 @@ async function runGlobal(opts: {
     p.log.info(`Argent is not installed globally — installing.`);
     track("installation:global_install_decision", { decision: "install" });
 
-    const pm = detectPackageManager();
     const installTarget = fromTar ?? PACKAGE_NAME;
     const cmd = globalInstallCommand(pm, installTarget);
     const cmdStr = formatShellCommand(cmd);
@@ -245,7 +246,7 @@ async function runGlobal(opts: {
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
+      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
       await tel.trackPackageAction(
         "fresh_install",
         packageActionStartedAt,
@@ -261,7 +262,6 @@ async function runGlobal(opts: {
   if (fromTar) {
     // Developer-only reinstall (`--from`) — not a product install decision, so
     // no decision event.
-    const pm = detectPackageManager();
     const cmd = globalInstallCommand(pm, fromTar);
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
@@ -273,7 +273,7 @@ async function runGlobal(opts: {
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
+      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
       await tel.finalize(INSTALL_FROM_TAR_PACKAGE_FAILED);
       process.exit(1);
     }
@@ -345,7 +345,6 @@ async function runGlobal(opts: {
       if (p.isCancel(updateChoice) || updateChoice === "skip") {
         await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
       } else if (updateChoice === "update") {
-        const pm = detectPackageManager();
         const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
         const cmdStr = formatShellCommand(cmd);
         const updateSpinner = p.spinner();
@@ -364,7 +363,7 @@ async function runGlobal(opts: {
         } catch (err) {
           updateSpinner.stop(pc.red("Update failed."));
           p.log.error(`${err}`);
-          p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
+          p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
           await tel.trackPackageAction(
             "update_failed",
             updateStartedAt,

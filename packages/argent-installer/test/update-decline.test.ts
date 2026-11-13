@@ -42,14 +42,22 @@ const promptsMock = vi.hoisted(() => ({
 
 vi.mock("@argent/telemetry", () => telemetryMock);
 // The PATH probe (`which -a argent` / `where argent`) goes to its own mock so the
-// execFileSync assertions below only see package-manager runs.
-vi.mock("node:child_process", () => ({
-  ...childProcessMock,
-  execFileSync: (bin: string, ...rest: unknown[]) =>
-    bin === "which" || bin === "where"
-      ? childProcessMock.which(bin, ...rest)
-      : childProcessMock.execFileSync(bin, ...rest),
-}));
+// execFileSync assertions below only see package-manager runs. Like `which -a`,
+// it lists only the paths that exist.
+vi.mock("node:child_process", async () => {
+  const { existsSync } = await import("node:fs");
+  return {
+    ...childProcessMock,
+    execFileSync: (bin: string, ...rest: unknown[]) =>
+      bin === "which" || bin === "where"
+        ? String(childProcessMock.which(bin, ...rest))
+            .split("\n")
+            .filter((line) => line && existsSync(line))
+            .map((line) => line + "\n")
+            .join("")
+        : childProcessMock.execFileSync(bin, ...rest),
+  };
+});
 vi.mock("@clack/prompts", () => promptsMock);
 vi.mock("@argent/tools-client", () => ({
   killToolServer: vi.fn().mockResolvedValue(undefined),
@@ -110,7 +118,7 @@ let savedAgent: string | undefined;
 let exitSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  // detectPackageManager() reads npm_config_user_agent, so the install/update
+  // detectGlobalPackageManager() reads npm_config_user_agent, so the install/update
   // commands these tests assert on are whichever package manager runs the
   // suite. Unset it to pin the npm shape.
   savedAgent = process.env.npm_config_user_agent;
@@ -199,6 +207,55 @@ describe("update — interactive decline", () => {
       expect.anything()
     );
   });
+
+  it("updates the global package with npm when launched from Yarn 2+", async () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    promptsMock.confirm.mockResolvedValueOnce(true);
+    childProcessMock.execFileSync.mockImplementationOnce((() => {
+      topologyState.globalVersion = "99.0.0";
+      return undefined;
+    }) as never);
+
+    await update([]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "-g", "@swmansion/argent@99.0.0"],
+      expect.anything()
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "says a failed yarn global add needs Yarn classic under Yarn 2+",
+    async () => {
+      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+      const pkg = path.join(tmpDir, "yarn-global", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.mkdirSync(path.join(tmpDir, "yarn-bin"));
+      fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(tmpDir, "yarn-bin", "argent"));
+      childProcessMock.which.mockImplementation(
+        () => path.join(tmpDir, "yarn-bin", "argent") + "\n"
+      );
+      promptsMock.confirm.mockResolvedValueOnce(true);
+      childProcessMock.execFileSync.mockImplementation((() => {
+        throw new Error("Usage Error: The 'yarn global' commands have been removed");
+      }) as never);
+
+      await expect(update([])).rejects.toThrow(ExitSentinel);
+
+      const esc = String.fromCharCode(27);
+      const info = promptsMock.log.info.mock.calls.map((c: unknown[]) =>
+        String(c[0])
+          .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+          .join("")
+      );
+      expect(info).toContain(
+        "Run yarn global add @swmansion/argent@99.0.0 (with Yarn classic, outside this Yarn 2+ project)."
+      );
+    }
+  );
 
   it("fails a zero-exit install whose target version never landed on disk", async () => {
     promptsMock.confirm.mockResolvedValueOnce(true);
@@ -327,6 +384,38 @@ describe("update — record-only local project stays updatable", () => {
     expect(JSON.parse(fs.readFileSync(localPkgJson, "utf8")).version).toBe("99.0.0");
     expect(telemetryMock.track).toHaveBeenCalledWith(
       "installation:cli_update_complete",
+      expect.anything()
+    );
+  });
+});
+
+describe("update — local mode uses the project's package manager", () => {
+  it("updates a yarn project with yarn, not the launcher's npm", async () => {
+    topologyState.globalInstalled = false;
+    fs.writeFileSync(
+      path.join(projDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    fs.writeFileSync(path.join(projDir, "yarn.lock"), "");
+    const pkgDir = path.join(projDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    const localPkgJson = path.join(pkgDir, "package.json");
+    fs.writeFileSync(localPkgJson, JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" }));
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.some((a) => a.includes("@swmansion/argent"))) {
+        fs.writeFileSync(
+          localPkgJson,
+          JSON.stringify({ name: "@swmansion/argent", version: "99.0.0" })
+        );
+      }
+      return undefined;
+    }) as never);
+
+    await update(["--yes", "--local"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "yarn",
+      ["add", "--dev", "@swmansion/argent@99.0.0"],
       expect.anything()
     );
   });

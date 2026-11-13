@@ -117,7 +117,33 @@ function expectExit(code: number, fn: () => void): CapturedConsole {
   return { stdout, stderr };
 }
 
+// A markerless dir under a HOME holding ~/.argent: "project" resolves to HOME.
+function chdirUnderHome(): void {
+  fs.mkdirSync(path.join(tmpHome, ".argent"), { recursive: true });
+  const nested = path.join(tmpHome, "not-a-project");
+  fs.mkdirSync(nested);
+  process.chdir(nested);
+}
+
 describe("enable / disable CLI", () => {
+  it.each([
+    ["enable", enable],
+    ["disable", disable],
+  ] as const)("%s --scope project warns when the project is home", (_command, run) => {
+    chdirUnderHome();
+    const out = captureConsole(() => run(["my-feature-flag", "--scope", "project"], TEST_REGISTRY));
+    expect(out.stderr).toContain(
+      `resolved to the home directory, so this writes the GLOBAL flags file (${path.join(tmpHome, ".argent", "flags.json")}).`
+    );
+  });
+
+  it("does not warn for a project of its own", () => {
+    const out = captureConsole(() =>
+      enable(["my-feature-flag", "--scope", "project"], TEST_REGISTRY)
+    );
+    expect(out.stderr).toBe("");
+  });
+
   it("enable writes flag=true globally by default", () => {
     const out = captureConsole(() => enable(["my-feature-flag"], TEST_REGISTRY));
     expect(out.stdout).toContain('Enabled flag "my-feature-flag" (global)');
@@ -317,6 +343,15 @@ describe("enable / disable CLI", () => {
 });
 
 describe("flags (list) CLI", () => {
+  it("lists a home-rooted project's flags once, as global", () => {
+    chdirUnderHome();
+    setFlag("a", true, "global");
+    const out = captureConsole(() => flagsCmd([], TEST_REGISTRY));
+    expect(out.stdout).toMatch(/a\s+enabled\s+\(global\)/);
+    expect(out.stdout).not.toContain("(project)");
+    expect(out.stdout).not.toContain("Project:");
+  });
+
   it("ships the argent-lens flag in the production registry", () => {
     // Guards the gate: setup-registry.ts reads isFeatureEnabled("argent-lens"),
     // so that exact name must stay registered (and discoverable via `argent flags`).
@@ -369,6 +404,24 @@ describe("flags (list) CLI", () => {
     });
     const unset = parsed.flags.find((f: { name: string }) => f.name === "my-feature-flag");
     expect(unset).toMatchObject({ enabled: false, scope: null });
+  });
+
+  it("rejects an unknown flag instead of listing", () => {
+    const out = expectExit(2, () => flagsCmd(["--jsno"], TEST_REGISTRY));
+    expect(out.stderr).toContain("Unknown flag: --jsno");
+    expect(out.stdout).toBe("");
+  });
+
+  it("rejects --scope, which only enable and disable take", () => {
+    const out = expectExit(2, () => flagsCmd(["--scope", "global"], TEST_REGISTRY));
+    expect(out.stderr).toContain("Unknown flag: --scope");
+    expect(out.stdout).toBe("");
+  });
+
+  it("rejects a positional argument", () => {
+    const out = expectExit(2, () => flagsCmd(["a"], TEST_REGISTRY));
+    expect(out.stderr).toContain('Unexpected extra argument: "a"');
+    expect(out.stdout).toBe("");
   });
 
   it("--help prints usage", () => {

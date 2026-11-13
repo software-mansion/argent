@@ -44,6 +44,14 @@ jobs:
             exit 1
           fi
 
+      - name: No no-break spaces
+        # U+00A0 breaks copy-pasted commands. Bytes, not `grep -P`: git may lack PCRE.
+        run: |
+          if git grep -nIF "$(printf '\302\240')" -- '*.md' '*.mdx'; then
+            echo "::error::No-break space (U+00A0) found in Markdown - use a plain space."
+            exit 1
+          fi
+
       - name: Shell scripts parse
         # A sourced script that fails to parse runs only up to the error, so the
         # functions below it are never defined and nothing else fails loudly.

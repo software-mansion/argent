@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import semver from "semver";
+import { canonicalPath } from "@argent/configuration-core";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { resolvePackageRoot } from "./package-root.js";
 import { isYarnPnp } from "./preflight.js";
@@ -34,12 +35,24 @@ function isTempRunnerPath(binaryPath: string): boolean {
   return TEMP_RUNNER_PATTERNS.some((pattern) => pattern.test(slashed));
 }
 
-/**
- * Path of the globally-installed argent binary, or null when argent is not
- * permanently on PATH. Checks every match so a concurrent temp-runner
- * invocation does not mask a real global install.
- */
-function getGlobalBinaryPath(): string | null {
+// npm exec, npx and package scripts prepend `<cwd or ancestor>/node_modules/.bin`,
+// or `<--prefix>/node_modules/.bin` from any cwd, which holds a project's
+// devDependency, not a global install. Compared by canonical path:
+// process.cwd() is physical, and `npm --prefix <symlink>` is not.
+function isProjectBinPath(binaryPath: string): boolean {
+  const norm = (p: string) => (process.platform === "win32" ? p.toLowerCase() : canonicalPath(p));
+  const binDir = norm(path.dirname(path.resolve(binaryPath)));
+  const prefix = process.env.npm_config_local_prefix;
+  if (prefix && norm(path.join(prefix, "node_modules", ".bin")) === binDir) return true;
+  for (let dir = path.resolve(process.cwd()); ; dir = path.dirname(dir)) {
+    if (norm(path.join(dir, "node_modules", ".bin")) === binDir) return true;
+    if (path.dirname(dir) === dir) return false;
+  }
+}
+
+// Every permanent argent on PATH, in PATH order: temp-runner and project copies
+// are skipped so they do not mask a real global install.
+function getGlobalBinaryPaths(): string[] {
   try {
     const [cmd, args] =
       process.platform === "win32"
@@ -49,21 +62,48 @@ function getGlobalBinaryPath(): string | null {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return (
-      output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .find((line) => !isTempRunnerPath(line)) ?? null
-    );
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !isTempRunnerPath(line) && !isProjectBinPath(line));
   } catch {
-    return null;
+    return [];
   }
 }
 
-/** True iff argent is permanently on PATH, not run from an npx / dlx cache. */
+/**
+ * Path of the globally-installed argent binary, or null when argent is not
+ * permanently on PATH.
+ */
+export function getGlobalBinaryPath(): string | null {
+  return getGlobalBinaryPaths()[0] ?? null;
+}
+
+/**
+ * The first live global argent on PATH: a link or pnpm shim that resolves to
+ * the package, or a binary that still runs. A version-manager shim (nodenv's,
+ * mise's) outlives the package until a reshim and then fails, so it is passed
+ * over: an install behind it still counts.
+ */
+export function getRemainingGlobalBinaryPath(): string | null {
+  for (const binaryPath of getGlobalBinaryPaths()) {
+    if (process.platform === "win32" || globalPackageRootOf(binaryPath)) return binaryPath;
+    try {
+      execFileSync(binaryPath, ["--version"], { stdio: "ignore", timeout: 10_000 });
+      return binaryPath;
+    } catch {
+      // A stale shim.
+    }
+  }
+  return null;
+}
+
+/**
+ * True iff a live argent is permanently on PATH, not run from an npx / dlx
+ * cache and not a stale version-manager shim.
+ */
 export function isGloballyInstalled(): boolean {
-  return getGlobalBinaryPath() !== null;
+  return getRemainingGlobalBinaryPath() !== null;
 }
 
 /**
@@ -72,8 +112,40 @@ export function isGloballyInstalled(): boolean {
  * version and to scope tool-server teardown to THIS install.
  */
 export function getGloballyInstalledPackageRoot(): string | null {
-  const binaryPath = getGlobalBinaryPath();
-  if (!binaryPath) return null;
+  const binaryPath = getRemainingGlobalBinaryPath();
+  return binaryPath ? globalPackageRootOf(binaryPath) : null;
+}
+
+// A shim script's text, or null for a binary (a Volta or mise shim) or an
+// unreadable file. 64 KiB is far above any shim script.
+export function readShimScript(binaryPath: string): string | null {
+  try {
+    if (fs.statSync(binaryPath).size > 64 * 1024) return null;
+    return fs.readFileSync(binaryPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// pnpm's global bin is a shim script, not a link. pnpm 10+ ends it with a
+// `# cmd-shim-target=` line; older ones exec a path under `$basedir`.
+function shimTargetOf(binaryPath: string): string | null {
+  const shim = readShimScript(binaryPath);
+  if (!shim) return null;
+  const trailer = /^# cmd-shim-target=(.+)$/m.exec(shim);
+  if (trailer) return trailer[1]!.trim();
+  const relative = /"\$basedir(?:_abs)?"?\/'?([^"'\s]*node_modules\/[^"'\s]*)/.exec(shim);
+  return relative ? path.resolve(canonicalPath(path.dirname(binaryPath)), relative[1]!) : null;
+}
+
+function globalPackageRootOf(binaryPath: string): string | null {
+  const root = packageRootOf(binaryPath);
+  if (root) return root;
+  const target = shimTargetOf(binaryPath);
+  return target ? packageRootOf(target) : null;
+}
+
+export function packageRootOf(binaryPath: string): string | null {
   try {
     const realPath = fs.realpathSync(binaryPath);
     const root = resolvePackageRoot(path.dirname(realPath));

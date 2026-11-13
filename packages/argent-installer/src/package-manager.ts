@@ -1,5 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { canonicalPath } from "@argent/configuration-core";
+import { PACKAGE_NAME } from "./constants.js";
+import { getRemainingGlobalBinaryPath, packageRootOf, readShimScript } from "./topology.js";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
@@ -26,6 +29,87 @@ export function detectPackageManager(): PackageManager {
   if (agent.startsWith("pnpm")) return "pnpm";
   if (agent.startsWith("bun")) return "bun";
   return "npm";
+}
+
+// pnpm keeps globals under <pnpm home>/global/<5 | v11/<hash>>/node_modules.
+const PNPM_GLOBAL_TARGET = new RegExp(
+  String.raw`[\\/]global[\\/]v?\d+[\\/][^"'\s]*node_modules[\\/]` +
+    PACKAGE_NAME.split("/").join(String.raw`[\\/]`) +
+    String.raw`[\\/]`
+);
+
+// bun keeps globals under <BUN_INSTALL>/install/global/node_modules.
+const BUN_GLOBAL_ROOT = new RegExp(
+  String.raw`[\\/]install[\\/]global[\\/]node_modules[\\/]` +
+    PACKAGE_NAME.split("/").join(String.raw`[\\/]`) +
+    "$"
+);
+
+// The manager that owns the global argent on PATH, read from its layout: any
+// other would add a second argent beside it. With no global the launcher's
+// manager installs, but Yarn 2+ has no `yarn global` and gets npm (over a Yarn
+// classic global it gets `yarn`, which fails there without installing anything).
+// npm's layout puts <prefix>/bin/argent beside <prefix>/lib/node_modules/@swmansion/argent,
+// or on Windows <prefix>\argent.cmd beside <prefix>\node_modules\@swmansion\argent.
+// A global in bun's folder gets bun; on Windows its bin is an .exe beside a
+// .bunx. A bin that resolves to no package is a shim script: pnpm's names its
+// global folder, so pnpm owns it. A shim that names no node_modules path
+// (nodenv's, asdf's) or is a binary (Volta's) runs a version manager's npm
+// global, so it keeps npm. Any other names a package outside npm's layout
+// (Yarn classic's) and gets `yarn`.
+export function detectGlobalPackageManager(): PackageManager {
+  const binaryPath = getRemainingGlobalBinaryPath();
+  if (!binaryPath) return isYarnBerryLauncher() ? "npm" : detectPackageManager();
+  const root = packageRootOf(binaryPath);
+  if (root) {
+    if (isInNpmLayout(binaryPath, root)) return "npm";
+    return BUN_GLOBAL_ROOT.test(root) ? "bun" : "yarn";
+  }
+  if (process.platform === "win32") {
+    if (fs.existsSync(path.join(npmCopyBeside(path.dirname(binaryPath)), "package.json"))) {
+      return "npm";
+    }
+    if (fs.existsSync(binaryPath.replace(/\.exe$/i, "") + ".bunx")) return "bun";
+  }
+  const shim = readShimScript(binaryPath);
+  if (shim === null || !/node_modules[\\/]/.test(shim)) return "npm";
+  return PNPM_GLOBAL_TARGET.test(shim) ? "pnpm" : "yarn";
+}
+
+function npmCopyBeside(binDir: string): string {
+  return process.platform === "win32"
+    ? path.join(binDir, "node_modules", PACKAGE_NAME)
+    : path.join(path.dirname(binDir), "lib", "node_modules", PACKAGE_NAME);
+}
+
+// The PATH entry can be a link to npm's bin, or sit in a linked directory, so
+// each hop of the bin's link chain is checked from its real directory.
+function isInNpmLayout(binaryPath: string, root: string): boolean {
+  const realRoot = canonicalPath(root);
+  let link = binaryPath;
+  for (let hop = 0; hop < 40; hop++) {
+    const binDir = canonicalPath(path.dirname(link));
+    if (canonicalPath(npmCopyBeside(binDir)) === realRoot) return true;
+    try {
+      link = path.resolve(binDir, fs.readlinkSync(link));
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function isYarnBerryLauncher(): boolean {
+  const agent = process.env.npm_config_user_agent ?? "";
+  return agent.startsWith("yarn") && !agent.startsWith("yarn/1.");
+}
+
+// Appended to a pasted `yarn global` command when the launcher is Yarn 2+, whose
+// own `yarn` rejects it.
+export function yarnClassicNote(cmd: ShellCommand): string {
+  return cmd.bin === "yarn" && isYarnBerryLauncher()
+    ? " (with Yarn classic, outside this Yarn 2+ project)"
+    : "";
 }
 
 function asKnownPm(name: unknown): PackageManager | null {

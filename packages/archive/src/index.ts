@@ -31,9 +31,13 @@ export function createTarGzArgs(sourcePath: string, target: string): string[] {
  * Gzip `sourcePath` (file or directory) into the tar file at `tarPath`. Removes
  * the partial archive if `tar` fails, so a mid-write failure doesn't leak it.
  */
-export async function createTarGzFile(sourcePath: string, tarPath: string): Promise<void> {
+export async function createTarGzFile(
+  sourcePath: string,
+  tarPath: string,
+  signal?: AbortSignal
+): Promise<void> {
   try {
-    await execFileAsync("tar", createTarGzArgs(sourcePath, tarPath));
+    await execFileAsync("tar", createTarGzArgs(sourcePath, tarPath), { signal });
   } catch (err) {
     await rm(tarPath, { force: true }).catch(() => {});
     throw err;

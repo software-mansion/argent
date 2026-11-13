@@ -180,6 +180,25 @@ describe("argent config — set/get across scopes", () => {
     );
     expect(globalCfg).toEqual({ lens: { agent: "codex" } });
   });
+
+  describe.skipIf(process.platform === "win32")("with HOME reached through a symlink", () => {
+    it.each([".argent", ".git"])(
+      "warns when project scope resolves to the home directory (%s marker)",
+      (marker) => {
+        const linkedHome = path.join(projectDir, "home");
+        fs.symlinkSync(homeDir, linkedHome);
+        process.env.HOME = linkedHome;
+        fs.mkdirSync(path.join(homeDir, marker));
+        const nested = path.join(homeDir, "not-a-project");
+        fs.mkdirSync(nested);
+        process.chdir(nested);
+
+        config(["set", "lens.agent", "codex", "--scope", "project"]);
+
+        expect(errors()).toContain("resolved to the home directory");
+      }
+    );
+  });
 });
 
 describe("argent config — validation & errors", () => {
@@ -198,6 +217,25 @@ describe("argent config — validation & errors", () => {
     expect(() => config(["get", "lens.agent", "--scope", "bogus"])).toThrow(ExitError);
     expect(errors()).toMatch(/--scope must be/);
   });
+
+  it.each([
+    [["list", "--jsno"], "Unknown flag: --jsno"],
+    [["list", "extra"], 'unexpected extra argument "extra"'],
+    [["list", "--scope", "project"], "Unknown flag: --scope"],
+  ])("rejects %j with exit 2 instead of listing", (argv, message) => {
+    expect(() => config(argv)).toThrow(new ExitError(2));
+    expect(errors()).toContain(message);
+    expect(output()).toBe("");
+  });
+
+  it.each([[["set", "lens.agent", "claude", "--json"]], [["unset", "lens.agent", "--json"]]])(
+    "rejects --json on %j, which has no JSON output",
+    (argv) => {
+      expect(() => config(argv)).toThrow(new ExitError(2));
+      expect(errors()).toContain("Unknown flag: --json");
+      expect(output()).toBe("");
+    }
+  );
 
   it("rejects a value that fails the schema validator", () => {
     // lens.agent must be a non-blank string; a JSON number is invalid.

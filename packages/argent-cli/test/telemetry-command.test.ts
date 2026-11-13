@@ -79,6 +79,22 @@ const output = () => logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join(
 const cleanEnv = { DO_NOT_TRACK: undefined, ARGENT_TELEMETRY: undefined };
 
 describe("argent telemetry — scopes", () => {
+  it.each(["enable", "disable"])(
+    "%s --scope project warns when the project is home",
+    async (command) => {
+      fs.mkdirSync(path.join(homeDir, ".argent"));
+      const nested = path.join(homeDir, "not-a-project");
+      fs.mkdirSync(nested);
+      process.chdir(nested);
+
+      await telemetry([command, "--scope", "project"]);
+
+      expect(errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n")).toContain(
+        `resolved to the home directory, so this writes the GLOBAL config file (${path.join(homeDir, ".argent", "config.json")}).`
+      );
+    }
+  );
+
   it("disable defaults to the global scope", async () => {
     await telemetry(["disable"]);
     expect(globalConfig()).toEqual({ telemetry: { enabled: false } });
@@ -123,6 +139,23 @@ describe("argent telemetry — scopes", () => {
     await expect(telemetry(["enable", "--force"])).rejects.toThrow("process.exit(2)");
     expect(errSpy).toHaveBeenCalled();
     expect(globalConfig()).toBeNull();
+    expect(projectConfig()).toBeNull();
+  });
+
+  it("rejects --scope on status, which shows the effective state", async () => {
+    await expect(telemetry(["status", "--scope", "project"])).rejects.toThrow("process.exit(2)");
+    expect(errSpy.mock.calls.join(" ")).toContain("Unknown flag: --scope");
+  });
+
+  it("rejects an unknown subcommand with exit 2", async () => {
+    await expect(telemetry(["off"])).rejects.toThrow("process.exit(2)");
+    expect(errSpy.mock.calls.join(" ")).toContain("Error: Unknown subcommand: telemetry off");
+    expect(logSpy.mock.calls.join(" ")).toContain("Usage:");
+  });
+
+  it("names the misspelled subcommand rather than its argument", async () => {
+    await expect(telemetry(["disabel", "project"])).rejects.toThrow("process.exit(2)");
+    expect(errSpy.mock.calls.join(" ")).toContain("Unknown subcommand: telemetry disabel");
     expect(projectConfig()).toBeNull();
   });
 
