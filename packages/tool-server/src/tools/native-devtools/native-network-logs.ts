@@ -57,7 +57,7 @@ const zodSchema = z.object({
     .optional()
     .default(false)
     .describe(
-      "Clear the log after reading. The IDs of cleared requests still work in view-network-request-details"
+      "Clear the log after reading. On iOS and Android, the IDs of cleared requests still work in view-network-request-details"
     ),
   stop: z
     .boolean()
