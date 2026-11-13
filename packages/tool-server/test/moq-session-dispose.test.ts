@@ -24,8 +24,7 @@ interface FakeSessionShape {
   failTransport(): void;
   close(): void;
   screenshot(): Promise<Uint8Array>;
-  sendControl(): Promise<void>;
-  key(): Promise<void>;
+  sendInput(): Promise<void>;
 }
 
 vi.mock("@swmansion/argent-cloud-sdk", () => {
@@ -72,12 +71,7 @@ vi.mock("@swmansion/argent-cloud-sdk", () => {
       return new Promise<Uint8Array>(() => {});
     }
 
-    sendControl(): Promise<void> {
-      this.sent += 1;
-      return Promise.resolve();
-    }
-
-    key(): Promise<void> {
+    sendInput(): Promise<void> {
       this.sent += 1;
       return Promise.resolve();
     }
@@ -162,7 +156,9 @@ describe("a MoQ session whose transport died", () => {
     expect(unhandled).toEqual([]);
   });
 
-  // The fake's `sendControl` resolves on a disposed session, as the SDK's does.
+  const KEY_DOWN = { type: "key", action: "Down", code: 0x19 } as const;
+
+  // The fake's `sendInput` resolves on a disposed session, as the SDK's does.
   it.each([
     ["ended", () => session().killTransport()],
     ["failed", () => session().failTransport()],
@@ -172,8 +168,7 @@ describe("a MoQ session whose transport died", () => {
     await session().closed.catch(() => {});
     await new Promise((resolve) => setImmediate(resolve));
 
-    await expect(client.sendControl(new Uint8Array([1]))).rejects.toThrow(/session is closed/i);
-    await expect(client.key("Down", 0x19)).rejects.toThrow(/session is closed/i);
+    await expect(client.sendInput(KEY_DOWN)).rejects.toThrow(/session is closed/i);
     expect(session().sent).toBe(0);
   });
 
@@ -182,8 +177,7 @@ describe("a MoQ session whose transport died", () => {
     await client.close();
 
     expect(session().disposed).toBe(true);
-    await expect(client.sendControl(new Uint8Array([1]))).rejects.toThrow(/session is closed/i);
-    await expect(client.key("Down", 0x19)).rejects.toThrow(/session is closed/i);
+    await expect(client.sendInput(KEY_DOWN)).rejects.toThrow(/session is closed/i);
     expect(session().sent).toBe(0);
   });
 
@@ -192,6 +186,6 @@ describe("a MoQ session whose transport died", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(session().disposed).toBe(false);
-    await expect(client.sendControl(new Uint8Array([1]))).resolves.toBeUndefined();
+    await expect(client.sendInput(KEY_DOWN)).resolves.toBeUndefined();
   });
 });
