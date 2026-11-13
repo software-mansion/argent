@@ -560,7 +560,12 @@ A leak check can take several seconds. When a recording with leak checks is shor
 | `profiler-cpu-query`        | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`      | Query native trace data for iterative native investigation                   |
 
-`native-profiler-start` records with Instruments on an iOS simulator and on a [Mac app](#profiling-a-mac-app), and with Perfetto on Android. The bundled Argent template of Instruments starts the first check for memory leaks about 4 seconds after `native-profiler-start` returns, and the next checks about every 11 seconds. A leak is in the trace only after a check that started after the leak has ended. Keep the recording on for about 25 seconds after the action that leaks. Otherwise the trace does not contain the leak.
+`native-profiler-start` records with Instruments on an iOS simulator and on a [Mac app](#profiling-a-mac-app), and with Perfetto on Android. The bundled Argent template of Instruments checks the app for memory leaks. A leak is in the trace only after a check that started after the leak:
+
+- On a Mac app, the first check starts about 4 seconds after `native-profiler-start` returns, and the next checks start about every 11 seconds. The check must also end before `native-profiler-stop`. Keep the recording on for about 25 seconds after the action that leaks.
+- On an iOS simulator, the first check starts about 4 to 7 seconds after `native-profiler-start` returns. The next checks start every 12 to 15 seconds. A check that started before `native-profiler-stop` is in the trace. Keep the recording on for about 20 seconds after the action that leaks. When a recording with leak checks is shorter than 12 seconds and finds no leak, the report has a note. The note tells that a check finds only the leaks that the app made before the check started.
+
+Otherwise the trace does not contain the leak.
 
 These recordings have no leak data:
 

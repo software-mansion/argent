@@ -259,8 +259,40 @@ describe("the note on a recording too short for a leak check", () => {
       `> ⚠️ ${SHORT_NOTE} 5 s. Instruments begins its first leak check about 4 s after ` +
         `native-profiler-start returns`
     );
+    expect(report).toContain(
+      "and a check can take several seconds, so this trace may hold no finished check."
+    );
     expect(report).toContain("Do not report the app as leak-free");
     expect(report.indexOf(SHORT_NOTE)).toBeLessThan(report.indexOf("---"));
+  });
+
+  it("is at the top of an iOS report with no leaks from a recording under 12 s", async () => {
+    // On an iOS simulator the first leak check begins later than on a Mac app: a 6 s
+    // recording of an app that leaked at 1 s exported the Leaks detail with no row.
+    pipeline({});
+    const { report } = await analyzeNativeProfilerIos(recorded("ios", 6_000));
+    expect(report).toContain(
+      `> ⚠️ ${SHORT_NOTE} 6 s. Instruments begins its first leak check about 4 to 7 s after ` +
+        `native-profiler-start returns`
+    );
+    // A check that began before the stop is in an iOS trace, so a finished check is not the
+    // issue: a check finds only the leaks made before it began.
+    const reason =
+      "native-profiler-start returns, and the next ones 12 to 15 s apart. A check finds only " +
+      "the leaks made before it began, so this trace holds at most the leaks made before the " +
+      "first check.";
+    expect(report).toContain(reason);
+    expect(report).not.toContain("no finished check");
+    expect(report).toContain("keep recording about 20 s after the action to check.");
+    expect(report.indexOf(SHORT_NOTE)).toBeLessThan(report.indexOf("---"));
+    // A 10 s recording holds the first check, so its reason is the same, not "ended before it".
+    const ten = (await analyzeNativeProfilerIos(recorded("ios", 10_000))).report;
+    expect(ten).toContain(`${SHORT_NOTE} 10 s.`);
+    expect(ten).toContain(reason);
+    expect(ten).not.toContain("ended before the first check");
+    expect((await analyzeNativeProfilerIos(recorded("ios", 12_000))).report).not.toContain(
+      SHORT_NOTE
+    );
   });
 
   it("is absent, and leaks read as not checked, when a Mac trace had no Leaks instrument", async () => {
@@ -281,7 +313,7 @@ describe("the note on a recording too short for a leak check", () => {
     expect(ios.parsedData?.leaksRecorded).toBe(false);
   });
 
-  it("is absent for 20 s and more, with leaks, without leak data, with no duration, and on iOS", async () => {
+  it("is absent for 20 s and more, with leaks, without leak data, and with no duration", async () => {
     pipeline({});
     expect((await analyzeNativeProfilerIos(recorded("macos", 20_000))).report).not.toContain(
       SHORT_NOTE
@@ -318,9 +350,6 @@ describe("the note on a recording too short for a leak check", () => {
     expect((await analyzeNativeProfilerIos(recorded("macos", null))).report).not.toContain(
       SHORT_NOTE
     );
-    expect((await analyzeNativeProfilerIos(recorded("ios", 5_000))).report).not.toContain(
-      SHORT_NOTE
-    );
   });
 });
 
@@ -351,7 +380,7 @@ describe("the closing line of a report with no finding", () => {
     const mac = makeApi("macos");
     mac.recordedMs = 30_000;
     const ios = makeApi("ios");
-    ios.recordedMs = 8_000;
+    ios.recordedMs = 12_000;
     for (const api of [mac, ios]) {
       const { report } = await analyzeNativeProfilerIos(api);
       expect(report).toContain(ALL_CLEAR);

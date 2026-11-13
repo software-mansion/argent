@@ -161,9 +161,9 @@ export interface NativeProfilerSessionApi {
    */
   leaksCaptureError: string | null;
   /**
-   * Mac apps only: how long the last recording ran, from the return of the start
-   * to the stop. Stamped at stop, null when xctrace ended before the stop;
-   * cleared by profiler-load.
+   * xctrace only (iOS and Mac apps): how long the last recording ran, from the
+   * return of the start to the stop. Stamped at stop, null when xctrace ended
+   * before the stop; cleared by profiler-load.
    */
   recordedMs: number | null;
   /** xctrace only: when native-profiler-start returned, for `recordedMs`. */

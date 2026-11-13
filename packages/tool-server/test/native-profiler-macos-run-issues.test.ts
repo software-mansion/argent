@@ -660,16 +660,14 @@ describe("a native-profiler-stop that is still exporting", () => {
     expect(analyzedWith).toBe("/tmp/new-cpu.xml");
   });
 
-  it("stamps how long a Mac app's recording ran, and not an iOS one's", async () => {
+  it("stamps how long the recording ran, on a Mac app and on iOS", async () => {
     runIssues(null);
-    const mac = await recording(MAC);
-    await stopNativeProfilerIos(mac);
-    expect(mac.recordedMs).toBeGreaterThanOrEqual(0);
-    expect(mac.recordedMs).toBeLessThan(60_000);
-
-    const ios = await recording(IOS);
-    await stopNativeProfilerIos(ios);
-    expect(ios.recordedMs).toBeNull();
+    for (const device of [MAC, IOS]) {
+      const api = await recording(device);
+      await stopNativeProfilerIos(api);
+      expect(api.recordedMs).toBeGreaterThanOrEqual(0);
+      expect(api.recordedMs).toBeLessThan(60_000);
+    }
   });
 });
 

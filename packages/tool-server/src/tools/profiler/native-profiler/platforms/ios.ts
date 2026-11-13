@@ -799,7 +799,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   api.customTemplate = api.recordingCustomTemplate;
   api.appEndedDuringCapture = ended;
   api.exportSkipReason = diagnostics.skipped ?? unfinishedRecordingReason(end);
-  api.recordedMs = api.platform === "macos" && api.startReturnedMs !== null ? recordedMs : null;
+  api.recordedMs = api.startReturnedMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
   if (ended) {
     // xctrace keeps recording when the app crashes, and the trace then lacks
@@ -928,19 +928,58 @@ function suspensionNote(adjustment: SuspensionAdjustment, leaksRecorded: boolean
     : `> ℹ️ **App pauses:** macOS held the app suspended ${times}. argent ${changes.join(", and ")}.`;
 }
 
-// Measured on Mac apps with the Argent template: the first leak check began 3.7 s after the
-// start returned and the next ones about every 11 s. A leak is in the trace only after a check
-// that began after it has ended, and a check took up to about 10 s on an app that argent drove:
-// a stop 8 s after the start found no leak at all, and a leak made just after a check began was
-// missing 15 s later and present 20 s later.
-const SHORT_LEAK_RECORDING_MS = 20_000;
+interface LeakCheckTiming {
+  /** A recording shorter than this, with no leak, can miss leaks, and the report says so. */
+  shortRecordingMs: number;
+  /** When the first leak check begins, in seconds after native-profiler-start returns. */
+  firstCheck: string;
+  /** How long to keep recording after the action that leaks, in seconds. */
+  recordAfterActionS: number;
+  /** Why a short recording can miss leaks, after the time of the first check. */
+  missReason: string;
+}
 
-function shortLeakRecordingNote(recordedMs: number): string {
+// Measured with the Argent template. A leak is in the trace only after a check that began after
+// the leak has ended.
+const LEAK_CHECK_TIMING: Record<"macos" | "ios", LeakCheckTiming> = {
+  // Mac apps: the first leak check began 3.7 s after the start returned and the next ones about
+  // every 11 s, and a check took up to about 10 s on an app that argent drove: a stop 8 s after
+  // the start found no leak at all, and a leak made just after a check began was missing 15 s
+  // later and present 20 s later.
+  macos: {
+    shortRecordingMs: 20_000,
+    firstCheck: "about 4 s",
+    recordAfterActionS: 25,
+    missReason: "and a check can take several seconds, so this trace may hold no finished check.",
+  },
+  // An iOS 27 simulator with Xcode 27.2, 13 recordings, times from xctrace's tracing-started
+  // notification: the first leak check began 7.0 to 8.2 s after it and the next ones 12.4 to
+  // 15.2 s apart. A stop before the first check (5.0 to 6.5 s) gave no leak at all, also when the
+  // app had leaked at 1 s. A check that had begun before the stop was in the trace, also when the
+  // stop came 0.1 s after it began. A leak made during a check was found by the next one, 12.8 to
+  // 14.4 s later. The start returns 1.5 s after that notification (settleAfterStart), so the
+  // first check began 5.5 to 6.7 s after the start returned. In a later run with the device
+  // capture and a freshly launched ProfProbe, a stop 4.5 s after the start returned (a 6.7 s
+  // trace) still found leaks, so the first check can begin earlier. A malloc_stack_logging start
+  // returned about 0.4 s later: 1.94 s after xctrace's "Ctrl-C to stop" line, not 1.51 s.
+  ios: {
+    shortRecordingMs: 12_000,
+    firstCheck: "about 4 to 7 s",
+    recordAfterActionS: 20,
+    // A check finds the leaks made before it began, so a recording that holds the first check
+    // still misses those made after it.
+    missReason:
+      "and the next ones 12 to 15 s apart. A check finds only the leaks made before it began, " +
+      "so this trace holds at most the leaks made before the first check.",
+  },
+};
+
+function shortLeakRecordingNote(recordedMs: number, timing: LeakCheckTiming): string {
   return (
     `No leak was found, but the recording lasted only ${Math.round(recordedMs / 1000)} s. ` +
-    `Instruments begins its first leak check about 4 s after native-profiler-start returns, ` +
-    `and a check can take several seconds, so this trace may hold no finished check. Do not report the app as leak-free: record again, and keep recording ` +
-    `about 25 s after the action to check.`
+    `Instruments begins its first leak check ${timing.firstCheck} after native-profiler-start returns, ` +
+    `${timing.missReason} Do not report the app as leak-free: record again, and keep recording ` +
+    `about ${timing.recordAfterActionS} s after the action to check.`
   );
 }
 
@@ -1079,13 +1118,13 @@ export async function analyzeNativeProfilerIos(
     bottlenecks,
   };
 
+  const leakCheckTiming = LEAK_CHECK_TIMING[api.platform === "macos" ? "macos" : "ios"];
   const shortLeakNote =
-    api.platform === "macos" &&
     leaksRecorded &&
     memoryLeaks.length === 0 &&
     api.recordedMs !== null &&
-    api.recordedMs < SHORT_LEAK_RECORDING_MS
-      ? shortLeakRecordingNote(api.recordedMs)
+    api.recordedMs < leakCheckTiming.shortRecordingMs
+      ? shortLeakRecordingNote(api.recordedMs, leakCheckTiming)
       : null;
 
   return renderNativeProfilerReport({

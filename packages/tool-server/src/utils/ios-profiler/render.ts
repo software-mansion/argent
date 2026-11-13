@@ -78,9 +78,10 @@ interface RenderInput {
   /** Why no leak was recorded, said with the not-recorded note when known. */
   leaksNotRecordedCause?: string;
   /**
-   * Mac apps: true when a note in freshnessNote says that the trace can miss
-   * findings (the app ended during the recording, or no leak check finished), so
-   * a report with no finding must not read as all clear.
+   * xctrace: true when a note in freshnessNote says that the trace can miss
+   * findings (a Mac app ended during the recording, or the recording was too
+   * short to hold a leak check), so a report with no finding must not read as
+   * all clear.
    */
   mayMissFindings?: boolean;
 }

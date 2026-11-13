@@ -95,7 +95,7 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 - One native profiler recording at a time can run on a Mac, for all iOS simulators and Mac apps together. macOS gives the kernel trace of Instruments to one recording only. Argent does not start a second recording while xctrace records on the Mac. Argent cannot see a recording in the Instruments app.
 - The memory leak data is available on iOS and on Mac apps only. On Android, Argent reports memory growth as a weak signal.
 - Sometimes Instruments does not end after the stop of a recording. This fault also occurs without Argent. When Instruments does no work for some time, Argent ends it and tells the agent. The data of this recording can be incomplete.
-- Instruments checks the app for memory leaks about every 11 seconds, and a leak is in the profile only after a check has ended. Keep the recording on for about 25 seconds after the action that leaks. Otherwise the profile does not contain the leak.
+- Instruments checks the app for memory leaks about every 11 to 15 seconds. A leak is in the profile only after a check that started after the leak. Keep the recording on for about 25 seconds after the action that leaks. Otherwise the profile does not contain the leak.
 - On Android, native network capture can slow the app and change the timings in a profile. When native network capture is on for an app on the device, the start of a profiler gives a warning. To profile without it, ask the agent to stop native network capture for the app. Then restart the app. See [Network inspection](/docs/features/network).
 
 Argent does this with the `react-profiler-*`, `native-profiler-*` and `profiler-*` tools. The [tools reference](/docs/reference/tools) contains all tools.
