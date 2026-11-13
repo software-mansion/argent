@@ -111,7 +111,7 @@ describe("renderProfilingReport — annotation reference frame", () => {
   });
 });
 
-describe("renderProfilingReport — reading grouped rows and instance counts", () => {
+describe("renderProfilingReport — reading grouped rows", () => {
   it("explains why a grouped row's self can exceed its w/children", async () => {
     // Three sibling Views, 1ms each: 3ms self in total, 1ms for the largest instance.
     const grouped: HotCommitSummary = {
@@ -133,21 +133,5 @@ describe("renderProfilingReport — reading grouped rows and instance counts", (
     expect(report).toContain(
       "On a grouped `×N` row it is\n> the largest single instance, while `self` is the total of all N."
     );
-  });
-
-  it("says react-profiler-renders counts mounted instances, not re-renders", async () => {
-    const { report } = await renderProfilingReport({
-      hotCommitSummaries: [],
-      componentFindings: [],
-      sessionContext: SESSION_CONTEXT,
-      recordingMs: 200_000,
-      anyRuntimeCompilerDetected: false,
-      reactCommits: 3,
-      allClear: true,
-      debugDir: await makeDebugDir(),
-    });
-
-    expect(report).toContain("a live count of mounted instances per component");
-    expect(report).toContain("It does not count re-renders");
   });
 });

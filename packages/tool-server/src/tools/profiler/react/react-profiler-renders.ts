@@ -123,6 +123,11 @@ Use when you want a quick look at which mounted components are expensive in a li
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   zodSchema,
   readOnly: true,
+  // It walks only the top 30 fiber levels, above the screens of a real app
+  // (Bluesky's first feed item sits at depth 446), and counts mounts, not
+  // re-renders. Agents read render counts from a profiling session
+  // (profiler-commit-query mode=render_counts); HTTP and SDK callers keep it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: () => "Reading React render activity",
     completedMsg: () => "Read React render activity",

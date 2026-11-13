@@ -65,9 +65,25 @@ function mixedIndex(disjointSelf: number, innerSelf: number, outerSelf: number):
   };
 }
 
-const oneCommit = {
-  commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 10, componentName: "Login" }],
-};
+/** Stored commits as profiler-cpu-query reads them, with no render summary. */
+function stored(
+  commits: {
+    commitIndex: number;
+    timestamp: number;
+    commitDuration: number;
+    componentName: string;
+  }[]
+): NonNullable<Parameters<typeof renderComponentCpu>[1]> {
+  return {
+    commits: commits.map((c) => ({ ...c, didRender: true })),
+    renderSummary: null,
+    totalReactCommits: null,
+  };
+}
+
+const oneCommit = stored([
+  { commitIndex: 0, timestamp: 0, commitDuration: 10, componentName: "Login" },
+]);
 
 function readRow(markdown: string, name: string): { self: number; total: number } {
   const row = markdown.split("\n").find((line) => line.startsWith(`| \`${name}\``));
@@ -78,9 +94,9 @@ function readRow(markdown: string, name: string): { self: number; total: number 
 
 describe("renderComponentCpu — one function as several call-tree nodes", () => {
   it("keeps the larger inclusive time for nested same-name frames", () => {
-    const nested = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 7, componentName: "Login" }],
-    };
+    const nested = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: 7, componentName: "Login" },
+    ]);
     const md = renderComponentCpu(nestedIndex(), nested, "Login", 10);
     const { self, total } = readRow(md, "walk");
     // Inclusive is the outer frame's 7ms, not 7 + 5.
@@ -132,7 +148,7 @@ describe("renderComponentCpu — one function as several call-tree nodes", () =>
       nodeMap,
       durationMs: 500,
     };
-    const md = renderComponentCpu(index, { commits }, "Login", 10);
+    const md = renderComponentCpu(index, stored(commits), "Login", 10);
     expect(readRow(md, "map")).toEqual({ self: 100.6, total: 100.6 });
   });
 
@@ -152,9 +168,9 @@ describe("renderComponentCpu — one function as several call-tree nodes", () =>
       nodeMap,
       durationMs: 5.405,
     };
-    const commit = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 5.405, componentName: "Login" }],
-    };
+    const commit = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: 5.405, componentName: "Login" },
+    ]);
     const md = renderComponentCpu(index, commit, "Login", 10);
     expect(readRow(md, "map")).toEqual({ self: 5.41, total: 5.41 });
   });
@@ -176,9 +192,9 @@ describe("renderComponentCpu — which same-name frames count as outermost", () 
       nodeMap,
       durationMs: n,
     };
-    const commit = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: n, componentName: "Login" }],
-    };
+    const commit = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: n, componentName: "Login" },
+    ]);
     return renderComponentCpu(index, commit, "Login", 10);
   };
 
@@ -252,9 +268,9 @@ describe("renderComponentCpu — which same-name frames count as outermost", () 
       durationMs: 1,
       childToParent,
     };
-    const commit = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 1, componentName: "Login" }],
-    };
+    const commit = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: 1, componentName: "Login" },
+    ]);
     expect(readRow(renderComponentCpu(index, commit, "Login", 10), "walk")).toEqual({
       self: 1,
       total: 1,
@@ -289,9 +305,9 @@ describe("renderComponentCpu — a window with more call-tree nodes than one hot
       nodeMap,
       durationMs: n,
     };
-    const commit = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: n, componentName: "Login" }],
-    };
+    const commit = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: n, componentName: "Login" },
+    ]);
     const { self, total } = readRow(renderComponentCpu(index, commit, "Login", 10), "walk");
     // The outer frame's 1 + the inner frame's 3, not the inner frame alone.
     expect(self).toBeCloseTo(4, 5);
@@ -325,9 +341,9 @@ describe("renderComponentCpu — frames without self samples", () => {
     nodeMap.set(2, mk(2, "walk", [3, 4]));
     nodeMap.set(3, mk(3, "walk", []));
     nodeMap.set(4, mk(4, "leaf", []));
-    const commit = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 4, componentName: "Login" }],
-    };
+    const commit = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: 4, componentName: "Login" },
+    ]);
     const md = renderComponentCpu(indexOf(nodeMap, [3, 4, 4, 4]), commit, "Login", 10);
     expect(readRow(md, "walk")).toEqual({ self: 1, total: 4 });
     expect(readRow(md, "leaf")).toEqual({ self: 3, total: 3 });
@@ -341,9 +357,9 @@ describe("renderComponentCpu — frames without self samples", () => {
     nodeMap.set(1, mk(1, "(root)", [2, 3]));
     nodeMap.set(2, mk(2, "work", []));
     nodeMap.set(3, mk(3, "sliver", []));
-    const commit = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 2.001, componentName: "Login" }],
-    };
+    const commit = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: 2.001, componentName: "Login" },
+    ]);
     const md = renderComponentCpu(indexOf(nodeMap, [2, 2, 3]), commit, "Login", 10);
     expect(readRow(md, "work")).toEqual({ self: 2, total: 2 });
     expect(md).not.toContain("`sliver`");
@@ -362,9 +378,9 @@ describe("renderComponentCpu — frames without self samples", () => {
       nodeMap,
       durationMs: 1.006,
     };
-    const commit = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 1.006, componentName: "Login" }],
-    };
+    const commit = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: 1.006, componentName: "Login" },
+    ]);
     const md = renderComponentCpu(index, commit, "Login", 10);
     expect(readRow(md, "work")).toEqual({ self: 1, total: 1.01 });
   });
@@ -406,12 +422,10 @@ describe("renderComponentCpu — frames without self samples", () => {
     nodeMap.set(1, mk(1, "(root)", [2]));
     nodeMap.set(2, mk(2, "walk", [3]));
     nodeMap.set(3, mk(3, "leaf", []));
-    const commits = {
-      commits: [
-        { commitIndex: 0, timestamp: 0, commitDuration: 2, componentName: "Login" },
-        { commitIndex: 1, timestamp: 2, commitDuration: 3, componentName: "Login" },
-      ],
-    };
+    const commits = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: 2, componentName: "Login" },
+      { commitIndex: 1, timestamp: 2, commitDuration: 3, componentName: "Login" },
+    ]);
     const md = renderComponentCpu(indexOf(nodeMap, [2, 3, 2, 2, 2]), commits, "Login", 10);
     expect(readRow(md, "walk")).toEqual({ self: 4, total: 5 });
   });
@@ -422,9 +436,9 @@ describe("renderComponentCpu — frames without self samples", () => {
     nodeMap.set(1, mk(1, "(root)", [2]));
     nodeMap.set(2, mk(2, "outer", [3]));
     nodeMap.set(3, mk(3, "inner", []));
-    const commit = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 4, componentName: "Login" }],
-    };
+    const commit = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: 4, componentName: "Login" },
+    ]);
     const md = renderComponentCpu(indexOf(nodeMap, [2, 3, 3, 3]), commit, "Login", 1);
     expect(readRow(md, "inner")).toEqual({ self: 3, total: 3 });
     expect(md).not.toContain("`outer`");
@@ -448,12 +462,11 @@ describe("renderComponentCpu — the Location of a row", () => {
       durationMs: n,
     } satisfies CpuSampleIndex;
   };
-  const twoCommits = (firstMs: number, secondMs: number) => ({
-    commits: [
+  const twoCommits = (firstMs: number, secondMs: number) =>
+    stored([
       { commitIndex: 0, timestamp: 0, commitDuration: firstMs, componentName: "Login" },
       { commitIndex: 1, timestamp: firstMs, commitDuration: secondMs, componentName: "Login" },
-    ],
-  });
+    ]);
   const locationOf = (markdown: string, name: string) =>
     markdown
       .split("\n")
@@ -480,9 +493,9 @@ describe("renderComponentCpu — the Location of a row", () => {
     nodeMap.set(2, at(2, "render", 10, [3]));
     nodeMap.set(3, at(3, "leaf", 5, []));
     nodeMap.set(4, at(4, "render", 20, []));
-    const commit = {
-      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 8, componentName: "Login" }],
-    };
+    const commit = stored([
+      { commitIndex: 0, timestamp: 0, commitDuration: 8, componentName: "Login" },
+    ]);
     const md = renderComponentCpu(index(nodeMap, [2, 3, 3, 3, 3, 4, 4, 4]), commit, "Login", 10);
     expect(readRow(md, "render")).toEqual({ self: 4, total: 8 });
     expect(locationOf(md, "render")).toBe("src/render.js:20");
