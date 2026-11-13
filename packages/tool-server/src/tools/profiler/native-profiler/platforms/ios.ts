@@ -596,7 +596,8 @@ export async function startNativeProfilerIos(
   } catch (err) {
     // The malloc path terminated the running app; if the capture never started,
     // relaunch it. The attach path never terminates, so only this path needs this.
-    if (mallocRelaunchBundleId) {
+    // Not after a teardown, as for one that the commit below reports.
+    if (mallocRelaunchBundleId && !api.disposed) {
       try {
         execFileSync(
           "xcrun",

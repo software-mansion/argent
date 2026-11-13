@@ -245,6 +245,12 @@ export async function spawnXctraceRecording(
 ): Promise<{ child: ChildProcess; pid: number }> {
   const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
   const notify = await registerStartupNotify(notifyName);
+  // A teardown during the start's awaits, with none from here to the spawn: an
+  // xctrace spawned now would record for a session that is gone.
+  if (api.disposed) {
+    notify?.cancel();
+    throw sessionTornDownError(api);
+  }
   // Not awaited, here and below: the helper creates the file seconds after the
   // spawn, and the start does not wait for a listing of the folder.
   const kernelTraces = kernelTraceDir();
@@ -265,7 +271,8 @@ export async function spawnXctraceRecording(
     await waitForXctraceReady(xctraceProcess, { notify, timeoutMs: STARTUP_TIMEOUT_MS });
   } catch (err) {
     resetStartState(api);
-    throw err;
+    // The teardown killed the xctrace that this wait watched.
+    throw api.disposed ? sessionTornDownError(api) : err;
   }
   // The helper creates it about 1 s before xctrace says that tracing started.
   // When xctrace never says so, as after a start that failed, the file stays:
@@ -295,6 +302,21 @@ export async function spawnXctraceRecording(
   }
 
   return { child: xctraceProcess, pid: xctraceProcess.pid };
+}
+
+function sessionTornDownError(api: NativeProfilerSessionApi): FailureError {
+  return new FailureError(
+    `The native profiling session for ${api.deviceId} was torn down by a ` +
+      `stop-all-simulator-servers while this start ran, so nothing was recorded. One ` +
+      `tool-server serves every agent using this argent install, so this may have been ` +
+      `another agent ending its session. Call native-profiler-start again.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_TORN_DOWN,
+      failure_stage: "native_profiler_xctrace_start",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    }
+  );
 }
 
 // Ceiling, not a fixed wait: 30 s SIGTERM'd xctrace mid-package.
@@ -459,19 +481,7 @@ export function commitXctraceRecording(
       // already dead
     }
     resetStartState(api);
-    throw new FailureError(
-      `The native profiling session for ${api.deviceId} was torn down by a ` +
-        `stop-all-simulator-servers while this start was waiting for xctrace to become ` +
-        `ready, so nothing was recorded — one tool-server serves every agent using this ` +
-        `argent install, so this may have been another agent ending its session. Call ` +
-        `native-profiler-start again.`,
-      {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_TORN_DOWN,
-        failure_stage: "native_profiler_xctrace_start",
-        failure_area: "tool_server",
-        error_kind: "not_found",
-      }
-    );
+    throw sessionTornDownError(api);
   }
 
   // Stamp the per-capture descriptors only on SUCCESS: a failed start must leave the

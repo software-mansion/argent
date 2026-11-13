@@ -154,11 +154,11 @@ export interface NativeProfilerSessionApi {
    * Set by `dispose()` and never cleared: `Registry._teardown` nulls the
    * node's instance, so the next resolve builds a fresh api.
    *
-   * `native-profiler-start` checks it after its readiness handshake — a
-   * teardown inside that window would otherwise have it report
-   * `status: "recording"` for a session the registry no longer has, whose
-   * owner's `native-profiler-stop` then answers "call native-profiler-start
-   * first".
+   * `native-profiler-start` checks it right before it spawns xctrace, when its
+   * readiness wait fails, and before it commits the recording. A teardown in
+   * the start would otherwise have it report `status: "recording"` for a
+   * session the registry no longer has, whose owner's `native-profiler-stop`
+   * then answers "call native-profiler-start first".
    */
   disposed: boolean;
   recordingTimeout: NodeJS.Timeout | null;

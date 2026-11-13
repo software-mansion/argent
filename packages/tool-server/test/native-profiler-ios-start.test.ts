@@ -55,6 +55,9 @@ vi.mock("../src/utils/ios-profiler/notify", () => ({
 vi.mock("../src/utils/ios-profiler/startup", () => ({
   waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
 }));
+vi.mock("../src/utils/simulator-watcher", () => ({
+  firstSimulatorPoll: vi.fn(async () => {}),
+}));
 vi.mock("../src/utils/ios-profiler/capture-strategy", () => ({
   selectIosCaptureStrategy: vi.fn(() => ({
     name: "device",
@@ -71,6 +74,9 @@ import {
   type NativeProfilerSessionApi,
 } from "../src/blueprints/native-profiler-session";
 import { startNativeProfilerIos } from "../src/tools/profiler/native-profiler/platforms/ios";
+import { execFileSync, spawn } from "child_process";
+import { waitForXctraceReady } from "../src/utils/ios-profiler/startup";
+import { resolveIosCaptureStrategy } from "../src/utils/ios-profiler/capture-strategy";
 import {
   recordReapedSession,
   takeReapedSession,
@@ -134,6 +140,24 @@ describe("startNativeProfilerIos", () => {
     expect(api.recordingTimeout).toBeNull();
   });
 
+  it("starts no xctrace when a teardown lands before the spawn", async () => {
+    const instance = await session();
+    const api = instance.api as NativeProfilerSessionApi;
+    const dump = await import("../src/utils/react-profiler/debug/dump");
+    // The trace path, which the start resolves before it spawns xctrace.
+    vi.mocked(dump.getDebugDir).mockImplementationOnce(async () => {
+      await instance.dispose();
+      return os.tmpdir();
+    });
+    vi.mocked(spawn).mockClear();
+
+    const err = await startNativeProfilerIos(api, startParams).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_PROFILER_SESSION_TORN_DOWN);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(api.captureProcess).toBeNull();
+  });
+
   it("kills the xctrace it spawned rather than leaving it recording", async () => {
     const instance = await session();
     const api = instance.api as NativeProfilerSessionApi;
@@ -149,5 +173,80 @@ describe("startNativeProfilerIos", () => {
     await startNativeProfilerIos(api, startParams).catch(() => {});
 
     expect(child.kill).toHaveBeenCalled();
+  });
+});
+
+describe("startNativeProfilerIos and a teardown during the readiness wait", () => {
+  /** An xctrace that never says it records and exits when it is killed, as the real one does. */
+  class StartingXctrace extends FakeXctrace {
+    exitCode: number | null = null;
+    signalCode: NodeJS.Signals | null = null;
+    kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
+      queueMicrotask(() => {
+        this.signalCode = signal;
+        this.emit("exit", null, signal);
+      });
+      return true;
+    });
+  }
+
+  /** Starts with the real readiness wait, and tears the session down while it waits. */
+  async function startAndTearDown(params: Parameters<typeof startNativeProfilerIos>[1]) {
+    const instance = await session();
+    const api = instance.api as NativeProfilerSessionApi;
+    const child = new StartingXctrace();
+    vi.mocked(spawn).mockReturnValueOnce(child as unknown as ChildProcess);
+    const actual = await vi.importActual<typeof import("../src/utils/ios-profiler/startup")>(
+      "../src/utils/ios-profiler/startup"
+    );
+    vi.mocked(waitForXctraceReady).mockImplementationOnce(actual.waitForXctraceReady);
+
+    const pending = startNativeProfilerIos(api, params).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(api.captureProcess).toBe(child));
+    await instance.dispose();
+    return { api, child, err: await pending };
+  }
+
+  it("fails as torn down, not as an xctrace that exited", async () => {
+    const { api, child, err } = await startAndTearDown(startParams);
+
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_PROFILER_SESSION_TORN_DOWN);
+    expect((err as Error).message).toContain("torn down by a stop-all-simulator-servers");
+    expect(api.profilingActive).toBe(false);
+    expect(api.captureProcess).toBeNull();
+  });
+
+  it("with malloc_stack_logging, does not launch the app again", async () => {
+    vi.mocked(resolveIosCaptureStrategy).mockReturnValueOnce({
+      strategy: { name: "device" },
+      reason: { kind: "default" },
+    } as unknown as ReturnType<typeof resolveIosCaptureStrategy>);
+    const app = {
+      CFBundleExecutable: "Bluesky",
+      CFBundleIdentifier: "xyz.blueskyweb.app",
+      ApplicationType: "User",
+    };
+    const simctl = vi.mocked(execFileSync);
+    simctl.mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "plutil") return JSON.stringify({ [app.CFBundleIdentifier]: app });
+      if (args.includes("get_app_container")) return "/apps/Bluesky.app\n";
+      // listapps, terminate and launch succeed.
+      return "";
+    }) as unknown as typeof execFileSync);
+    try {
+      const { err } = await startAndTearDown({ ...startParams, malloc_stack_logging: true });
+
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_PROFILER_SESSION_TORN_DOWN
+      );
+      const calls = simctl.mock.calls.map(([, args]) => (args as string[]).join(" "));
+      expect(calls).toContain(`terminate ${iosDevice.id} ${app.CFBundleIdentifier}`);
+      expect(calls).not.toContain(`launch ${iosDevice.id} ${app.CFBundleIdentifier}`);
+    } finally {
+      simctl.mockImplementation(() => {
+        throw new Error("simctl unavailable in this test");
+      });
+    }
   });
 });
