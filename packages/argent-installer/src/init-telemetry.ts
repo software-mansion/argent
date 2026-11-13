@@ -52,6 +52,14 @@ export const INSTALL_INIT_TRIGGERED_UPDATE_FAILED: InstallerFailureSignal = {
   error_kind: "subprocess",
 };
 
+// Init finished everything else, but left no skills on disk.
+export const INSTALL_SKILLS_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_SKILLS_FAILED,
+  failure_stage: "installer_skills_install",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
 // Catch-all for throws escaping the classified paths; without it the terminal
 // event would carry no error code.
 export const INSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
