@@ -618,6 +618,16 @@ export function withNpmForce(npxArgs: string[]): string[] {
 // inherits it and npm then installs <spec> in place of the requested package,
 // so `npx skills add ...` re-runs argent instead of the skills CLI (#1335).
 // The skills commands argent spawns get an environment without it.
+//
+// The pinned source is this whole repository at a release tag, and the skills CLI
+// (1.8.0+) runs `git submodule update --init --recursive` after cloning it. The
+// one submodule is private and has an SSH URL, and no skill lives in it. Without
+// github.com in known_hosts, ssh asks to trust the host on /dev/tty, behind the
+// install spinner, and the install hangs: the CLI's clone timeout signals git,
+// never ssh. Every release tag carries the submodule, so skip it through git's
+// environment config, after any entries the caller already set.
+const SKIPPED_SKILLS_SOURCE_SUBMODULES = ["packages/argent-private"] as const;
+
 export function npxChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const childEnv = { ...env };
   for (const key of Object.keys(childEnv)) {
@@ -625,6 +635,15 @@ export function npxChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
       delete childEnv[key];
     }
   }
+  // A count git would reject breaks every git command anyway, so start over.
+  const existing = Number(childEnv.GIT_CONFIG_COUNT ?? 0);
+  let count = Number.isInteger(existing) && existing >= 0 ? existing : 0;
+  for (const name of SKIPPED_SKILLS_SOURCE_SUBMODULES) {
+    childEnv[`GIT_CONFIG_KEY_${count}`] = `submodule.${name}.update`;
+    childEnv[`GIT_CONFIG_VALUE_${count}`] = "none";
+    count += 1;
+  }
+  childEnv.GIT_CONFIG_COUNT = String(count);
   return childEnv;
 }
 
