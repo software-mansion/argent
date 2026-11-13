@@ -164,7 +164,8 @@ export function appEnded(api: NativeProfilerSessionApi): boolean {
 const outputTails = new WeakMap<ChildProcess, { text: string }>();
 const OUTPUT_TAIL_CHARS = 16_384;
 
-function keepOutputTail(child: ChildProcess): void {
+/** Keeps the end of what `child` prints, for {@link xctraceOutput}. */
+export function keepOutputTail(child: ChildProcess): void {
   const tail = { text: "" };
   const add = (data: Buffer) => {
     tail.text = (tail.text + data.toString()).slice(-OUTPUT_TAIL_CHARS);
@@ -315,13 +316,29 @@ function stallIdleMs(recordedMs: number): number {
 export interface XctraceEnd {
   result: ShutdownResult;
   idleMs: number;
+  /** xctrace said neither that tracing started nor that it stops the recording. */
+  neverTraced: boolean;
+}
+
+/**
+ * How often the stop sends SIGINT again while xctrace has not said that it
+ * stops. xctrace ignores a SIGINT that comes before it starts to trace, and then
+ * records until it is killed. On a busy Mac it started to trace 24 s after its
+ * start, while the start of a Mac app waits at most 10 s for that.
+ */
+const SIGINT_REPEAT_MS = 5_000;
+
+/** True once xctrace has printed that it stops the recording, after a SIGINT it took. */
+function xctraceStopping(child: ChildProcess): boolean {
+  return xctraceOutput(child).includes("Stopping recording");
 }
 
 /**
  * Ends a recording's xctrace: SIGINT, then SIGTERM and SIGKILL when it does not
- * end in 5 minutes. xctrace sometimes hangs after SIGINT for good, also with no
- * argent in the app: idle, and writing nothing. So the ladder goes on earlier
- * when it makes no progress for {@link stallIdleMs} of the recording.
+ * end in 5 minutes. SIGINT goes again every {@link SIGINT_REPEAT_MS} until
+ * xctrace says that it stops. xctrace sometimes hangs after SIGINT for good,
+ * also with no argent in the app: idle, and writing nothing. So the ladder goes
+ * on earlier when it makes no progress for {@link stallIdleMs} of the recording.
  */
 export async function endXctrace(
   child: ChildProcess,
@@ -329,23 +346,62 @@ export async function endXctrace(
   recordedMs: number
 ): Promise<XctraceEnd> {
   const idleMs = stallIdleMs(recordedMs);
-  const result = await shutdownChild(child, {
-    graceMs: STOP_GRACE_MS,
-    termMs: STOP_TERM_MS,
-    killMs: STOP_KILL_MS,
-    stall: { probe: xctraceProgressProbe(child, traceFile), idleMs, pollMs: 2_000 },
-  });
-  return { result, idleMs };
+  const stopping = () => xctraceStopping(child);
+  let repeat: NodeJS.Timeout | undefined;
+  let repeated = false;
+  const repeatSigint = () => {
+    repeat = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null || stopping()) return;
+      if (!repeated) {
+        repeated = true;
+        process.stderr.write(
+          `[native-profiler] xctrace (pid ${child.pid}) did not take SIGINT; sending it again ` +
+            `every ${SIGINT_REPEAT_MS / 1000} s.\n`
+        );
+      }
+      try {
+        child.kill("SIGINT");
+      } catch {
+        // gone
+      }
+      repeatSigint();
+    }, SIGINT_REPEAT_MS);
+  };
+  repeatSigint();
+  try {
+    const result = await shutdownChild(child, {
+      graceMs: STOP_GRACE_MS,
+      termMs: STOP_TERM_MS,
+      killMs: STOP_KILL_MS,
+      stall: {
+        probe: xctraceProgressProbe(child, traceFile, { idleMs, stopping }),
+        idleMs,
+        pollMs: 2_000,
+      },
+    });
+    const neverTraced = !stopping() && !xctraceOutput(child).includes("Ctrl-C to stop");
+    return { result, idleMs, neverTraced };
+  } finally {
+    clearTimeout(repeat);
+  }
 }
 
 /** What the stop says when xctrace did not end on its SIGINT. */
-export function xctraceEndWarning({ result, idleMs }: XctraceEnd): string | undefined {
+export function xctraceEndWarning({ result, idleMs, neverTraced }: XctraceEnd): string | undefined {
+  if (result.stalled && neverTraced) {
+    return (
+      `xctrace had not started to trace: it did not say that tracing started, did not take ` +
+      `the SIGINT that ends the recording, and for ${Math.round(idleMs / 1000)} s used almost ` +
+      `no CPU and wrote nothing to the trace. argent ended it with ${result.signalUsed}, so ` +
+      `nothing was recorded. Call native-profiler-start again for a new recording.`
+    );
+  }
   if (result.stalled) {
     return (
       `xctrace hung while it ended the recording: for ${Math.round(idleMs / 1000)} s it used ` +
-      `no CPU and wrote nothing to the trace. This is a fault of xctrace, which also happens ` +
-      `without argent. argent ended it with ${result.signalUsed}, so the exported data may be ` +
-      `incomplete or missing. Call native-profiler-start again for a new recording.`
+      `almost no CPU and wrote nothing to the trace. This is a fault of xctrace, which also ` +
+      `happens without argent. argent ended it with ${result.signalUsed}, so the exported data ` +
+      `may be incomplete or missing. Call native-profiler-start again for a new recording.`
     );
   }
   if (!result.clean) {

@@ -3,7 +3,7 @@
  * progress probe, and a child whose progress fingerprint stays the same for
  * `idleMs` is taken as hung, so the ladder goes on to SIGTERM early. A probe
  * that cannot tell (null, or a throw) never counts as a hang. Below it, the
- * probe that native-profiler-stop uses for a Mac app's xctrace, tested through
+ * probe that native-profiler-stop uses for xctrace, tested through
  * its contract against real processes and files.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -14,6 +14,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shutdownChild } from "../../src/utils/profiler-shared/lifecycle";
 import { xctraceProgressProbe } from "../../src/utils/ios-profiler/xctrace-progress";
+
+/** A stub `ps` for the probe to run in place of the system one, while set. */
+const psStub = vi.hoisted(() => ({ path: undefined as string | undefined }));
+vi.mock("../../src/utils/vega-process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/vega-process")>();
+  return {
+    ...actual,
+    get PS_BIN() {
+      return psStub.path ?? actual.PS_BIN;
+    },
+  };
+});
 
 class FakeChild extends EventEmitter {
   exitCode: number | null = null;
@@ -217,11 +229,17 @@ describe("xctraceProgressProbe", { timeout: 30_000 }, () => {
 
   const unreadable = (probe: () => Promise<string | null>) => probe().catch(() => null);
 
+  /** Before xctrace has said that it stops, unless `stopping`. */
+  const probeOptions = (idleMs = IDLE_MS, stopping = false) => ({
+    idleMs,
+    stopping: () => stopping,
+  });
+
   /** Past the start of the process, whose own CPU time could still move. */
   const settle = () => new Promise((r) => setTimeout(r, 200));
 
   it("stays the same while the process uses no CPU and the trace does not grow", async () => {
-    const probe = xctraceProgressProbe(run("sleep", ["30"]), dir);
+    const probe = xctraceProgressProbe(run("sleep", ["30"]), dir, probeOptions());
     await settle();
     const first = await probe();
     await new Promise((r) => setTimeout(r, 300));
@@ -230,7 +248,7 @@ describe("xctraceProgressProbe", { timeout: 30_000 }, () => {
   });
 
   it("changes when the trace grows, also in a nested file", async () => {
-    const probe = xctraceProgressProbe(run("sleep", ["30"]), dir);
+    const probe = xctraceProgressProbe(run("sleep", ["30"]), dir, probeOptions());
     await settle();
     const before = await probe();
 
@@ -245,7 +263,7 @@ describe("xctraceProgressProbe", { timeout: 30_000 }, () => {
     const originalPath = process.env.PATH;
     process.env.PATH = dir;
     try {
-      expect(await unreadable(xctraceProgressProbe(sleeping, dir))).not.toBeNull();
+      expect(await unreadable(xctraceProgressProbe(sleeping, dir, probeOptions()))).not.toBeNull();
     } finally {
       process.env.PATH = originalPath;
     }
@@ -260,7 +278,8 @@ describe("xctraceProgressProbe", { timeout: 30_000 }, () => {
         "-e",
         "const end = Date.now() + 20000; while (Date.now() < end) {}",
       ]);
-      const probe = xctraceProgressProbe(busy, dir);
+      // A 5 s idle limit: 0.05 s of CPU counts.
+      const probe = xctraceProgressProbe(busy, dir, probeOptions(5_000));
       await new Promise((r) => setTimeout(r, 300));
       const before = await probe();
       await new Promise((r) => setTimeout(r, 500));
@@ -269,17 +288,82 @@ describe("xctraceProgressProbe", { timeout: 30_000 }, () => {
     }
   );
 
+  describe("with the CPU times of an xctrace that hangs in its run loop", () => {
+    let bin = "";
+    /** What the stub `ps` prints, as `ps -o time=` does. */
+    const cpuTime = (time: string) => writeFileSync(join(bin, "time"), `  ${time}\n`);
+
+    beforeEach(() => {
+      bin = mkdtempSync(join(tmpdir(), "argent-xctrace-ps-"));
+      writeFileSync(join(bin, "ps"), `#!/bin/sh\ncat "${join(bin, "time")}"\n`, { mode: 0o755 });
+      psStub.path = join(bin, "ps");
+    });
+    afterEach(() => {
+      psStub.path = undefined;
+      rmSync(bin, { recursive: true, force: true });
+    });
+
+    it("does not count a little CPU time as progress", async () => {
+      const probe = xctraceProgressProbe(run("sleep", ["30"]), dir, probeOptions());
+      cpuTime("0:03.83");
+      const first = await probe();
+
+      // As measured: 3.83 s to 4.19 s of CPU time in 2.5 min, with nothing written.
+      for (const time of ["0:03.84", "0:03.90", "0:04.05", "0:04.12"]) {
+        cpuTime(time);
+        expect(await probe()).toBe(first);
+      }
+      // 1 % of a core over the 30 s idle limit: 0.3 s.
+      cpuTime("0:04.19");
+      const busy = await probe();
+      expect(busy).not.toBe(first);
+      cpuTime("0:04.30");
+      expect(await probe()).toBe(busy);
+    });
+
+    it("counts the CPU time from the last change of the trace", async () => {
+      const probe = xctraceProgressProbe(run("sleep", ["30"]), dir, probeOptions());
+      cpuTime("0:03.83");
+      await probe();
+      cpuTime("0:04.05");
+      appendFileSync(join(dir, "Trace1.run", "data"), "more bytes");
+      const grown = await probe();
+
+      cpuTime("0:04.30");
+      expect(await probe()).toBe(grown);
+      cpuTime("1:00:04.35");
+      expect(await probe()).not.toBe(grown);
+    });
+
+    it("counts any CPU time once xctrace says that it stops", async () => {
+      let stopping = false;
+      const probe = xctraceProgressProbe(run("sleep", ["30"]), dir, {
+        idleMs: IDLE_MS,
+        stopping: () => stopping,
+      });
+      cpuTime("0:03.83");
+      const first = await probe();
+      cpuTime("0:03.84");
+      expect(await probe()).toBe(first);
+
+      stopping = true;
+      expect(await probe()).not.toBe(first);
+    });
+  });
+
   it("gives no fingerprint for a process that is gone or a trace that is missing", async () => {
     const gone = run("sleep", ["30"]);
     const exited = new Promise((r) => gone.once("exit", r));
     gone.kill("SIGKILL");
     await exited;
-    expect(await unreadable(xctraceProgressProbe(gone, dir))).toBeNull();
+    expect(await unreadable(xctraceProgressProbe(gone, dir, probeOptions()))).toBeNull();
 
     const live = run("sleep", ["30"]);
-    expect(await unreadable(xctraceProgressProbe(live, join(dir, "missing.trace")))).toBeNull();
+    expect(
+      await unreadable(xctraceProgressProbe(live, join(dir, "missing.trace"), probeOptions()))
+    ).toBeNull();
 
     const neverStarted = { pid: undefined } as unknown as ChildProcess;
-    expect(await xctraceProgressProbe(neverStarted, dir)()).toBeNull();
+    expect(await xctraceProgressProbe(neverStarted, dir, probeOptions())()).toBeNull();
   });
 });
