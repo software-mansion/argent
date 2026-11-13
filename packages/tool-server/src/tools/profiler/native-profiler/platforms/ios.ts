@@ -33,6 +33,7 @@ import {
   inFlightGuardMessage,
 } from "../../../../utils/profiler-shared/capture-guard";
 import {
+  appEnded,
   assertNoCaptureRunning,
   waitForStop,
   commitXctraceRecording,
@@ -666,7 +667,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
 
-    const ended = appEnded(api);
+    const ended = api.recordingAppEnded;
     const suspensions = endSuspensionWatch(api);
     const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile);
     api.exportedFiles = exportedFiles;
@@ -720,6 +721,9 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   const child = api.captureProcess;
   const recordedMs = Date.now() - (api.wallClockStartMs ?? Date.now());
   const idleMs = stallIdleMs(recordedMs);
+  // Before xctrace saves the trace and the exports run: an app that quits during
+  // them did not quit during the recording.
+  const ended = appEnded(api);
   const result = await shutdownChild(child, {
     graceMs: STOP_GRACE_MS,
     termMs: STOP_TERM_MS,
@@ -757,8 +761,6 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   api.captureProcess = null;
   api.recordingExitedUnexpectedly = false;
   api.lastExitInfo = null;
-  // Now, not after the export: a quit during the export is not one during the recording.
-  const ended = appEnded(api);
   // After xctrace ended: it suspends the app until then.
   const suspensions = endSuspensionWatch(api);
 
@@ -879,17 +881,6 @@ function shortLeakRecordingNote(recordedMs: number): string {
     `and a check can take several seconds, so this trace may hold no finished check. Do not report the app as leak-free: record again, and keep recording ` +
     `about 25 s after the action to check.`
   );
-}
-
-/** Whether the Mac app the recording attached to is gone: false when there was none. */
-function appEnded(api: NativeProfilerSessionApi): boolean {
-  if (api.recordingAppPid === null) return false;
-  try {
-    process.kill(api.recordingAppPid, 0);
-    return false;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH";
-  }
 }
 
 /**

@@ -5,7 +5,7 @@
  * of such a trace waits out its timeout. A stub `xctrace` first on PATH prints
  * what Xcode 26.6 printed for a failed attach; the table export is faked.
  */
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -31,7 +31,7 @@ import {
   nativeProfilerSessionBlueprint,
   type NativeProfilerSessionApi,
 } from "../src/blueprints/native-profiler-session";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   analyzeNativeProfilerIos,
   stopNativeProfilerIos,
@@ -42,6 +42,7 @@ import {
 } from "../src/tools/profiler/native-profiler/platforms/xctrace";
 import { exportIosTraceData } from "../src/utils/ios-profiler/export";
 import { resolveDevice } from "../src/utils/device-info";
+import { RECORDING_CAP_MS } from "../src/utils/profiler-shared/types";
 
 const ATTACH_FAILED = [
   "* [Error] Failed to attach to target process",
@@ -61,13 +62,29 @@ function runIssues(lines: string | null): void {
   else fs.writeFileSync(file, lines + "\n");
 }
 
+/**
+ * A process the stub kills when it gets SIGINT, before it ends: an app that
+ * quits while xctrace saves the trace.
+ */
+function quitOnStop(pid: number | null): void {
+  const file = path.join(dir, "quit-on-stop.txt");
+  if (pid === null) fs.rmSync(file, { force: true });
+  else fs.writeFileSync(file, `${pid}\n`);
+}
+
 beforeAll(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-xctrace-run-issues-"));
   fs.writeFileSync(
     path.join(dir, "xctrace"),
     `#!/bin/bash
 issues="${dir}/issues.txt"
+quit="${dir}/quit-on-stop.txt"
 stop() {
+  if [ -f "$quit" ]; then
+    pid=$(cat "$quit")
+    kill -9 "$pid"
+    while kill -0 "$pid" 2>/dev/null; do sleep 0.01; done
+  fi
   echo "Stopping recording..."
   if [ -f "$issues" ]; then
     echo "Run issues were detected (trace is still ready to be viewed):"
@@ -96,18 +113,41 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.mocked(exportIosTraceData).mockClear();
+  quitOnStop(null);
 });
 
 const MAC = "macos-app-com.example.runissues";
 const IOS = "6DBF83B4-0000-0000-0000-000000000001";
 
-/** A session recording with the stub, as a successful start leaves it. */
-async function recording(deviceId: string): Promise<NativeProfilerSessionApi> {
+/** Ends the stub from outside, as when xctrace ends without a stop. */
+async function endXctrace(api: NativeProfilerSessionApi): Promise<void> {
+  const child = api.captureProcess!;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGINT");
+  await exited;
+  expect(api.recordingExitedUnexpectedly).toBe(true);
+}
+
+async function quit(app: ChildProcess): Promise<void> {
+  const gone = new Promise((resolve) => app.once("exit", resolve));
+  app.kill("SIGKILL");
+  await gone;
+}
+
+/**
+ * A session recording with the stub, as a successful start leaves it.
+ * `beforeCommit` runs between the spawn and the commit that sets the 10-minute cap.
+ */
+async function recording(
+  deviceId: string,
+  beforeCommit?: () => void
+): Promise<NativeProfilerSessionApi> {
   const device: DeviceInfo = resolveDevice(deviceId);
   const { api } = await nativeProfilerSessionBlueprint.factory({}, device, { device } as never);
   const traceFile = path.join(dir, `native-profiler-${Date.now()}.trace`);
   fs.mkdirSync(traceFile, { recursive: true });
   const started = await spawnXctraceRecording(api, () => ["record", "--output", traceFile]);
+  beforeCommit?.();
   commitXctraceRecording(api, started, {
     appProcess: "PM-sdbg",
     traceFile,
@@ -196,21 +236,96 @@ describe("native-profiler-stop and the run issues xctrace prints", () => {
     expect(api.appEndedDuringCapture).toBe(false);
   });
 
-  it("on a Mac app, says so when xctrace ended on its own and the app is gone", async () => {
+  it("on a Mac app, does not take a quit while xctrace saves the trace for one during the recording", async () => {
     runIssues(null);
+    const app = spawn("sleep", ["30"]);
     const api = await recording(MAC);
-    await stopNativeProfilerIos(api);
-    // xctrace ended without a stop, and the app it attached to is gone.
-    api.recordingExitedUnexpectedly = true;
-    api.lastExitInfo = { code: 2, signal: null };
-    // macOS pids stay below 100000, so no process has this one.
-    api.recordingAppPid = 999_999;
+    api.recordingAppPid = app.pid!;
+    quitOnStop(app.pid!);
 
     const result = await stopNativeProfilerIos(api);
 
-    expect(result.warning).toContain("xctrace exited before stop was called (code=2");
+    expect(app.exitCode !== null || app.signalCode !== null).toBe(true);
+    expect(result.warning).toBeUndefined();
+    expect(api.appEndedDuringCapture).toBe(false);
+  });
+
+  it("on a Mac app, says so when xctrace ended on its own and the app is gone", async () => {
+    runIssues(null);
+    const api = await recording(MAC);
+    // macOS pids stay below 100000, so no process has this one.
+    api.recordingAppPid = 999_999;
+    // xctrace ends without a stop, after the app it attached to.
+    await endXctrace(api);
+
+    const result = await stopNativeProfilerIos(api);
+
+    expect(result.warning).toContain("xctrace exited before stop was called (code=0");
     expect(result.warning).toContain("The app quit, crashed or was restarted during the recording");
     expect(api.appEndedDuringCapture).toBe(true);
+  });
+
+  it("on a Mac app, does not take a quit after xctrace ended on its own for one during the recording", async () => {
+    runIssues(null);
+    const app = spawn("sleep", ["30"]);
+    const api = await recording(MAC);
+    api.recordingAppPid = app.pid!;
+    await endXctrace(api);
+    await quit(app);
+
+    const result = await stopNativeProfilerIos(api);
+
+    expect(result.warning).toContain("xctrace exited before stop was called (code=0");
+    expect(result.warning).not.toContain("The app quit");
+    expect(api.appEndedDuringCapture).toBe(false);
+  });
+
+  describe("on a Mac app at the 10-minute cap", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** A recording of `app` whose cap has fired. */
+    async function capped(app: ChildProcess): Promise<NativeProfilerSessionApi> {
+      const api = await recording(MAC, () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      });
+      api.recordingAppPid = app.pid!;
+      const exited = new Promise((resolve) => api.captureProcess!.once("exit", resolve));
+      vi.advanceTimersByTime(RECORDING_CAP_MS);
+      vi.useRealTimers();
+      await exited;
+      expect(api.recordingTimedOut).toBe(true);
+      return api;
+    }
+
+    it("does not take a quit after the cap for one during the recording", async () => {
+      runIssues(null);
+      const app = spawn("sleep", ["30"]);
+      const api = await capped(app);
+      await quit(app);
+
+      const result = await stopNativeProfilerIos(api);
+
+      expect(result.warning).toMatch(/^Recording timed out at 10 min cap/);
+      expect(result.warning).not.toContain("The app quit");
+      expect(api.appEndedDuringCapture).toBe(false);
+    });
+
+    it("says so when the app was gone at the cap", async () => {
+      runIssues(null);
+      const app = spawn("sleep", ["30"]);
+      await quit(app);
+      const api = await capped(app);
+
+      const result = await stopNativeProfilerIos(api);
+
+      expect(result.warning).toMatch(/^Recording timed out at 10 min cap/);
+      expect(result.warning).toContain(
+        "The app quit, crashed or was restarted during the recording"
+      );
+      expect(api.appEndedDuringCapture).toBe(true);
+    });
   });
 
   it("on an iOS simulator, exports as before", async () => {

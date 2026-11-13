@@ -108,6 +108,12 @@ export interface NativeProfilerSessionApi {
    */
   recordingAppPid: number | null;
   /**
+   * Mac apps only: the app was gone when the in-flight recording ended without a
+   * stop (the 10-minute cap, or xctrace exiting on its own). The stop that
+   * exports that recording reads it.
+   */
+  recordingAppEnded: boolean;
+  /**
    * Mac apps only: the app quit, crashed or was restarted while the data in
    * `exportedFiles` was recorded, so the trace holds only part of it. Stamped
    * at stop; cleared by profiler-load.
@@ -275,6 +281,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       recordingMallocStackLogging: null,
       mallocStackLogging: null,
       recordingAppPid: null,
+      recordingAppEnded: false,
       appEndedDuringCapture: false,
       exportSkipReason: null,
       recordedMs: null,

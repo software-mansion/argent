@@ -139,6 +139,19 @@ export function handleXctraceExit(
     api.recordingExitedUnexpectedly = true;
   }
   api.lastExitInfo = { code, signal };
+  // Now, not at the stop: an app that quits after the recording did not quit during it.
+  api.recordingAppEnded = appEnded(api);
+}
+
+/** Whether the Mac app the recording attached to is gone: false when there was none. */
+export function appEnded(api: NativeProfilerSessionApi): boolean {
+  if (api.recordingAppPid === null) return false;
+  try {
+    process.kill(api.recordingAppPid, 0);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ESRCH";
+  }
 }
 
 /** The end of each recording's xctrace output: the run issues come last. */
@@ -288,6 +301,8 @@ export function commitXctraceRecording(
   // unconsumable, and therefore a future false accusation.
   takeReapedSession("native-profiler", api.deviceId);
   api.recordingTimeout = setTimeout(() => {
+    // Now, not at the stop: an app that quits after the recording did not quit during it.
+    api.recordingAppEnded = appEnded(api);
     try {
       xctraceProcess.kill("SIGINT");
     } catch {
