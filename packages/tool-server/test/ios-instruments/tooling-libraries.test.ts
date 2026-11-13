@@ -14,6 +14,7 @@ import {
   aggregateCpuHotspots,
   toolingWeightNs,
   toolingWork,
+  withAppCallsThroughArgent,
 } from "../../src/utils/ios-profiler/pipeline/02-aggregate";
 import { correlateHangsWithCpu } from "../../src/utils/ios-profiler/pipeline/01-correlate";
 import { runIosProfilerPipeline } from "../../src/utils/ios-profiler/pipeline/index";
@@ -274,6 +275,124 @@ describe("toolingWork: whose work a sample is", () => {
   });
 });
 
+describe("withAppCallsThroughArgent: a method of the system that argent's library replaces", () => {
+  // The app orders a window in: argent's replacement of the ordering method calls the
+  // original, which lays out the window.
+  const windowOrdering = [
+    system("-[NSView layoutSubtreeIfNeeded]"),
+    system("-[NSWindow orderWindow:relativeTo:]"),
+    argent("SomeReplacedMethod"),
+    system("-[NSWindow makeKeyAndOrderFront:]"),
+    app("ExampleApp.openWindow()"),
+    system("-[NSApplication sendAction:to:from:]"),
+    system("-[NSApplication run]"),
+    system("NSApplicationMain"),
+    app("main"),
+  ];
+  // argent's describe, which the run loop calls.
+  const describeFromRunLoop = [
+    system("AXUIElementCopyAttributeValue"),
+    argent("SomeLibraryFunction"),
+    argent("OtherLibraryFunction"),
+    system("__CFRUNLOOP_IS_CALLING_OUT_TO_A_BLOCK__"),
+    system("__CFRunLoopDoBlocks"),
+    system("CFRunLoopRunSpecific"),
+    system("-[NSApplication run]"),
+    system("NSApplicationMain"),
+    app("main"),
+  ];
+
+  it("gives the app the work under argent's frame when an app function called through it", () => {
+    const stack = withAppCallsThroughArgent(windowOrdering);
+
+    expect(stack[2]).toEqual({ name: "SomeReplacedMethod", isSystemLibrary: true });
+    expect(toolingWork(stack)).toBeNull();
+    expect(aggregateCpuHotspots(repeat(10, 0, stack)).map((h) => h.dominantFunction)).toEqual([
+      "ExampleApp.openWindow()",
+    ]);
+    // The input is not changed.
+    expect(windowOrdering[2]!.tooling).toBe("argent");
+  });
+
+  it("gives the app the work when the app calls the replaced method itself", () => {
+    const stack = withAppCallsThroughArgent([
+      system("-[NSView layoutSubtreeIfNeeded]"),
+      argent("SomeReplacedMethod"),
+      system("0x19a3afe69"),
+      app("-[ExampleWindowController showWindow:]"),
+      app("main"),
+    ]);
+    expect(toolingWork(stack)).toBeNull();
+  });
+
+  it("keeps the recorder's work under the replaced method the recorder's", () => {
+    const stack = withAppCallsThroughArgent([
+      instruments("SomeRecorderFunction"),
+      system("_malloc_zone_malloc_instrumented_or_legacy"),
+      ...windowOrdering,
+    ]);
+    expect(toolingWork(stack)).toBe("instruments");
+  });
+
+  it("keeps argent's work that the run loop calls argent's, also while an app function runs a modal loop", () => {
+    expect(withAppCallsThroughArgent(describeFromRunLoop)).toBe(describeFromRunLoop);
+    expect(toolingWork(describeFromRunLoop)).toBe("argent");
+
+    const duringModal = [
+      ...describeFromRunLoop.slice(0, 6),
+      system("-[NSApplication runModalForWindow:]"),
+      system("-[NSAlert runModal]"),
+      app("ExampleApp.showAlert()"),
+      ...windowOrdering.slice(5),
+    ];
+    expect(withAppCallsThroughArgent(duringModal)).toBe(duringModal);
+  });
+
+  it("keeps argent's work that a dispatch queue or an event monitor calls argent's", () => {
+    const fromQueue = [
+      argent("SomeLibraryFunction"),
+      system("_dispatch_call_block_and_release"),
+      system("_dispatch_client_callout"),
+      system("__CFRUNLOOP_IS_SERVICING_THE_MAIN_DISPATCH_QUEUE__"),
+      app("main"),
+    ];
+    const fromEventMonitor = [
+      argent("SomeLibraryFunction"),
+      system("_NSSendEventToObservers"),
+      system("-[NSApplication sendEvent:]"),
+      system("-[NSApplication run]"),
+      app("main"),
+    ];
+    expect(withAppCallsThroughArgent(fromQueue)).toBe(fromQueue);
+    expect(withAppCallsThroughArgent(fromEventMonitor)).toBe(fromEventMonitor);
+  });
+
+  it("keeps a replaced method that argent's own work calls argent's", () => {
+    const stack = [
+      system("-[NSWindow orderWindow:relativeTo:]"),
+      argent("SomeReplacedMethod"),
+      system("-[NSWindow orderFront:]"),
+      ...describeFromRunLoop.slice(1),
+    ];
+    expect(withAppCallsThroughArgent(stack)).toBe(stack);
+  });
+
+  it("keeps argent's work on a thread with no app frame argent's", () => {
+    const stack = [
+      argent("SomeLibraryFunction"),
+      system("-[NSURLSession dataTaskWithRequest:]"),
+      system("_pthread_start"),
+    ];
+    expect(withAppCallsThroughArgent(stack)).toBe(stack);
+  });
+
+  it("returns a stack with no argent frame unchanged", () => {
+    const stack = [instruments("SomeRecorderFunction"), app("main")];
+    expect(withAppCallsThroughArgent(stack)).toBe(stack);
+    expect(withAppCallsThroughArgent([])).toEqual([]);
+  });
+});
+
 describe("aggregateCpuHotspots without the tools' samples", () => {
   it("lists only the app's work, as a share of all the CPU time, the tools' included", () => {
     const samples = [
@@ -441,6 +560,51 @@ describe("runIosProfilerPipeline: the tools' CPU time", () => {
     expect(out.cpuHotspots.map((h) => h.dominantFunction)).toEqual(["-[ExampleView layout]"]);
     // 5 of the 8.2 ms.
     expect(out.cpuHotspots[0]!.weightPercentage).toBe(60.98);
+  });
+
+  it("gives the app a hang in a replaced method that the app called, in the hotspots and the suspects", async () => {
+    const cpu = join(dir, "cpu.xml");
+    const hangs = join(dir, "hangs.xml");
+    const appKit = binaryDef(4, "AppKit", APPKIT);
+    const app = binaryDef(9, "ExampleExec", APP_EXECUTABLE);
+    // The app orders a window in through argent's replacement of the ordering method.
+    const ordering =
+      `<backtrace id="1">` +
+      frame(2, "-[NSView layoutSubtreeIfNeeded]", appKit) +
+      frame(5, "-[NSWindow orderWindow:relativeTo:]", `<binary ref="4"/>`) +
+      frame(
+        6,
+        "SomeReplacedMethod",
+        binaryDef(
+          7,
+          "libNativeDevtoolsMacos.dylib",
+          `${ARGENT_LIB_DIR}/libNativeDevtoolsMacos.dylib`
+        )
+      ) +
+      frame(8, "-[NSWindow makeKeyAndOrderFront:]", `<binary ref="4"/>`) +
+      frame(10, "ExampleApp.openWindow()", app) +
+      frame(11, "main", `<binary ref="9"/>`) +
+      `</backtrace>`;
+    writeFileSync(
+      cpu,
+      cpuXml([
+        row(100_000_000, ordering),
+        ...[101, 102, 103].map((ms) => row(ms * 1_000_000, `<backtrace ref="1"/>`)),
+      ])
+    );
+    writeFileSync(
+      hangs,
+      `<trace-query-result><node><row><start-time>100000000</start-time><duration>300000000</duration>` +
+        `<hang-type>Hang</hang-type><thread fmt="Main Thread"></thread></row></node></trace-query-result>`
+    );
+
+    const out = await runIosProfilerPipeline({ cpu, hangs, leaks: null });
+
+    expect(out.toolingCpuMs).toEqual({ argent: 0, instruments: 0 });
+    expect(out.cpuHotspots.map((h) => h.dominantFunction)).toEqual(["ExampleApp.openWindow()"]);
+    expect(out.uiHangs[0]!.suspectedFunctions).toEqual(["ExampleApp.openWindow()"]);
+    expect(out.uiHangs[0]!.appCallChains[0]!.chain).toEqual(["ExampleApp.openWindow()", "main"]);
+    expect(out.uiHangs[0]).not.toHaveProperty("toolingLabels");
   });
 
   it("reports zero time without a CPU export", async () => {

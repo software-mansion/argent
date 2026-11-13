@@ -553,7 +553,8 @@ describe("a Mac app's NativeProfilerSession", () => {
 /**
  * An xctrace export of 10 one-millisecond main-thread samples: 6 in the app's
  * own code, 3 in argent's library (under a system leaf frame, as when the
- * library calls into AppKit), and 1 in the recorder Instruments loads. A hang
+ * library calls into AppKit, and called from the run loop), and 1 in the
+ * recorder Instruments loads. A hang
  * covers the argent samples. `prefix` names the files, as stop names a saved session's.
  */
 function writeExports(dir: string, prefix = ""): { cpu: string; hangs: string; leaks: string } {
@@ -571,6 +572,7 @@ function writeExports(dir: string, prefix = ""): { cpu: string; hangs: string; l
     `<backtrace id="5">` +
     `<frame id="6" name="objc_msgSend" addr="0x3">${bin(7, "libobjc.A.dylib", "/usr/lib/libobjc.A.dylib")}</frame>` +
     `<frame id="8" name="SomeLibraryFunction" addr="0x4">${bin(9, "libNativeDevtoolsMacos.dylib", "/Users/dev/.argent/macos/lib/0123456789abcdef/libNativeDevtoolsMacos.dylib")}</frame>` +
+    `<frame id="13" name="__CFRUNLOOP_IS_CALLING_OUT_TO_A_BLOCK__" addr="0x6">${bin(14, "CoreFoundation", "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation")}</frame>` +
     `<frame ref="4"/>` +
     `</backtrace>`;
   const recorderBacktrace =

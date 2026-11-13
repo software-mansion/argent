@@ -1,7 +1,7 @@
 import type { Bottleneck, CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../types";
 import { parseCpuFile, parseHangsFile, parseLeaksFile } from "./xml-parser";
 import { correlateHangsWithCpu, aggregateLeaks } from "./01-correlate";
-import { aggregateCpuHotspots, toolingWeightNs } from "./02-aggregate";
+import { aggregateCpuHotspots, toolingWeightNs, withAppCallsThroughArgent } from "./02-aggregate";
 import {
   removeSuspendedTime,
   withoutSuspendedTime,
@@ -45,6 +45,7 @@ export async function runIosProfilerPipeline(
     parseHangsFile(files.hangs ?? null),
     parseLeaksFile(files.leaks ?? null),
   ]);
+  for (const sample of cpuSamples) sample.stack = withAppCallsThroughArgent(sample.stack);
 
   // Before the CPU correlation: the samples of a hang left out must not mark hotspots as during a hang.
   const suspensions =

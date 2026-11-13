@@ -53,6 +53,33 @@ export function toolingWork(stack: StackFrame[]): ToolingOwner | null {
   return null;
 }
 
+/**
+ * argent's library replaces some methods of the system with its own, which call the
+ * original (window ordering is one). When the app calls such a method, the work that
+ * argent's frame calls is the app's. argent's own work, such as describe and taps, is a
+ * block or function that the run loop, a dispatch queue or an event monitor calls, or runs
+ * on a thread with no app frame.
+ *
+ * Returns the stack with argent's frames marked as system frames when the app called
+ * through them, else the same stack.
+ */
+export function withAppCallsThroughArgent(stack: StackFrame[]): StackFrame[] {
+  let outermost = -1;
+  stack.forEach((frame, i) => {
+    if (frame.tooling === "argent") outermost = i;
+  });
+  if (outermost === -1) return stack;
+  const callers = stack.slice(outermost + 1).filter((frame) => !isHexAddress(frame.name));
+  const isApp = (frame: StackFrame) => !frame.isSystemLibrary && !frame.tooling;
+  // A method of the app or the system called argent's frame, as it calls a method.
+  const caller = callers[0];
+  const calledAsMethod = caller !== undefined && (isApp(caller) || /^[-+]\[/.test(caller.name));
+  if (!calledAsMethod || !callers.some(isApp)) return stack;
+  return stack.map((frame) =>
+    frame.tooling === "argent" ? { name: frame.name, isSystemLibrary: true } : frame
+  );
+}
+
 /** What the report adds to the name of a function in a tool's library. */
 export const TOOLING_LABEL: Record<ToolingOwner, string> = {
   argent: "argent's own library",
