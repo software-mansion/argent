@@ -62,7 +62,9 @@ On iOS and on a Mac app, the main thread can run only system code. This code can
 
 A memory leak gets the red indicator only when the code of the app is responsible for the leak. macOS and iOS also leak some objects by themselves, for example in their XPC connections. When the responsible code is in a library of the system, such as Foundation, the leak gets the yellow indicator. The report gives a note about these leaks.
 
-Argent and Instruments can run their own code inside the app while the native profiler records on iOS or on a Mac app. For example, in a Mac app, the agent reads the screen and clicks through the Argent library inside the app. Instruments loads a recorder into the app to track the memory allocations. The native report gives the CPU time of this code and its share of all CPU time. The CPU hotspots do not include this time. When this code causes a hang, the report marks the suspect functions with the name of the tool.
+Argent and Instruments can run their own code inside the app while the native profiler records on iOS or on a Mac app. For example, in a Mac app, the agent reads the screen and clicks through the Argent library inside the app. Instruments loads a recorder into the app to track the memory allocations. The native report gives the CPU time of this code and its share of all CPU time. The CPU hotspots do not include this time. When the Argent code causes a hang, the report marks the suspect functions as Argent code.
+
+The time of the Instruments recorder on the main thread is not part of the length of a hang. When a hang has less than 250 ms without the recorder time and the suspended time, the report does not show the hang. A note gives the time of the recorder.
 
 The React report gives the file and the line of the components in its table that are in the project. When several files define the same name, the report also names the other files. For the five components with the highest render time, the report also shows a suggestion and, if it has the file, 50 lines of source. Thus the agent can propose a fix for the component.
 

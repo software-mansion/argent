@@ -131,7 +131,9 @@ describe("the CPU sampling note on the tools' time", () => {
       `${NOTE} Of the CPU samples, 120 ms (30%) were argent's own work inside the app, such as ` +
         `describe and taps, while the trace recorded. They are left out of the CPU hotspots.`
     );
-    expect(report).toContain(`marked "argent's own library" or "Instruments' own library"`);
+    expect(report).toContain(
+      `A hang whose suspects are marked "argent's own library" was caused by argent, not the app.`
+    );
     expect(report).not.toContain("Instruments loads into the app");
   });
 
@@ -143,6 +145,8 @@ describe("the CPU sampling note on the tools' time", () => {
         "trace recorded, and 50 ms (5%) were the recorder that Instruments loads into the app " +
         "to track allocations."
     );
+    // The recorder's samples are no hang's suspects, so no suspect has a mark of Instruments.
+    expect(both).not.toContain("Instruments' own library");
 
     pipeline({ toolingCpuMs: { argent: 0, instruments: 40 }, totalCpuMs: 200 });
     const instrumentsOnly = (await analyzeNativeProfilerIos(makeApi("macos"))).report;
@@ -150,6 +154,7 @@ describe("the CPU sampling note on the tools' time", () => {
       `${NOTE} Of the CPU samples, 40 ms (20%) were the recorder that Instruments loads`
     );
     expect(instrumentsOnly).not.toContain("argent's own work");
+    expect(instrumentsOnly).not.toContain("own library");
 
     pipeline({ toolingCpuMs: { argent: 3, instruments: 0 }, totalCpuMs: 1000 });
     const sliver = (await analyzeNativeProfilerIos(makeApi("macos"))).report;

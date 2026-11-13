@@ -5,6 +5,7 @@ import {
   extractAppCallChain,
   isEntryPoint,
   isSystemCodeSample,
+  toolingWork,
 } from "./02-aggregate";
 import { isSystemLibraryPath } from "./xml-parser";
 import { normalizeThreadName } from "../../profiler-shared/thread";
@@ -25,9 +26,9 @@ interface CorrelationResult {
 
 /**
  * `excludedNs` is the time of each hang that is not the hang's own: when the app was
- * suspended (removeSuspendedTime). The report leaves it out of the hang's length.
- * `leakPausesUnknown`: the trace checked the app for leaks, and when the app was suspended
- * is not known, so a hang's length can hold a check's pause.
+ * suspended, and Instruments' recorder (removeSuspendedTime). The report leaves it out of
+ * the hang's length. `leakPausesUnknown`: the trace checked the app for leaks, and when
+ * the app was suspended is not known, so a hang's length can hold a check's pause.
  */
 export function correlateHangsWithCpu(
   hangs: RawHang[],
@@ -58,16 +59,22 @@ export function correlateHangsWithCpu(
     // hang mostly waited, so then the suspects are what all threads ran. When other threads
     // ran, it possibly waited for a worker that it called with dispatch_sync. When no other
     // thread ran, it possibly waited in a sleep, for a lock or for I/O, and the suspects are
-    // what it ran.
+    // what it ran. The recorder's time is not the hang's, so its samples are no thread's run.
     const hangThread = normalizeThreadName(hang.threadFmt);
     const ownThread = allThreads.filter((s) => normalizeThreadName(s.threadFmt) === hangThread);
-    const ownRunNs = ownThread.reduce((sum, s) => sum + s.weightNs, 0);
+    const ownRunNs = ownThread.reduce(
+      (sum, s) => (toolingWork(s.stack) === "instruments" ? sum : sum + s.weightNs),
+      0
+    );
     const ownLengthNs = hang.durationNs - (excludedNs[hangIndex] ?? 0);
     // A thread with no sample in the whole trace can have another name in the samples (the
     // hang's thread is then not the main thread), so how long it ran is not known.
     const waited =
       sampleThreads.has(hangThread) && ownRunNs < ownLengthNs * MIN_HANG_THREAD_RUN_SHARE;
-    const otherThreadsRan = allThreads.length > ownThread.length;
+    const otherThreadsRan = allThreads.some(
+      (s) =>
+        toolingWork(s.stack) !== "instruments" && normalizeThreadName(s.threadFmt) !== hangThread
+    );
     const windowSamples = waited || ownThread.length === 0 ? allThreads : ownThread;
 
     const funcCounts = new Map<string, number>();
@@ -76,6 +83,9 @@ export function correlateHangsWithCpu(
     const toolingLabels: Record<string, string> = {};
 
     for (const sample of windowSamples) {
+      // The recorder's time is the hang's recorderMs (recorder-hangs.ts), not a suspect: its
+      // frames often have no symbol, so its dominant frame is the app function that allocated.
+      if (toolingWork(sample.stack) === "instruments") continue;
       const dominant = findDominantFunction(sample.stack);
       if (dominant) {
         funcCounts.set(dominant, (funcCounts.get(dominant) ?? 0) + 1);

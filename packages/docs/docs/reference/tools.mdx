@@ -624,7 +624,9 @@ In a report from Instruments, `native-profiler-analyze` gives the CPU time that 
 - Argent: the code that Argent runs inside the app, for example for `describe` and taps on a Mac app.
 - Instruments: the recorder that Instruments loads into the app to track the memory allocations.
 
-The CPU hotspots do not include this time. A suspect function of a hang in this code has the mark "argent's own library" or "Instruments' own library". When neither tool used CPU time inside the app, the report does not contain this note.
+The CPU hotspots do not include this time. A suspect function of a hang in the Argent code has the mark "argent's own library". When neither tool used CPU time inside the app, the report does not contain this note.
+
+The main-thread time of the Instruments recorder is not part of the length of a hang. `native-profiler-analyze` does not show a hang that has less than 250 ms without the recorder time and the suspended time. It gives the length of the other hangs without the recorder time. A note gives the recorder time and the number of hangs that changed. The recorder stays in the app until the app quits. To record hangs without the recorder, start the app again and use `template_path: "Time Profiler"`.
 
 Sometimes the only app function in the stacks of a CPU hotspot is the entry point of the app, `main`. Then `native-profiler-analyze` names the hotspot "system code under `main`". The report gives the system frameworks that ran and the share of each. An app function below the entry point, for example of React Native, gets its own hotspot. A thread with no app function in its stacks gets the hotspot "system code under" its first function, for example `start_wqthread`. `profiler-stack-query` with `mode: "function_callers"` and the function of such a hotspot also gives the heaviest stack of its system code.
 

@@ -10,6 +10,7 @@ import {
   type AppSuspensionSpan,
   type SuspensionAdjustment,
 } from "../app-suspensions";
+import { recorderNsIn, type RecorderAdjustment } from "../recorder-hangs";
 
 interface PipelineOutput {
   bottlenecks: Bottleneck[];
@@ -25,6 +26,8 @@ interface PipelineOutput {
   totalCpuMs: number;
   /** What the app's suspensions changed in the hangs. Null when none were passed. */
   suspensionAdjustment?: SuspensionAdjustment | null;
+  /** What Instruments' recorder changed in the hangs. */
+  recorderAdjustment?: RecorderAdjustment;
 }
 
 interface PipelineOptions {
@@ -35,7 +38,7 @@ interface PipelineOptions {
   cpuFilterPid?: number | null;
   /**
    * Mac apps: when macOS held the app suspended, on the trace's timeline. Their
-   * time is taken out of the hangs. Null or absent leaves the hangs as recorded.
+   * time is taken out of the hangs. Null or absent takes no suspended time out.
    */
   appSuspensions?: AppSuspensionSpan[] | null;
   /**
@@ -140,22 +143,25 @@ export async function runIosProfilerPipeline(
   for (const sample of cpuSamples) sample.stack = withAppCallsThroughArgent(sample.stack);
 
   // Before the CPU correlation: the samples of a hang left out must not mark hotspots as during a hang.
-  const suspensions =
-    options.appSuspensions != null ? removeSuspendedTime(rawHangs, options.appSuspensions) : null;
+  const kept = removeSuspendedTime(
+    rawHangs,
+    options.appSuspensions ?? [],
+    recorderNsIn(rawHangs, cpuSamples)
+  );
   // A trace with leak data checked the app for leaks. Without the app's suspensions, the
   // length of a hang can hold the pause of a check.
   const leakPausesUnknown =
     options.appSuspensions == null && (rawLeaks.length > 0 || detailExported);
   const correlated = correlateHangsWithCpu(
-    suspensions?.hangs ?? rawHangs,
+    kept.hangs,
     cpuSamples,
-    suspensions?.suspendedNs,
+    kept.hangs.map((_, i) => kept.suspendedNs[i]! + kept.recorderNs[i]!),
     leakPausesUnknown
   );
   const { hangSampleTimestamps } = correlated;
-  const uiHangs = suspensions
-    ? correlated.uiHangs.map((hang, i) => withoutSuspendedTime(hang, suspensions.suspendedNs[i]!))
-    : correlated.uiHangs;
+  const uiHangs = correlated.uiHangs.map((hang, i) =>
+    withoutSuspendedTime(hang, kept.suspendedNs[i]!, kept.recorderNs[i]!)
+  );
 
   const cpuHotspots = aggregateCpuHotspots(cpuSamples, hangSampleTimestamps);
   const memoryLeaks = aggregateLeaks(
@@ -179,6 +185,7 @@ export async function runIosProfilerPipeline(
       instruments: Math.round(tooling.instruments / 1_000_000),
     },
     totalCpuMs: Math.round(totalNs / 1_000_000),
-    suspensionAdjustment: suspensions?.summary ?? null,
+    suspensionAdjustment: options.appSuspensions != null ? kept.summary : null,
+    recorderAdjustment: kept.recorderSummary,
   };
 }

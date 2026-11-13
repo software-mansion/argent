@@ -6,6 +6,7 @@
  * the pause in the trace, though the app did not work in that time.
  */
 import type { RawHang, UiHang } from "./types";
+import type { RecorderAdjustment } from "./recorder-hangs";
 import { classifyHangSeverity } from "./pipeline/01-correlate";
 
 /** A suspension in wall-clock ms since 1970, as `argent-macos-helper watch-suspension` reports it. */
@@ -73,7 +74,11 @@ export interface HangsWithoutSuspensions {
   hangs: RawHang[];
   /** For each of `hangs`: the ns of its recorded span during which the app was suspended. */
   suspendedNs: number[];
+  /** For each of `hangs`: the ns of main-thread CPU time of Instruments' recorder in its span. */
+  recorderNs: number[];
   summary: SuspensionAdjustment;
+  /** What taking the recorder's time out changed, in the hangs that the suspensions left. */
+  recorderSummary: RecorderAdjustment;
 }
 
 /** Sorted, with the empty spans left out and the overlapping ones merged. */
@@ -101,40 +106,57 @@ function overlapNs(startNs: number, endNs: number, merged: readonly AppSuspensio
 }
 
 /**
- * Takes the time the app was suspended out of each hang. A hang with under 250 ms
- * of its own is left out, as xctrace reports no shorter hang. The other hangs
- * keep their recorded spans, so their CPU samples stay theirs.
+ * Takes the time the app was suspended out of each hang, and then the main-thread
+ * time of Instruments' recorder (`recorderNs`, one for each of `rawHangs`; from
+ * recorderNsIn). A hang with under 250 ms of its own is left out, as xctrace
+ * reports no shorter hang. The other hangs keep their recorded spans, so their
+ * CPU samples stay theirs.
  */
 export function removeSuspendedTime(
   rawHangs: readonly RawHang[],
-  spans: readonly AppSuspensionSpan[]
+  spans: readonly AppSuspensionSpan[],
+  recorderNs: readonly number[] = []
 ): HangsWithoutSuspensions {
   const merged = mergeSpans(spans);
   const hangs: RawHang[] = [];
   const suspendedNs: number[] = [];
+  const keptRecorderNs: number[] = [];
   let removedHangs = 0;
   let adjustedHangs = 0;
-  for (const hang of rawHangs) {
+  const recorderSummary: RecorderAdjustment = { removedHangs: 0, adjustedHangs: 0, recorderMs: 0 };
+  let recorderTotalNs = 0;
+  rawHangs.forEach((hang, i) => {
     const overlap = overlapNs(hang.startNs, hang.startNs + hang.durationNs, merged);
     const suspended = overlap < MIN_OVERLAP_NS ? 0 : overlap;
     if (suspended > 0 && hang.durationNs - suspended < MIN_HANG_NS) {
       removedHangs++;
-      continue;
+      return;
     }
     if (suspended > 0) adjustedHangs++;
+    const recorder = recorderNs[i] ?? 0;
+    recorderTotalNs += recorder;
+    if (recorder > 0 && hang.durationNs - suspended - recorder < MIN_HANG_NS) {
+      recorderSummary.removedHangs++;
+      return;
+    }
+    if (recorder > 0) recorderSummary.adjustedHangs++;
     hangs.push(hang);
     suspendedNs.push(suspended);
-  }
+    keptRecorderNs.push(recorder);
+  });
+  recorderSummary.recorderMs = Math.round(recorderTotalNs / 1_000_000);
   const pausedNs = merged.reduce((sum, s) => sum + (s.endNs - s.startNs), 0);
   return {
     hangs,
     suspendedNs,
+    recorderNs: keptRecorderNs,
     summary: {
       pauses: merged.length,
       pausedMs: Math.round(pausedNs / 1_000_000),
       removedHangs,
       adjustedHangs,
     },
+    recorderSummary,
   };
 }
 
@@ -145,18 +167,20 @@ function hangLabel(ns: number): string {
 }
 
 /**
- * The hang as the report shows it: as long as its own time, and labeled and
- * graded from that length. Its span stays the recorded one.
+ * The hang as the report shows it: as long as its own time, without the suspended
+ * time and the recorder's, and labeled and graded from that length. Its span stays
+ * the recorded one.
  */
-export function withoutSuspendedTime(hang: UiHang, suspendedNs: number): UiHang {
-  if (!(suspendedNs > 0)) return hang;
-  const ownNs = hang.endNs - hang.startNs - suspendedNs;
+export function withoutSuspendedTime(hang: UiHang, suspendedNs: number, recorderNs = 0): UiHang {
+  if (!(suspendedNs > 0) && !(recorderNs > 0)) return hang;
+  const ownNs = hang.endNs - hang.startNs - suspendedNs - recorderNs;
   const hangType = hangLabel(ownNs);
   return {
     ...hang,
     hangType,
     durationMs: Math.round(ownNs / 1_000_000),
     severity: classifyHangSeverity(hangType),
-    suspendedMs: Math.round(suspendedNs / 1_000_000),
+    ...(suspendedNs > 0 ? { suspendedMs: Math.round(suspendedNs / 1_000_000) } : {}),
+    ...(recorderNs > 0 ? { recorderMs: Math.round(recorderNs / 1_000_000) } : {}),
   };
 }

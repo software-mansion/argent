@@ -104,7 +104,9 @@ export function renderHangStacksIos(
     lines.push("");
   }
 
+  // The recorder's samples are not the app's work, as in the suspects (01-correlate).
   const relatedSamples = cpuSamples.filter((s) => {
+    if (toolingWork(s.stack) === "instruments") return false;
     const dominant = findDominantFunction(s.stack);
     return dominant !== null && suspectedSet.has(dominant);
   });

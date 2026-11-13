@@ -95,6 +95,11 @@ export interface UiHang {
    * suspended, such as for a leak check. `durationMs` leaves this time out.
    */
   suspendedMs?: number;
+  /**
+   * xctrace only: ms of main-thread CPU time in the hang's span that the recorder of
+   * Instruments' Allocations instrument used. `durationMs` leaves this time out.
+   */
+  recorderMs?: number;
   /** Android-only: Perfetto jank_type, e.g. "App Deadline Missed". */
   jankReason?: string;
   /** Android-only: main-thread state durations during this hang. */

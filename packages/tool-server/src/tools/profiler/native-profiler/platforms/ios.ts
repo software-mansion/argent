@@ -32,6 +32,7 @@ import {
   type CaptureStrategyReason,
 } from "../../../../utils/ios-profiler/capture-strategy";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
+import type { RecorderAdjustment } from "../../../../utils/ios-profiler/recorder-hangs";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 import { formatTraceFreshness } from "../../../../utils/profiler-shared/freshness";
 import {
@@ -897,6 +898,30 @@ const LEAK_CHECK_HANG_NOTE =
   'Profiler"`, which records hangs and CPU samples but does not check for leaks.';
 
 /**
+ * What argent changed in the hangs, for a note: "left out 1 hang <why>, and took <what>
+ * out of the length of 2 other hangs".
+ */
+function hangChanges(
+  removedHangs: number,
+  removedWhy: string,
+  adjustedHangs: number,
+  takenOut: string
+): string {
+  const hangs = (n: number) => (n === 1 ? "hang" : "hangs");
+  const changes: string[] = [];
+  if (removedHangs > 0) {
+    changes.push(`left out ${removedHangs} ${hangs(removedHangs)} ${removedWhy}`);
+  }
+  if (adjustedHangs > 0) {
+    changes.push(
+      `took ${takenOut} out of the length of ${adjustedHangs} ` +
+        `${removedHangs > 0 ? "other " : ""}${hangs(adjustedHangs)}`
+    );
+  }
+  return changes.join(", and ");
+}
+
+/**
  * Says what the pipeline took out of the hangs when argent watched the Mac app's
  * suspensions, in place of LEAK_CHECK_HANG_NOTE. Each leak check suspended the
  * whole app, so a hang that began before or during one included it. Null when
@@ -907,25 +932,41 @@ function suspensionNote(adjustment: SuspensionAdjustment, leaksRecorded: boolean
   if (removedHangs === 0 && adjustedHangs === 0) return null;
   const seconds = `${(pausedMs / 1000).toFixed(1)} s`;
   const times = pauses === 1 ? `once (${seconds})` : `${pauses} times (${seconds} in all)`;
-  const thePauses = pauses === 1 ? "the pause" : "the pauses";
-  const hangs = (n: number) => (n === 1 ? "hang" : "hangs");
-  const changes: string[] = [];
-  if (removedHangs > 0) {
-    changes.push(
-      `left out ${removedHangs} ${hangs(removedHangs)} that ${removedHangs === 1 ? "was" : "were"} ` +
-        `only ${pauses === 1 ? "this pause" : "these pauses"}`
-    );
-  }
-  if (adjustedHangs > 0) {
-    changes.push(
-      `took ${thePauses} out of the length of ${adjustedHangs} ` +
-        `${removedHangs > 0 ? "other " : ""}${hangs(adjustedHangs)}`
-    );
-  }
+  const thesePauses = pauses === 1 ? "this pause" : "these pauses";
+  const changes = hangChanges(
+    removedHangs,
+    `that ${removedHangs === 1 ? "was" : "were"} only ${thesePauses}`,
+    adjustedHangs,
+    pauses === 1 ? "the pause" : "the pauses"
+  );
   return leaksRecorded
     ? `> ℹ️ **Leak-check pauses:** Instruments held the app suspended ${times} to check it for ` +
-        `leaks. argent ${changes.join(", and ")}.`
-    : `> ℹ️ **App pauses:** macOS held the app suspended ${times}. argent ${changes.join(", and ")}.`;
+        `leaks. argent ${changes}.`
+    : `> ℹ️ **App pauses:** macOS held the app suspended ${times}. argent ${changes}.`;
+}
+
+/**
+ * Says what the pipeline took out of the hangs for the recorder that the Allocations
+ * instrument loads into the app. Null when no hang changed.
+ */
+function recorderNote(adjustment: RecorderAdjustment | undefined): string | null {
+  if (!adjustment) return null;
+  const { removedHangs, adjustedHangs, recorderMs } = adjustment;
+  if (removedHangs === 0 && adjustedHangs === 0) return null;
+  const changes = hangChanges(
+    removedHangs,
+    "that had under 250 ms of the app's own time without the recorder (xctrace reports no " +
+      "shorter hang)",
+    adjustedHangs,
+    "the recorder's time"
+  );
+  return (
+    `> ℹ️ **Instruments' recorder:** The recorder that Instruments loads into the app to track ` +
+    `allocations ran on the main thread for ${recorderMs} ms in the hangs. argent ` +
+    `${changes}. The recorder stays in the app until the app quits: to see the ` +
+    `hangs without it, start the app again and record the same actions with ` +
+    `\`template_path: "Time Profiler"\`.`
+  );
 }
 
 interface LeakCheckTiming {
@@ -1045,6 +1086,7 @@ export async function analyzeNativeProfilerIos(
     toolingCpuMs,
     totalCpuMs,
     suspensionAdjustment,
+    recorderAdjustment,
   } = await runIosProfilerPipeline(api.exportedFiles, {
     cpuFilterPid: api.cpuFilterPid,
     appSuspensions,
@@ -1149,6 +1191,7 @@ export async function analyzeNativeProfilerIos(
           ? `> ⚠️ **Hangs and the leak check:** ${LEAK_CHECK_HANG_NOTE}`
           : null,
         suspensionAdjustment ? suspensionNote(suspensionAdjustment, leaksRecorded) : null,
+        recorderNote(recorderAdjustment),
         shortLeakNote ? `> ⚠️ **Memory leaks:** ${shortLeakNote}` : null,
       ]
         .filter(Boolean)
@@ -1202,8 +1245,9 @@ function toolingNote(
   }
   if (parts.length === 0) return undefined;
   return (
-    `Of the CPU samples, ${parts.join(", and ")}. They are left out of the CPU hotspots. A hang ` +
-    `whose suspects are marked "argent's own library" or "Instruments' own library" was caused ` +
-    `by that tool, not the app.`
+    `Of the CPU samples, ${parts.join(", and ")}. They are left out of the CPU hotspots.` +
+    (toolingMs.argent > 0
+      ? ` A hang whose suspects are marked "argent's own library" was caused by argent, not the app.`
+      : ``)
   );
 }
