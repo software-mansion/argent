@@ -25,10 +25,21 @@ import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 import { isLiveService } from "../network/network-capture";
+import type { NetworkEvent } from "../../blueprints/macos-app";
+import { macosAppServices } from "../../utils/macos-input";
+import { requireMacosAppOfBundle } from "./macos-view-hierarchy";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Device ID from list-devices: an iOS simulator UDID or Android serial"),
-  bundleId: z.string().describe("App bundle ID on iOS or package name on Android"),
+  udid: z
+    .string()
+    .describe(
+      "Device ID from list-devices: an iOS simulator UDID or Android serial<flag:macos-apps>, or a Mac app id (macos-app-<bundle id>)</flag:macos-apps>"
+    ),
+  bundleId: z
+    .string()
+    .describe(
+      "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
+    ),
   port: metroPortField.describe(
     "The app's Metro port, whose requests are left out of the listing. Omit it to use this device's port, 8081 by default."
   ),
@@ -81,7 +92,10 @@ interface NativeListing {
   requests: NativeRequestLine[];
 }
 
-type Result = NativeDevtoolsPrecheckBlock | NativeListing;
+type Result =
+  | NativeDevtoolsPrecheckBlock
+  | NativeListing
+  | { status: "ok"; count: number; events: NetworkEvent[] };
 
 /** Only reads which services are live: a read never creates one. */
 type InspectorRegistry = Pick<Registry, "getSnapshot">;
@@ -101,21 +115,24 @@ export function createNativeNetworkLogsTool(
       apple: { simulator: true },
       appleRemote: { simulator: true },
       android: { emulator: true, device: true },
+      macos: { app: true },
     },
     description: `Retrieve network requests captured at the native level: NSURLProtocol on iOS, OkHttp on Android.
 Use when inspecting native-level HTTP traffic that view-network-logs cannot see: requests that never pass through JS XMLHttpRequest or fetch.
 On iOS it sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing.
 Returns { status, header, armed, count, total, requests }: one line per request, oldest first, with its id (ios-3f9a-12, android-3f9a-12), method, URL, state (pending, headers, complete or failed), status, mimeType, durationMs and errorText. The header says whether capture is armed, how many requests there are and the app's pid once read, and why capture is not armed when it is not. Requests to Metro on \`port\` are left out. Pass a request's id to view-network-request-details for its headers and bodies, and on Android its redirects. The history is kept across relaunches of the app, except on a device whose devtools agent argent attached to.
-This tool only reads and never starts capture: call network-capture-start for the app first, then repeat the action whose requests you need. Before a start it returns started: false and a header that says capture is not started; after network-capture-stop it returns stopped: true and still lists what was captured.
+On iOS and Android this tool only reads and never starts capture: call network-capture-start for the app first, then repeat the action whose requests you need. Before a start it returns started: false and a header that says capture is not started; after network-capture-stop it returns stopped: true and still lists what was captured.
 On iOS: when capture started while the app was already running, the header of the first answer says that the app's launch was not recorded; to capture the launch, restart-app and call again, unless the header says the launch cannot be recorded on that device. On a local simulator, launch-app and restart-app return networkCapture saying whether capture is armed in the new process.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+<flag:macos-apps>On a Mac app it returns { status, count, events }: NSURLSession events, react-native-macos fetch included. There the first call starts capture, with no network-capture-start, and capture stays on across restart-app, with a new log per process.
+</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
-On Android: needs a debuggable build, and native-devtools-status does not run there. A header that says not attached means the app's current process started without launch-app or restart-app and runs without capture: restart-app or network-capture-start attaches it.
+On Android: needs a debuggable build. A header that says not attached means the app's current process started without launch-app or restart-app and runs without capture: restart-app or network-capture-start attaches it.
 Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
 Android results also carry capture and captureDetail. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing.`,
     zodSchema,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
+      if (device.platform === "macos") return macosAppServices(device);
       // A read never starts capture, so it names only a service that already runs.
       const live = (urn: string): boolean => isLiveService(registry, urn);
       if (device.platform === "android") {
@@ -128,6 +145,19 @@ Android results also carry capture and captureDetail. When capture is active, ca
     },
     async execute(services, params) {
       const device = resolveDevice(params.udid);
+      if (device.platform === "macos") {
+        // A Mac app keeps capture on from its first read: it has no start or stop.
+        const app = requireMacosAppOfBundle(
+          services,
+          device,
+          "native-network-logs",
+          params.bundleId
+        );
+        await app.activateNetworkInspection();
+        const events = params.limit === 0 ? [] : app.networkLog().slice(-params.limit);
+        if (params.clear) app.clearNetworkLog();
+        return { status: "ok", count: events.length, events };
+      }
       const port = metroPort({ device_id: params.udid, port: params.port });
 
       if (device.platform === "android") {

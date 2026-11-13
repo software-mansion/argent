@@ -16,6 +16,10 @@ export type LaunchAppResult =
   | {
       launched: boolean;
       bundleId: string;
+      /** Mac apps: the `.app` that runs. */
+      appPath?: string;
+      /** Mac apps: the arguments the app runs with. */
+      args?: string[];
       note?: string;
       /** Once network-capture-start started native network capture for the app: whether it followed the app into this process, or that it is stopped. */
       networkCapture?: string;

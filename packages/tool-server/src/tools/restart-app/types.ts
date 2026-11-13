@@ -16,6 +16,12 @@ export type RestartAppResult =
   | {
       restarted: boolean;
       bundleId: string;
+      /** Mac apps: the `.app` the new process was started from. */
+      appPath?: string;
+      /** Mac apps: the arguments the new process was started with. */
+      args?: string[];
+      /** Mac apps: argent quit a copy that ran without its library, or the new process showed no window in time. */
+      note?: string;
       /** Once network-capture-start started native network capture for the app: whether it followed the app into the new process, or that it is stopped. */
       networkCapture?: string;
     }

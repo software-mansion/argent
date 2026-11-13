@@ -1,6 +1,6 @@
 ---
 name: argent-qa-e2e
-description: Write repeatable QA regression e2e tests from test cases, tickets, or acceptance criteria. Use when the user asks to write, automate, or generate an e2e test or preserve an automated regression scenario, with deterministic setup, stable targets, executable structural or visual evidence, and two consecutive full passes. For one-off UI checks or replayable paths without acceptance criteria, use argent-test-ui-flow or argent-create-e2e. Supports iOS, Android, Chromium, and Vega (Fire TV), where recorded tv-remote steps replace touch directives. Apple TV and Android TV are unsupported; use argent-tv-interact there and report the limitation.
+description: Write repeatable QA regression e2e tests from test cases, tickets, or acceptance criteria. Use when the user asks to write, automate, or generate an e2e test or preserve an automated regression scenario, with deterministic setup, stable targets, executable structural or visual evidence, and two consecutive full passes. For one-off UI checks or replayable paths without acceptance criteria, use argent-test-ui-flow or argent-create-e2e. Supports iOS, Android, Chromium, Mac apps, and Vega (Fire TV), where recorded tv-remote steps replace touch directives. Apple TV and Android TV are unsupported; use argent-tv-interact there and report the limitation.
 ---
 
 # Create a QA regression e2e test

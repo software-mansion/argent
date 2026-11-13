@@ -30,6 +30,11 @@ Returns found: false if the component is not found in user-owned code (e.g. live
 When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col). Check it before assuming the returned file is the one you meant.`,
   zodSchema,
   readOnly: true,
+  // react-profiler-analyze runs the same AST lookup for each component in its
+  // table (file, line and other matches) and adds the source of the located ones
+  // among the top five; agents read any other file themselves. The SDK still
+  // calls it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: ({ params }) => `Finding source for ${params.component_name}`,
     completedMsg: ({ params, result }) =>

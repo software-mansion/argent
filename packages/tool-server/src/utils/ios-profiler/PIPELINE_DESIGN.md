@@ -21,7 +21,7 @@ Living document tracking the reasoning behind pipeline architecture decisions.
 
 ### XML parser: id/ref deduplication
 
-xctrace XML uses an id/ref scheme for deduplication — a `<backtrace id="42">` element defines a backtrace once, then later rows reference it with `<backtrace ref="42"/>`. Same for `<binary>`, `<frame>`, and hang field values. The parser maintains registries for each element type and resolves refs on the fly. Without this, most rows would have empty fields since xctrace only emits the full definition once.
+xctrace XML uses an id/ref scheme for deduplication — a `<backtrace id="42">` element defines a backtrace once, then later rows reference it with `<backtrace ref="42"/>`. Same for `<binary>`, `<frame>`, and hang field values. Xcode 26 and later wrap each sample's stack in a `<tagged-backtrace>`, which 26.x fills with a `<backtrace>` and 27 fills with the frames themselves; later rows then reference the `<tagged-backtrace>`. The parser maintains registries for each element type and resolves refs on the fly. Without this, most rows would have empty fields since xctrace only emits the full definition once.
 
 ### Regex-based XML extraction
 

@@ -49,6 +49,104 @@ describe("buildAstIndexWithDiagnostics", () => {
     expect(res.index.get("Baz")?.line).toBe(5);
   });
 
+  it("indexes a file over the parser's default 32 KB buffer, non-ASCII text included", async () => {
+    const dir = makeTempDir("ast-index-big-");
+    writeFileSync(
+      join(dir, "Screen.tsx"),
+      "// żółć 日本語 🚀 filler line for size\n".repeat(1200) +
+        "export function BigScreen() { return <View />; }\n"
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.get("BigScreen")?.line).toBe(1201);
+  });
+
+  it("leaves test files and mocks out: a mock named View is not the app's View", async () => {
+    const dir = makeTempDir("ast-index-tests-");
+    mkdirSync(join(dir, "__mocks__"), { recursive: true });
+    mkdirSync(join(dir, "__tests__"), { recursive: true });
+    const mock = (name: string) => `export function ${name}() { return <Text />; }\n`;
+    writeFileSync(join(dir, "feed.test.tsx"), mock("InTestFile"));
+    writeFileSync(join(dir, "feed.spec.tsx"), mock("InSpecFile"));
+    writeFileSync(join(dir, "__mocks__", "native.tsx"), mock("InMocks"));
+    writeFileSync(join(dir, "__tests__", "helper.tsx"), mock("InTests"));
+    writeFileSync(join(dir, "Latest.tsx"), mock("RealScreen"));
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect([...res.index.keys()]).toEqual(["RealScreen"]);
+  });
+
+  it("leaves out a file too large to be a screen someone wrote", async () => {
+    const dir = makeTempDir("ast-index-huge-");
+    writeFileSync(
+      join(dir, "generated.tsx"),
+      `// ${"x".repeat(600_000)}\nfunction NotAScreen() { return <View />; }\n`
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.has("NotAScreen")).toBe(false);
+  });
+
+  it("skips a file too deep to walk instead of losing the whole index", async () => {
+    const dir = makeTempDir("ast-index-deep-");
+    writeFileSync(join(dir, "generated.js"), `export const n = ${"1+".repeat(16_000)}1;\n`);
+    writeFileSync(join(dir, "Screen.tsx"), "export function Screen() { return <View />; }\n");
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.has("Screen")).toBe(true);
+  });
+
+  it("leaves large plain .ts files out: they hold data, and walking them is slow", async () => {
+    const dir = makeTempDir("ast-index-big-ts-");
+    writeFileSync(
+      join(dir, "messages.ts"),
+      `export const messages = ${JSON.stringify("x".repeat(40_000))};\n` +
+        "export function NotAScreen() { return null; }\n"
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.has("NotAScreen")).toBe(false);
+  });
+
+  it("leaves a .js file over 32 KB out: it may be a minified bundle, whose names are not components", async () => {
+    // Minified code names its functions E, A, T, G. Indexed, those names made a
+    // library's `G` the app's own, and its 50-line snippet 144 KB of one file.
+    const dir = makeTempDir("ast-index-minified-");
+    const minified = `var x=${JSON.stringify("x".repeat(40_000))};function G(){return x}function E(){return G}\n`;
+    writeFileSync(join(dir, "bundle.js"), minified);
+    writeFileSync(join(dir, "Screen.jsx"), minified.replace("function G", "function BigJsx"));
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect([...res.index.keys()].sort()).toEqual(["BigJsx", "E"]);
+    expect(res.index.get("E")?.file).toBe(join(dir, "Screen.jsx"));
+  });
+
+  it("indexes every component of a .js file with JSX, not just those before the first tag", async () => {
+    // Expo's App.js: with the TypeScript grammar the parse broke at the first JSX
+    // tag, so only components declared above it were indexed.
+    const dir = makeTempDir("ast-index-js-");
+    writeFileSync(
+      join(dir, "App.js"),
+      [
+        `function Row({ now }) { return <Text>{now}</Text>; }`,
+        `function Header({ now }) { return <Text>{now}</Text>; }`,
+        `const Screen = () => <View><Header now={1} /><Row now={1} /></View>;`,
+        `export default function App() { return <Screen />; }`,
+        ``,
+      ].join("\n")
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect([...res.index.keys()].sort()).toEqual(["App", "Header", "Row", "Screen"]);
+  });
+
   it("indexes memo()/forwardRef()/React.memo()/nested-wrapped components", async () => {
     // Regression: wrapped components are declared `const X = memo(...)`, whose
     // value node is a call_expression (not arrow/function), so they were missed
