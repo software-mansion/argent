@@ -12,7 +12,7 @@ import { EventEmitter } from "events";
 import * as os from "node:os";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal, type DeviceInfo } from "@argent/registry";
 
 class FakeXctrace extends EventEmitter {
   pid = 5151;
@@ -81,6 +81,7 @@ import { InvalidToolInputError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import { getDebugDir } from "../src/utils/react-profiler/debug/dump";
 import { listenForDarwinNotification, type NotifyHandle } from "../src/utils/ios-profiler/notify";
+import { waitForXctraceReady } from "../src/utils/ios-profiler/startup";
 import {
   getTrackedMacosApp,
   inBackgroundSession,
@@ -104,6 +105,7 @@ const spawnMock = vi.mocked(spawn);
 const runningMock = vi.mocked(runningTrackedApp);
 const trackedMock = vi.mocked(getTrackedMacosApp);
 const signatureMock = vi.mocked(readCodeSignature);
+const readyMock = vi.mocked(waitForXctraceReady);
 
 const TEMPLATE = "/tmp/Custom.tracetemplate";
 
@@ -479,6 +481,79 @@ describe("startNativeProfilerMacos with malloc_stack_logging", () => {
     });
     expect(restarted.warning).toBeUndefined();
     expect(spawnMock.mock.lastCall![1]).toContain("8888");
+  });
+
+  it("says that it restarted the app when xctrace then fails to start", async () => {
+    const api = await session();
+    const { app, launch } = fakeMacosApp(7777);
+    runningMock.mockResolvedValue(trackedApp(4321));
+    readyMock.mockRejectedValueOnce(
+      new FailureError(
+        "xctrace record exited before recording started (code=33, signal=null). " +
+          "stderr: Cannot find template matching name: /nonexistent/x",
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_EXITED,
+          failure_stage: "native_profiler_xctrace_ready",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        }
+      )
+    );
+
+    const err = await start(api, app, {
+      device_id: deviceId,
+      template_path: "/nonexistent/x.tracetemplate",
+      malloc_stack_logging: true,
+    }).catch((e: unknown) => e);
+
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_EXITED
+    );
+    // xctrace's error first, then that the app lost its state and now logs.
+    const message = (err as Error).message;
+    expect(message).toMatch(/^xctrace record exited before recording started .*\/nonexistent\/x /);
+    expect(message).toContain(
+      `argent restarted ${bundleId} (pid 7777) with MallocStackLogging=1, so its earlier state is gone.`
+    );
+    expect(message).toContain("restart-app");
+  });
+
+  it("says that it restarted the app when xctrace quits during the wait after the start", async () => {
+    const api = await session();
+    const { app } = fakeMacosApp(7777);
+    runningMock.mockResolvedValue(trackedApp(4321));
+
+    const pending = startNativeProfilerMacos(api, app, {
+      device_id: deviceId,
+      template_path: TEMPLATE,
+      malloc_stack_logging: true,
+    });
+    pending.catch(() => {});
+    await vi.advanceTimersByTimeAsync(500);
+    (api.captureProcess as unknown as FakeXctrace).exitWith(null, 3);
+    await vi.advanceTimersByTimeAsync(ARM_SETTLE_MS);
+    const err = await pending.catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_EXITED
+    );
+    expect((err as Error).message).toContain("xctrace quit right after the recording started");
+    expect((err as Error).message).toContain(`argent restarted ${bundleId} (pid 7777)`);
+  });
+
+  it("a plain start that fails says nothing about a restart", async () => {
+    const api = await session();
+    const { app } = fakeMacosApp(7777);
+    runningMock.mockResolvedValue(trackedApp(4321));
+    readyMock.mockRejectedValueOnce(new Error("xctrace record exited before recording started"));
+
+    const err = await start(api, app, {
+      device_id: deviceId,
+      template_path: TEMPLATE,
+    }).catch((e: unknown) => e);
+
+    expect((err as Error).message).toBe("xctrace record exited before recording started");
   });
 
   it("does not warn about another app's malloc stack logging", async () => {

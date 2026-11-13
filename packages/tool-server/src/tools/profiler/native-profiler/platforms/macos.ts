@@ -112,6 +112,8 @@ export async function startNativeProfilerMacos(
 
   let pid: number;
   let stillLogs = false;
+  // Set once argent restarted the app: a start that fails after that says so too.
+  let restartNote: string | undefined;
   const notes: string[] = [];
   if (useMallocStackLogging) {
     // Before the restart, which loses the app's state.
@@ -123,7 +125,7 @@ export async function startNativeProfilerMacos(
     const launched = await macosApp.launch({ restart: true, env: { MallocStackLogging: "1" } });
     pid = launched.pid;
     mallocStackLoggingPids.set(bundleId, pid);
-    const restartNote =
+    restartNote =
       `argent restarted ${bundleId} (pid ${pid}) with MallocStackLogging=1, so its earlier ` +
       `state is gone. It keeps running with malloc stack logging, which slows it down, until ` +
       `restart-app starts it again without.`;
@@ -193,6 +195,9 @@ export async function startNativeProfilerMacos(
     api.suspensionWatch = suspensionWatch;
     recording = true;
     return notes.length > 0 ? { ...result, warning: notes.join(" ") } : result;
+  } catch (err) {
+    if (restartNote && err instanceof Error) err.message = `${err.message} ${restartNote}`;
+    throw err;
   } finally {
     if (!recording) suspensionWatch?.end();
   }
