@@ -588,6 +588,8 @@ On an iOS simulator and on a Mac app, these rules apply while `native-profiler-s
 - `native-profiler-start` and `native-profiler-analyze` wait until the stop has ended.
 - `profiler-load` and `profiler-combined-report` refuse to run until the stop has ended.
 
+On an iOS simulator and on a Mac app, `native-profiler-stop` also writes the file `native-profiler-<session_id>.trace.metadata.json`. This file holds the start time of the recording and other data that the exports do not hold. An example is the times when macOS suspended a Mac app. `profiler-load` with `mode: "load_native"` reads this file. Thus a loaded session gives the same report as the live session, and `profiler-combined-report` works after a load. When the recording is older than 30 minutes, the report also starts with a note that the trace is old. A session that an older version of Argent stored does not have this file. For such a session, `profiler-combined-report` cannot align the two profiles. Also, `native-profiler-analyze` does not write over the report file of the live session.
+
 In a report from Instruments, `native-profiler-analyze` gives the CPU time that Argent and Instruments used inside the app during the recording, and the share of all CPU time:
 
 - Argent: the code that Argent runs inside the app, for example for `describe` and taps on a Mac app.

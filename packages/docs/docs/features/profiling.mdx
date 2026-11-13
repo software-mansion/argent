@@ -72,7 +72,7 @@ After the report, the agent can query the stored data without a new recording.
 | CPU           | The top functions, the CPU in a time window, the call tree of a function, or the CPU of a component |
 | Native stacks | The stacks during a hang, the callers of a function, the CPU of each thread, or the leaked objects  |
 
-Argent writes each session to disk in a directory with the name `argent-profiler-cwd` in the temporary directory of the system. The agent can load a session from disk later and query it again. Thus you can compare the profile before and after a change.
+Argent writes each session to disk in a directory with the name `argent-profiler-cwd` in the temporary directory of the system. The agent can load a session from disk later and query it again. A loaded session gives the same reports as before the load. This includes the combined report. When the recording is older than 30 minutes, a native report also starts with a note that the trace is old. Thus you can compare the profile before and after a change.
 
 ## Example instructions
 

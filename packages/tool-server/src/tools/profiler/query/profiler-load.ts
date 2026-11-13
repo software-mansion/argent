@@ -19,8 +19,10 @@ import { resolveDevice } from "../../../utils/device-info";
 import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
+import { leaksWereRecorded } from "../native-profiler/platforms/ios";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
+import { readXctraceSessionMetadata } from "../../../utils/ios-profiler/session-metadata";
 import {
   isCaptureInFlight,
   inFlightGuardMessage,
@@ -290,17 +292,14 @@ async function loadReactSession(
   return lines.join("\n");
 }
 
-async function loadNativeSession(
-  debugDir: string,
-  sessionId: string,
-  api: NativeProfilerSessionApi,
-  appProcessOverride?: string
-): Promise<string> {
-  assertSafeSessionId(sessionId);
-  // Loading overwrites the session's capture state (traceFile, exportedFiles,
-  // parsedData, …), which strands a live or unrecovered capture: stop's export
-  // needs traceFile, and only the raw_*.xml that export writes can be loaded
-  // back — the .trace bundle cannot.
+/**
+ * Loading overwrites the session's capture state (traceFile, exportedFiles,
+ * parsedData, …), which strands a live or unrecovered capture: stop's export
+ * needs traceFile, and only the raw_*.xml that export writes can be loaded back
+ * (the .trace bundle cannot). A load checks before it reads and again before it
+ * writes: a native-profiler-start can begin while it reads.
+ */
+function assertNoCaptureInFlight(api: NativeProfilerSessionApi): void {
   if (isCaptureInFlight(api)) {
     throw new FailureError(inFlightGuardMessage(api, "retry profiler-load"), {
       error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
@@ -309,6 +308,16 @@ async function loadNativeSession(
       error_kind: "validation",
     });
   }
+}
+
+async function loadNativeSession(
+  debugDir: string,
+  sessionId: string,
+  api: NativeProfilerSessionApi,
+  appProcessOverride?: string
+): Promise<string> {
+  assertSafeSessionId(sessionId);
+  assertNoCaptureInFlight(api);
   if (api.platform === "android") {
     const pftrace = path.join(debugDir, `native-profiler-${sessionId}.pftrace`);
     try {
@@ -339,6 +348,7 @@ async function loadNativeSession(
         }
       );
     }
+    assertNoCaptureInFlight(api);
     api.traceFile = pftrace;
     api.exportedFiles = { pftrace };
     api.appProcess = appProcess;
@@ -401,34 +411,47 @@ async function loadNativeSession(
     );
   }
 
-  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
+  const traceFile = path.join(debugDir, `native-profiler-${sessionId}.trace`);
+  // The raw_*.xml carry none of the capture's own fields. The stop saved them next
+  // to the trace; a session saved before that has none, and its fields stay empty.
+  const metadata = await readXctraceSessionMetadata(traceFile);
+  const cpuFilterPid = metadata?.cpuFilterPid ?? null;
+  const appSuspensions = metadata?.appSuspensions ?? null;
+  const mallocStackLogging = metadata?.mallocStackLogging ?? null;
+  const wallClockStartMs = metadata?.wallClockStartMs ?? null;
+  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files, {
+    cpuFilterPid,
+    appSuspensions,
+  });
+  // The rule of the live analyze, so a load reports the leaks as it did.
+  const leaksRecorded = await leaksWereRecorded(api.platform, files.leaks, memoryLeaks);
 
-  // raw_*.xml carry no start time, so the frozen anchor is null and the combined
-  // report reports a missing native anchor rather than mis-anchoring to residue.
+  assertNoCaptureInFlight(api);
+  // Without a saved start time the frozen anchor is null, and the combined report
+  // reports a missing native anchor rather than mis-anchoring to residue.
   api.parsedData = {
     cpuSamples,
     uiHangs,
     cpuHotspots,
     memoryLeaks,
-    // Stop writes no raw_leaks.xml when the trace had no Leaks table.
-    leaksRecorded: files.leaks != null,
-    mallocStackLogging: null,
-    wallClockStartMs: null,
+    leaksRecorded,
+    mallocStackLogging,
+    wallClockStartMs,
   };
   api.exportedFiles = files;
-  // Clear every per-capture field an earlier live capture left behind, or analyze
+  // Replace every per-capture field an earlier live capture left behind, or analyze
   // attributes them to the loaded trace: mislabeled capture mode, samples dropped
   // by a stale CPU filter PID, and a stale-trace note. The trace is this session's
-  // own, so the report names it. With no start time, analyze writes no report .md:
-  // it would replace the live report with one that lacks the capture's fields.
-  api.mallocStackLogging = null;
-  api.cpuFilterPid = null;
-  api.appEndedDuringCapture = false;
+  // own, so the report names it. Without the saved start time, analyze writes no
+  // report .md: it would replace the live report with one that lacks those fields.
+  api.mallocStackLogging = mallocStackLogging;
+  api.cpuFilterPid = cpuFilterPid;
+  api.appEndedDuringCapture = metadata?.appEndedDuringCapture ?? false;
   api.exportSkipReason = null;
-  api.recordedMs = null;
-  api.appSuspensions = null;
-  api.wallClockStartMs = null;
-  api.traceFile = path.join(debugDir, `native-profiler-${sessionId}.trace`);
+  api.recordedMs = metadata?.recordedMs ?? null;
+  api.appSuspensions = appSuspensions;
+  api.wallClockStartMs = wallClockStartMs;
+  api.traceFile = traceFile;
 
   const lines: string[] = [
     `Loaded native profiler session \`${sessionId}\`.`,
@@ -436,7 +459,7 @@ async function loadNativeSession(
     `- CPU samples: ${cpuSamples.length}`,
     `- UI hangs: ${uiHangs.length}`,
     `- CPU hotspots: ${cpuHotspots.length}`,
-    `- Memory leaks: ${files.leaks ? memoryLeaks.length : "not recorded"}`,
+    `- Memory leaks: ${leaksRecorded ? memoryLeaks.length : "not recorded"}`,
     "",
     "Query tools (`profiler-stack-query`) are now ready to use against this data.",
   ];

@@ -107,11 +107,12 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    - `<base>_raw_cpu.xml` — `time-profile` table
    - `<base>_raw_hangs.xml` — `potential-hangs` table
    - `<base>_raw_leaks.xml` — `Leaks` track detail
-4. Returns `{ traceFile, exportedFiles, exportDiagnostics }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data.
+4. `<base>.trace.metadata.json` lands next to them: the capture's own fields, which a load from disk restores.
+5. Returns `{ traceFile, exportedFiles, exportDiagnostics }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data.
 
 ### `native-profiler-analyze`
 
-Runs the post-processing pipeline, caches the parsed data on the session (so `profiler-stack-query` can reuse it), and renders the markdown report. Returns `{ report, reportFile, bottlenecksTotal }`. The full report is also written to `<base>-report.md` so the agent can re-read it later without re-analysing.
+Runs the post-processing pipeline, caches the parsed data on the session (so `profiler-stack-query` can reuse it), and renders the markdown report. Returns `{ report, reportFile, bottlenecksTotal }`. The full report is also written to `<base>-report.md` so the agent can re-read it later without re-analysing. A session loaded from disk without its `<trace>.metadata.json` gets no report file, so the live report stays: `reportFile` is null.
 
 ---
 
@@ -175,7 +176,7 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 6. **Suggested Improvements** — a one-liner per finding with a templated remediation hint.
 7. **Next Steps** — concrete `profiler-stack-query` invocations the agent can chain into.
 
-The inline report is capped (top 5 hotspots, top 3 hangs); the full report is always written to `<trace>-report.md` for re-read.
+The inline report is capped (top 5 hotspots, top 3 hangs); the full report is written to `<trace>-report.md` for re-read (not for a session loaded without its metadata file).
 
 With no findings, the report is a short all clear instead. Without leak data it keeps the header warning and says only that no CPU hotspots or UI hangs were detected.
 
@@ -201,7 +202,7 @@ Top-N is configurable (default 15).
 Lists prior `.trace` directories under the debug dir (`<os.tmpdir()>/argent-profiler-cwd/`, e.g. `/var/folders/.../T/argent-profiler-cwd/` on macOS) and re-parses them on demand:
 
 - `mode=list` — enumerate sessions on disk.
-- `mode=load_native session_id=<ts> device_id=<UDID>` — re-runs the parsing pipeline on the stored XMLs and re-hydrates the session so query tools work again.
+- `mode=load_native session_id=<ts> device_id=<UDID>` — re-runs the parsing pipeline on the stored XMLs and re-hydrates the session so query tools work again. It restores the capture's own fields (start time, CPU filter PID, capture mode, Mac app suspensions) from the `<trace>.metadata.json` that native-profiler-stop writes, so analyze and the combined report match the live session. A load more than 30 minutes after the recording also gets the stale-trace note at the top of the report.
 - (Also supports `mode=load_react` for Hermes profiler sessions; same idea, different files.)
 
 This is what makes before/after comparisons possible without keeping the original capture session alive.

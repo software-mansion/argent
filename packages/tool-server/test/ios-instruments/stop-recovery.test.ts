@@ -1,5 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { EventEmitter } from "events";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import type { ChildProcess } from "child_process";
 import {
   nativeProfilerSessionBlueprint,
@@ -62,7 +65,10 @@ async function buildSession(): Promise<NativeProfilerSessionApi> {
   return instance.api;
 }
 
-const FAKE_TRACE = "/tmp/argent-profiler-cwd/ios-profiler-20260101-000000.trace";
+// In a folder of its own: a recovery stop saves a metadata file next to the trace.
+const TRACE_DIR = mkdtempSync(join(tmpdir(), "argent-ios-stop-recovery-"));
+afterAll(() => rmSync(TRACE_DIR, { recursive: true, force: true }));
+const FAKE_TRACE = join(TRACE_DIR, "ios-profiler-20260101-000000.trace");
 const FAKE_EXPORT_RESULT = {
   files: { cpu: "/tmp/cpu.xml", hangs: "/tmp/hangs.xml", leaks: "/tmp/leaks.xml" },
   diagnostics: { tocSchemas: ["time-profile"], cpuSchemaUsed: "time-profile", errors: {} },

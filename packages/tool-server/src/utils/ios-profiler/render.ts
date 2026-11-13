@@ -59,9 +59,8 @@ interface RenderInput {
   /**
    * Whether the capture cold-launched the app with MallocStackLogging=1
    * (native-profiler-start's malloc_stack_logging flag). Null/undefined when
-   * unknown — a session restored from disk has no capture-mode sidecar — in
-   * which case the unattributed-leaks note infers it from the attributed-leak
-   * count.
+   * unknown (a session saved before the stop saved its metadata file), in which
+   * case the unattributed-leaks note infers it from the attributed-leak count.
    */
   mallocStackLogging?: boolean | null;
   /**
