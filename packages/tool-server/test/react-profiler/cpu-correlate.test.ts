@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildCpuSampleIndex,
+  dropStaleLeadingGap,
   queryCpuWindow,
   serializeCpuSampleIndex,
   deserializeCpuSampleIndex,
@@ -231,5 +232,110 @@ describe("serialized index", () => {
     // `new Float64Array(undefined)` is empty, so an unvalidated read would turn
     // a corrupt file into "this session had no CPU activity", permanently.
     expect(() => deserializeCpuSampleIndex({ version: 2 } as never)).toThrow(/unsupported/i);
+  });
+});
+
+describe("dropStaleLeadingGap", () => {
+  // The shape of a real profile: sample 0 was copied from a suspension Hermes
+  // never stamped, so `startTime` is 0 and the first positive delta is the
+  // device clock (27,942 s), followed by 11 s of real intervals.
+  function staleProfile(staleStampUs: number, leadingStale = 1): HermesCpuProfile {
+    const clockUs = 27_942_660_822;
+    const real = new Array(1100).fill(10_000);
+    const deltas = [...new Array(leadingStale).fill(0), clockUs - staleStampUs, ...real];
+    return {
+      nodes: NODES,
+      samples: deltas.map((_, i) => (i <= leadingStale ? 3 : 2)),
+      timeDeltas: deltas,
+      startTime: staleStampUs,
+      endTime: clockUs + 11_000_000,
+    } as unknown as HermesCpuProfile;
+  }
+
+  it("leaves a normal profile untouched", () => {
+    const profile = uniformWorkProfile();
+    const before = JSON.stringify(profile);
+    dropStaleLeadingGap(profile);
+    expect(JSON.stringify(profile)).toBe(before);
+  });
+
+  it("leaves a profile with no samples or one sample untouched", () => {
+    // The last one is not a shape Hermes produces: its first delta is always 0.
+    // Its only delta spans the recording, and is still not taken for a jump.
+    for (const deltas of [[], [0], [5_000_000]]) {
+      const profile = makeProfile(
+        deltas,
+        deltas.map(() => 2)
+      );
+      const before = JSON.stringify(profile);
+      dropStaleLeadingGap(profile);
+      expect(JSON.stringify(profile)).toBe(before);
+    }
+  });
+
+  it("starts the recording at the first real sample when the first one has no stamp", () => {
+    const profile = staleProfile(0);
+    dropStaleLeadingGap(profile);
+    expect((profile.endTime - profile.startTime) / 1e6).toBe(11);
+    expect(profile.startTime).toBe(27_942_660_822);
+    expect(profile.timeDeltas.slice(0, 3)).toEqual([0, 0, 10_000]);
+    expect(profile.timeDeltas).toHaveLength(1102);
+  });
+
+  it("does the same for a stamp left over from an earlier recording", () => {
+    // Hermes keeps the last suspension's stamp across recordings, so the stale
+    // value need not be 0: here it is 95 s before the first real sample.
+    const profile = staleProfile(27_942_660_822 - 95_000_000);
+    dropStaleLeadingGap(profile);
+    expect((profile.endTime - profile.startTime) / 1e6).toBe(11);
+  });
+
+  it("finds the gap behind several stale samples", () => {
+    const profile = staleProfile(0, 3);
+    dropStaleLeadingGap(profile);
+    expect((profile.endTime - profile.startTime) / 1e6).toBe(11);
+    expect(profile.timeDeltas.slice(0, 5)).toEqual([0, 0, 0, 0, 10_000]);
+  });
+
+  it("keeps the first interval of a very short recording, however much of it that is", () => {
+    for (const deltas of [
+      [0, 20_000],
+      [0, 20_000, 15_000],
+      [0, 999_999, 10_000],
+    ]) {
+      const profile = makeProfile(deltas, new Array(deltas.length).fill(2));
+      const before = JSON.stringify(profile);
+      dropStaleLeadingGap(profile);
+      expect(JSON.stringify(profile), JSON.stringify(deltas)).toBe(before);
+    }
+  });
+
+  it("repairs a jump of exactly 1 s", () => {
+    const profile = makeProfile([0, 1_000_000, 10_000], [2, 2, 2]);
+    dropStaleLeadingGap(profile);
+    expect(profile.timeDeltas).toEqual([0, 0, 10_000]);
+    expect(profile.endTime - profile.startTime).toBe(10_000);
+  });
+
+  it("keeps a long first interval that is still shorter than the rest", () => {
+    // A stall right after start is real time: 4 s, then 5 s of samples.
+    const profile = makeProfile(
+      [0, 4_000_000, ...new Array(500).fill(10_000)],
+      new Array(502).fill(2)
+    );
+    dropStaleLeadingGap(profile);
+    expect((profile.endTime - profile.startTime) / 1e6).toBe(9);
+  });
+
+  it("puts samples back on the commit clock, so a window finds its function", () => {
+    // Before the repair every sample sat 27,942 s after the start, and the
+    // first real sample's interval covered all of it.
+    const profile = staleProfile(0);
+    dropStaleLeadingGap(profile);
+    const index = buildCpuSampleIndex(profile);
+    expect(index.durationMs).toBe(11_000);
+    const result = queryCpuWindow(index, 5000, 5100);
+    expect(selfOf(result.hotspots, "work")).toBeCloseTo(100, 5);
+    expect(selfOf(result.hotspots, "other")).toBeUndefined();
   });
 });

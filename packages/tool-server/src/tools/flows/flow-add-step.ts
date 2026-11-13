@@ -64,15 +64,30 @@ import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke"
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { electronLaunchSpec } from "../devices/boot-electron";
+import { assertSupported, isFlagOffered } from "../../utils/capability";
+import { renderFlagGated } from "../../utils/flag-gated-text";
+import {
+  MACOS_DESCRIBE_LIMITS,
+  MACOS_JUDGING_LIMITS,
+  MACOS_LOCKED_HINT,
+} from "../describe/platforms/macos";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
-import type { DescribeSource } from "../describe/contract";
+import {
+  getDescribeTapPoint,
+  type DescribeFrame,
+  type DescribeNode,
+  type DescribeSource,
+  type DescribeTreeData,
+} from "../describe/contract";
 import {
   nodeAtPoint,
   deriveSelector,
   selectorToFrame,
   frameContains,
+  frameWithin,
+  isVisible,
   type Selector,
   type TextMatchMode,
   type WaitCondition,
@@ -81,10 +96,13 @@ import {
 // Replay gates on the platform's full-hierarchy source (`treeSourceGate` in
 // flow-run.ts) and refuses to degrade to the fallback tree, so a selector
 // derived from the fallback deserves a caveat even when it derives cleanly.
-// Chromium/Vega have a single source — no caveat.
+// Chromium/Vega have a single source — no caveat. A Mac app reads a different
+// tree ("macos-fallback") mostly while the Mac is locked, so a step recorded on
+// a locked Mac gets a caveat that says so.
 const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
   ios: "native-devtools",
   android: "android-devtools",
+  macos: "macos-devtools",
 };
 
 /**
@@ -101,11 +119,17 @@ function recordedLaunchedApp(session: RecordingSession, platform: string): strin
   return undefined;
 }
 
-function fallbackSourceWarning(source: DescribeSource, platform: string): string | undefined {
+function fallbackSourceWarning(
+  { source, hint }: DescribeTreeData,
+  platform: string
+): string | undefined {
   // Keyed by authoring platform: a remote simulator reads the same iOS full
   // hierarchy a local one does, so it earns the same caveat.
   const expected = REPLAY_TREE_SOURCES[authoringPlatform(platform)];
   if (!expected || source === expected) return undefined;
+  if (platform === "macos" && hint?.includes(MACOS_LOCKED_HINT)) {
+    return `selector captured while the Mac was locked (the ${source} tree, not ${expected}): a replay on an unlocked Mac reads the ${expected} tree, which may not match it`;
+  }
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
 }
 
@@ -125,7 +149,8 @@ function hasRunnerTree(udid: unknown): boolean {
 /**
  * Fallback for a platform the clauses below do not name. Unreachable today: a
  * determinate verdict needs `fetchFlowTree`, which answers only on ios,
- * ios-remote, android, chromium and vega, and the clauses read ios-remote as ios.
+ * ios-remote, android, chromium, vega and macos, and the clauses read ios-remote
+ * as ios.
  */
 const UNSUPPORTED_PLATFORM = {
   divergence: "The recorder and the runner read different projections of the screen.",
@@ -153,8 +178,8 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
 }
 
 /**
- * How to read the tree the runner resolves against — or, on iOS, Android and
- * Chromium, that no read-only tool reports it. `describe` and the native
+ * How to read the tree the runner resolves against — or, on iOS, Android,
+ * Chromium and macOS, that no read-only tool reports it. `describe` and the native
  * readers each show a different projection, so naming one of them would point
  * the author at the wrong tree.
  *
@@ -213,6 +238,29 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
       "so only an `id`/`role` selector can match it"
     );
   }
+  if (platform === "macos") {
+    const settle =
+      "No read-only tool reports the runner's flat list on macOS: `describe` prints the nested " +
+      "tree, with the windows, scroll bars and unlabelled containers the runner drops, and it " +
+      `stops at ${MACOS_DESCRIBE_LIMITS.maxNodes} elements where the runner reads ` +
+      `${MACOS_JUDGING_LIMITS.maxNodes}. Settle it by running the conversion: put the ` +
+      "directive in an e2e test and `e2e-execute` it. ";
+    if (condition === "hidden") {
+      return (
+        settle +
+        "This verdict says that tree still HAS the element, so a switch to an `id`/`role` " +
+        "selector or a `scroll-to` before the check only makes the directive match more surely. " +
+        "Narrow the selector until it matches only what you expect to leave, or gate on " +
+        "something that does leave; or keep the step raw"
+      );
+    }
+    return (
+      settle +
+      "An element without an id, a label, a value, a clickable role or focus is not in the " +
+      "runner's list: retarget at an element that carries one; a password field reaches the " +
+      "runner under the name `[password]`, so only an `id`/`role` selector can match it"
+    );
+  }
   if (platform === "vega") {
     return (
       "`describe` reads the same source the runner does, so re-run the wait rather than " +
@@ -264,6 +312,30 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "5000-node walk limit is not what went wrong. The runner tree keeps only addressable nodes " +
       "(id, label, value, clickable or focused) whose frame the walker did not clamp to zero " +
       "area for being off-viewport, and it redacts a password field's name to `[password]`." +
+      SCREEN_MAY_HAVE_MOVED
+    );
+  }
+  if (platform === "macos") {
+    // Both sides take one read of the same elements; the flow tree then keeps
+    // a subset of the nodes, renamed only for a password. The condition says
+    // which side lost the element, as on Chromium.
+    if (condition === "hidden") {
+      return (
+        `Both read the same elements with the same limits (${MACOS_JUDGING_LIMITS.maxNodes} ` +
+        `elements, ${MACOS_JUDGING_LIMITS.maxItems} items per web view), both refuse an ` +
+        "incomplete read, and the runner's flat list only DROPS nodes from that read. Here it is " +
+        "the RECORDER that never saw the element: the live wait passed on absence, and this " +
+        "verdict says the runner's tree holds it, so nothing the runner tree drops can be the " +
+        "cause. What is left: the runner names a password field `[password]`, so a selector on " +
+        "that name matches only there." +
+        SCREEN_MAY_HAVE_MOVED
+      );
+    }
+    return (
+      "Both read the same elements, and here it is the RUNNER's side to check: the live wait " +
+      "passed, so the recorder's tree did hold a matching element. The runner tree keeps only " +
+      "addressable leaves (id, label, value, a clickable role or focus), never a window, scroll " +
+      "bar or value indicator, and it redacts a password field's name to `[password]`." +
       SCREEN_MAY_HAVE_MOVED
     );
   }
@@ -625,6 +697,44 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
   );
 }
 
+/** Mac controls that act on where in them a click lands. */
+const MACOS_POINT_ROLES: ReadonlySet<string> = new Set(["AXSlider", "AXIncrementor", "AXTextArea"]);
+/**
+ * Mac controls that take a click only at one part of them: a SwiftUI
+ * DisclosureGroup is one element over its chevron and its label, and opens only
+ * at the chevron.
+ */
+const MACOS_PART_ROLES: ReadonlySet<string> = new Set(["AXDisclosureTriangle"]);
+/** Mac text, which takes a click the same anywhere in it. */
+const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading", "AXLink"]);
+
+/** Whether `node` is text in a text area of its own layer: a paragraph or a link of a web editor. */
+function inTextArea(tree: DescribeNode, node: DescribeNode): boolean {
+  if (!MACOS_TEXT_ROLES.has(node.role)) return false;
+  const walk = (n: DescribeNode): boolean =>
+    (n !== node &&
+      n.role === "AXTextArea" &&
+      isVisible(n) &&
+      (n.layer ?? 0) === (node.layer ?? 0) &&
+      frameWithin(node.frame, n.frame)) ||
+    n.children.some(walk);
+  return tree.children.some(walk);
+}
+
+/**
+ * Whether a click is away from the centre of `frame` by more than `tolerance`:
+ * the rounding of describe's 3-decimal frames (0.0015), or of a centre that an
+ * agent rounds to 2 decimals as well (0.006).
+ */
+function awayFromCentre(
+  point: { x: number; y: number },
+  frame: DescribeFrame,
+  tolerance: number
+): boolean {
+  const centre = getDescribeTapPoint(frame);
+  return Math.abs(point.x - centre.x) > tolerance || Math.abs(point.y - centre.y) > tolerance;
+}
+
 /**
  * The reason without the layers wrapped around it: the registry tags a service
  * failure with `[<namespace>:<id>] ` and the tree source prefixes its own
@@ -664,11 +774,12 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source, uiOrientation } = await fetchFlowTree(
+    const data = await fetchFlowTree(
       registry,
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
     );
+    const { tree, uiOrientation } = data;
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(node);
@@ -694,9 +805,30 @@ async function captureTapSelector(
         warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
+    // Replay clicks the centre. On a Mac app, a click anywhere else on a slider,
+    // a stepper, a text view or the text in it, a disclosure group, a canvas,
+    // chart, map or seek bar, or a container's empty space does something else
+    // there. So does a click on any element that is not clickable, text
+    // included, when another element lies at its centre.
+    const pointRole = MACOS_POINT_ROLES.has(node.role) || inTextArea(tree, node);
+    const pointMatters =
+      pointRole ||
+      MACOS_PART_ROLES.has(node.role) ||
+      (!node.clickable && !MACOS_TEXT_ROLES.has(node.role));
+    if (
+      device.platform === "macos" &&
+      // Coordinates on a slider replay the same point, so it keeps them for any click
+      // off its centre; elsewhere a tap at a rounded centre keeps the selector.
+      ((pointMatters && awayFromCentre(point, resolved, pointRole ? 0.0015 : 0.006)) ||
+        (!node.clickable && nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node))
+    ) {
+      return {
+        warning: `the click is away from the centre of ${describeSelector(selector)}, where replay clicks; kept coordinates (brittle)`,
+      };
+    }
     const warnings = [
       roleOnlySelectorWarning(selector),
-      fallbackSourceWarning(source, device.platform),
+      fallbackSourceWarning(data, device.platform),
     ].filter((w) => w !== undefined);
     return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
@@ -820,11 +952,13 @@ export const UNHINTED_DIRECTIVE_KEYS: readonly string[] = [
 
 export function directiveCommandHint(command: string): string | undefined {
   if (command === "swipe") {
-    return (
+    return renderFlagGated(
       `"swipe" is an e2e test directive, not a tool. Record the movement by calling \`gesture-swipe\` ` +
-      `(\`gesture-drag\` on chromium, where gesture-swipe is not supported) through e2e-add-step. ` +
-      `It is stored as the raw \`tool:\` step for whichever one you called; converting it to ` +
-      `\`swipe:\` is part of the polish pass.`
+        `(\`gesture-drag\` on chromium<flag:macos-apps> and macOS</flag:macos-apps>, where ` +
+        `gesture-swipe is not supported) through e2e-add-step. ` +
+        `It is stored as the raw \`tool:\` step for whichever one you called; converting it to ` +
+        `\`swipe:\` is part of the polish pass.`,
+      isFlagOffered
     );
   }
   if (command === "echo") {
@@ -852,12 +986,14 @@ export function directiveCommandHint(command: string): string | undefined {
     );
   }
   if (command === "scroll-to") {
-    return (
+    return renderFlagGated(
       `"scroll-to" is an e2e test directive, not a tool, and no tool records one — it SEARCHES, ` +
-      `scrolling until the target is visible, which no single recorded gesture reproduces. ` +
-      `Record the movement with \`gesture-swipe\` (\`gesture-scroll\` on chromium) if the path ` +
-      `needs it, then add the \`scroll-to:\` step by hand during polish and prove it with the ` +
-      `replay.`
+        `scrolling until the target is visible, which no single recorded gesture reproduces. ` +
+        `Record the movement with \`gesture-swipe\` (\`gesture-scroll\` on chromium` +
+        `<flag:macos-apps> and macOS</flag:macos-apps>) if the path ` +
+        `needs it, then add the \`scroll-to:\` step by hand during polish and prove it with the ` +
+        `replay.`,
+      isFlagOffered
     );
   }
   if (command === "snapshot") {
@@ -1287,6 +1423,24 @@ function replayRefusal(
 }
 
 /**
+ * The args of a recorded `file-panel` stub, with the panel kind the call used.
+ * Without `panelKind` the tool infers the kind from the file system: one path
+ * that does not exist yet is a save panel's file. The answer writes that file,
+ * so a replay would infer an open panel, and the save panel would stay open.
+ */
+function withRecordedPanelKind(
+  command: string,
+  args: Record<string, unknown>,
+  toolResult: unknown
+): Record<string, unknown> {
+  if (command !== "file-panel" || args.action !== "stub" || args.panelKind !== undefined) {
+    return args;
+  }
+  const panelKind = (toolResult as { panelKind?: unknown } | null)?.panelKind;
+  return panelKind === "open" || panelKind === "save" ? { ...args, panelKind } : args;
+}
+
+/**
  * Over a link, the argent client sends with the call the files the one
  * recorded step makes this tool read, as a replay over the same link reads
  * them: the file arguments of the step, the flow a nested `flow-execute` names
@@ -1453,6 +1607,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
+        // Refused as the runner refuses a raw `tool:` step: a sub-invocation
+        // skips the HTTP capability gate.
+        const deviceId = args.udid ?? args.device_id;
+        const device = typeof deviceId === "string" ? resolveDevice(deviceId) : undefined;
+        if (device?.platform === "macos") {
+          assertSupported(params.command, registry.getTool(params.command)?.capability, device);
+        }
         prepared = await prepareToolStepInputs(registry, project, params.command, args);
         const nestedFromClient =
           command === RUN_TARGET_COMMAND && prepared.fileInputs !== undefined;
@@ -1518,8 +1679,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A blocked native-devtools precheck RESOLVES its block instead of
       // throwing, and returns before the tool does any work — so recording the
       // step would write an action the device never took, and the runner scores
-      // that same result a failure at replay (isNativeDevtoolsBlockResult in
-      // flow-run.ts). Refusing here keeps the two verdicts identical.
+      // that same result a failure at replay (toolResultVerdict in
+      // utils/tool-result-verdict.ts). Refusing here keeps the two verdicts identical.
       if (isNativeDevtoolsBlockResult(params.command, toolResult)) {
         throw new FailureError(
           `${params.command} did not run (${toolResult.status}): ${toolResult.message} — nothing was recorded, so the take still matches what is on screen; clear the block and call e2e-add-step again`,
@@ -1568,13 +1729,15 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // iOS device, which records as the `ios: { app, args }` entry beside a
       // `native` id so the flow still replays elsewhere; other extra args (e.g.
       // an Android `activity`) keep the raw tool step. An empty `launchArgs` is
-      // no args. On Chromium the bundleId is a tag and the other args are
-      // ignored, so the step records the relaunched app's path and boot args
-      // instead, and a pinned replay attaches rather than relaunching (see
-      // runChromiumLaunch). Only a leading restart of a standalone recording
-      // maps there: anywhere else a Chromium launch attaches or boots another
-      // instance, so such a restart stays the raw step, which relaunches the
-      // run's instance in place.
+      // no args. On a Mac app the step records the arguments the new process
+      // got, as a `macos: { app, args }` entry: without `launchArgs` the restart
+      // reuses those of the app's last start. On Chromium the bundleId is a tag
+      // and the other args are ignored, so the step records the relaunched app's
+      // path and boot args instead, and a pinned replay attaches rather than
+      // relaunching (see runChromiumLaunch). Only a leading restart of a
+      // standalone recording maps there: anywhere else a Chromium launch attaches
+      // or boots another instance, so such a restart stays the raw step, which
+      // relaunches the run's instance in place.
       // `launch-app` is NOT rewritten — it foregrounds without terminating.
       const strippedArgs = stripDeviceKeys(args);
       const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
@@ -1592,6 +1755,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           ? parseChromiumCdpPort(args.udid as string)
           : null;
       const chromiumSpec = chromiumPort === null ? undefined : electronLaunchSpec(chromiumPort);
+      const isMacos = platformOf(args.udid) === "macos";
+      const macosArgs = isMacos ? (toolResult as { args?: string[] } | null)?.args : undefined;
       const isLaunch =
         command === "restart-app" &&
         params.delayMs === undefined &&
@@ -1600,7 +1765,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           ? chromiumSpec !== undefined &&
             !session.flow.executionPrerequisite &&
             session.flow.steps.every(precedesLeadingLaunch)
-          : Object.keys(extraLaunchArgs).length === 0 && (noLaunchArgs || iosArgs !== undefined));
+          : Object.keys(extraLaunchArgs).length === 0 &&
+            (noLaunchArgs || iosArgs !== undefined || isMacos));
 
       // A recorded `fold` becomes the `fold:` directive, the same posture change
       // the tool made; args the directive does not take keep the raw tool step.
@@ -1617,16 +1783,25 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         isTap && typeof cc === "number" && Number.isInteger(cc) && cc >= 2 && cc <= 10
           ? { times: cc }
           : {};
+      // A right-click must survive it as `button`, or replay would left-click.
+      // Left is the default (absent).
+      const tapButton = isTap && args.button === "right" ? { button: "right" as const } : {};
 
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
-        step = { kind: "tap", selector: captured.selector, ...tapTimes };
+        step = { kind: "tap", selector: captured.selector, ...tapTimes, ...tapButton };
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
         // directive so every tap reads uniformly.
-        step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };
+        step = {
+          kind: "tap",
+          x: args.x as number,
+          y: args.y as number,
+          ...tapTimes,
+          ...tapButton,
+        };
         warning = captured?.warning;
       } else if (isLaunch) {
         const bundleId = strippedArgs.bundleId as string;
@@ -1640,7 +1815,9 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
               }
             : iosArgs
               ? { native: bundleId, ios: { app: bundleId, args: iosArgs } }
-              : bundleId,
+              : macosArgs?.length
+                ? { macos: { app: bundleId, args: macosArgs } }
+                : bundleId,
         };
       } else if (foldStep) {
         step = foldStep;
@@ -1654,7 +1831,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = {
           kind: "tool",
           name: command,
-          args: strippedArgs,
+          args: withRecordedPanelKind(command, strippedArgs, toolResult),
           delayMs: params.delayMs,
         };
       }
