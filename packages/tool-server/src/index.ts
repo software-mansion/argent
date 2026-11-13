@@ -1,6 +1,10 @@
 import * as path from "node:path";
 import { homedir } from "node:os";
-import { getAndroidAdbServerPort, isFlagEnabled } from "@argent/configuration-core";
+import {
+  getAndroidAdbServerPort,
+  isFeatureEnabled,
+  isFlagEnabled,
+} from "@argent/configuration-core";
 import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
 import {
   init as telemetryInit,
@@ -559,7 +563,7 @@ export function getAvailableTools(): Array<{
     const def = registry.getTool(id)!;
     return renderFlagGated(
       { id: def.id, description: def.description, inputSchema: def.inputSchema },
-      isFlagEnabled
+      isFeatureEnabled
     );
   });
 }

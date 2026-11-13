@@ -36,11 +36,12 @@ import {
   getAutoScreenshotDelayMs,
   autoDescribeEnabled,
   shouldAutoDescribe,
-  renderAutoDescribe,
+  AUTO_DESCRIBE_HEADER,
   CAPTURE_TIMEOUT_MS,
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
+import { listDevicesText } from "./list-devices-text.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
@@ -249,15 +250,21 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const t1 = Date.now();
     try {
       const d = await callTool("describe", { udid }, { signal });
-      const block = renderAutoDescribe(d.result);
+      const { description: desc, hint } =
+        (d.result as { description?: unknown; hint?: unknown } | null) ?? {};
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_describe",
         name: toolName,
         durationMs: Date.now() - t1,
-        chars: block?.length ?? 0,
+        chars: typeof desc === "string" ? desc.length : 0,
       });
-      return block ? [{ type: "text" as const, text: block }] : [];
+      if (typeof desc !== "string" || desc.length === 0) return [];
+      // The agent reads this tree in place of describe, so it needs describe's warnings too
+      // (the TV description already carries its hint).
+      const hintLine =
+        typeof hint === "string" && hint && !desc.includes(hint) ? `Hint: ${hint}\n` : "";
+      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${hintLine}${desc}` }];
     } catch (e) {
       await spyLog({
         ts: new Date().toISOString(),
@@ -332,8 +339,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         signal: callSignal,
       };
 
+      const devicesText =
+        canonicalToolId(params.name) === "list-devices" ? listDevicesText(result) : undefined;
       let content: ContentBlock[];
-      if (
+      if (devicesText !== undefined) {
+        content = [{ type: "text" as const, text: devicesText }];
+      } else if (
         canonicalToolId(params.name) === "e2e-execute" &&
         result &&
         typeof result === "object" &&
@@ -348,8 +359,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
-      const wantScreenshot = autoScreenshotOn && shouldAutoScreenshot(params.name);
-      const wantTree = autoDescribeOn && shouldAutoDescribe(params.name);
+      const wantScreenshot =
+        autoScreenshotOn && shouldAutoScreenshot(params.name, params.arguments);
+      const wantTree = autoDescribeOn && shouldAutoDescribe(params.name, params.arguments);
       if (udid && (wantScreenshot || wantTree) && containsSecretPlaceholder(params.arguments)) {
         // The tool-server typed the *resolved* secret; a screenshot of a
         // non-secure-entry field would hand the plaintext back to the model as

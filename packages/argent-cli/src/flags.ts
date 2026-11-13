@@ -140,7 +140,27 @@ function runToggle(
   } else {
     console.log(`Disabled flag "${parsed.name}" (${parsed.scope}).`);
   }
+  const shadow = projectShadowNote(parsed.name, parsed.scope, command);
+  if (shadow) console.log(pc.yellow(shadow));
   return parsed.name;
+}
+
+// A project value wins over the global one, so a global toggle that the project
+// file contradicts changes nothing. Said now, not when the feature still refuses.
+function projectShadowNote(
+  name: string,
+  scope: FlagScope,
+  command: "enable" | "disable"
+): string | undefined {
+  if (scope !== "global") return undefined;
+  const wanted = command === "enable";
+  const project = readFlags("project");
+  if (!Object.hasOwn(project, name) || project[name] === wanted) return undefined;
+  return (
+    `The project flags file ${getFlagsPath("project")} sets "${name}" to ${project[name]}, ` +
+    `which overrides the global value, so the flag stays ${wanted ? "off" : "on"} in this project. ` +
+    `Run: argent ${command} ${name} --scope project`
+  );
 }
 
 export function enable(

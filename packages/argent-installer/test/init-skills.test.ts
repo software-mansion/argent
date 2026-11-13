@@ -29,6 +29,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   return {
     ...actual,
     isOnline: vi.fn(async () => true),
+    isSkillsCliAvailable: vi.fn(() => false),
     getGloballyInstalledPackageRoot: () => state.globalRoot,
     getGloballyInstalledVersion: () => (state.globalRoot ? actual.getInstalledVersion() : null),
     listBundledSkills: (dir?: string) =>
@@ -36,18 +37,35 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   };
 });
 
+// `note` carries the manual-install instructions; `select` is the method prompt,
+// which can't read stdin headless.
 vi.mock("@clack/prompts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@clack/prompts")>();
-  return { ...actual, confirm: confirmMock, select: vi.fn(async () => "interactive") };
+  return {
+    ...actual,
+    confirm: confirmMock,
+    note: vi.fn(),
+    select: vi.fn(async () => "interactive"),
+  };
 });
 
+import * as p from "@clack/prompts";
 import {
   formatSkillsSummaryLine,
   runSkillsStep,
   skillsAreMissing,
   type SkillsStepResult,
 } from "../src/init-skills.js";
-import { SKILLS_DIR, buildArgentSkillsSource, getInstalledVersion } from "../src/utils.js";
+import {
+  SKILLS_DIR,
+  buildArgentSkillsSource,
+  getInstalledVersion,
+  isOnline,
+  isSkillsCliAvailable,
+  shellQuotePath,
+} from "../src/utils.js";
+
+type SpawnCall = [string, string[], { cwd?: string; stdio?: unknown }];
 
 const originalPackage = process.env.npm_config_package;
 const originalHome = process.env.HOME;
@@ -64,6 +82,11 @@ beforeEach(() => {
   // Never touch the real ~/.agents or ~/.claude skill dirs.
   process.env.HOME = path.join(tmpDir, "home");
   process.env.XDG_STATE_HOME = path.join(tmpDir, "home", "xdg");
+  // A spawn that loses its cwd pin writes here, never into the real checkout.
+  // It is never init's root, so a test that passes `effectiveRoot` still fails.
+  const cwd = path.join(tmpDir, "cwd");
+  fs.mkdirSync(cwd, { recursive: true });
+  vi.spyOn(process, "cwd").mockReturnValue(cwd);
   exitCode = 0;
   addExitCodes = [];
   addWritesSkills = true;
@@ -125,6 +148,7 @@ describe("runSkillsStep", () => {
       fromTar: null,
       version: "unknown",
       scope: "global",
+      effectiveRoot: tmpDir,
     });
 
     expect(method).toBe("default");
@@ -154,6 +178,7 @@ describe("runSkillsStep", () => {
       fromTar: null,
       version: "unknown",
       scope: "global",
+      effectiveRoot: tmpDir,
     });
 
     expect(fs.existsSync(path.join(store, "argent-create-flow"))).toBe(false);
@@ -177,6 +202,7 @@ describe("runSkillsStep", () => {
       fromTar: null,
       version: "unknown",
       scope: "global",
+      effectiveRoot: tmpDir,
     });
 
     expect(spawnMock).toHaveBeenCalledTimes(2);
@@ -190,7 +216,6 @@ describe("runSkillsStep", () => {
     // A project pinned to an older local install gets that version's skills,
     // which may still be the legacy names.
     const project = path.join(tmpDir, "project");
-    vi.spyOn(process, "cwd").mockReturnValue(project);
     const legacy = path.join(project, ".agents", "skills", "argent-create-flow");
     mkdirs(legacy);
     const lockPath = path.join(project, "skills-lock.json");
@@ -201,6 +226,7 @@ describe("runSkillsStep", () => {
       fromTar: null,
       version: "0.0.1-older",
       scope: "local",
+      effectiveRoot: project,
     });
 
     const [, args] = spawnMock.mock.calls[0]! as [string, string[]];
@@ -212,7 +238,6 @@ describe("runSkillsStep", () => {
 
   it("removes legacy skills from the project only, leaving the global scope alone", async () => {
     const project = path.join(tmpDir, "project");
-    vi.spyOn(process, "cwd").mockReturnValue(project);
     mkdirs(path.join(project, ".claude", "skills", "argent-create-flow"));
     writeLock(path.join(project, "skills-lock.json"), ["argent-create-flow", "argent-create-e2e"]);
     const globalLegacy = path.join(process.env.HOME!, ".claude", "skills", "argent-create-flow");
@@ -223,6 +248,7 @@ describe("runSkillsStep", () => {
       fromTar: null,
       version: "unknown",
       scope: "local",
+      effectiveRoot: project,
     });
 
     expect(fs.existsSync(path.join(project, ".claude", "skills", "argent-create-flow"))).toBe(
@@ -242,10 +268,255 @@ describe("runSkillsStep", () => {
       fromTar: null,
       version: "unknown",
       scope: "custom",
-      customRoot: custom,
+      effectiveRoot: custom,
     });
 
     expect(fs.existsSync(legacy)).toBe(false);
+  });
+
+  // init.ts passes the skills step the same root it writes the MCP config and
+  // rules/agents to; these pin the skills step to it rather than to the cwd
+  // init was run from (#1467).
+  describe("from a project subdirectory (#1467)", () => {
+    let root: string;
+
+    beforeEach(() => {
+      root = path.join(tmpDir, "repo");
+      const subdir = path.join(root, "packages", "app");
+      mkdirs(subdir);
+      vi.spyOn(process, "cwd").mockReturnValue(subdir);
+    });
+
+    it("runs project-scope `npx skills add` at init's root, not the cwd", async () => {
+      const result = await runSkillsStep({
+        nonInteractive: true,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root,
+      });
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const [, , opts] = spawnMock.mock.calls[0]! as SpawnCall;
+      expect(opts.cwd).toBe(root);
+      // The summary counts the skills where they were written.
+      expect(result).toMatchObject({ outcome: "success", installedCount: 1 });
+    });
+
+    it("prunes legacy skills at init's root, running `skills remove` there too", async () => {
+      const legacy = path.join(root, ".claude", "skills", "argent-create-flow");
+      mkdirs(legacy);
+      const lockPath = path.join(root, "skills-lock.json");
+      writeLock(lockPath, ["argent-create-flow", "argent-create-e2e"]);
+
+      await runSkillsStep({
+        nonInteractive: true,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root,
+      });
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      const [, removeArgs, removeOpts] = spawnMock.mock.calls[1]! as SpawnCall;
+      expect(removeArgs).toEqual(
+        expect.arrayContaining(["skills", "remove", "argent-create-flow"])
+      );
+      expect(removeOpts.cwd).toBe(root);
+      expect(fs.existsSync(legacy)).toBe(false);
+      expect(lockNames(lockPath)).toEqual(["argent-create-e2e"]);
+    });
+
+    it("runs the interactive `npx skills` TUI at init's root", async () => {
+      vi.mocked(p.select).mockResolvedValueOnce("interactive");
+
+      const { method } = await runSkillsStep({
+        nonInteractive: false,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root,
+      });
+
+      expect(method).toBe("interactive");
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const [, , opts] = spawnMock.mock.calls[0]! as SpawnCall;
+      expect(opts.stdio).toBe("inherit");
+      expect(opts.cwd).toBe(root);
+    });
+
+    it("points the instructions after a failed install at init's root", async () => {
+      exitCode = 1;
+
+      const result = await runSkillsStep({
+        nonInteractive: true,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root,
+      });
+
+      expect(result).toMatchObject({ outcome: "failure", installedCount: 0 });
+      const text = vi
+        .mocked(p.note)
+        .mock.calls.map(([message]) => String(message))
+        .join("\n");
+      expect(text).toContain(`cp -r ${SKILLS_DIR}/* ${shellQuotePath(`${root}/.claude/skills/`)}`);
+      expect(text).toContain(`cd ${shellQuotePath(root)} && npx skills add ${SKILLS_DIR} `);
+    });
+
+    it("points the pnpm hint at init's root when npx is missing", async () => {
+      spawnMock.mockImplementationOnce(() => {
+        const child = Object.assign(new EventEmitter(), {
+          stdout: new EventEmitter(),
+          stderr: new EventEmitter(),
+        });
+        setImmediate(() =>
+          child.emit("error", Object.assign(new Error("spawn npx ENOENT"), { code: "ENOENT" }))
+        );
+        return child;
+      });
+
+      await runSkillsStep({
+        nonInteractive: true,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root,
+      });
+
+      const text = vi
+        .mocked(p.note)
+        .mock.calls.map(([message]) => String(message))
+        .join("\n");
+      expect(text).toContain(`cd ${shellQuotePath(root)} && pnpm dlx skills add ${SKILLS_DIR} `);
+    });
+
+    it("probes for an offline skills CLI where the install would run", async () => {
+      vi.mocked(isOnline).mockResolvedValueOnce(false);
+      vi.mocked(isSkillsCliAvailable).mockReturnValueOnce(true);
+
+      await runSkillsStep({
+        nonInteractive: true,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root,
+      });
+
+      expect(isSkillsCliAvailable).toHaveBeenCalledWith(root);
+      const [, args, opts] = spawnMock.mock.calls[0]! as SpawnCall;
+      expect(args).toContain("--no-install");
+      expect(opts.cwd).toBe(root);
+    });
+  });
+
+  it("prints manual commands at init's root, quoted as one shell word", async () => {
+    // Offline with no cached skills CLI forces the manual method.
+    vi.mocked(isOnline).mockResolvedValueOnce(false);
+    const root = path.join(tmpDir, "My 'Project' $x");
+    vi.spyOn(process, "cwd").mockReturnValue(path.join(root, "packages", "app"));
+
+    const { method } = await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "local",
+      effectiveRoot: root,
+    });
+
+    expect(method).toBe("manual");
+    expect(spawnMock).not.toHaveBeenCalled();
+    const text = vi
+      .mocked(p.note)
+      .mock.calls.map(([message]) => String(message))
+      .join("\n");
+    for (const editor of [".claude", ".cursor"]) {
+      expect(text).toContain(
+        `mkdir -p ${shellQuotePath(`${root}/${editor}/skills`)} && ` +
+          `cp -r ${SKILLS_DIR}/* ${shellQuotePath(`${root}/${editor}/skills/`)}`
+      );
+    }
+    // `skills add` writes to its cwd, so the printed command has to start at the root.
+    expect(text).toContain(`cd ${shellQuotePath(root)} && npx skills add ${SKILLS_DIR} `);
+  });
+
+  it("prints custom-scope manual commands at the custom root", async () => {
+    vi.mocked(isOnline).mockResolvedValueOnce(false);
+    const custom = path.join(tmpDir, "custom root");
+
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "custom",
+      effectiveRoot: custom,
+    });
+
+    const text = vi
+      .mocked(p.note)
+      .mock.calls.map(([message]) => String(message))
+      .join("\n");
+    for (const editor of [".claude", ".cursor"]) {
+      expect(text).toContain(
+        `mkdir -p ${shellQuotePath(`${custom}/${editor}/skills`)} && ` +
+          `cp -r ${SKILLS_DIR}/* ${shellQuotePath(`${custom}/${editor}/skills/`)}`
+      );
+    }
+    expect(text).toContain(`cd ${shellQuotePath(custom)} && npx skills add ${SKILLS_DIR} `);
+  });
+
+  it("runs global-scope `npx skills add -g` without pinning a cwd", async () => {
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "global",
+      effectiveRoot: path.join(tmpDir, "project"),
+    });
+
+    const [, args, opts] = spawnMock.mock.calls[0]! as SpawnCall;
+    expect(args).toContain("-g");
+    expect(opts.cwd).toBeUndefined();
+  });
+
+  it("probes for an offline global-scope skills CLI without pinning a cwd", async () => {
+    vi.mocked(isOnline).mockResolvedValueOnce(false);
+
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "global",
+      effectiveRoot: path.join(tmpDir, "project"),
+    });
+
+    expect(isSkillsCliAvailable).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(isSkillsCliAvailable).mock.calls[0]).toEqual([undefined]);
+  });
+
+  it("prints global-scope manual commands unquoted, so `~` still expands", async () => {
+    vi.mocked(isOnline).mockResolvedValueOnce(false);
+
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "global",
+      effectiveRoot: path.join(tmpDir, "project"),
+    });
+
+    const text = vi
+      .mocked(p.note)
+      .mock.calls.map(([message]) => String(message))
+      .join("\n");
+    expect(text).toContain(
+      `mkdir -p ~/.claude/skills && cp -r ${SKILLS_DIR}/* ~/.claude/skills/\n`
+    );
+    expect(text).toContain(
+      `mkdir -p ~/.cursor/skills && cp -r ${SKILLS_DIR}/* ~/.cursor/skills/\n`
+    );
+    expect(text).toContain(`\n  npx skills add ${SKILLS_DIR} -g `);
   });
 
   it("keeps legacy skills when `npx skills add` fails", async () => {
@@ -258,6 +529,7 @@ describe("runSkillsStep", () => {
       fromTar: null,
       version: "unknown",
       scope: "global",
+      effectiveRoot: tmpDir,
     });
 
     expect(fs.existsSync(legacy)).toBe(true);
@@ -275,6 +547,7 @@ describe("runSkillsStep when the install fails (#614)", () => {
       fromTar: null,
       version,
       scope: "local",
+      effectiveRoot: project(),
       ...overrides,
     });
   const interactiveStep = () => step({ nonInteractive: false });
@@ -287,7 +560,6 @@ describe("runSkillsStep when the install fails (#614)", () => {
 
   beforeEach(() => {
     mkdirs(project());
-    vi.spyOn(process, "cwd").mockReturnValue(project());
   });
 
   it("uses only the pinned source when it works", async () => {
@@ -416,7 +688,7 @@ describe("runSkillsStep when the install fails (#614)", () => {
     const custom = path.join(tmpDir, "custom");
     mkdirs(custom);
 
-    const result = await step({ scope: "custom", customRoot: custom });
+    const result = await step({ scope: "custom", effectiveRoot: custom });
 
     expect(spawnMock.mock.calls[1]![2]).toMatchObject({ cwd: custom });
     expect(result).toMatchObject({ outcome: "success", installedCount: 1 });
