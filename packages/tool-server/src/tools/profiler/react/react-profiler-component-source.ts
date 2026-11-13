@@ -2,7 +2,7 @@ import { z } from "zod";
 import { promises as fs } from "fs";
 import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { astLookupCandidates } from "../../../utils/react-profiler/component-names";
 
 /**
@@ -45,7 +45,7 @@ When several files define a component with the same name (e.g. platform variants
   // Declared so the tool catalogue groups this with the other react-profiler-*
   // tools; the HTTP gate itself is a no-op here, as there is no device arg to
   // inspect.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  capability: REACT_PROFILER_TOOL_CAPABILITY,
   fileInputs,
   services: () => ({}),
   async execute(_services, params) {

@@ -77,6 +77,9 @@ export interface DevToolsCommitTree {
   hookNames?: Map<number, string>;
 }
 
+/** The platform a React Native bundle was built for, as Metro's `platform` names it. */
+export type RnPlatform = "ios" | "android" | "macos";
+
 // Top-level raw input to the pipeline
 export interface RawProfilingInput {
   flamegraph?: HermesCpuProfile;
@@ -84,7 +87,7 @@ export interface RawProfilingInput {
   sessionMeta: {
     recordingDurationMs: number;
     deviceId: string;
-    platform: "ios" | "android";
+    platform: RnPlatform;
     rnVersion: string;
     projectRoot: string;
     detectedArchitecture?: "bridge" | "bridgeless";

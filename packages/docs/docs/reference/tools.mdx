@@ -369,7 +369,6 @@ These tools do not support a Mac app and fail with a `not supported on macos app
 - `settings-permissions`
 - The screen recording tools
 - The JavaScript debugger tools, `view-network-logs` and `view-network-request-details`
-- The React profiler tools, `profiler-cpu-query`, `profiler-commit-query` and `profiler-combined-report`. See [Profiling a Mac app](#profiling-a-mac-app)
 - `native-devtools-status`
 - The Chromium tools
 
@@ -514,7 +513,23 @@ Each window in the Window menu has an identifier. Use it to choose one of two wi
 
 ### Profiling a Mac app
 
-These profiler tools take a Mac app id: `native-profiler-start`, `native-profiler-stop`, `native-profiler-analyze`, `profiler-stack-query` and `profiler-load`. `profiler-load` refuses a Mac app id with `mode: "load_react"`. The other profiler tools do not support a Mac app. The [Profiling](#profiling) section contains the behavior that all platforms share.
+Each profiler tool with a `device_id` parameter takes a Mac app id. The [Profiling](#profiling) section contains the behavior that all platforms share.
+
+The React profiler tools, `profiler-cpu-query`, `profiler-commit-query`, `profiler-combined-report` and `profiler-load` with `mode: "load_react"` work on a react-native-macos app:
+
+- The app must be a Debug build of react-native-macos 0.76 or later that loads its JavaScript bundle from Metro. A Release build has no JavaScript debugger. Older versions of react-native-macos are not supported. Argent is tested with react-native-macos 0.83 with Hermes in bridgeless mode.
+- `react-profiler-start` does not need `debugger-connect` first. The `debugger-*` tools do not take a Mac app id.
+- Argent finds the JavaScript runtime of the app on Metro from the bundle id in the Mac app id. This also works when other devices use the same Metro, for example an iOS simulator that runs the same app with the same bundle id. Pass the Mac app id, not a `logicalDeviceId` of Metro.
+- When Metro has no runtime of the Mac app, the tools fail with `DEBUGGER_TARGET_DEVICE_MISMATCH`, and the error lists the devices that Metro has. Argent does not connect to the runtime of another app.
+- When Metro does not use port 8081, pass its port in `port`.
+- Call `native-profiler-start` with the same Mac app id at the same time, as on iOS. `profiler-combined-report` then correlates the hangs of the Instruments trace with the React commits.
+- While the React profiler records, interaction tools on the app return no automatic screenshot or element tree, as on the other devices.
+
+`react-profiler-analyze` on a Mac app:
+
+- The tool reads the platform from the recording: the bundle URL of a Mac app has `platform=macos`. The `platform` parameter also takes `"macos"`. It applies only when the recording names no platform.
+- When several files define a component name, the report selects the file in the order of Metro for macOS: a `.macos.*` file, then a `.native.*` file, then the base file. A `.ios.*` file and a `.android.*` file are not in a macOS bundle, so the report does not give them. On iOS and Android, the report does not give a `.macos.*` file.
+- When the recording does not give the React Native architecture, the tool reads `macos/Podfile` in place of `ios/Podfile`.
 
 `native-profiler-start` on a Mac app:
 
@@ -603,6 +618,8 @@ When two or more devices use one Metro, `react-profiler-start` takes the `logica
 3. The device whose log contains the marker is the device of the React profile.
 
 When Argent finds no device, interaction tools on the device keep the automatic screenshot and element tree. `react-profiler-start` then returns a note. Argent cannot read the log of a physical iPhone or of a device from a provider.
+
+A Mac app does not need a `logicalDeviceId`. `react-profiler-start` takes the Mac app id also when two or more devices use one Metro, because Argent finds the app from its bundle id. Thus Argent does not read a log for a Mac app, and interaction tools on the app return no automatic screenshot or element tree. See [Profiling a Mac app](#profiling-a-mac-app).
 
 One React profiler run at a time can record in an app. `react-profiler-status` returns one of these `session_status` values:
 

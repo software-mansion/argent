@@ -2,7 +2,9 @@ import { z } from "zod";
 import { promises as fsPromises } from "fs";
 import { relative, isAbsolute } from "path";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { MACOS_APPS_FLAG } from "../../../utils/capability";
+import { FLAG_ENUM_META_KEY } from "../../../utils/flag-gated-text";
 import {
   type ProfilerSessionPaths,
   getCachedProfilerPaths,
@@ -11,6 +13,7 @@ import type {
   RawProfilingInput,
   HermesCpuProfile,
   DevToolsCommitTree,
+  RnPlatform,
 } from "../../../utils/react-profiler/types/input";
 import { runPipeline } from "../../../utils/react-profiler/pipeline/index";
 import { astLookupCandidates } from "../../../utils/react-profiler/component-names";
@@ -52,10 +55,10 @@ async function fileArtifact(
  * The bundle URL in a Hermes profile names the platform that ran it, which is
  * stronger than the `platform` parameter: agents may omit that on Android.
  */
-function recordedPlatform(profile: HermesCpuProfile | null): "ios" | "android" | undefined {
+function recordedPlatform(profile: HermesCpuProfile | null): RnPlatform | undefined {
   for (const node of profile?.nodes ?? []) {
-    const match = /[?&]platform=(ios|android)\b/.exec(node.callFrame.url);
-    if (match) return match[1] as "ios" | "android";
+    const match = /[?&]platform=(ios|android|macos)\b/.exec(node.callFrame.url);
+    if (match) return match[1] as RnPlatform;
   }
   return undefined;
 }
@@ -85,12 +88,16 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android logicalDeviceId)."
     ),
   project_root: z
     .string()
     .describe("Absolute path to the RN project root for session context detection"),
-  platform: z.enum(["ios", "android"]).optional().describe("Target platform"),
+  platform: z
+    .enum(["ios", "android", "macos"])
+    .optional()
+    .describe("Target platform")
+    .meta({ [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } }),
   rn_version: z.coerce.string().default("unknown").describe('React Native version (e.g. "0.73.4")'),
   annotations: z
     .array(annotationSchema)
@@ -123,7 +130,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
   },
   // RN-only: reads commit data captured via the React DevTools backend, which
   // Chromium does not have.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  capability: REACT_PROFILER_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params, ctx) {
     const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(

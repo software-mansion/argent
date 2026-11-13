@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import type {
   DevToolsFiberCommit,
@@ -499,7 +499,7 @@ const timeRangeSchema = z.object({
 const zodSchema = z.object({
   port: metroPortField,
   device_id: metroDeviceIdParam(
-    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+    "Device logicalDeviceId from debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android logicalDeviceId)."
   ),
   mode: z
     .enum(["by_component", "by_time_range", "by_index", "cascade_tree", "render_counts"])
@@ -546,7 +546,7 @@ Fails if react-profiler-stop has not been called.`,
     failedMsg: ({ failureSignal }) => `Failed to query React commits: ${failureSignal.error_code}`,
   },
   // Reads React commit data captured via the React DevTools backend.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  capability: REACT_PROFILER_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const commitTree = await getCommitData(metroPort(params), params.device_id);

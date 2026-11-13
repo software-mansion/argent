@@ -5,6 +5,11 @@ export interface CDPTarget {
   id: string;
   title: string;
   description: string;
+  /**
+   * The bundle id or package name the app registered with. Metro 0.76 has no
+   * such field and sends it as `description`.
+   */
+  appId?: string;
   webSocketDebuggerUrl: string;
   deviceName?: string;
   /** Legacy inspector-proxy only. Its synthetic reload page reports "don't use". */

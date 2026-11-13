@@ -29,7 +29,7 @@ import {
   type LostRunInfo,
   type SavedSessionInfo,
 } from "../../../utils/react-profiler/last-run";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
@@ -74,7 +74,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android logicalDeviceId)."
     ),
 });
 
@@ -94,7 +94,7 @@ export function createReactProfilerStatusTool(
         `Failed to check React profiler: ${failureSignal.error_code}`,
     },
     // RN-only: companion to react-profiler-start.
-    capability: RN_ONLY_TOOL_CAPABILITY,
+    capability: REACT_PROFILER_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params): Promise<StatusResponse> {
       // Same key as react-profiler-start/stop, so a forwarded logicalDeviceId

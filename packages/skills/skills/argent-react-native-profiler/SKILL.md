@@ -7,7 +7,7 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Profile on a simulator.
 
-Mac app (`platform: "macos"`), also react-native-macos: not supported; `react-profiler-*` reject a Mac app id. Follow `argent-native-profiler`.
+react-native-macos app (`platform: "macos"`): `device_id` is the Mac app id; no `debugger-connect`. Needs a Debug build of react-native-macos 0.76 or later that loads its bundle from Metro (a Release build has no JS debugger). Pass `port` when Metro is not on 8081. If the error says Metro has no runtime of the app, report it; do not switch to another device it lists.
 
 ## 1. Tools
 

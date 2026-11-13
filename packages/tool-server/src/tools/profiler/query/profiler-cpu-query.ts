@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   type ProfilerSessionPaths,
   getCachedProfilerPaths,
@@ -449,7 +449,7 @@ const timeWindowSchema = z.object({
 const zodSchema = z.object({
   port: metroPortField,
   device_id: metroDeviceIdParam(
-    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+    "Device logicalDeviceId from debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android logicalDeviceId)."
   ),
   mode: z
     .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
@@ -494,7 +494,7 @@ Fails if no CPU profile is stored; run react-profiler-stop (and ideally react-pr
     failedMsg: ({ failureSignal }) => `Failed to query CPU profile: ${failureSignal.error_code}`,
   },
   // RN-only: reads Hermes-format CPU profiles; Chromium's V8 sample format differs.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  capability: REACT_PROFILER_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const sessionPaths = getCachedProfilerPaths(metroPort(params), params.device_id);

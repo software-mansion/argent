@@ -99,6 +99,7 @@ import { ensureDeps } from "../src/utils/check-deps";
 import { adbShell } from "../src/utils/adb";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { startSuspensionWatch } from "../src/utils/macos-suspension-watch";
+import { getCachedProfilerPaths } from "../src/blueprints/react-profiler-session";
 
 const flag = useMacosAppsFlag();
 
@@ -465,16 +466,35 @@ describe("profiler-load on a Mac app id", () => {
     expect(res.body.error).toContain(`native-profiler-${SESSION_ID}_raw_*.xml`);
   });
 
-  it("refuses load_react for a Mac app, which has no React profiler sessions", async () => {
-    const res = await call("profiler-load", {
+  it("restores a Mac app's React session with load_react, and reports a missing one as for any device", async () => {
+    // A react-native-macos Debug build records React sessions like an iOS app.
+    const missing = await call("profiler-load", {
       mode: "load_react",
       session_id: SESSION_ID,
       device_id: MAC,
     });
+    expect(missing.body.error_code).toBe(FAILURE_CODES.PROFILER_DATA_NOT_LOADED);
+    expect(missing.body.error).toContain(`No data found for React session "${SESSION_ID}"`);
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain("A Mac app has no React profiler sessions");
-    expect(res.body.error).toContain("load_native");
+    // What react-profiler-stop leaves in the debug directory.
+    const cpuPath = join(debugDir.path, `react-profiler-${SESSION_ID}_cpu.json`);
+    writeFileSync(cpuPath, JSON.stringify({ nodes: [], samples: [1, 2, 3], timeDeltas: [] }));
+    const loaded = await call("profiler-load", {
+      mode: "load_react",
+      session_id: SESSION_ID,
+      device_id: MAC,
+    });
+    expect(loaded.status).toBe(200);
+    expect(loaded.body.data).toContain(
+      `Loaded React profiler session \`${SESSION_ID}\` into port 8081.`
+    );
+    expect(loaded.body.data).toContain("- CPU profile: 3 samples");
+    // Under the Mac app id, where the profiler-*-query tools look it up.
+    expect(getCachedProfilerPaths(8081, MAC)).toMatchObject({
+      sessionId: SESSION_ID,
+      cpuProfilePath: cpuPath,
+      loadedFromDisk: true,
+    });
   });
 
   it("with the flag off, is refused by the gate with the flag message", async () => {

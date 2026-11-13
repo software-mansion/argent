@@ -19,13 +19,13 @@ Argent records a profile of the running app. The agent reads the profile. The ag
 
 Argent has two profilers. The agent can run one profiler or both profilers at the same time.
 
-| Profiler | Platforms     | Engine                    | Data                                                              |
-| -------- | ------------- | ------------------------- | ----------------------------------------------------------------- |
-| React    | iOS, Android  | Hermes and React DevTools | JS CPU samples, React commits, renders of each component          |
-| Native   | iOS, Mac apps | Xcode Instruments         | Native CPU time, UI hangs, memory leaks                           |
-| Native   | Android       | Perfetto                  | Native CPU time, UI hangs with the jank reason, GC, memory growth |
+| Profiler | Platforms              | Engine                    | Data                                                              |
+| -------- | ---------------------- | ------------------------- | ----------------------------------------------------------------- |
+| React    | iOS, Android, Mac apps | Hermes and React DevTools | JS CPU samples, React commits, renders of each component          |
+| Native   | iOS, Mac apps          | Xcode Instruments         | Native CPU time, UI hangs, memory leaks                           |
+| Native   | Android                | Perfetto                  | Native CPU time, UI hangs with the jank reason, GC, memory growth |
 
-The React profiler connects to the Hermes runtime of the app through the debugger. Thus the app must run in a debuggable build. The native profiler attaches to the process of the app on the device. On iOS, the native profiler does not need a special build. On a Mac app, the native profiler needs a build that allows debugging, for example a Debug build from Xcode. See [Mac apps](/docs/features/mac-apps#profiling). On Android, the app must be a debug build or be profileable. Without this, the native profile has no CPU call stacks. To make a release build profileable, add `<profileable android:shell="true"/>` under `<application>` in `AndroidManifest.xml`.
+The React profiler connects to the Hermes runtime of the app through the debugger. Thus the app must run in a debuggable build. On a Mac app, the React profiler needs a Debug build of react-native-macos 0.76 or later that loads its JavaScript from Metro. See [Mac apps](/docs/features/mac-apps#react-native). The native profiler attaches to the process of the app on the device. On iOS, the native profiler does not need a special build. On a Mac app, the native profiler needs a build that allows debugging, for example a Debug build from Xcode. See [Mac apps](/docs/features/mac-apps#profiling). On Android, the app must be a debug build or be profileable. Without this, the native profile has no CPU call stacks. To make a release build profileable, add `<profileable android:shell="true"/>` under `<application>` in `AndroidManifest.xml`.
 
 ## A profiling session
 
@@ -44,7 +44,7 @@ A screen capture uses CPU on the device. On a phone, it also raises the clock sp
   - On a physical device, a screenshot takes about 150 ms to 200 ms. It starts the capture for a short time.
   - Taps and swipes do not start the capture.
 
-When two or more devices use one Metro, Argent finds the device of the React profile from a line that the app writes to the device log. Argent reads this log on Android devices and iOS simulators. On other devices, Argent keeps the screenshot and the element tree after each interaction.
+When two or more devices use one Metro, Argent finds the device of the React profile from a line that the app writes to the device log. Argent reads this log on Android devices and iOS simulators. On a Mac app, Argent finds the app on Metro from its bundle id and does not read a log. On other devices, Argent keeps the screenshot and the element tree after each interaction.
 
 When no profiler records, a screenshot does not wait for the screen capture.
 
@@ -83,7 +83,7 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 
 ## Limits
 
-- The React profiler is available in React Native apps with Hermes on iOS and Android only. On a Mac app, also a react-native-macos app, only the native profiler is available. Argent does not profile Chromium and Electron apps.
+- The React profiler is available in React Native apps with Hermes on iOS, on Android and on a Mac app. On a Mac app, the React profiler supports react-native-macos 0.76 and later only. Argent does not profile Chromium and Electron apps.
 - Argent records the data from the start of the session only. Start the session before you do the interaction.
 - One session at a time can own the React profiler of an app. If another agent owns the session, Argent tells the agent who the owner is. The agent must ask you before it takes over the session.
 - A session is stale after 5 minutes without a heartbeat. Only `react-profiler-status`, `react-profiler-renders` and `react-profiler-fiber-tree` calls refresh the heartbeat, so a long recording can go stale while you use the app. An agent on another tool-server can take over a stale session without asking you. Argent tells both agents about the takeover. On React Native 0.84 and older, Metro allows one debugger for each app. A call from a second tool-server disconnects the first tool-server. Argent reports this loss to the first agent as a lost debugger connection, not as a takeover.
