@@ -42,7 +42,7 @@ interface OcrWord {
   wordNum: number;
 }
 
-export interface OcrTextBlock {
+interface OcrTextBlock {
   text: string;
   confidence: number;
   bounds: DiffBounds;

@@ -20,9 +20,9 @@ interface LogRegistryResponse extends LogStats {
   appName: string;
   logicalDeviceId: string | undefined;
   /**
-   * Set only when a teardown reaped the previous debugger session while it held
-   * captured console output. Without it an empty registry reads as "the app
-   * logged nothing".
+   * Set when a teardown reaped the previous debugger session while it held
+   * captured console output (without it an empty registry reads as "the app
+   * logged nothing"), or when `file` does not exist or holds fewer entries than were captured.
    */
   note?: string;
 }
@@ -43,7 +43,7 @@ export function createDebuggerLogRegistryTool(
     id: "debugger-log-registry",
     description: `Get a summary of all console logs captured from the app's JS runtime.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
-Use when investigating warnings, errors, or unexpected output. Call this first for an overview, then Grep the returned file for details; never Read it whole, it can hold 50,000 lines. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when the stats are empty BECAUSE the previous debugger session ended: torn down (its log file deleted) or cut off by an app crash (its log file kept at the path the note names). Without that note, empty means the app has logged nothing.
+Use when investigating warnings, errors, or unexpected output. Call this first for an overview, then Grep the returned file for details; never Read it whole, it can hold 50,000 lines. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when { file } does not exist or holds fewer entries than totalEntries counts (failed writes, e.g. a full disk), or when the stats are empty BECAUSE the previous debugger session ended: torn down (its log file deleted) or cut off by an app crash (the note names its kept log file, if it had one). Without that note, empty means the app has logged nothing.
 When the debugger cannot be reached, it returns { status: "not_connected", reason, detail, guidance } with NO log file. Follow the guidance (do not retry in a loop). Grep a log file in this state only when a { note } names one kept from before the app crashed. A "connected" result's stats may come from a session whose socket has since died. Use debugger-status, not this tool, to judge debugger health.`,
     zodSchema,
     readOnly: true,
@@ -93,6 +93,15 @@ When the debugger cannot be reached, it returns { status: "not_connected", reaso
           ]);
           if (reaped) response.note = describeReapedSession(reaped, "JS-runtime debugger session");
         }
+        const inFile = api.logWriter.getFileEntryCount();
+        const fileNote = !api.logWriter.hasFile()
+          ? `No log file exists at ${stats.file}, so there is nothing to grep: the counts and clusters are all that was captured. Usually ~/.argent/tmp is not writable (e.g. a root-owned ~/.argent: sudo chown -R "$USER" ~/.argent). Only a new debugger session gets a file: once that is fixed, call stop-all-simulator-servers with devices: ["${canonicalDeviceId(params.device_id)}"], then debugger-connect again.`
+          : inFile === 0 && stats.totalEntries > 0
+            ? `The log file at ${stats.file} holds none of the ${stats.totalEntries} captured entries: every write to it failed (e.g. a full disk), so there is nothing to grep and the counts and clusters are all that was captured. Entries logged once the disk has room are written to it.`
+            : inFile < stats.totalEntries
+              ? `The log file at ${stats.file} holds only ${inFile} of the ${stats.totalEntries} captured entries: the other writes to it failed (e.g. a full disk or a file-size limit), so byLevel and clusters count entries that grepping it will not find. Entries logged once the disk has room are written to it.`
+              : undefined;
+        if (fileNote) response.note = response.note ? `${response.note} ${fileNote}` : fileNote;
         return response;
       } catch (err) {
         const reason = classifyNotConnected(err);

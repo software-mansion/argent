@@ -47,7 +47,7 @@ const DARK_TAIL_MAX_MS = 2000;
 const TV_NO_CURSOR_NOTE = "no element holds focus on this screen, so a remote press may be lost";
 
 interface IdleResult {
-  /** Screen rendered content and went still before the timeout. */
+  /** Screen rendered content and held it for minStableMs (0: content alone) before the timeout. */
   settled: boolean;
   waitedMs: number;
   polls: number;
@@ -140,7 +140,7 @@ const zodSchema = z
       .max(10_000)
       .optional()
       .describe(
-        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}).`
+        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}); 0 settles on the first non-empty read, confirming content, not stillness.`
       ),
   })
   .strict();
@@ -184,9 +184,9 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 
   return {
     id: AWAIT_SCREEN_IDLE_TOOL_ID,
-    description: `Block until the screen has rendered content and stopped changing, or the timeout elapses. It polls the same element tree as \`describe\`.
+    description: `Block until the screen has rendered content and held it for minStableMs, or the timeout elapses. It polls the same element tree as \`describe\`.
 Use when a launch or navigation must finish rendering before a screenshot or tap.
-Returns { settled, waitedMs, polls, note? }. If the screen never goes still before timeoutMs, it returns settled=false instead of failing.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
+Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutMs, including when the tree cannot be read, it returns settled=false instead of failing. It fails at once while Xcode's first-launch component install is pending, or when it cannot reach a Chromium app or start an Apple TV's remote services.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
     zodSchema,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",

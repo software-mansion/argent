@@ -20,6 +20,19 @@
         background: #2e7d32;
         cursor: pointer;
       }
+      #cliplist {
+        position: fixed;
+        left: 8px;
+        top: 8px;
+        width: 240px;
+        height: 50px;
+        overflow: hidden;
+      }
+      #cliplist button {
+        display: block;
+        width: 100%;
+        height: 50px;
+      }
     </style>
   </head>
   <body>
@@ -35,5 +48,14 @@
       ">
       ArgentTapTarget
     </button>
+    <!-- Its second row lies entirely outside the overflow box, so Chromium paints
+         none of it: only the first row may get a non-zero frame, one a click
+         actually hits. -->
+    <div id="cliplist">
+      <button id="visiblerow" onclick="this.textContent = 'ArgentRowClicked'">
+        ArgentVisibleRow
+      </button>
+      <button id="clippedrow">ArgentClippedRow</button>
+    </div>
   </body>
 </html>

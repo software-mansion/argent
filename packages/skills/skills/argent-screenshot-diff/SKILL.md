@@ -19,7 +19,7 @@ Do not use screenshot diffing for tap-coordinate discovery. Use `describe` to fi
 ## 3. Deterministic Flow
 
 1. Navigate to the known-good state. Capture the baseline before the relevant interaction or before editing whenever feasible.
-2. Save a baseline PNG with `screenshot` using `scale: 1.0` and `includeImageInContext: false`, so the full-size image stays out of context; keep the returned `path`. Use normal downscaled screenshots for everything else.
+2. Save a baseline PNG with `screenshot` using `scale: 1.0` and `includeImageInContext: false`, so the full-size image stays out of context; keep the returned `path`. Use normal downscaled screenshots for everything else. Any size difference between the two images returns `dimension_mismatch` and nothing is compared, so capture at the same scale and orientation, and keep one baseline per device model: two models with the same resolution are compared as one screen.
 3. Perform the interaction, apply the code change and navigate to the state under test, after the app reloads or rebuilds.
 4. Call `screenshot-diff` with that `baselinePath`, `captureCurrent: true`, `udid`, and `outputDir`. If both images are already saved, pass `currentPath` instead of `captureCurrent`.
 5. Inspect the summary and artifact paths, then combine the diff with normal visual inspection and any structural/runtime evidence needed for the assertion.

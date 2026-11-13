@@ -97,7 +97,7 @@ With the `macos-apps` flag on, `list-devices` shows each native Mac app that Arg
 | `screenshot`        | Capture the device screen                                                        |
 | `describe`          | Get the accessibility / DOM element tree for the current screen                  |
 | `screenshot-diff`   | Compare two PNG screenshots and return a visual-diff summary                     |
-| `await-screen-idle` | Block until the screen has rendered content and stopped changing                 |
+| `await-screen-idle` | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
 
 On an iOS simulator, a line of `describe` can show:
@@ -629,20 +629,20 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 Argent hides these tools from MCP, so the agent does not see them. Call them with the [Argent SDK](./node-client.mdx), `argent run <name>`, or a `tool:` step in an e2e test. The SDK exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 
-| Tool                              | Description                                                              | Tool for the agent                               |
-| --------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------ |
-| `terminate-app`                   | Stop an app without relaunching it                                       | `restart-app`                                    |
-| `ui-tree`                         | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                                       |
-| `foreground-app`                  | Get the app in front, iOS simulator and Android                          | None                                             |
-| `fill`                            | Set the text of the focused text field                                   | `keyboard`                                       |
-| `native-devtools-status`          | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                        |
-| `native-describe-screen`          | Read the app's native accessibility screen description                   | `describe`                                       |
-| `chromium-storage`                | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                              |
-| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions`       |
-| `react-profiler-component-source` | Find a component's source file, line, and memoization status             | `react-profiler-analyze`                         |
-| `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree         | `profiler-commit-query`, mode `render_counts`    |
-| `e2e-read-prerequisite`           | Read the execution prerequisite of an e2e test without running it        | `e2e-execute` without `prerequisiteAcknowledged` |
-| `gather-workspace-data`           | Fetch a structured snapshot of the app project's workspace               | None                                             |
+| Tool                              | Description                                                                   | Tool for the agent                               |
+| --------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------ |
+| `terminate-app`                   | Stop an app without relaunching it                                            | `restart-app`                                    |
+| `ui-tree`                         | Get the raw accessibility tree as nested JSON, iOS simulator and Android      | `describe`                                       |
+| `foreground-app`                  | Get the app in front, iOS simulator and Android                               | None                                             |
+| `fill`                            | Set the text of the focused text field                                        | `keyboard`                                       |
+| `native-devtools-status`          | Check whether native devtools are connected and injection is prepared         | Any other `native-*` tool                        |
+| `native-describe-screen`          | Read the app's native accessibility screen description                        | `describe`                                       |
+| `chromium-storage`                | Read and write `localStorage` and `sessionStorage` of the active page         | `debugger-evaluate`                              |
+| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                               | `profiler-cpu-query`, mode `top_functions`       |
+| `react-profiler-component-source` | Find a component's source file, line, and memoization status                  | `react-profiler-analyze`                         |
+| `react-profiler-renders`          | List mounted instances and self durations from the fiber tree's top 30 levels | `profiler-commit-query`, mode `render_counts`    |
+| `e2e-read-prerequisite`           | Read the execution prerequisite of an e2e test without running it             | `e2e-execute` without `prerequisiteAcknowledged` |
+| `gather-workspace-data`           | Fetch a structured snapshot of the app project's workspace                    | None                                             |
 
 Some agent tools do not always give the same result as the hidden tool:
 
@@ -657,6 +657,14 @@ Some agent tools do not always give the same result as the hidden tool:
 - `react-profiler-component-source` fails when `project_root` is not on the computer of the tool-server. `react-profiler-analyze` returns the report with a `warning`. When no component in the report table is in `project_root`, the `warning` says so. This can mean that all components in the table are library components, or that `project_root` is wrong. When `project_root` holds no components, `react-profiler-analyze` uses the project root that Metro reports, and the `warning` says so.
 - `react-profiler-renders` reads only the top 30 levels of the React fiber tree and counts the mounted components, not the re-renders. For render counts, use `profiler-commit-query` with `mode: "render_counts"` after a profiling session.
 - `e2e-execute` without `prerequisiteAcknowledged` returns the execution prerequisite and runs no step only when the e2e test has a prerequisite. When the e2e test has no prerequisite, `e2e-execute` runs the e2e test.
+
+`fill` replaces the text of the focused field and reads the field back. The result and the errors never contain the text. In an email input, Chromium stores the domain of an address in ASCII, for example `xn--bcher-kva.de` for `bücher.de`. `fill` accepts that form as the text. On a physical iPhone, Argent cannot read the field back, so `verified` is `false`. Besides errors it shares with other tools, such as a lost connection, an unknown secret placeholder or a page that navigates away during the fill, a failed `fill` returns one of these codes:
+
+| Code                     | Meaning                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FILL_NO_FOCUSED_FIELD`  | No field that takes text has focus. `fill` changes nothing.                                                                                                                                                                                                                                                                                                                                    |
+| `FILL_UNSUPPORTED_FIELD` | The field cannot take the text, and `fill` changes nothing. Examples are a date or time input and a newline in a single-line field. On Chromium, other examples are text longer than the `maxlength` of the field, text that is not a valid number in a number input, whitespace around an address in an email input, and focus in a cross-origin frame, a closed shadow root or an `<embed>`. |
+| `FILL_NOT_VERIFIED`      | The field does not read back the text, or the device does not answer in time. The error message tells if the field can have changed. A Chromium page does not answer while it shows a JavaScript dialog.                                                                                                                                                                                       |
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones and Mac apps are not supported yet.
 

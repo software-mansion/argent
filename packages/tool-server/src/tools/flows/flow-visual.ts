@@ -455,9 +455,6 @@ export async function runSnapshot(
         // best-effort pinStatusBar instead. A Mac window has no status bar: its
         // top band is the title bar and toolbar, compared like the rest.
         topMask: cropFrame === undefined && env.device.platform !== "macos" ? "status-bar" : "none",
-        // Crop dimensions track the element — size drift must hard-fail below
-        // instead of being resampled away like a full-screen scale difference.
-        ...(cropFrame !== undefined && { normalizeSizes: false }),
       }).catch((err: unknown) => {
         // A client baseline that is not a PNG (empty, truncated, a Git LFS
         // pointer): name the client's file, not the copy the finally deletes.
@@ -468,9 +465,7 @@ export async function runSnapshot(
 
       // The differ reports a dimension bail as mismatchPercentage 0, which the
       // threshold below would read as a clean pass — but nothing was compared.
-      // Under cropOn the differ hard-fails ANY size difference (normalizeSizes:
-      // false), so proportional element drift lands here too; full-screen
-      // snapshots keep normalization and only reach this on an aspect change.
+      // Under cropOn, element size drift lands here too.
       if (result.dimensionMismatch) {
         const { expected, actual } = result.dimensionMismatch;
         // A full-screen mismatch on a foldable is usually a posture mismatch:

@@ -13,7 +13,7 @@ import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-pro
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
-const COLLECT_RENDERS_SCRIPT = `
+export const COLLECT_RENDERS_SCRIPT = `
 (function() {
   try {
     var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
@@ -33,9 +33,10 @@ const COLLECT_RENDERS_SCRIPT = `
         else if (fiber.type.name) name = fiber.type.name;
       }
       if (name && fiber.actualDuration !== undefined) {
-        if (!results[name]) results[name] = { renderCount: 0, totalActualDuration: 0, selfBaseDuration: 0 };
-        results[name].renderCount += 1;
-        results[name].totalActualDuration += fiber.actualDuration || 0;
+        if (!results[name]) results[name] = { instanceCount: 0, maxActualDuration: 0, selfBaseDuration: 0 };
+        results[name].instanceCount += 1;
+        var inclusive = fiber.actualDuration || 0;
+        if (inclusive > results[name].maxActualDuration) results[name].maxActualDuration = inclusive;
         results[name].selfBaseDuration += fiber.selfBaseDuration || 0;
       }
       if (fiber.child) walkFiber(fiber.child, depth + 1);
@@ -72,8 +73,8 @@ type ParsedRenders =
   | Record<
       string,
       {
-        renderCount: number;
-        totalActualDuration: number;
+        instanceCount: number;
+        maxActualDuration: number;
         selfBaseDuration: number;
       }
     >
@@ -81,19 +82,19 @@ type ParsedRenders =
 
 interface RenderEntry {
   component: string;
-  renderCount: number;
-  totalActualDuration_ms: number;
+  instanceCount: number;
+  maxActualDuration_ms: number;
   selfBaseDuration_ms: number;
 }
 
 function renderMarkdownTable(entries: RenderEntry[]): string {
   if (entries.length === 0)
     return "_No render data found. Ensure React DevTools global hook is present._";
-  const header = "| Component | Instances | Total (ms) | Self Base (ms) |";
+  const header = "| Component | Instances | Largest subtree (ms) | Self Base (ms) |";
   const sep = "|---|---|---|---|";
   const rows = entries.map(
     (e) =>
-      `| \`${e.component}\` | ${e.renderCount} | ${e.totalActualDuration_ms.toFixed(2)} | ${e.selfBaseDuration_ms.toFixed(2)} |`
+      `| \`${e.component}\` | ${e.instanceCount} | ${e.maxActualDuration_ms.toFixed(2)} | ${e.selfBaseDuration_ms.toFixed(2)} |`
   );
   return [header, sep, ...rows].join("\n");
 }
@@ -105,20 +106,26 @@ const zodSchema = z.object({
     .describe(
       "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
     ),
-  top_n: z.coerce.number().int().positive().default(20).describe("Number of components to return"),
+  top_n: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(20)
+    .describe("Number of components to return, by self render time"),
 });
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
   description: `Scan the live React fiber tree and count the mounted instances of each component, with their last render durations.
-Returns a markdown table of the components with the longest total render time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
-Use when you want a quick look at what is mounted in a live connected app, without a profiling session.
+Returns a markdown table sorted by total self time, with each component's instance count and its largest instance's subtree time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
+Self time comes from each fiber's last render, often its mount, and subtree time from the last commit that reached it, so self time can exceed the subtree column: compare self time between rows.
+Use when you want a quick look at which mounted components are expensive in a live connected app, without a profiling session.
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   zodSchema,
   readOnly: true,
   // It walks only the top 30 fiber levels, above the screens of a real app
-  // (Bluesky's first feed item sits at depth 446), and its totals double-count
-  // nested instances. Agents read render counts from a profiling session
+  // (Bluesky's first feed item sits at depth 446), and counts mounts, not
+  // re-renders. Agents read render counts from a profiling session
   // (profiler-commit-query mode=render_counts); HTTP and SDK callers keep it.
   hideFromMcp: true,
   interaction: {
@@ -207,11 +214,11 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
     const entries: RenderEntry[] = Object.entries(parsed)
       .map(([component, data]) => ({
         component,
-        renderCount: data.renderCount,
-        totalActualDuration_ms: data.totalActualDuration,
+        instanceCount: data.instanceCount,
+        maxActualDuration_ms: data.maxActualDuration,
         selfBaseDuration_ms: data.selfBaseDuration,
       }))
-      .sort((a, b) => b.totalActualDuration_ms - a.totalActualDuration_ms)
+      .sort((a, b) => b.selfBaseDuration_ms - a.selfBaseDuration_ms)
       .slice(0, params.top_n);
 
     return `## Mounted React Components\n\n${renderMarkdownTable(entries)}`;

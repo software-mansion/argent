@@ -1,8 +1,9 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as http from "node:http";
 import { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   CHROMIUM_CDP_NAMESPACE,
   discoverPrimaryPage,
@@ -10,7 +11,6 @@ import {
   chromiumCdpRef,
   ensureCdpReachable,
 } from "../src/blueprints/chromium-cdp";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { chromiumImpl } from "../src/tools/open-url/platforms/chromium";
 import { resolveDevice } from "../src/utils/device-info";
 
@@ -26,10 +26,13 @@ interface FakeCdp {
     method: string,
     payload: Record<string, unknown> | ((id: number) => Record<string, unknown>)
   ) => void;
+  /** Record requests but answer none, like a page under a JavaScript dialog. */
+  mute: () => void;
 }
 
 async function startFakeCdp(): Promise<FakeCdp> {
   const recordedMethods: string[] = [];
+  let muted = false;
   const customReplies = new Map<
     string,
     Record<string, unknown> | ((id: number) => Record<string, unknown>)
@@ -77,6 +80,7 @@ async function startFakeCdp(): Promise<FakeCdp> {
           params?: unknown;
         };
         recordedMethods.push(msg.method);
+        if (muted) return;
         let result: unknown;
         const custom = customReplies.get(msg.method);
         if (custom !== undefined) {
@@ -129,6 +133,9 @@ async function startFakeCdp(): Promise<FakeCdp> {
     ws: wss,
     recordedMethods,
     setReply: (method, payload) => customReplies.set(method, payload),
+    mute: () => {
+      muted = true;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         wss.close(() => httpSrv.close(() => resolve()));
@@ -202,6 +209,26 @@ describe("chromiumCdpBlueprint (smoke)", () => {
     } finally {
       await instance.dispose();
     }
+  });
+
+  it("factory with answerTimeoutMs fails within it, sending nothing more, on a page that does not answer", async () => {
+    const s = await startFakeCdp();
+    servers.push(s);
+    s.mute();
+    const device = resolveDevice(`chromium-cdp-${s.port}`);
+    const started = Date.now();
+
+    const err = await chromiumCdpBlueprint
+      .factory({}, device, { device, answerTimeoutMs: 300 })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT);
+    expect(s.recordedMethods).toEqual(["Runtime.evaluate"]);
+    await vi.waitFor(() => expect(s.ws.clients.size).toBe(0));
   });
 
   it("open-url fails with the classified error when Chromium rejects the navigation", async () => {

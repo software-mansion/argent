@@ -178,7 +178,7 @@ function formatReason(commit: DevToolsFiberCommit): string {
   return parts.join(" ");
 }
 
-function renderByComponent(
+export function renderByComponent(
   commits: DevToolsFiberCommit[],
   componentName: string,
   topN: number,
@@ -220,13 +220,15 @@ function renderByComponent(
     .map(([idx, entries]) => ({
       commitIndex: idx,
       instances: entries.length,
-      totalDuration: entries.reduce((s, e) => s + e.actualDuration, 0),
+      // Same-named instances nest, so inclusive durations can't be summed.
+      maxSubtree: entries.reduce((m, e) => Math.max(m, e.actualDuration), 0),
+      totalSelf: entries.reduce((s, e) => s + e.selfDuration, 0),
       commitDuration: entries[0]!.commitDuration,
       timestamp: entries[0]!.timestamp,
       reason: formatReason(entries[0]!),
       parentName: entries[0]!.parentName ?? "—",
     }))
-    .sort((a, b) => b.totalDuration - a.totalDuration)
+    .sort((a, b) => b.totalSelf - a.totalSelf)
     .slice(0, topN);
 
   const lines: string[] = [
@@ -235,13 +237,13 @@ function renderByComponent(
     ...(resolutionNote ? [resolutionNote, ""] : []),
     `**Total occurrences:** ${matching.length} across ${byCommit.size} commits${storedOnlyNote(resolvedName, matching.filter((c) => c.didRender).length, summary)}`,
     "",
-    "| Commit | Instances | Duration (ms) | Commit Total (ms) | Time (ms) | Reason | Parent |",
-    "|---|---|---|---|---|---|---|",
+    "| Commit | Instances | Self (ms) | Largest subtree (ms) | Commit Total (ms) | Time (ms) | Reason | Parent |",
+    "|---|---|---|---|---|---|---|---|",
   ];
 
   for (const c of sortedCommits) {
     lines.push(
-      `| #${c.commitIndex} | ${c.instances} | ${c.totalDuration.toFixed(1)} | ${c.commitDuration.toFixed(1)} | ${c.timestamp.toFixed(0)} | ${c.reason} | \`${c.parentName}\` |`
+      `| #${c.commitIndex} | ${c.instances} | ${c.totalSelf.toFixed(1)} | ${c.maxSubtree.toFixed(1)} | ${c.commitDuration.toFixed(1)} | ${c.timestamp.toFixed(0)} | ${c.reason} | \`${c.parentName}\` |`
     );
   }
 
@@ -334,7 +336,7 @@ function renderByTimeRange(
     lines.push("");
     for (const comp of s.topComponents) {
       lines.push(
-        `- \`${comp.name}\` ×${comp.count} ${comp.totalDuration.toFixed(1)}ms — ${comp.reason}`
+        `- \`${comp.name}\` ×${comp.count} self ${comp.totalSelf.toFixed(1)}ms, largest subtree ${comp.maxSubtree.toFixed(1)}ms — ${comp.reason}`
       );
     }
     lines.push("");
@@ -356,7 +358,7 @@ export function renderByIndex(
   const commitDuration = matching[0]!.commitDuration;
   const timestamp = matching[0]!.timestamp;
 
-  const sorted = [...matching].sort((a, b) => b.actualDuration - a.actualDuration);
+  const sorted = [...matching].sort((a, b) => b.selfDuration - a.selfDuration);
   // Uncapped by default: rows are fibers, so a small cap would show less than
   // the analyze report that points here.
   const shown = topN !== undefined ? sorted.slice(0, topN) : sorted;
@@ -368,7 +370,7 @@ export function renderByIndex(
     `**Time:** ${timestamp.toFixed(0)}ms  **Duration:** ${commitDuration.toFixed(1)}ms  ` +
       `**Fibers:** ${matching.length}${hidden > 0 ? ` (showing ${shown.length})` : ""}`,
     "",
-    "| Component | Duration (ms) | Self (ms) | Reason | Parent | Compiler |",
+    "| Component | Self (ms) | Subtree (ms) | Reason | Parent | Compiler |",
     "|---|---|---|---|---|---|",
   ];
 
@@ -377,15 +379,15 @@ export function renderByIndex(
     const parent = c.parentName ?? "—";
     const compiler = c.isCompilerOptimized ? "✓" : "";
     lines.push(
-      `| \`${c.componentName}\` | ${c.actualDuration.toFixed(1)} | ${c.selfDuration.toFixed(1)} | ${reason} | \`${parent}\` | ${compiler} |`
+      `| \`${c.componentName}\` | ${c.selfDuration.toFixed(1)} | ${c.actualDuration.toFixed(1)} | ${reason} | \`${parent}\` | ${compiler} |`
     );
   }
 
   if (hidden > 0) {
     lines.push("");
     lines.push(
-      `_Showing the ${shown.length} costliest of ${sorted.length} fibers — ${hidden} cheaper ` +
-        `fibers hidden. Note these are fibers, not components: the full set covers ` +
+      `_Showing the ${shown.length} of ${sorted.length} fibers with the most self time — ` +
+        `${hidden} cheaper fibers hidden. Note these are fibers, not components: the full set covers ` +
         `${new Set(sorted.map((c) => c.componentName)).size} distinct components and this view ` +
         `covers ${new Set(shown.map((c) => c.componentName)).size}. Omit top_n for everything._`
     );
@@ -462,31 +464,38 @@ function renderCascadeTree(commits: DevToolsFiberCommit[], commitIndex: number):
   return lines.join("\n");
 }
 
-function getTopComponents(
+export function getTopComponents(
   entries: DevToolsFiberCommit[],
   topN: number
-): { name: string; count: number; totalDuration: number; reason: string }[] {
+): { name: string; count: number; totalSelf: number; maxSubtree: number; reason: string }[] {
   const byName = new Map<
     string,
-    { count: number; totalDuration: number; first: DevToolsFiberCommit }
+    { count: number; totalSelf: number; maxSubtree: number; first: DevToolsFiberCommit }
   >();
   for (const e of entries) {
     const existing = byName.get(e.componentName);
     if (existing) {
       existing.count++;
-      existing.totalDuration += e.actualDuration;
+      existing.totalSelf += e.selfDuration;
+      existing.maxSubtree = Math.max(existing.maxSubtree, e.actualDuration);
     } else {
-      byName.set(e.componentName, { count: 1, totalDuration: e.actualDuration, first: e });
+      byName.set(e.componentName, {
+        count: 1,
+        totalSelf: e.selfDuration,
+        maxSubtree: e.actualDuration,
+        first: e,
+      });
     }
   }
 
   return [...byName.entries()]
-    .sort((a, b) => b[1].totalDuration - a[1].totalDuration)
+    .sort((a, b) => b[1].totalSelf - a[1].totalSelf)
     .slice(0, topN)
-    .map(([name, { count, totalDuration, first }]) => ({
+    .map(([name, { count, totalSelf, maxSubtree, first }]) => ({
       name,
       count,
-      totalDuration,
+      totalSelf,
+      maxSubtree,
       reason: formatReason(first),
     }));
 }
@@ -519,8 +528,9 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Max results to return. Defaults to 20 for by_component / by_time_range, which count " +
-        "commits, and render_counts, which counts components. by_index counts individual fibers and returns all of them unless this is set; " +
-        "a small cap there can show less than the analyze report it is meant to expand on."
+        "commits, and render_counts, which counts components. by_index counts individual fibers, " +
+        "ranked by self time, and returns all of them unless this is set; a small cap there can " +
+        "show less than the analyze report it is meant to expand on."
     ),
 });
 

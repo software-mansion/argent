@@ -37,6 +37,7 @@ const SUMMARY: HotCommitSummary = {
       name: "work",
       selfMs: 10,
       totalMs: 10,
+      nodeId: 2,
       url: "http://localhost:8081/src/index.bundle",
       lineNumber: 7,
     },
