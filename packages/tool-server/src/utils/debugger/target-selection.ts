@@ -108,15 +108,20 @@ export function selectTarget(
         );
       }
       // The single-device fallback exists for UDIDs/serials Metro never echoes.
-      // A logicalDeviceId we have seen before that has vanished is a device that
-      // left; falling back would silently drive another device while reporting
-      // success.
+      // A logicalDeviceId we have seen before that has vanished is usually a
+      // device that left; falling back would silently drive another device while
+      // reporting success. It can also be the same iOS app under a new id, since
+      // iOS derives the id from identifierForVendor, which a reinstall can reset.
+      // Neither case can be told apart here, so the message covers both.
       if (seenLogicalDeviceIds.has(deviceId)) {
         throw new FailureError(
           `Device with logicalDeviceId "${deviceId}" is no longer attached to Metro on port ${port} — ` +
             `its app likely exited or reloaded onto another Metro. ` +
             `Not falling back to the remaining device: ${listDevices(distinctDevices.values())}. ` +
-            `Relaunch the app on the target device (launch-app / restart-app), then retry.`,
+            `If the app exited, relaunch it on the target device (launch-app / restart-app), then ` +
+            `retry with the same id: a relaunched app keeps its logicalDeviceId. If it was ` +
+            `reinstalled (reinstall-app), iOS can give it a new logicalDeviceId: when the device ` +
+            `listed above is your target, retry with the id shown for it.`,
           {
             error_code: FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS,
             failure_stage: "debugger_select_target",

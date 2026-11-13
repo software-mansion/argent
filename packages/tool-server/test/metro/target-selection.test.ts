@@ -372,5 +372,40 @@ describe("selectTarget", () => {
 
       expect(result.target.id).toBe("android");
     });
+
+    it("tells the caller a relaunched app keeps its id", () => {
+      const thrown = selectGoneAndroid();
+
+      expect((thrown as Error | undefined)?.message).toMatch(
+        /relaunch it[\s\S]*retry with the same id/
+      );
+    });
+
+    it("after a reinstall changed the id, still refuses and points at the id shown for the device", () => {
+      // iOS derives the id from identifierForVendor, which a reinstall can
+      // reset: the same iPhone comes back under a new id while the agent still
+      // holds the old one.
+      const REINSTALLED_ID = "6c1f0e5ab9d24f7e8a3b1c2d4e5f60718293a4b5";
+      const reinstalled = makeTarget({
+        ...iphone(),
+        reactNative: {
+          logicalDeviceId: REINSTALLED_ID,
+          capabilities: { prefersFuseboxFrontend: true },
+        },
+      });
+      selectTarget([iphone(), android()], 8081, { deviceId: IPHONE_ID });
+
+      let thrown: unknown;
+      try {
+        selectTarget([reinstalled], 8081, { deviceId: IPHONE_ID });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      const message = (thrown as Error).message;
+      expect(message).toContain(`iPhone 17 Pro (${REINSTALLED_ID})`);
+      expect(message).toMatch(/reinstall-app[\s\S]*retry with the id shown for it/);
+    });
   });
 });
