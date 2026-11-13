@@ -252,6 +252,50 @@ export function makeComponentTreeScript(opts: {
     }
   } catch(e) {}
 
+  // --- Native stack: routes covered by a later route ---
+  // A react-native-screens native stack (@react-navigation/native-stack) keeps
+  // every route mounted as a child of the RNSScreenStack host, in route order,
+  // the last on top. A route that another is pushed over keeps activityState 2
+  // (native-stack 7) or has none (native-stack 6), so the activityState check
+  // in collectAll misses it. When the walk reaches a stack, mark each route
+  // that a later route covers. A preloaded route (activityState 0) covers
+  // nothing. A SEE_THROUGH route leaves the routes below it on view: a
+  // transparent modal, or a form sheet over part of the screen. Any other
+  // presentation covers them. The top route is never marked, so a stack keeps
+  // at least one screen.
+  var SEE_THROUGH = { transparentModal: 1, containedTransparentModal: 1, formSheet: 1 };
+  var coveredRoutes = [];
+
+  // The props of a route's screen: the first fiber down the route's first-child
+  // chain that carries a react-native-screens Screen prop. The chain passes
+  // SceneView and the navigation providers and, before react-native-screens
+  // 4.4, the DelayedFreeze, Freeze and Suspense fibers that ScreenStack wrapped
+  // each route in.
+  function routeScreenProps(fiber, d) {
+    if (!fiber || d > 20) return null;
+    var p = fiber.memoizedProps;
+    if (p && typeof p === 'object' &&
+        (p.stackPresentation !== undefined || p.screenId !== undefined || p.activityState !== undefined)) {
+      return p;
+    }
+    return routeScreenProps(fiber.child, d + 1);
+  }
+
+  function markCoveredRoutes(stack) {
+    var routes = [];
+    for (var k = stack.child; k; k = k.sibling) {
+      var sp = routeScreenProps(k, 0);
+      if (sp) routes.push({ fiber: k, props: sp });
+    }
+    var covered = false;
+    for (var ki = routes.length - 1; ki >= 0; ki--) {
+      if (covered) coveredRoutes.push(routes[ki].fiber);
+      var rp = routes[ki].props;
+      if (rp.activityState === 0) continue;
+      if (SEE_THROUGH[rp.stackPresentation || 'push'] !== 1) covered = true;
+    }
+  }
+
   // --- Phase 1: Walk tree, collect candidates (no measurement yet) ---
   var candidates = [];
   var totalFibers = 0;
@@ -260,9 +304,20 @@ export function makeComponentTreeScript(opts: {
   function collectAll(fiber, parentCandidateIdx) {
     if (!fiber) return;
 
-    // Skip entire subtrees of inactive screens/pages. react-native-screens uses
-    // activityState (0=inactive, 2=active) and pagers use isPageFocused.
-    // This prunes off-screen navigation stacks and inactive tab pages.
+    // Skip the whole subtree of a screen that is not on view:
+    // - a native-stack route that a later route covers (see markCoveredRoutes);
+    // - a react-native-screens Screen with activityState 0 (detached: an inactive
+    //   tab or drawer screen, a JS-stack card under an opaque card, a preloaded
+    //   route) or 1 (a JS-stack card or a tab in a transition, or a JS-stack
+    //   card under a transparent card);
+    // - a pager page passed isPageFocused={false} (an app prop; Bluesky's feed
+    //   pager sets it).
+    // Do not prune on aria-hidden or accessibilityElementsHidden alone: apps set
+    // them on decorative views that are on view.
+    if (coveredRoutes.length > 0 && coveredRoutes.indexOf(fiber) !== -1) {
+      collectAll(fiber.sibling, parentCandidateIdx);
+      return;
+    }
     if (fiber.memoizedProps) {
       var as = fiber.memoizedProps.activityState;
       if (as === 0 || as === 1) {
@@ -274,6 +329,7 @@ export function makeComponentTreeScript(opts: {
         return;
       }
     }
+    if (fiber.type === 'RNSScreenStack') markCoveredRoutes(fiber);
 
     var name = getCompName(fiber);
     var emittedIdx = -1;
