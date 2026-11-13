@@ -1,11 +1,17 @@
 import { execFileSync, type ChildProcess } from "child_process";
-import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  subprocessFailureMetadata,
+} from "@argent/registry";
 import { promises as fs } from "fs";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
 import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
+import { SIMCTL_KILL_SIGNAL } from "../../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
 import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData, skippedTraceExport } from "../../../../utils/ios-profiler/export";
@@ -70,6 +76,8 @@ interface DetectedApp {
    * matching name". Null when the target is not running; then we attach by name.
    */
   pid: number | null;
+  /** Why the running apps could not be read, when that left `pid` null. */
+  listFailure?: FailureError;
 }
 
 /**
@@ -88,6 +96,7 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        killSignal: SIMCTL_KILL_SIGNAL,
         maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
       }
     );
@@ -206,7 +215,7 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
   } catch (err) {
     // A refused `simctl` says nothing about the app, so this is not "it isn't running yet".
     if (err instanceof XcodeFirstLaunchPendingError) throw err;
-    return { executable: name, pid: null };
+    return { executable: name, pid: null, ...listFailure(err) };
   }
   const matched = runningUserApps.find(
     ({ info }) => info.CFBundleExecutable === name || info.CFBundleDisplayName === name
@@ -215,6 +224,17 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
     return { executable: matched.info.CFBundleExecutable, pid: matched.pid };
   }
   return { executable: name, pid: null };
+}
+
+const LIST_FAILURES: ReadonlySet<string> = new Set([
+  FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_LIST_FAILED,
+  FAILURE_CODES.NATIVE_PROFILER_APP_LIST_FAILED,
+]);
+
+/** A failure to read the apps says nothing about whether the app runs. */
+function listFailure(err: unknown): { listFailure?: FailureError } {
+  const code = getFailureSignal(err)?.error_code;
+  return err instanceof FailureError && code && LIST_FAILURES.has(code) ? { listFailure: err } : {};
 }
 
 function getInstalledApps(udid: string): Record<string, AppInfo> {
@@ -232,6 +252,7 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        killSignal: SIMCTL_KILL_SIGNAL,
         maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
       }
     );
@@ -272,6 +293,7 @@ function getAppBundlePath(udid: string, bundleId: string): string {
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        killSignal: SIMCTL_KILL_SIGNAL,
       }
     ).trim();
   } catch (err) {
@@ -493,6 +515,7 @@ async function startIosRecording(
         ),
         {
           timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+          killSignal: SIMCTL_KILL_SIGNAL,
           stdio: "ignore",
         }
       );
@@ -516,6 +539,7 @@ async function startIosRecording(
     strategy = selectIosCaptureStrategy();
     // The all-processes fallback isolates the app by PID, so it needs a live target.
     if (strategy.name === "all-processes" && detected.pid == null) {
+      if (detected.listFailure) throw detected.listFailure;
       throw new FailureError(
         `The all-processes capture fallback needs the target app to be running so its ` +
           `samples can be isolated by PID, but no running PID was found for "${appProcess}". ` +
@@ -616,6 +640,7 @@ async function startIosRecording(
           ),
           {
             timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+            killSignal: SIMCTL_KILL_SIGNAL,
             stdio: "ignore",
           }
         );

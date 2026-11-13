@@ -355,3 +355,104 @@ describe("startNativeProfilerIos: the wait after the recording starts", () => {
     expect(api.captureProcess).toBeNull();
   });
 });
+
+describe("startNativeProfilerIos when the app list times out", () => {
+  /** What execFileSync throws when its timeout ends the call. */
+  const timedOut = () =>
+    Object.assign(new Error("spawnSync xcrun ETIMEDOUT"), { code: "ETIMEDOUT", signal: "SIGKILL" });
+
+  beforeEach(async () => {
+    const { selectIosCaptureStrategy } = await import("../src/utils/ios-profiler/capture-strategy");
+    // The all-processes capture finds the app by its pid.
+    vi.mocked(selectIosCaptureStrategy).mockReturnValueOnce({
+      name: "all-processes",
+      attachesByName: false,
+      cpuFilterPid: () => null,
+      buildRecordArgs: () => ["record", "--all-processes"],
+    } as never);
+    vi.mocked(execFileSync).mockImplementation(((_file: string, args: string[]) => {
+      if (args.includes("launchctl")) throw timedOut();
+      throw new Error("simctl unavailable in this test");
+    }) as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(execFileSync).mockImplementation((() => {
+      throw new Error("simctl unavailable in this test");
+    }) as never);
+  });
+
+  it("says that the list timed out, not that the app does not run", async () => {
+    const instance = await session();
+    const api = instance.api as NativeProfilerSessionApi;
+
+    const error = await startNativeProfilerIos(api, startParams).catch((err: unknown) => err);
+
+    expect(getFailureSignal(error)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_LIST_FAILED
+    );
+    expect((error as Error).message).toContain("within 10000 ms");
+    expect((error as Error).message).not.toContain("no running PID");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("ends a launchctl call that does not end on its timeout", async () => {
+    const instance = await session();
+    const api = instance.api as NativeProfilerSessionApi;
+
+    await startNativeProfilerIos(api, startParams).catch(() => {});
+
+    const call = vi
+      .mocked(execFileSync)
+      .mock.calls.find(([, args]) => (args as string[]).includes("launchctl"));
+    // simctl spawn passes SIGTERM on to the process in the simulator and waits for it.
+    expect(call?.[2]).toMatchObject({ timeout: 10_000, killSignal: "SIGKILL" });
+  });
+});
+
+describe("startNativeProfilerIos with malloc_stack_logging", () => {
+  afterEach(() => {
+    vi.mocked(execFileSync).mockImplementation((() => {
+      throw new Error("simctl unavailable in this test");
+    }) as never);
+  });
+
+  it("ends each simctl call of the malloc_stack_logging path that does not end on its timeout", async () => {
+    vi.mocked(resolveIosCaptureStrategy).mockReturnValueOnce({
+      strategy: { name: "device" },
+      reason: { kind: "default" },
+    } as unknown as ReturnType<typeof resolveIosCaptureStrategy>);
+    const app = {
+      CFBundleExecutable: "Bluesky",
+      CFBundleIdentifier: "xyz.blueskyweb.app",
+      ApplicationType: "User",
+    };
+    vi.mocked(execFileSync).mockImplementation(((cmd: string, args: string[]) => {
+      if (cmd === "plutil") return JSON.stringify({ [app.CFBundleIdentifier]: app });
+      if (args.includes("get_app_container")) return "/apps/Bluesky.app\n";
+      return "";
+    }) as never);
+    // A failed start launches the app again.
+    vi.mocked(waitForXctraceReady).mockRejectedValueOnce(new Error("xctrace failed"));
+    const instance = await session();
+    const api = instance.api as NativeProfilerSessionApi;
+
+    await startNativeProfilerIos(api, { ...startParams, malloc_stack_logging: true }).catch(
+      () => {}
+    );
+
+    const simctl = vi
+      .mocked(execFileSync)
+      .mock.calls.filter(([file]) => file === "xcrun")
+      .map(([, args, options]) => [
+        (args as string[])[0],
+        (options as { killSignal?: string })?.killSignal,
+      ]);
+    expect(simctl).toEqual([
+      ["listapps", "SIGKILL"],
+      ["get_app_container", "SIGKILL"],
+      ["terminate", "SIGKILL"],
+      ["launch", "SIGKILL"],
+    ]);
+  });
+});
