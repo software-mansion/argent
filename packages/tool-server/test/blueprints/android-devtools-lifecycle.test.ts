@@ -36,6 +36,11 @@ vi.mock("node:child_process", async () => {
 vi.mock("../../src/utils/adb", () => {
   const runAdb = vi.fn(async (args: string[]) => {
     if (args.includes("--remove")) log.push("forward-remove");
+    if (args.includes("force-stop")) {
+      log.push("force-stop");
+      await forceStopGate;
+      log.push("force-stopped");
+    }
     return args.includes("forward")
       ? { stdout: `${helperPort}\n`, stderr: "" }
       : { stdout: "", stderr: "" };
@@ -84,11 +89,38 @@ let connections: net.Socket[] = [];
 let answer: (method: string) => { result?: unknown; error?: unknown } | undefined;
 /** How long `am instrument` takes to exit after `shutdown`; `null` never. */
 let exitAfterShutdownMs: number | null;
+/** `am force-stop` returns once this settles; unset, at once. */
+let forceStopGate: Promise<void> | undefined;
+
+/** Hold `am force-stop` open until the returned function is called. */
+function holdForceStop(): () => void {
+  let release!: () => void;
+  forceStopGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return release;
+}
+
+/** Let pending I/O and promise callbacks run; timers are not advanced. */
+async function flush() {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Whether `promise` has settled, without waiting for it. */
+function watch(promise: Promise<unknown>): { settled: boolean } {
+  const state = { settled: false };
+  void promise.then(
+    () => (state.settled = true),
+    () => (state.settled = true)
+  );
+  return state;
+}
 
 beforeEach(async () => {
   log.length = 0;
   connections = [];
   exitAfterShutdownMs = 50;
+  forceStopGate = undefined;
   answer = () => ({ result: { ok: true } });
   server = net.createServer((socket) => {
     connections.push(socket);
@@ -215,6 +247,178 @@ describe("android-devtools connection lifecycle", () => {
     expect(terminated).toHaveLength(1);
 
     await instance.dispose();
+  });
+
+  // #1880: a helper that stops answering keeps its UiAutomation registration,
+  // so the describe fallback's `uiautomator dump` dies until it is stopped.
+  it("force-stops and terminates a helper whose getHierarchy times out", async () => {
+    const { instance, terminated } = await start();
+    answer = (method) => (method === "getHierarchy" ? undefined : { result: { ok: true } });
+    const { runAdb } = await import("../../src/utils/adb");
+    const forceStop = [
+      "-s",
+      "emulator-5554",
+      "shell",
+      "am",
+      "force-stop",
+      "com.argent.androiddevtools",
+    ];
+
+    const release = holdForceStop();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const read = instance.api.getHierarchy().catch((err: unknown) => err);
+      const state = watch(read);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await flush();
+
+      // Awaited before the error reaches the caller, so its fallback dump can register.
+      expect(vi.mocked(runAdb)).toHaveBeenCalledWith(forceStop, { timeoutMs: 5_000 });
+      expect(state.settled).toBe(false);
+      release();
+      const err = await read;
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT);
+      expect(terminated).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await instance.dispose();
+  });
+
+  it("keeps the helper when setText times out, since the text may have landed", async () => {
+    const { instance, terminated } = await start();
+    answer = (method) => (method === "setText" ? undefined : { result: { ok: true } });
+    const { runAdb } = await import("../../src/utils/adb");
+    vi.mocked(runAdb).mockClear();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const typed = instance.api.setText("x");
+      await vi.advanceTimersByTimeAsync(14_000);
+      await expect(typed).resolves.toMatchObject({ timedOut: true });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(terminated).toHaveLength(0);
+    expect(
+      vi.mocked(runAdb).mock.calls.some(([args]) => (args as string[]).includes("force-stop"))
+    ).toBe(false);
+    await instance.dispose();
+  });
+
+  // After 60 s idle the first request is the reconnect's ping, not the caller's RPC.
+  it("force-stops a helper whose reconnect ping times out, before rejecting", async () => {
+    const { instance, terminated } = await start();
+    await helperClosesConnection();
+    answer = (method) => (method === "ping" ? undefined : { result: { ok: true } });
+    const pings = () => log.filter((method) => method === "ping").length;
+    const pingsBefore = pings();
+    const release = holdForceStop();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const read = instance.api.getHierarchy().catch((err: unknown) => err);
+      const state = watch(read);
+      // The ping's timer starts once the new socket has connected.
+      while (pings() === pingsBefore) await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
+
+      expect(log).toContain("force-stop");
+      expect(state.settled).toBe(false);
+      release();
+
+      expect(getFailureSignal(await read)?.error_code).toBe(
+        FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT
+      );
+      expect(terminated).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await instance.dispose();
+  });
+
+  // The ping timed out, so `setText` was never sent: nothing "may have landed".
+  it("rejects setText when the reconnect ping times out, instead of reporting a fill", async () => {
+    const { instance } = await start();
+    await helperClosesConnection();
+    answer = (method) => (method === "ping" ? undefined : { result: { ok: true } });
+    const pings = () => log.filter((method) => method === "ping").length;
+    const pingsBefore = pings();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const typed = instance.api.setText("hello").catch((err: unknown) => err);
+      while (pings() === pingsBefore) await flush();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(getFailureSignal(await typed)?.error_code).toBe(
+        FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT
+      );
+      expect(log).not.toContain("setText");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await instance.dispose();
+  });
+
+  it("force-stops a helper that does not answer shutdown, instead of orphaning it", async () => {
+    const { instance } = await start();
+    answer = (method) => (method === "shutdown" ? undefined : { result: { ok: true } });
+    exitAfterShutdownMs = null;
+    const release = holdForceStop();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const disposing = instance.dispose();
+      const state = watch(disposing);
+      await flush();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flush();
+
+      expect(log.slice(-2)).toEqual(["shutdown", "force-stop"]);
+      expect(state.settled).toBe(false);
+      release();
+      await disposing;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(log.slice(-4)).toEqual(["shutdown", "force-stop", "force-stopped", "forward-remove"]);
+  });
+
+  // A hung adb transport: the launcher's SIGKILL follows 6 s after a stop.
+  it("stops waiting for the force-stop after 2 s on dispose", async () => {
+    const { instance } = await start();
+    answer = (method) => (method === "shutdown" ? undefined : { result: { ok: true } });
+    exitAfterShutdownMs = null;
+    const release = holdForceStop();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const disposing = instance.dispose();
+      const state = watch(disposing);
+      await flush();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flush();
+      await vi.advanceTimersByTimeAsync(1_900);
+      await flush();
+      expect(state.settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(100);
+      await disposing;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(log.slice(-3)).toEqual(["shutdown", "force-stop", "forward-remove"]);
+    release();
   });
 
   it("lets `am instrument` exit after shutdown before removing the forward, without a kill", async () => {

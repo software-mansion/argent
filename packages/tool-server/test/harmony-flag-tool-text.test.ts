@@ -9,7 +9,8 @@ import { advertisedSchema, definitionsById } from "./helpers/catalog";
 
 vi.mock("@argent/configuration-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/configuration-core")>();
-  return { ...actual, isFlagEnabled: vi.fn(() => false) };
+  const isFlagEnabled = vi.fn<(name: string) => boolean>(() => false);
+  return { ...actual, isFlagEnabled, isFeatureEnabled: (name: string) => isFlagEnabled(name) };
 });
 
 const HARMONY_TEXT = /harmony|\bhdc\b|uitest|deveco/i;

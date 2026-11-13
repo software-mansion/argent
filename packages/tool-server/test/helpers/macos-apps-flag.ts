@@ -34,16 +34,24 @@ export function scopeTempFlags(): void {
 }
 
 /**
- * Runs every test of the calling file with the `macos-apps` flag on, and with
- * neither of the developer's flags files ({@link scopeTempFlags}), so their own
- * flags never leak in. The flag is read per call, so `off()` takes effect for
- * the rest of the test.
+ * Runs every test of the calling file with the `macos-apps` flag on, on a Mac
+ * host (`process.platform` reads "darwin", as the flag takes effect only
+ * there), and with neither of the developer's flags files
+ * ({@link scopeTempFlags}), so their own flags never leak in. The flag is read
+ * per call, so `off()` takes effect for the rest of the test.
  *
  * Call at file top level.
  */
 export function useMacosAppsFlag(): { on: () => void; off: () => void } {
   scopeTempFlags();
+  const realPlatform = process.platform;
   const on = () => setFlag("macos-apps", true, "global");
-  beforeEach(on);
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    on();
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+  });
   return { on, off: () => setFlag("macos-apps", false, "global") };
 }

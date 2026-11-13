@@ -3,7 +3,12 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { launchRunner, waitForRunnerListeningPort } from "../src/utils/ios-device/runner-launch";
+import { execFileSync } from "node:child_process";
+import {
+  disableRunnerAttachments,
+  launchRunner,
+  waitForRunnerListeningPort,
+} from "../src/utils/ios-device/runner-launch";
 
 let tmpRoot: string;
 beforeAll(async () => {
@@ -100,6 +105,77 @@ describe("launchRunner", () => {
     await once(second.child, "exit");
     const secondLog = await fsp.readFile(second.logPath, "utf8");
     expect(secondLog.match(/PORT=/g)).toHaveLength(1);
+  });
+});
+
+/** The keys Xcode writes into a build-for-testing .xctestrun by default. */
+const XCODE_DEFAULT_TARGET = `
+    <key>PreferredScreenCaptureFormat</key><string>screenRecording</string>
+    <key>SystemAttachmentLifetime</key><string>deleteOnSuccess</string>
+    <key>UserAttachmentLifetime</key><string>deleteOnSuccess</string>
+    <key>TestHostPath</key><string>__TESTROOT__/ArgentRunner.app</string>`;
+
+function readKeys(file: string, keyPath: string): Record<string, string> {
+  const read = (key: string) =>
+    execFileSync("plutil", ["-extract", `${keyPath}.${key}`, "raw", file], {
+      encoding: "utf8",
+    }).trim();
+  return {
+    PreferredScreenCaptureFormat: read("PreferredScreenCaptureFormat"),
+    SystemAttachmentLifetime: read("SystemAttachmentLifetime"),
+    UserAttachmentLifetime: read("UserAttachmentLifetime"),
+    TestHostPath: read("TestHostPath"),
+  };
+}
+
+const PATCHED = {
+  PreferredScreenCaptureFormat: "screenshots",
+  SystemAttachmentLifetime: "keepNever",
+  UserAttachmentLifetime: "keepNever",
+  TestHostPath: "__TESTROOT__/ArgentRunner.app",
+};
+
+describe.skipIf(process.platform !== "darwin")("disableRunnerAttachments", () => {
+  it("turns off screen recording and attachment retention in a format 1 xctestrun", async () => {
+    const file = path.join(tmpRoot, "format1.xctestrun");
+    await fsp.writeFile(
+      file,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>ArgentRunnerUITests</key><dict>${XCODE_DEFAULT_TARGET}</dict>
+  <key>__xctestrun_metadata__</key><dict><key>FormatVersion</key><integer>1</integer></dict>
+</dict></plist>`
+    );
+
+    await disableRunnerAttachments(file);
+
+    expect(readKeys(file, "ArgentRunnerUITests")).toEqual(PATCHED);
+  });
+
+  it("patches the test target of a format 2 xctestrun", async () => {
+    const file = path.join(tmpRoot, "format2.xctestrun");
+    await fsp.writeFile(
+      file,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>TestConfigurations</key><array><dict>
+    <key>TestTargets</key><array><dict>${XCODE_DEFAULT_TARGET}</dict></array>
+  </dict></array>
+  <key>__xctestrun_metadata__</key><dict><key>FormatVersion</key><integer>2</integer></dict>
+</dict></plist>`
+    );
+
+    await disableRunnerAttachments(file);
+
+    expect(readKeys(file, "TestConfigurations.0.TestTargets.0")).toEqual(PATCHED);
+  });
+
+  it("leaves a missing file alone instead of failing the launch", async () => {
+    await expect(
+      disableRunnerAttachments(path.join(tmpRoot, "missing.xctestrun"))
+    ).resolves.toBeUndefined();
   });
 });
 

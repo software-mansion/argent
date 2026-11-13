@@ -8,12 +8,11 @@ sidebar_custom_props:
 
 Argent drives a native Mac app that you build: an AppKit, SwiftUI or react-native-macos app. The agent starts the app, reads the screen, clicks, drags, scrolls, types and takes screenshots. The app stays in the background, and Argent does not move the pointer. Thus you continue to use the Mac while the agent works. Argent needs no Accessibility permission and no Screen Recording permission.
 
-This feature is behind the `macos-apps` flag. The flag is off by default.
+The `macos-apps` flag controls this feature. The flag is on by default. To turn the feature off, run `argent disable macos-apps`.
 
 ## Requirements
 
 - macOS 14.4 or later.
-- The `macos-apps` flag on.
 - The built `.app` bundle of your app on disk, for example a Debug build from Xcode.
 - A build that allows the Argent library. See [The hardened runtime](#the-hardened-runtime).
 
@@ -29,10 +28,9 @@ When the tool-server disconnects from the app, for example when the tool-server 
 
 ## The first run
 
-1. Run `argent enable macos-apps`. The change takes effect immediately. Start a new agent session to give the agent the `file-panel` and `menu-bar` tools, because an editor reads the tool list when the session starts.
-2. Build the app. Use a build command that does not start the app, for example `xcodebuild build`. Xcode Run and `react-native run-macos` start a copy without the Argent library.
-3. Ask the agent to open the app, and give the path of the `.app` bundle. The agent starts the app with `boot-device`.
-4. The agent reads the screen with `describe`, then clicks and types.
+1. Build the app. Use a build command that does not start the app, for example `xcodebuild build`. Xcode Run and `react-native run-macos` start a copy without the Argent library.
+2. Ask the agent to open the app, and give the path of the `.app` bundle. The agent starts the app with `boot-device`.
+3. The agent reads the screen with `describe`, then clicks and types.
 
 ## One app is one device
 

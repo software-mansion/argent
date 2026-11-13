@@ -274,7 +274,7 @@ export async function init(args: string[]): Promise<void> {
       fromTar: parsed.fromTar,
       version,
       scope,
-      customRoot,
+      effectiveRoot,
     });
 
     p.log.step(pc.bold("Step 3: Rules"));

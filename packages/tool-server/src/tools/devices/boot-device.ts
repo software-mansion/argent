@@ -73,7 +73,7 @@ import {
   isIosPhysicalUdid,
   nativeIdPlatform,
 } from "../../utils/external-devices";
-import { InvalidToolInputError, MACOS_APPS_FLAG } from "../../utils/capability";
+import { InvalidToolInputError, isFlagOffered, MACOS_APPS_FLAG } from "../../utils/capability";
 import {
   simctlBoot as simRemoteBoot,
   simctlBootstatus as simRemoteBootstatus,
@@ -2364,7 +2364,7 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
         throw new InvalidToolInputError(
           renderFlagGated(
             "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), <flag:harmonyos>`harmonyInstance` (HarmonyOS), </flag:harmonyos><flag:macos-apps>`macosAppPath` (Mac app), </flag:macos-apps>`electronAppPath` (Electron), or `browser` (web browser).",
-            isFlagEnabled
+            isFlagOffered
           ),
           {
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,

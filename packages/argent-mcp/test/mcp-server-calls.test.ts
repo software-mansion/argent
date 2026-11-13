@@ -93,6 +93,20 @@ const RUN_REPORT = {
 /** What the stub answers `e2e-execute` with: RUN_REPORT unless a test swaps it. */
 let runReport: Record<string, unknown> = RUN_REPORT;
 
+const DEVICES = {
+  devices: [
+    { platform: "ios", udid: "BOOTED", name: "iPhone 17", state: "Booted", runtimeKind: "mobile" },
+    {
+      platform: "ios",
+      udid: "STOPPED",
+      name: "iPad",
+      state: "Shutdown",
+      runtime: "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+    },
+  ],
+  avds: [],
+};
+
 type Route = (res: http.ServerResponse) => void | Promise<void>;
 
 /**
@@ -135,6 +149,9 @@ async function startStub({
       }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/list-devices") {
+        return json(200, { data: DEVICES });
       }
       // Both made while a profiler records on the device.
       if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
@@ -292,6 +309,24 @@ describe("startMcpServer tool calls", () => {
     expect(textOf(tap)).toContain("skipped while a profiler is recording");
     expect(textOf(described)).toContain("Button 'OK'");
     expect(textOf(described)).not.toContain("profiler");
+  });
+
+  it("renders list-devices in the short form", async () => {
+    const result = await client.callTool({ name: "list-devices", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    // One block: the short text replaces the JSON, it does not go out beside it.
+    expect(result.content).toHaveLength(1);
+    expect(textOf(result)).toBe(
+      [
+        '{"devices":[',
+        '{"platform":"ios","udid":"BOOTED","name":"iPhone 17","state":"Booted"}',
+        "],",
+        '"avds":[]}',
+        "iOS simulators that are shut down, one per line (platform, udid, name, runtime, state, tags); start one with boot-device:",
+        'ios STOPPED "iPad" iOS 27.0 Shutdown',
+      ].join("\n")
+    );
   });
 
   it("uploads a tar-upload input and returns the tool result", async () => {

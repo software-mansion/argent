@@ -8,7 +8,7 @@
  * long gap still shows causality.
  */
 import { promises as fs } from "fs";
-import { join } from "path";
+import { isAbsolute, join, relative, sep } from "path";
 import type { HotCommitSummary, ComponentFinding } from "../types/output";
 import type { SessionContext } from "../types/pipeline";
 import { annotateComponentName } from "../component-names";
@@ -27,6 +27,7 @@ import {
 import { createComponentOriginClassifier, type ComponentOriginResult } from "../component-origin";
 
 const MAX_INLINE_COMMITS = 10;
+const MAX_OTHER_MATCHES = 3;
 const MAX_OUTSIDE_SOURCE_NAMES = 5;
 const REPORT_FILENAME = "react-profiler-report.md";
 
@@ -185,7 +186,15 @@ function renderNoHotCommits(input: RenderInput, maxMs: number): string {
   }
 
   const { rows, cut } = frequentRerenderRows(input);
-  lines.push(...renderFrequentRerenders(summary, rows, frequentOutsideSource(input), cut));
+  lines.push(
+    ...renderFrequentRerenders(
+      summary,
+      rows,
+      frequentOutsideSource(input),
+      input.sessionContext.projectRoot,
+      cut
+    )
+  );
 
   lines.push(``, `---`, `## Next Steps`, ``);
   if (rows.length > 0) {
@@ -239,6 +248,7 @@ function renderFrequentRerenders(
   summary: RenderSummary | null,
   rows: FrequentRerenderRow[],
   outsideSource: string[],
+  projectRoot: string,
   cut: FrequentRerenderRow[] = []
 ): string[] {
   if (!summary) return [];
@@ -257,7 +267,7 @@ function renderFrequentRerenders(
     ``,
     `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
     `|---|---|---|---|---|---|---|`,
-    ...rows.map(renderFrequentRow),
+    ...rows.map((row) => renderFrequentRow(row, projectRoot)),
     ...cutNote,
     ...outsideNote,
   ];
@@ -287,12 +297,12 @@ function renderOutsideSourceNote(names: string[]): string {
   return `Frequent re-renders left out because the source index has no definition for the name: ${shown}${more}. These are usually library components. Class components, components made by a wrapper such as \`observer()\`, and all of your components when \`project_root\` is wrong land here too. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
 }
 
-function renderFrequentRow(row: FrequentRerenderRow): string {
+function renderFrequentRow(row: FrequentRerenderRow, projectRoot: string): string {
   const c = row.component;
   const ann = annotateComponentName(c.name);
   const file =
     row.origin.file !== undefined
-      ? `\`${shortenPath(row.origin.file)}${row.origin.line !== undefined ? `:${row.origin.line}` : ""}\``
+      ? `\`${pathFromProject(row.origin.file, projectRoot)}${row.origin.line !== undefined ? `:${row.origin.line}` : ""}\``
       : "—";
   return (
     `| \`${ann.displayName}\`${ann.tag} | ${formatCount(c.rerenders)} | ${row.perSecond.toFixed(1)} | ` +
@@ -360,7 +370,7 @@ function buildFullMarkdown(
     lines.push("|---|---|---|---|---|---|---|");
     for (const f of input.componentFindings) {
       const file = f.sourceLocation
-        ? `\`${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}\``
+        ? formatLocation(f.sourceLocation, sessionContext.projectRoot)
         : "—";
       const reasonStr = formatReason(f.dominantReason, f.topChangedProps, f.topChangedHookNames);
       const compilerFlag = f.compilerBailoutSuspected ? " ⚠️" : f.isCompilerOptimized ? " ✓" : "";
@@ -397,6 +407,7 @@ function buildFullMarkdown(
         input.renderSummary ?? null,
         tableAddsRow ? frequent : [],
         outsideSource,
+        sessionContext.projectRoot,
         cutNew
       )
     );
@@ -404,7 +415,8 @@ function buildFullMarkdown(
 
   const suggestionsSection = renderSuggestedImprovements(
     input.componentFindings,
-    sessionContext.reactCompilerEnabled
+    sessionContext.reactCompilerEnabled,
+    sessionContext.projectRoot
   );
   if (suggestionsSection) {
     lines.push(suggestionsSection);
@@ -623,7 +635,8 @@ function findPriorAnnotation(
 
 function renderSuggestedImprovements(
   findings: ComponentFinding[],
-  compilerEnabled: boolean
+  compilerEnabled: boolean,
+  projectRoot: string
 ): string {
   if (findings.length === 0) return "";
 
@@ -635,9 +648,7 @@ function renderSuggestedImprovements(
   const lines: string[] = ["", "---", "## Suggested Improvements", ""];
 
   for (const f of topFindings) {
-    const loc = f.sourceLocation
-      ? `\`${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}\``
-      : null;
+    const loc = f.sourceLocation ? formatLocation(f.sourceLocation, projectRoot) : null;
     const ann = annotateComponentName(f.component);
     const heading = `\`${ann.displayName}\`${ann.tag}`;
     lines.push(loc ? `### ${heading} — ${loc}` : `### ${heading}`);
@@ -717,7 +728,7 @@ function renderSuggestedImprovements(
     }
 
     if (f.sourceSnippet && f.sourceLocation) {
-      const snippetPath = `${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}`;
+      const snippetPath = `${pathFromProject(f.sourceLocation.file, projectRoot)}:${f.sourceLocation.line}`;
       lines.push("");
       lines.push(`<details><summary>Source — \`${snippetPath}\`</summary>`);
       lines.push("");
@@ -734,9 +745,31 @@ function renderSuggestedImprovements(
   return lines.join("\n");
 }
 
+function formatLocation(
+  loc: { file: string; line: number; otherMatches?: Array<{ file: string; line: number }> },
+  projectRoot: string
+): string {
+  const main = `\`${pathFromProject(loc.file, projectRoot)}:${loc.line}\``;
+  const others = loc.otherMatches ?? [];
+  if (others.length === 0) return main;
+  const shown = others
+    .slice(0, MAX_OTHER_MATCHES)
+    .map((m) => `${pathFromProject(m.file, projectRoot)}:${m.line}`);
+  const rest = others.length - shown.length;
+  return `${main} (name also in ${shown.join(", ")}${rest > 0 ? `, +${rest} more` : ""})`;
+}
+
+/** For a CPU frame's bundle url, where the end of the path is all that helps. */
 function shortenPath(file: string): string {
   const parts = file.replace(/\\/g, "/").split("/");
   return parts.slice(-2).join("/");
+}
+
+/** A path that an agent can open, unlike the end of the path. */
+function pathFromProject(file: string, projectRoot: string): string {
+  const fromRoot = relative(projectRoot, file);
+  const outsideRoot = !fromRoot || fromRoot.split(sep)[0] === ".." || isAbsolute(fromRoot);
+  return outsideRoot ? file : fromRoot;
 }
 
 async function writeReport(path: string, content: string): Promise<boolean> {

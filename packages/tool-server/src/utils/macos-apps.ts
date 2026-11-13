@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   FailureError,
@@ -16,8 +16,8 @@ import { macosArtifacts } from "@argent/native-devtools-ios";
 import {
   InvalidToolInputError,
   MACOS_APPS_FLAG,
-  MACOS_APPS_FLAG_OFF_REASON,
   UnsupportedOperationError,
+  macosAppsUnavailableReason,
 } from "./capability";
 import {
   MACOS_APP_ID_PREFIX,
@@ -30,19 +30,21 @@ import { PS_BIN } from "./vega-process";
 const execFileAsync = promisify(execFile);
 
 export function isMacosAppsEnabled(): boolean {
-  return isFlagEnabled(MACOS_APPS_FLAG);
+  return isFeatureEnabled(MACOS_APPS_FLAG);
 }
 
 /**
  * For the Mac branches the capability gate does not cover: `boot-device` with
- * `macosAppPath` has no device id for it to read.
+ * `macosAppPath` has no device id for it to read. Refuses as that gate does, so
+ * off macOS nothing reads the bundle.
  */
 export function assertMacosAppsEnabled(toolId: string, device?: DeviceInfo): void {
-  if (isMacosAppsEnabled()) return;
+  const reason = macosAppsUnavailableReason();
+  if (!reason) return;
   throw new UnsupportedOperationError(
     toolId,
     device ?? { id: MACOS_APP_ID_PREFIX, platform: "macos", kind: "app" },
-    MACOS_APPS_FLAG_OFF_REASON
+    reason
   );
 }
 

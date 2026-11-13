@@ -11,12 +11,10 @@ const zodSchema = z.object({
     .array(z.string())
     .optional()
     .describe(
-      "View fields to include. Use EXACT names: " +
-        "className, frame, hidden, alpha, identifier, label, nativeID, " +
-        "userInteractionEnabled, depth, pointer, tag, windowFrame, screenFrame, bounds, " +
-        "center, opaque, clipsToBounds, transform, contentMode, " +
-        "backgroundColor, tintColor, layerName. " +
-        "Defaults to all of the first group when omitted."
+      "View fields to include. Use EXACT names. Defaults: pointer, className, tag, frame, " +
+        "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
+        "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
+        "Additional: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder"
     ),
   skipClasses: z
     .array(z.string())
