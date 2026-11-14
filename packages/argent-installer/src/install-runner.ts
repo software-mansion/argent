@@ -4,9 +4,11 @@ import { track } from "@argent/telemetry";
 import {
   getInstalledVersion,
   getGloballyInstalledVersion,
+  getGloballyInstalledPackageRoot,
   getLatestVersion,
   isNewerVersion,
   detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   localInstallCommand,
@@ -345,7 +347,7 @@ async function runGlobal(opts: {
       if (p.isCancel(updateChoice) || updateChoice === "skip") {
         await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
       } else if (updateChoice === "update") {
-        const pm = detectPackageManager();
+        const pm = detectGlobalPackageManager(getGloballyInstalledPackageRoot());
         const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
         const cmdStr = formatShellCommand(cmd);
         const updateSpinner = p.spinner();
