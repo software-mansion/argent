@@ -273,6 +273,19 @@ describe("resolveFileInputs — tar-upload kind", () => {
     }
   );
 
+  it("says a plain relative path is resolved against the tool-server's working directory", async () => {
+    const err = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wire({ path: "build/MyApp.app" }) },
+      () => undefined
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).message).toBe(
+      `Path "build/MyApp.app" is not an absolute path. The tool-server resolves a relative path ` +
+        `against its own working directory, so pass the file's absolute path.`
+    );
+  });
+
   it("fails when uploadId is set without contentHash", async () => {
     const appDir = await makeFakeApp("MyApp.app");
     const tarPath = await tarApp(appDir);

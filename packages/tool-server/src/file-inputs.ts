@@ -35,6 +35,7 @@ import bytesUtil from "bytes";
 import { safeExtractTarGz } from "@argent/archive";
 import {
   isFileInputWire,
+  isUnexpandedPath,
   type FileInputMember,
   type FileInputSpec,
   type FileInputWire,
@@ -370,12 +371,16 @@ async function resolveMembers(
 /**
  * A current client sends a path as absolute, except a spelling nothing expanded
  * (`~`, `$VAR`, `$(cmd)`, `%VAR%`, a URL), which no host has a file at either.
+ * A direct HTTP caller or an older client can also send a plain relative path.
  */
 function unexpandedPathError(wire: FileInputWire): FileInputError | undefined {
   if (isAbsolute(wire.path) || win32.isAbsolute(wire.path)) return undefined;
   return new FileInputError(
-    `Path "${wire.path}" is not an absolute path. Nothing expands "~", variables, ` +
-      `commands or URLs in a file argument, so pass the file's absolute path.`
+    `Path "${wire.path}" is not an absolute path. ` +
+      (isUnexpandedPath(wire.path)
+        ? `Nothing expands "~", variables, commands or URLs in a file argument, `
+        : `The tool-server resolves a relative path against its own working directory, `) +
+      `so pass the file's absolute path.`
   );
 }
 
