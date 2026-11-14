@@ -46,6 +46,9 @@ describe("profiler-commit-query by_index — top_n", () => {
     // Self time is half the duration here, so the retained rows are 30..23.
     expect(rows[0]).toContain("| 30.0 |");
     expect(rows[7]).toContain("| 23.0 |");
+    expect(out.split("\n")).toContain(
+      "_Showing the 8 of 30 fibers with the most self time — 22 cheaper fibers hidden. Note these are fibers, not components: the full set covers 10 distinct components and this view covers 8. Omit top_n for everything._"
+    );
   });
 
   it("reports the true fiber total alongside the shown count", () => {
