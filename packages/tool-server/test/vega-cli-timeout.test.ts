@@ -443,6 +443,7 @@ describe("runVega timeout (real subprocess)", () => {
     } finally {
       // Outside sweep()'s `sleep` namespace.
       execSync(`pkill -9 -f '${pattern}' || true`);
+      await run;
     }
   });
 
@@ -463,6 +464,7 @@ describe("runVega timeout (real subprocess)", () => {
     } finally {
       // Outside sweep()'s `sleep` namespace.
       execSync(`pkill -9 -f '${pattern}' || true`);
+      await run;
     }
   });
 
