@@ -159,6 +159,23 @@ describe("install-skills script", () => {
     expect(fs.existsSync(path.join(project, path.dirname(target)))).toBe(false);
   });
 
+  it("reports a .claude/skills link loop as ELOOP", () => {
+    fs.mkdirSync(path.join(project, ".claude"));
+    fs.symlinkSync("skills", path.join(project, ".claude", "skills"));
+
+    const { status, stderr } = spawnSync(process.execPath, [SCRIPT], {
+      cwd: project,
+      encoding: "utf8",
+    });
+
+    expect({ status, stderr }).toEqual({
+      status: 1,
+      stderr:
+        "Could not install skills: ELOOP: too many symbolic links encountered, " +
+        `mkdir '${path.join(project, ".claude", "skills")}'\n`,
+    });
+  });
+
   // A fresh clone runs it before any build, so it must not import a workspace package.
   it("runs from a copy outside the workspace, writing through a linked skills dir", () => {
     const pkg = path.join(project, "pkg");
