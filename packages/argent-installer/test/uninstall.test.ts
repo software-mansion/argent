@@ -170,6 +170,67 @@ describe("uninstall — telemetry consent preservation", () => {
     expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
   });
 
+  it("removes a bun-owned global install with bun, not with the launcher's npm", async () => {
+    // Bun's layout under the sandboxed HOME: ~/.bun/bin/argent is a relative
+    // symlink into ~/.bun/install/global/node_modules/, which the topology
+    // probe resolves to the package root. The launcher's user agent is unset
+    // above; a moved bun install must not redirect the check either.
+    const bunKeys = ["BUN_INSTALL", "BUN_INSTALL_GLOBAL_DIR"];
+    const savedBun = Object.fromEntries(bunKeys.map((key) => [key, process.env[key]]));
+    for (const key of bunKeys) delete process.env[key];
+    try {
+      const pkgRoot = path.join(
+        tmpDir,
+        ".bun",
+        "install",
+        "global",
+        "node_modules",
+        "@swmansion",
+        "argent"
+      );
+      writeFile(
+        path.join(pkgRoot, "package.json"),
+        JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+      );
+      writeFile(path.join(pkgRoot, "dist", "cli.js"), "");
+      const binPath = path.join(tmpDir, ".bun", "bin", "argent");
+      fs.mkdirSync(path.dirname(binPath), { recursive: true });
+      fs.symlinkSync(
+        path.join(
+          "..",
+          "install",
+          "global",
+          "node_modules",
+          "@swmansion",
+          "argent",
+          "dist",
+          "cli.js"
+        ),
+        binPath
+      );
+      childProcessMock.which.mockImplementation(() => `${binPath}\n`);
+      process.chdir(tmpDir);
+
+      await uninstall(["--yes"]);
+
+      expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+        "bun",
+        ["remove", "-g", "@swmansion/argent"],
+        expect.any(Object)
+      );
+      expect(childProcessMock.execFileSync).not.toHaveBeenCalledWith(
+        "npm",
+        expect.anything(),
+        expect.anything()
+      );
+    } finally {
+      for (const key of bunKeys) {
+        if (savedBun[key] === undefined) delete process.env[key];
+        else process.env[key] = savedBun[key];
+      }
+    }
+  });
+
   it("drains queued uninstall telemetry before deleting the local telemetry id", async () => {
     process.chdir(tmpDir);
 

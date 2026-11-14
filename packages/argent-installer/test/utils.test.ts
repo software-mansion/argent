@@ -41,6 +41,7 @@ import {
   RETIRED_BUNDLED_PATHS,
   dirExists,
   detectPackageManager,
+  detectGlobalPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
@@ -657,6 +658,85 @@ describe("detectPackageManager", () => {
   it("returns bun for bun agent", () => {
     process.env.npm_config_user_agent = "bun/1.0.0";
     expect(detectPackageManager()).toBe("bun");
+  });
+});
+
+// ── detectGlobalPackageManager ───────────────────────────────────────────────
+
+describe("detectGlobalPackageManager", () => {
+  // Pins the launcher (npm_config_user_agent) and bun's global dir, so the
+  // verdict comes from the staged root and not from the contributor's machine.
+  const ENV_KEYS = [
+    "npm_config_user_agent",
+    "BUN_INSTALL",
+    "BUN_INSTALL_GLOBAL_DIR",
+    "HOME",
+    "USERPROFILE",
+  ] as const;
+  let saved: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+
+  beforeEach(() => {
+    saved = {};
+    for (const key of ENV_KEYS) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+    process.env.BUN_INSTALL = tmpDir;
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  // An install root as getGloballyInstalledPackageRoot reports it: on disk,
+  // and a real path — which on macOS differs from the os.tmpdir() the env vars
+  // above name (/var is a symlink to /private/var).
+  function stageRoot(...nodeModulesParent: string[]): string {
+    const root = path.join(tmpDir, ...nodeModulesParent, "node_modules", PACKAGE_NAME);
+    fs.mkdirSync(root, { recursive: true });
+    return fs.realpathSync(root);
+  }
+
+  it("reads bun from the install's location when nothing launched argent", () => {
+    expect(detectGlobalPackageManager(stageRoot("install", "global"))).toBe("bun");
+  });
+
+  it("lets the install's location win over the launcher's user agent", () => {
+    process.env.npm_config_user_agent = "npm/10.9.0 node/v22.0.0 darwin arm64";
+    expect(detectGlobalPackageManager(stageRoot("install", "global"))).toBe("bun");
+  });
+
+  it("finds bun's default global dir under the home directory", () => {
+    delete process.env.BUN_INSTALL;
+    process.env.HOME = tmpDir;
+    process.env.USERPROFILE = tmpDir;
+    expect(detectGlobalPackageManager(stageRoot(".bun", "install", "global"))).toBe("bun");
+  });
+
+  it("follows a global dir moved with BUN_INSTALL_GLOBAL_DIR", () => {
+    delete process.env.BUN_INSTALL;
+    process.env.BUN_INSTALL_GLOBAL_DIR = path.join(tmpDir, "globals");
+    expect(detectGlobalPackageManager(stageRoot("globals"))).toBe("bun");
+  });
+
+  it("reads npm from an npm-prefix install, whatever launched argent", () => {
+    process.env.npm_config_user_agent = "bun/1.4.4 npm/? node/v24.3.0 darwin arm64";
+    expect(detectGlobalPackageManager(stageRoot("lib"))).toBe("npm");
+  });
+
+  it("keeps the user-agent answer for a layout it does not know", () => {
+    const root = stageRoot("elsewhere");
+    expect(detectGlobalPackageManager(root)).toBe("npm");
+    process.env.npm_config_user_agent = "pnpm/9.0.0";
+    expect(detectGlobalPackageManager(root)).toBe("pnpm");
+  });
+
+  it("keeps the user-agent answer when the root could not be resolved", () => {
+    process.env.npm_config_user_agent = "bun/1.4.4";
+    expect(detectGlobalPackageManager(null)).toBe("bun");
   });
 });
 

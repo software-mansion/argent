@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
@@ -26,6 +27,45 @@ export function detectPackageManager(): PackageManager {
   if (agent.startsWith("pnpm")) return "pnpm";
   if (agent.startsWith("bun")) return "bun";
   return "npm";
+}
+
+// Bun's global packages live under <BUN_INSTALL or ~/.bun>/install/global, or
+// under BUN_INSTALL_GLOBAL_DIR when that moves them. Each candidate is
+// compared by real path, as the install root is one (a symlinked home, macOS's
+// /private/var), and with `/` separators, like isTempRunnerPath.
+function isBunGlobalRoot(packageRoot: string): boolean {
+  const slashed = (p: string): string => p.split("\\").join("/");
+  const bunInstall = process.env.BUN_INSTALL || path.join(os.homedir(), ".bun");
+  const candidates = [
+    process.env.BUN_INSTALL_GLOBAL_DIR,
+    path.join(bunInstall, "install", "global"),
+  ];
+  return candidates.some((dir) => {
+    if (!dir) return false;
+    let real = dir;
+    try {
+      real = fs.realpathSync(dir);
+    } catch {
+      // Not on disk: compare as given.
+    }
+    return slashed(packageRoot).startsWith(slashed(path.join(real, "node_modules")) + "/");
+  });
+}
+
+// The package manager that owns an EXISTING global install, read from where
+// it lives. npm_config_user_agent names whoever launched `argent` — unset for
+// a bare `argent update` and for the tool-server's updater — so on its own it
+// sends a `bun add -g` install to `npm install -g`, which lays a second copy
+// under npm's prefix while PATH keeps running the old one. Recognised: bun's
+// global dir, and npm's `<prefix>/lib/node_modules` for the reverse case (an
+// npm install updated through `bunx`). Anything else — and a root the layout
+// can't resolve, like pnpm's shell shim (#1207) — keeps the user-agent answer.
+export function detectGlobalPackageManager(packageRoot: string | null): PackageManager {
+  if (packageRoot !== null) {
+    if (isBunGlobalRoot(packageRoot)) return "bun";
+    if (packageRoot.split("\\").join("/").includes("/lib/node_modules/")) return "npm";
+  }
+  return detectPackageManager();
 }
 
 function asKnownPm(name: unknown): PackageManager | null {
