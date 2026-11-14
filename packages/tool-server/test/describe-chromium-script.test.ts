@@ -2868,9 +2868,11 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(barred, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.5 } });
     // A frame's own document may take the wheel, though its element sits in the pane.
     const TOP = { x: 0, y: 0, w: 300, h: 300 };
-    const frame = el({ tag: "iframe", rect: TOP, painted: TOP });
-    const framed = run([pane([frame, cutRow()], PANE)]).tree;
-    expect(findById(framed, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.5 } });
+    for (const tag of ["iframe", "frame", "object", "embed"]) {
+      const frame = el({ tag, rect: TOP, painted: TOP });
+      const framed = run([pane([frame, cutRow()], PANE)]).tree;
+      expect(findById(framed, "cut")!.clipAnchors, tag).toEqual({ y: { x: 0.0285, y: 0.5 } });
+    }
     // A scroller between the cutter and the row carries the row as it scrolls.
     const inner = el({
       rect: { x: 0, y: 0, w: 285, h: 2 * H },
