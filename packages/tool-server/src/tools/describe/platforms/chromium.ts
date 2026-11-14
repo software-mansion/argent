@@ -1545,23 +1545,23 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // A fieldset's rendered legend, which its overflow never clips: the first <legend>
   // among its flat-tree children, seen through display:contents boxes (slots included),
   // that generates a box and is neither floated nor out of flow. A display:contents
-  // fieldset has none; the fieldset around it takes the legend.
+  // fieldset has none; the fieldset around it takes the legend. Under a box that may host
+  // a closed root, which can slot it anywhere in its shadow tree, a legend counts only
+  // where layout put it. A stack, not recursion: those boxes can nest thousands deep.
   function renderedLegend(el, style) {
-    return htmlTag(el) === "FIELDSET" && style.display !== "contents"
-      ? firstLegend(el, style, flatChildElements(el), false)
-      : null;
-  }
-  // unsure: kids sit under a box that may host a closed root, which can slot them
-  // anywhere in its shadow tree.
-  function firstLegend(el, style, kids, unsure) {
-    for (const kid of kids) {
+    if (!isHtml(el, "fieldset") || style.display === "contents") return null;
+    const stack = [];
+    const push = (kids, unsure) => {
+      for (let i = kids.length - 1; i >= 0; i--) stack.push([kids[i], unsure]);
+    };
+    push(flatChildElements(el), false);
+    while (stack.length) {
+      const [kid, unsure] = stack.pop();
       const ks = window.getComputedStyle(kid);
       if (ks.display === "contents") {
-        const closed = !getShadowRoot.call(kid) && canHostShadow(kid);
-        const found = firstLegend(el, style, flatChildElements(kid), unsure || closed);
-        if (found) return found;
+        push(flatChildElements(kid), unsure || (!getShadowRoot.call(kid) && canHostShadow(kid)));
       } else if (
-        htmlTag(kid) === "LEGEND" &&
+        isHtml(kid, "legend") &&
         ks.display !== "none" &&
         ks.cssFloat === "none" &&
         ks.position !== "absolute" &&

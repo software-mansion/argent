@@ -4932,6 +4932,48 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     }
   });
 
+  it("finds a fieldset's legend under thousands of display:contents boxes, and only an HTML one", () => {
+    const fieldset = (children: MockElement[], svg = false) =>
+      el({
+        tag: "fieldset",
+        svg,
+        rect: { x: 0, y: 0, w: 300, h: 100 },
+        client: { left: 2, top: 2, width: 296, height: 96 },
+        offset: { width: 300, height: 100 },
+        style: { overflow: "hidden", borderTopWidth: "2px" },
+        children,
+      });
+    // Laid out over the fieldset's 2px border, as a rendered legend is.
+    const legend = (opts: Opts = {}) =>
+      el({
+        tag: "legend",
+        rect: { x: 20, y: 0, w: 60, h: 30 },
+        offset: { width: 60, height: 30, left: 18, top: -2 },
+        ...opts,
+      });
+    const content = () => row("content", { x: 20, y: 20, w: 60, h: 40 });
+    const lg = legend();
+    let deep = lg;
+    for (let i = 0; i < 50_000; i++) {
+      deep = el({ rect: ZERO, style: { display: "contents" }, children: [deep] });
+    }
+    const deepFieldset = fieldset([deep, content()]);
+    (lg as Record<string, unknown>).__offsetParent = deepFieldset;
+    expect(pxFrame(run([deepFieldset]).tree, "content")).toEqual({ x: 20, y: 30, w: 60, h: 30 });
+    // An SVG element named legend, and a legend in an SVG element named fieldset.
+    const inSvg = legend();
+    (inSvg as Record<string, unknown>).__offsetParent = el();
+    for (const page of [
+      fieldset([legend({ svg: true }), content()]),
+      fieldset(
+        [el({ rect: ZERO, style: { display: "contents" }, children: [inSvg] }), content()],
+        true
+      ),
+    ]) {
+      expect(pxFrame(run([page]).tree, "content")).toEqual({ x: 20, y: 20, w: 60, h: 40 });
+    }
+  });
+
   it("takes a legend a closed root may slot as rendered only where layout put it over the border", () => {
     // A 300x100 fieldset with 2px borders, at offset (50, 100) in its offsetParent. A
     // rendered legend clips "content" to start past it; a flow legend leaves it whole.
