@@ -33,11 +33,11 @@ const device: DeviceInfo = {
   kind: "simulator",
 };
 
-const rebind = (port: number): Promise<void> =>
-  new Promise((resolve, reject) => {
+const bindError = (port: number): Promise<string | undefined> =>
+  new Promise((resolve) => {
     const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(port, "127.0.0.1", () => probe.close(() => resolve()));
+    probe.once("error", (err: NodeJS.ErrnoException) => resolve(err.code));
+    probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(undefined)));
   });
 
 afterEach(() => {
@@ -49,8 +49,10 @@ afterEach(() => {
 describe("axServiceBlueprint factory — tcp transport", () => {
   it("closes the listener when startProxy throws", async () => {
     let boundPort = 0;
+    let bindErrorWhileStarting: string | undefined;
     startProxy.mockImplementation(async (_udid: string, port: number) => {
       boundPort = port;
+      bindErrorWhileStarting = await bindError(port);
       throw new Error("sim-remote reverse start refused");
     });
 
@@ -58,10 +60,11 @@ describe("axServiceBlueprint factory — tcp transport", () => {
       /reverse start refused/
     );
 
-    expect(boundPort).toBeGreaterThan(0);
+    // The tunnel was asked for the listener's own port.
+    expect(bindErrorWhileStarting).toBe("EADDRINUSE");
     expect(spawnAxDaemon).not.toHaveBeenCalled();
     // The factory threw before the registry could record an instance, so
     // nothing will ever call dispose: the port has to be free already.
-    await expect(rebind(boundPort)).resolves.toBeUndefined();
+    expect(await bindError(boundPort)).toBeUndefined();
   });
 });

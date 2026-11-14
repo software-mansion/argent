@@ -117,14 +117,25 @@ describe("reverseStart / reverseStop", () => {
 
   it("stops after three attempts and throws the last error", async () => {
     outcomes = [
-      "error: tunnel-mux control send: connection lost",
-      "error: tunnel-mux control send: connection lost",
+      "error: connection lost",
+      "error: connection lost",
       "error: tunnel-mux control send: connection lost",
       null,
     ];
     const err = await start();
-    expect((err as Error).message).toMatch(/control send: connection lost$/);
+    expect((err as Error).message).toBe(
+      `sim-remote reverse start ${UDID} 37223 failed: error: tunnel-mux control send: connection lost`
+    );
     expect(calls).toHaveLength(3);
+  });
+
+  it("reports a retry's own failure, not the one that prompted it", async () => {
+    const stderr =
+      "error: the host's port forwarder has lost its proxy tunnel (HTTP 503); reverse tunnels cannot be set up on this machine until it reconnects";
+    outcomes = ["error: tunnel-mux control send: connection lost", stderr, null];
+    const err = await start();
+    expect((err as Error).message).toBe(`sim-remote reverse start ${UDID} 37223 failed: ${stderr}`);
+    expect(calls).toHaveLength(2);
   });
 
   it("starts no retry once the retry window has passed", async () => {
