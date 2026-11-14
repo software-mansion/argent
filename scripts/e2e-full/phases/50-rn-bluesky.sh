@@ -18,6 +18,28 @@
 
 _metro_ready() { curl -fsS -m 3 "http://127.0.0.1:${1}/status" 2>/dev/null | grep -q 'packager-status:running'; }
 
+# A fetch the harness sends itself must reach view-network-logs and open in
+# view-network-request-details.
+_assert_network_capture() { # phase device-args
+  local P="$1" D="$2"
+  # Capture starts at the first network-tool call, and the reload cleared it.
+  run_tool view-network-logs "{$D}" >/dev/null 2>&1
+  run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
+  local FETCH_RC=$RT_RC
+  sleep 2
+  assert_ok "$P" view-network-logs netlogs "{$D,\"pageIndex\":\"latest\"}"
+  # Text, not JSON: one `{id: <requestId>} "<METHOD> <url>" ...` line per request.
+  local RID; RID="$(printf '%s' "$RT_JSON" | sed -n 's/^{id: \([^}]*\)}.*/\1/p' | tail -n 1)"
+  if [ -n "$RID" ]; then
+    assert_ok "$P" view-network-request-details netdetails "{$D,\"requestId\":\"$RID\"}"
+  elif [ "$FETCH_RC" -ne 0 ]; then
+    fail "$P" view-network-request-details netdetails "debugger-evaluate of the harness fetch failed (rc=$FETCH_RC), so nothing may have been sent"
+  else
+    # The fetch above is the harness's own, so a missing id is a capture regression.
+    fail "$P" view-network-request-details netdetails "no request id in view-network-logs: $(rt_detail 160)"
+  fi
+}
+
 run_phase() {
   local P=rn
   # HOME is sandboxed by run-e2e, so the checkout is found via HOME_REAL.
@@ -111,22 +133,7 @@ run_phase() {
   assert_ok    "$P" debugger-reload-metro reload "{$D}"
   sleep 4  # reload drops the runtime; let it re-register
 
-  # Capture starts at the first network-tool call, and the reload cleared it.
-  run_tool view-network-logs "{$D}" >/dev/null 2>&1
-  run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
-  local FETCH_RC=$RT_RC
-  sleep 2
-  assert_ok "$P" view-network-logs netlogs "{$D,\"pageIndex\":\"latest\"}"
-  # Text, not JSON: one `{id: <requestId>} "<METHOD> <url>" ...` line per request.
-  local RID; RID="$(printf '%s' "$RT_JSON" | sed -n 's/^{id: \([^}]*\)}.*/\1/p' | tail -n 1)"
-  if [ -n "$RID" ]; then
-    assert_ok "$P" view-network-request-details netdetails "{$D,\"requestId\":\"$RID\"}"
-  elif [ "$FETCH_RC" -ne 0 ]; then
-    fail "$P" view-network-request-details netdetails "debugger-evaluate of the harness fetch failed (rc=$FETCH_RC), so nothing may have been sent"
-  else
-    # The fetch above is the harness's own, so a missing id is a capture regression.
-    fail "$P" view-network-request-details netdetails "no request id in view-network-logs: $(rt_detail 160)"
-  fi
+  _assert_network_capture "$P" "$D"
 
   run_tool react-profiler-start "{$D}"
   if [ "$RT_RC" -eq 0 ]; then

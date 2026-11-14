@@ -128,6 +128,29 @@ _withdraw_device() {
   mv "$PROV_DESCRIPTOR.tmp" "$PROV_DESCRIPTOR"
 }
 
+# A tool the platform supports, on a mechanism the descriptor does not grant,
+# must fail with the capability-denied message. native-describe-screen is
+# iOS-only: on Android its platform gate answers first.
+_assert_capability_denied() { # phase platform device-id
+  local P="$1" PLATFORM="$2" DEV="$3"
+  local DENY_TOOL DENY_ARGS DENY_CAP
+  if [ "$PLATFORM" = ios ]; then
+    DENY_TOOL=native-describe-screen DENY_CAP=native-devtools
+    # `bundleId` is required by its schema, or validation (rc=2) fails before
+    # the grant check; any value will do.
+    DENY_ARGS="{\"udid\":\"$DEV\",\"bundleId\":\"com.e2e.denied\"}"
+  else
+    DENY_TOOL=native-profiler-start DENY_CAP=native-profiler
+    DENY_ARGS="{\"device_id\":\"$DEV\"}"
+  fi
+  run_tool "$DENY_TOOL" "$DENY_ARGS"
+  if [ "$RT_RC" -ne 0 ] && printf '%s' "$RT_OUT" | grep -qi "did not grant the '$DENY_CAP'"; then
+    pass "$P" "$DENY_TOOL" "denied: $DENY_CAP not granted"
+  else
+    fail "$P" "$DENY_TOOL" "denied" "rc=$RT_RC $(printf '%s' "$RT_OUT" | tr '\n' ' ' | cut -c1-160)"
+  fi
+}
+
 run_phase() {
   local P=device-provider
   ensure_server || { skip "$P" tier all "tool-server unavailable"; return 0; }
@@ -261,25 +284,7 @@ run_phase() {
   fi
 
   # --- capability denial ----------------------------------------------------
-  # A tool the platform supports, on a mechanism the descriptor does not grant,
-  # must fail with the capability-denied message. native-describe-screen is
-  # iOS-only: on Android its platform gate answers first.
-  # `bundleId` is required by its schema, or validation (rc=2) fails before the
-  # grant check; any value will do.
-  local DENY_TOOL DENY_ARGS DENY_CAP
-  if [ "$PLATFORM" = ios ]; then
-    DENY_TOOL=native-describe-screen DENY_CAP=native-devtools
-    DENY_ARGS="{\"udid\":\"$DEV\",\"bundleId\":\"com.e2e.denied\"}"
-  else
-    DENY_TOOL=native-profiler-start DENY_CAP=native-profiler
-    DENY_ARGS="{\"device_id\":\"$DEV\"}"
-  fi
-  run_tool "$DENY_TOOL" "$DENY_ARGS"
-  if [ "$RT_RC" -ne 0 ] && printf '%s' "$RT_OUT" | grep -qi "did not grant the '$DENY_CAP'"; then
-    pass "$P" "$DENY_TOOL" "denied: $DENY_CAP not granted"
-  else
-    fail "$P" "$DENY_TOOL" "denied" "rc=$RT_RC $(printf '%s' "$RT_OUT" | tr '\n' ' ' | cut -c1-160)"
-  fi
+  _assert_capability_denied "$P" "$PLATFORM" "$DEV"
 
   # --- revocation -----------------------------------------------------------
   # Withdraw the device and assert the very next call is refused. There is no
