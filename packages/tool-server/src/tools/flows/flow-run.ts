@@ -2864,12 +2864,13 @@ type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "s
 /**
  * A `script` step is the one step whose `reason` is written by something other
  * than this server: the child's own `throw` message crosses into it verbatim,
- * and a multi-line message is the ordinary shape of a rethrown API error. Every
- * surface that renders a step is one line per step and interpolates the reason
- * raw — the CLI's step line, `flowRunToMcpContent`, and the lift in
- * `flow-nested-outcome.ts` — so a newline in it puts script-controlled text at
- * column 0, below a `✗` line and above the real summary. A forged
- * "PASS — 3 passed, 0 failed" reads there as the run's own verdict.
+ * and a multi-line message is the ordinary shape of a rethrown API error. The
+ * CLI's step line and `flowRunToMcpContent` indent a reason's later lines, but
+ * only at `\n`: a `\r` or an escape sequence reaching the CLI's terminal moves
+ * the cursor itself, so script-controlled text could overprint its `✗` line
+ * with a forged "PASS — 3 passed, 0 failed". So every control character is
+ * spelled the way `escapeInline` spells it, and the reason keeps to its step's
+ * own line.
  *
  * Escaped rather than stripped, and here rather than in each renderer: the
  * original characters stay recoverable, and the one step whose reason is not
@@ -2883,11 +2884,8 @@ type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "s
  * decision anywhere a reader can find it.
  */
 function oneLineReason(text: string): string {
-  return text
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t");
+  // Doubled first, so an escape can be told from a backslash the script wrote.
+  return escapeInline(text.replace(/\\/g, "\\\\"));
 }
 
 async function runScriptStep(

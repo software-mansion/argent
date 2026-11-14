@@ -296,6 +296,21 @@ describe("a script step that fails", () => {
     expect(reason).toContain("PASS — 3 passed");
   });
 
+  it("spells the control characters that move a terminal's cursor without a newline", async () => {
+    // ESC [1A is cursor-up, CSI (U+009B) its one-byte spelling: either lets
+    // the script overprint the line above the `✗` one. The trailing `\u001b`
+    // is the script's own text, so it must not read as an escape.
+    await write("scripts/ansi.mjs", 'throw new Error("a\\x1b[1Ab\\x9b[1Ac\\x7f d\\\\u001b");');
+    await flow("ansi", "steps:\n  - script: { path: ../../scripts/ansi.mjs }\n");
+
+    const { result } = await runFlow("ansi");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(reason).toContain("a\\u001b[1Ab\\u009b[1Ac\\u007f d\\\\u001b");
+    for (const raw of ["\x1b", "\x9b", "\x7f"]) expect(reason).not.toContain(raw);
+  });
+
   it("reports a script that stops its own process as a fail", async () => {
     await write("scripts/exit.mjs", `console.log("about to bail");\nprocess.exit(3);`);
     await flow("exit", "steps:\n  - script: { path: ../../scripts/exit.mjs }\n");
