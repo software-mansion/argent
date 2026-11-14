@@ -78,9 +78,9 @@ import { directCallFailure } from "./utils/tool-result-verdict";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
-// The caller's deadline clock starts before its request reaches the handler,
-// by the connect and transit time.
-const CALLER_DEADLINE_SLACK_MS = 1_000;
+// The caller's deadline clock starts before its request arrives, by the time
+// it takes to connect and send the request head.
+const CALLER_DEADLINE_SLACK_MS = 2_000;
 
 const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 const BEARER_PREFIX = "Bearer ";
@@ -452,6 +452,12 @@ function takeToolNote(data: unknown): string | undefined {
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
+  // Before the body is read: a caller's deadline clock runs while it sends one.
+  const arrivedAt = new WeakMap<Request, number>();
+  app.use((req, _res, next) => {
+    arrivedAt.set(req, performance.now());
+    next();
+  });
   // 48mb: file-input wrappers may inline base64 file content when the client is
   // remote. Bounds the whole encoded request; the decoded per-file ceiling is
   // enforced in file-inputs.ts.
@@ -1007,11 +1013,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
       const controller = new AbortController();
       const deadlineMs = parseCallerDeadlineMs(firstHeader(req.headers[CALLER_DEADLINE_HEADER]));
+      // The declared deadline counts from the last line written, else from the
+      // request's arrival: Node's fetch times out the wait for the head and
+      // each gap in the body alike, and `writeHead` below sends nothing before
+      // the first line.
+      let lastSentAt = arrivedAt.get(req)!;
       res.on("close", () => {
         if (res.writableFinished) return;
         const atDeadline =
           deadlineMs !== undefined &&
-          performance.now() - requestStartedAt >= deadlineMs - CALLER_DEADLINE_SLACK_MS;
+          performance.now() - lastSentAt >= deadlineMs - CALLER_DEADLINE_SLACK_MS;
         controller.abort(atDeadline ? callerDeadlineReason() : undefined);
       });
 
@@ -1053,6 +1064,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const wantsStream = Boolean(req.headers.accept?.includes("application/x-ndjson"));
       const writeLine = (payload: unknown): void => {
         res.write(`${JSON.stringify(payload)}\n`);
+        lastSentAt = performance.now();
       };
       if (wantsStream) {
         // Every line must reach the client as soon as it is written.
