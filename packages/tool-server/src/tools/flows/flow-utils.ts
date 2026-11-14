@@ -3893,7 +3893,10 @@ export function serializeFlow(flow: FlowFile): string {
   // multi-line values as double-quoted scalars (escape-exact both ways);
   // single-line values still serialize plain, and legacy files containing block
   // scalars still parse.
-  return yamlStringify(doc, { blockQuote: false });
+  // doubleQuotedMinMultiLineLength: Infinity — keep every newline as a `\n`
+  // escape. Otherwise yaml writes a long value's newlines as line breaks and
+  // escapes a line of exactly one space twice (`\\ `), so " " came back as "\".
+  return yamlStringify(doc, { blockQuote: false, doubleQuotedMinMultiLineLength: Infinity });
 }
 
 export function validateFlow(flow: FlowFile): void {
