@@ -982,15 +982,60 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([text("Pick"), select, text("end")])).toBe("Pick Opt end");
   });
 
-  it("reads an embedded textarea's live value or placeholder, not its default text", () => {
-    const area = (value: string, placeholder: string) =>
-      elementNode("textarea", [text("default")], { value, placeholder });
-    expect(labelledBy([text("Qty"), area("typed", "hint"), text("items")])).toBe("Qty typed items");
-    expect(labelledBy([text("Qty"), area("", "hint"), text("items")])).toBe("Qty hint items");
-    expect(labelledBy([text("Qty"), area("", ""), text("items")])).toBe("Qty items");
+  it("reads an embedded textarea's live value, else its aria-label, title or placeholder", () => {
+    const area = (value: string, placeholder: string, attrs: Record<string, string> = {}) => {
+      const node = elementNode("textarea", [text("default")], { value, placeholder });
+      node.__attrs = attrs;
+      return labelledBy([text("Qty"), node, text("items")]);
+    };
+    expect(area("typed", "hint", { "aria-label": "AL" })).toBe("Qty typed items");
+    expect(area("", "hint", { "aria-label": "AL", "title": "Ti" })).toBe("Qty AL items");
+    expect(area("", "hint", { "aria-label": " ", "title": "Ti" })).toBe("Qty Ti items");
+    expect(area("", "hint")).toBe("Qty hint items");
+    expect(area("", "")).toBe("Qty items");
   });
 
-  it("reads a target that is itself a select or textarea by what it shows", () => {
+  it("reads an embedded input as Chrome does: a text field's value, a password's as bullets", () => {
+    const input = (type: string, fields = {}, attrs: Record<string, string> = {}) => {
+      const node = elementNode("input", [], { type, value: "", placeholder: "", ...fields });
+      Object.setPrototypeOf(node, MockHTMLInputElement.prototype);
+      node.__attrs = attrs;
+      return labelledBy([text("Pre"), node, text("post")]);
+    };
+    for (const type of ["text", "search", "email", "url", "tel", "number"]) {
+      expect(input(type, { value: "Typed" }, { "aria-label": "AL" }), type).toBe("Pre Typed post");
+    }
+    expect(input("text", { placeholder: "Ph" }, { "aria-label": "AL", "title": "Ti" })).toBe(
+      "Pre AL post"
+    );
+    expect(input("text", { placeholder: "Ph" }, { title: "Ti" })).toBe("Pre Ti post");
+    expect(input("text", { placeholder: "Ph" }, { "aria-label": " " })).toBe("Pre Ph post");
+    expect(input("text", { placeholder: " " })).toBe("Pre post");
+    // One bullet per UTF-16 code unit.
+    expect(input("password", { value: "a\u{1F600}\u00e9" }, { "aria-label": "AL" })).toBe(
+      "Pre \u2022\u2022\u2022\u2022 post"
+    );
+    expect(input("password", { placeholder: "Ph" }, { title: "Ti" })).toBe("Pre Ti post");
+    // A button input reads its aria-label, else its value, else its title.
+    for (const type of ["button", "submit", "reset"]) {
+      expect(input(type, { value: "Go" }, { title: "Ti" }), type).toBe("Pre Go post");
+      expect(input(type, { value: "Go" }, { "aria-label": "AL" }), type).toBe("Pre AL post");
+      expect(input(type, {}, { title: "Ti" }), type).toBe("Pre Ti post");
+    }
+    expect(input("image", { value: "Go" }, { alt: "Alt", title: "Ti" })).toBe("Pre Alt post");
+    expect(input("image", { value: "Go" }, { title: "Ti" })).toBe("Pre Go post");
+    // Any other input reads only its aria-label or title.
+    for (const type of ["checkbox", "radio", "color"]) {
+      expect(input(type, { value: "on" }), type).toBe("Pre post");
+      expect(input(type, { value: "on" }, { title: "Ti" }), type).toBe("Pre Ti post");
+    }
+    // The target's text-transform does not case a value.
+    const typed = elementNode("input", [], { type: "text", value: "typed", placeholder: "" });
+    const upper = { display: "inline", textTransform: "uppercase" };
+    expect(labelledBy([text("Pre"), typed, text("post")], upper)).toBe("PRE typed POST");
+  });
+
+  it("reads a target that is itself a select, textarea or input by what it shows", () => {
     const label = (tag: string, fields: Record<string, unknown>, attrs = {}) => {
       const target = el({ tag, rect: BOX, attrs: { id: "lbl", ...attrs } }) as MockElement &
         Record<string, unknown>;
@@ -1010,6 +1055,72 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(label("textarea", { value: "typed", placeholder: "" }, { "aria-label": "Named" })).toBe(
       "typed"
     );
+    expect(label("input", { type: "text", value: "Typed", placeholder: "" })).toBe("Typed");
+    expect(label("input", { type: "range", valueAsNumber: 3 })).toBe("3");
+    // A field labelled by itself reads its own value too.
+    const field = inputEl({
+      type: "text",
+      value: "Typed",
+      rect: BOX,
+      attrs: { "id": "t", "aria-labelledby": "t lab" },
+    });
+    const lab = el({ tag: "span", text: "Lab", rect: BOX, attrs: { id: "lab" } });
+    expect(findById(run([field, lab]).tree, "t")!.label).toBe("Typed Lab");
+  });
+
+  it("reads the control being named in its own target as no embedded control, as Chrome does", () => {
+    const control = (tag: string, fields: Record<string, unknown>, attrs = {}) => {
+      const node = el({ tag, rect: BOX, attrs: { id: "t", ...attrs } }) as MockElement &
+        Record<string, unknown>;
+      if (tag === "input") Object.setPrototypeOf(node, MockHTMLInputElement.prototype);
+      Object.assign(node, { placeholder: "", ...fields });
+      return node;
+    };
+    // The control inside the target it names itself by, beside a button the target names.
+    const inside = (ctl: MockElement & Record<string, unknown>) => {
+      (ctl.__attrs as Record<string, string>)["aria-labelledby"] = "l";
+      const label = el({ tag: "span", rect: BOX, attrs: { id: "l" }, children: [ctl] });
+      label.childNodes = [text("Name "), ctl, text(" end")];
+      const other = el({ tag: "button", rect: BOX, attrs: { "id": "b", "aria-labelledby": "l" } });
+      const { tree } = run([label, other]);
+      return [findById(tree, "t")!.label, findById(tree, "b")!.label];
+    };
+    const field = (fields: Record<string, unknown>, attrs = {}) =>
+      control("input", { type: "text", ...fields }, attrs);
+    expect(inside(field({ value: "Bob" }))).toEqual(["Name end", "Name Bob end"]);
+    expect(inside(field({ value: "Bob" }, { "aria-label": "Who" }))[0]).toBe("Name Who end");
+    expect(inside(field({ value: "Bob", placeholder: "Ph" }, { title: "Ti" }))[0]).toBe(
+      "Name Ti end"
+    );
+    expect(inside(field({ value: "Bob", placeholder: "Ph" }))[0]).toBe("Name Ph end");
+    const password = field({ type: "password", value: "secret", placeholder: "Ph" });
+    expect(inside(password)[0]).toBe("Name Ph end");
+    const range = control("input", { type: "range", valueAsNumber: 3 });
+    expect(inside(range)[0]).toBe("Name end");
+    const small = el({ tag: "option", text: "Small", rect: BOX });
+    const select = (attrs = {}) => {
+      const node = control("select", { selectedOptions: [{ label: "Small" }] }, attrs);
+      node.childNodes = [small];
+      return node;
+    };
+    expect(inside(select())).toEqual(["Name end", "Name Small end"]);
+    expect(inside(select({ title: "Ti" }))[0]).toBe("Name Ti end");
+    const button = control("input", { type: "button", value: "Go" }, { title: "Ti" });
+    expect(inside(button)[0]).toBe("Name Go end");
+    // As the target itself, a text field reads its value only after its title and placeholder.
+    const target = (ctl: MockElement & Record<string, unknown>) => {
+      (ctl.__attrs as Record<string, string>)["aria-labelledby"] = "t lab";
+      const lab = el({ tag: "span", text: "Lab", rect: BOX, attrs: { id: "lab" } });
+      return findById(run([ctl, lab]).tree, "t")!.label;
+    };
+    expect(target(field({ value: "Typed" }))).toBe("Typed Lab");
+    expect(target(field({ value: "Typed", placeholder: "Ph" }))).toBe("Ph Lab");
+    expect(target(field({ value: "Typed", placeholder: "Ph" }, { title: "Ti" }))).toBe("Ti Lab");
+    expect(target(field({ type: "password", value: "secret" }))).toBe(
+      "\u2022\u2022\u2022\u2022\u2022\u2022 Lab"
+    );
+    expect(target(control("input", { type: "range", valueAsNumber: 3 }))).toBe("Lab");
+    expect(target(select())).toBe("Lab");
   });
 
   it("names an embedded control by what it shows, over its own aria-label", () => {
@@ -1087,6 +1198,29 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(native("progress", { value: "3" }, { value: 3 }, { display: "none" })).toBe(
       "a fallback b"
     );
+    // A range input is one even undisplayed, its min and max 0 and 100 unless they parse.
+    const range = (attrs: Record<string, string>, valueAsNumber = 50, target = {}) => {
+      const node = widget(attrs, []);
+      Object.assign(node, { localName: "input", type: "range", valueAsNumber });
+      return labelledBy([text("a"), node, text("b")], { display: "inline", ...target });
+    };
+    expect(range({})).toBe("a 50 b");
+    expect(range({ min: "10", max: "20" }, 15)).toBe("a 15 b");
+    expect(range({ max: "1e7" }, 1234567)).toBe("a 1.23457e+6 b");
+    expect(range({ "aria-valuetext": "Three" }, 3)).toBe("a Three b");
+    expect(range({ "aria-valuenow": "700", "min": "10", "max": "20" })).toBe("a 20 b");
+    expect(range({ "aria-valuenow": "70", "aria-valuemax": "50" })).toBe("a 50 b");
+    expect(range({ "aria-valuenow": "-5", "min": "x" })).toBe("a 0 b");
+    expect(range({ "aria-valuenow": "700", "max": "abc" })).toBe("a 100 b");
+    const inverted = { "aria-valuemin": "0", "min": "150", "max": "120" };
+    expect(range({ ...inverted, "aria-valuenow": "700" })).toBe("a 150 b");
+    expect(range({ "aria-valuenow": "x", "min": "-10" })).toBe("a 0 b");
+    expect(range({ "aria-valuemin": "60" }, 3)).toBe("a 3 b");
+    for (const role of ["meter", "progressbar", "scrollbar", "spinbutton"]) {
+      expect(range({ role }, 3), role).toBe("a 3 b");
+    }
+    expect(range({ role: "button" }, 3)).toBe("a b");
+    expect(range({}, 3, { display: "none" })).toBe("a 3 b");
 
     const option = (name: string, attrs: Record<string, string>, style = {}) => {
       const node = widget({ role: "option", ...attrs }, [text(name)]);
@@ -1686,6 +1820,26 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     for (const text of ["Shared", ""]) {
       expect(childNodesReads(text, 5)).toBe(childNodesReads(text, 1));
     }
+  });
+
+  it("walks a target once for the empty fields inside it that it names, which read the same", () => {
+    const childNodesReads = (fields: number) => {
+      const inputs = Array.from({ length: fields }, (_, i) =>
+        inputEl({ type: "text", rect: BOX, attrs: { "id": `f${i}`, "aria-labelledby": "grp" } })
+      );
+      for (const input of inputs) input.placeholder = "";
+      const group = el({ tag: "div", rect: BOX, attrs: { id: "grp" }, children: inputs });
+      let reads = 0;
+      const kids = [text("Group"), ...inputs];
+      Object.defineProperty(group, "__childNodes", {
+        get: () => (reads++, kids),
+        configurable: true,
+      });
+      const { tree } = run([group]);
+      expect(findById(tree, `f${fields - 1}`)!.label).toBe("Group");
+      return reads;
+    };
+    expect(childNodesReads(5)).toBe(childNodesReads(1));
   });
 
   it("reads a shared aria-labelledby target on a page whose own global Map is not the builtin", () => {

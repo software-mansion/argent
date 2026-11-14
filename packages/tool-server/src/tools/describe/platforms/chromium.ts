@@ -112,6 +112,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getActiveElement = protoGetter(docProto, "activeElement");
   const getDocBody = protoGetter(docProto, "body");
   const getRootNode = Node.prototype.getRootNode;
+  const nodeContains = Node.prototype.contains;
   const docElementsFromPoint = docProto.elementsFromPoint;
   const docGetElementById = docProto.getElementById;
   const slotAssignedNodes = HTMLSlotElement.prototype.assignedNodes;
@@ -129,9 +130,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return t;
   }
 
-  // Per document or shadow root, aria-labelledby id -> trimmed target text, or null for a
+  // Per document or shadow root, aria-labelledby id -> its target and, once read, the
+  // target's trimmed text for a control that reads in it as any other does; null for a
   // missing id.
-  const labelTexts = nodeMap();
+  const labelTargets = nodeMap();
   const NAME_MAX = 200;
 
   // A blank aria-labelledby name or aria-label falls through to the next source.
@@ -141,18 +143,25 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       // Its ids name elements in el's own tree. A document's named getter can shadow
       // getElementById; a shadow root has none.
       const root = getRootNode.call(el);
-      let texts = labelTexts.get(root);
-      if (!texts) labelTexts.set(root, (texts = Object.create(null)));
+      let targets = labelTargets.get(root);
+      if (!targets) labelTargets.set(root, (targets = Object.create(null)));
       const ids = labelledBy.split(/\\s+/);
       const parts = [];
       for (const id of ids) {
-        let text = texts[id];
-        if (text === undefined) {
+        let target = targets[id];
+        if (target === undefined) {
           const ref =
             getNodeType.call(root) === 9
               ? docGetElementById.call(root, id)
               : root.getElementById(id);
-          text = texts[id] = ref ? labelText(ref).trim() : null;
+          target = targets[id] = ref ? { ref, text: null } : null;
+        }
+        if (!target) continue;
+        let text;
+        if (readsAsSelf(el, target.ref)) text = labelText(target.ref, el).trim();
+        else {
+          if (target.text === null) target.text = labelText(target.ref, null).trim();
+          text = target.text;
         }
         if (text) parts.push(text);
       }
@@ -252,9 +261,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   // An aria-labelledby target's text (text and CDATA) in the flat tree, read by a subset
-  // of Chrome's accessible-name rules. An element reads as what a <select> or <textarea>
-  // shows, a range widget's value or a listbox's aria-selected options; else as its
-  // aria-label, an <img>'s alt or an SVG element's <title>; else as its ::before, content
+  // of Chrome's accessible-name rules. A text field reads as its value, uncased (a
+  // password's as bullets), else its aria-label, title or placeholder. Another element
+  // reads as what a <select> shows, a range widget's value (a range input's too) or a
+  // listbox's aria-selected options; else as its aria-label, an <img>'s or image input's
+  // alt, an SVG element's <title> or a button input's value; else as its ::before, content
   // and ::after, or as its title if those are blank (not an <img> with an alt). A
   // non-inline element, an <img> (but a presentational alt=""), an <svg> with content, an
   // SVG <style> or a <br> parts the words around it, and an SVG <style>'s text never
@@ -266,12 +277,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // has no layout to run inline in. Neither reads what layout skips: a closed <details>
   // past its first <summary>, a rendered <progress> or <meter>'s content, a
   // content-visibility:hidden box's content, a hidden chosen option, or a hidden ::before
-  // or ::after (or any in an aria-hidden target). An
-  // <input>'s value is not read. Laid-out text and ::before/::after strings take their
-  // text-transform case, and a block container's first letter its ::first-letter's.
+  // or ::after (or any in an aria-hidden target). Laid-out text and ::before/::after
+  // strings take their text-transform case, and a block container's first letter its
+  // ::first-letter's. In its own target, the control being named (self) is no embedded
+  // control and reads as selfText says.
   // Iterative: the target's depth has no MAX_DEPTH bound. The walk stops once more than
   // NAME_MAX non-whitespace characters are in, which settles the name accessibleName cuts.
-  function labelText(root) {
+  function labelText(root, self) {
     const rootStyle = window.getComputedStyle(root);
     let shown = rootStyle.visibility === "visible";
     let ariaHidden = false;
@@ -289,7 +301,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
     }
     const rootOptions = chosenOptions(root);
-    const own = shownText(root, !unrendered, rootOptions);
+    const own = root === self ? selfText(root, true) : shownText(root, !unrendered, rootOptions);
     if (own !== null) return own;
     if (shown && inert) return "";
     let s = "";
@@ -521,7 +533,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         else letters = box ? [node] : null;
       }
       const options = chosenOptions(node);
-      const content = shownText(node, rendered, options);
+      const content = node === self ? selfText(node, false) : shownText(node, rendered, options);
       if (content !== null) {
         read(" " + content + " ");
         if (rendered) layOut(node);
@@ -576,14 +588,63 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return false;
   }
 
-  // What an element reads as in place of its content, or null: what a control shows, a
-  // range widget's value, else its alt text unless it is a listbox with chosen options.
+  // What an element reads as in place of its content, or null: a text field's value (a
+  // password's as bullets), else its aria-label, title or placeholder; what a <select>
+  // shows; a range widget's value; else, unless it is a listbox with chosen options, its
+  // alt text or a button input's value.
   function shownText(el, rendered, options) {
+    if (isTextField(el)) {
+      return fieldText(el) || altText(el) || getAttr.call(el, "title") || el.placeholder;
+    }
     const control = controlText(el);
     if (control !== null) return control;
     const range = rangeText(el, rendered);
     if (range !== null) return range;
-    return options ? null : altText(el);
+    if (options) return null;
+    const alt = altText(el);
+    return alt !== null ? alt : buttonText(el);
+  }
+
+  // What the control being named reads as in place of its content, in its own
+  // aria-labelledby target, or null: its alt text or a button input's value; for a text
+  // field its title or placeholder, else, as the target itself, its value; for a <select>
+  // its title, never its options.
+  function selfText(el, isTarget) {
+    const alt = altText(el);
+    if (alt !== null) return alt;
+    if (isTextField(el)) {
+      return getAttr.call(el, "title") || el.placeholder || (isTarget ? fieldText(el) : "");
+    }
+    if (isHtml(el, "select")) return getAttr.call(el, "title") || "";
+    return buttonText(el);
+  }
+
+  // Whether target can read differently for el than for other controls: only when it
+  // holds el and el reads otherwise as itself.
+  function readsAsSelf(el, target) {
+    if (!nodeContains.call(target, el)) return false;
+    return selfText(el, target === el) !== shownText(el, true, chosenOptions(el));
+  }
+
+  // A text field's value, a password's as bullets.
+  function fieldText(el) {
+    return isPassword(el) ? "\\u2022".repeat(el.value.length) : el.value;
+  }
+
+  // A button input's value, or null when it has none.
+  function buttonText(el) {
+    const button = isHtml(el, "input") && /^(button|submit|reset|image)$/.test(el.type);
+    return button && el.value ? el.value : null;
+  }
+
+  // Whether an element is a <textarea> or an <input> that takes typed text.
+  function isTextField(el) {
+    if (getNamespaceURI.call(el) !== "http://www.w3.org/1999/xhtml") return false;
+    const tag = getLocalName.call(el);
+    return (
+      tag === "textarea" ||
+      (tag === "input" && /^(text|search|email|url|tel|number|password)$/.test(el.type))
+    );
   }
 
   // What a <select> or <textarea> shows, which its child text is not; null for others.
@@ -597,11 +658,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return chosen;
   }
 
-  // An element's aria-label, or an <img>'s alt, when it has one that is not blank; else an
-  // SVG element's first <title> child's text, which Chrome takes even when blank.
+  // An element's aria-label, or an <img>'s or image input's alt, when it has one that is not
+  // blank; else an SVG element's first <title> child's text, which Chrome takes even when
+  // blank.
   function altText(el) {
     const ns = getNamespaceURI.call(el);
-    const img = ns === "http://www.w3.org/1999/xhtml" && getLocalName.call(el) === "img";
+    const tag = getLocalName.call(el);
+    const img =
+      ns === "http://www.w3.org/1999/xhtml" &&
+      (tag === "img" || (tag === "input" && el.type === "image"));
     const t = getAttr.call(el, "aria-label") || (img && getAttr.call(el, "alt"));
     if (t && t.trim()) return t;
     if (ns !== "http://www.w3.org/2000/svg") return null;
@@ -661,26 +726,26 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // A range widget's value as Chrome reads it: its aria-valuetext, else its aria-valuenow
   // held to aria-valuemin and aria-valuemax, to 6 significant digits. A value that does
   // not parse reads as 0, and a missing aria-valuenow as Chrome's default for the role.
-  // A rendered <progress> or <meter> is one unless its role is another: a <progress> reads
-  // its aria-valuenow unheld, else its value if it has one, and a <meter>'s min, max and
-  // value stand in for the missing attributes. null for other roles, and for a progressbar
-  // without a value.
+  // A rendered <progress> or <meter>, and a range input, is one unless its role is another:
+  // a <progress> reads its aria-valuenow unheld, else its value if it has one, and a
+  // <meter>'s or range input's min, max and value stand in for the missing attributes (a
+  // range input's min and max are 0 and 100 unless they parse). null for other roles, and
+  // for a progressbar without a value.
   function rangeText(el, rendered) {
     const tag = getLocalName.call(el);
-    const native =
-      rendered &&
-      getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml" &&
-      /^(progress|meter)$/.test(tag)
-        ? tag
-        : "";
-    const role = ariaRole(el) || (native === "progress" ? "progressbar" : native);
+    const html = getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml";
+    let native = "";
+    if (html && rendered && /^(progress|meter)$/.test(tag)) native = tag;
+    else if (html && tag === "input" && el.type === "range") native = "range";
+    const implicit = native === "progress" ? "progressbar" : native === "range" ? "slider" : native;
+    const role = ariaRole(el) || implicit;
     if (!/^(slider|scrollbar|spinbutton|meter|progressbar)$/.test(role)) return null;
     const text = getAttr.call(el, "aria-valuetext");
     if (text !== null) return text;
-    const num = (name, missing) => {
+    const num = (name, missing, invalid = 0) => {
       const v = getAttr.call(el, name);
       if (v === null) return missing;
-      return /^[+-]?(\\d+\\.?\\d*|\\.\\d+)(e[+-]?\\d+)?$/i.test(v) ? Number(v) : 0;
+      return /^[+-]?(\\d+\\.?\\d*|\\.\\d+)(e[+-]?\\d+)?$/i.test(v) ? Number(v) : invalid;
     };
     let v = num("aria-valuenow", null);
     if (native === "progress") {
@@ -689,11 +754,16 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         v = el.value;
       }
     } else {
+      const lo = native === "range" ? num("min", 0, 0) : 0;
+      const own =
+        native === "range"
+          ? { min: lo, max: Math.max(lo, num("max", 100, 100)), value: el.valueAsNumber }
+          : el;
       const spin = role === "spinbutton";
-      const min = num("aria-valuemin", native ? el.min : spin ? -Infinity : 0);
-      const max = num("aria-valuemax", native ? el.max : spin ? Infinity : 100);
+      const min = num("aria-valuemin", native ? own.min : spin ? -Infinity : 0);
+      const max = num("aria-valuemax", native ? own.max : spin ? Infinity : 100);
       if (v !== null) v = Math.max(min, Math.min(max, v));
-      else if (native) v = el.value;
+      else if (native) v = own.value;
       else if (role === "progressbar") return null;
       else v = role === "meter" ? min : spin ? 0 : (min + max) / 2;
     }
