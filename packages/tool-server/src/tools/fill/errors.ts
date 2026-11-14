@@ -60,12 +60,12 @@ export function notAnsweredError(stage: string): FailureError {
 }
 
 /** Same code as {@link notVerifiedError}: a web page that did not answer, so fill sent it nothing that writes. */
-export function pageNotAnsweringError(stage: string): FailureError {
+export function pageNotAnsweringError(stage: string, waitedMs: number): FailureError {
   return new FailureError(
-    "The page did not answer, so fill changed nothing. A JavaScript dialog (alert, confirm or " +
-      "prompt) may be open, or the page is busy or has crashed. Argent cannot close a dialog: ask " +
-      "the user to close it, then retry. " +
-      "If no dialog is open and it still does not answer, restart the app.",
+    `The page did not answer for ${waitedMs / 1000} s, so fill changed nothing. A JavaScript ` +
+      "dialog (alert, confirm or prompt) may be open, or the page is busy or has crashed. Argent " +
+      "cannot close a dialog: ask the user to close it, then retry. A retry fills a busy page " +
+      "once its task ends. If no dialog is open and it still does not answer, restart the app.",
     {
       error_code: FAILURE_CODES.FILL_NOT_VERIFIED,
       failure_stage: stage,

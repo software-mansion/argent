@@ -233,9 +233,11 @@ export function buildChromiumFillScript(text: string): string {
 }
 
 /**
- * How long a no-op evaluation may take before fill decides the page is blocked.
- * Until a long task ends, a busy page answers no command, like a page under a
- * JavaScript dialog, so the no-op gets the budget of any CDP command.
+ * How long a no-op evaluation may take before fill decides the page is blocked:
+ * as long as any CDP command gets. A page busy in one long task answers no
+ * command, like a page under a JavaScript dialog, and a fresh CDP session gets
+ * no signal that tells them apart. So a page busy past this fails like a
+ * dialog, changing nothing, and a retry after its task ends fills it.
  */
 const PAGE_ANSWER_TIMEOUT_MS = 10_000;
 const FILL_TIMEOUT_MS = 10_000;
@@ -266,11 +268,11 @@ export async function fillChromium(
         ...ref.options,
         answerTimeoutMs: PAGE_ANSWER_TIMEOUT_MS,
       }),
-    () => pageNotAnsweringError("fill_chromium_connect")
+    () => pageNotAnsweringError("fill_chromium_connect", PAGE_ANSWER_TIMEOUT_MS)
   );
   await withTimeoutError(
     () => api.cdp.send("Runtime.evaluate", { expression: "0" }, PAGE_ANSWER_TIMEOUT_MS),
-    () => pageNotAnsweringError("fill_chromium_page_blocked")
+    () => pageNotAnsweringError("fill_chromium_page_blocked", PAGE_ANSWER_TIMEOUT_MS)
   );
   const out = (await withTimeoutError(
     () =>

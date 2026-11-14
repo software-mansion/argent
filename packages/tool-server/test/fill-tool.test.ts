@@ -390,7 +390,7 @@ describe("fill: Chromium", () => {
       error_kind: "timeout",
       failure_stage: "fill_chromium_page_blocked",
     });
-    expect(err.message).toContain("fill changed nothing");
+    expect(err.message).toContain("did not answer for 10 s, so fill changed nothing");
     expect(cdp.send).toHaveBeenCalledTimes(1);
   });
 
@@ -414,7 +414,7 @@ describe("fill: Chromium", () => {
     });
   }
 
-  it("maps a connect timeout, which wrote nothing", async () => {
+  it("maps a connect timeout, which wrote nothing, naming the wait and that a busy page fills on a retry", async () => {
     const cdp = connectError(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT);
     const err = await failure({ cdp }, CHROMIUM, "hello");
     expect(getFailureSignal(err)).toMatchObject({
@@ -422,7 +422,8 @@ describe("fill: Chromium", () => {
       error_kind: "timeout",
       failure_stage: "fill_chromium_connect",
     });
-    expect(err.message).toContain("fill changed nothing");
+    expect(err.message).toContain("did not answer for 10 s, so fill changed nothing");
+    expect(err.message).toContain("A retry fills a busy page once its task ends.");
   });
 
   it("passes any other connect failure through", async () => {
