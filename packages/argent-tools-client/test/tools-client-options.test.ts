@@ -612,6 +612,20 @@ describe("refuseRelativeProjectPaths", () => {
     ]);
   });
 
+  it.each(["~/app", "$HOME/app", "C:\\work\\app"])(
+    "sends %s as written, for the tool-server to refuse",
+    async (root) => {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        refuseRelativeProjectPaths: true,
+      });
+
+      await callTool("record", { project_root: root });
+
+      expect(recordBodies()).toEqual([{ project_root: { __argentFileInput: true, path: root } }]);
+    }
+  );
+
   it("leaves project_root alone for a tool whose file inputs do not name it", async () => {
     const { callTool } = createToolsClient({
       baseUrl: async () => ({ url, token: "t", remote: false }),

@@ -482,6 +482,21 @@ describe("prepareFileInputs — relative paths", () => {
     expect(out.e2e_test_path!.size).toBeUndefined();
   });
 
+  it("leaves the caller's args as they were", async () => {
+    const specs: FileInputSpec[] = [
+      { target: "project_root", path: "${project_root}", kind: "probe" },
+    ];
+    const args = { project_root: "." };
+
+    const out = (await prepareFileInputs(specs, args, { includeContent: false })) as Record<
+      string,
+      FileInputWire
+    >;
+
+    expect(out.project_root!.path).toBe(cwd);
+    expect(args).toEqual({ project_root: "." });
+  });
+
   it("prefixes a path with a .. segment instead of collapsing it", async () => {
     await fs.mkdir(path.join(cwd, "sub"));
     await fs.writeFile(path.join(cwd, "app.apk"), "apk");
@@ -647,19 +662,22 @@ describe("prepareFileInputs — relative paths", () => {
     expect(out.project_root!.path).toBe(projectRoot);
   });
 
-  it.each(["app~", "a$/b", "50%/app"])("resolves the relative path %s", async (projectRoot) => {
-    const specs: FileInputSpec[] = [
-      { target: "project_root", path: "${project_root}", kind: "probe" },
-    ];
+  it.each(["app~", "a$/b", "50%/app", "apps/my:app"])(
+    "resolves the relative path %s",
+    async (projectRoot) => {
+      const specs: FileInputSpec[] = [
+        { target: "project_root", path: "${project_root}", kind: "probe" },
+      ];
 
-    const out = (await prepareFileInputs(
-      specs,
-      { project_root: projectRoot },
-      { includeContent: false }
-    )) as Record<string, FileInputWire>;
+      const out = (await prepareFileInputs(
+        specs,
+        { project_root: projectRoot },
+        { includeContent: false }
+      )) as Record<string, FileInputWire>;
 
-    expect(out.project_root!.path).toBe(path.join(cwd, projectRoot));
-  });
+      expect(out.project_root!.path).toBe(path.join(cwd, projectRoot));
+    }
+  );
 
   it.each([
     ["..\\proj\\app.apk", "C:\\work\\app\\..\\proj\\app.apk"],
