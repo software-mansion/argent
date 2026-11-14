@@ -47,8 +47,8 @@ function yamlSelectorLabel(sel: FlowSelector): string {
 
 // Render a text condition for the summary: the comparator is preserved — regex
 // patterns as `matches /…/`, exact text as `== "…"`, substrings as
-// `contains "…"` — and literals use JSON quoting so embedded quotes and
-// control characters stay unambiguous.
+// `contains "…"` — and literals use JSON quoting plus `escapeInline` so
+// embedded quotes and control characters stay unambiguous.
 function yamlTextConditionLabel(
   sel: FlowSelector,
   expectedText: string | undefined,
@@ -84,10 +84,10 @@ function selectorLabel(sel: FlowSelector): string {
   if (sel.any) parts.push("*");
   // A report target is one line and these values are free text out of the flow
   // file, so `escapeInline` keeps a newline or an escape byte in one from
-  // breaking the line or driving the terminal. `text` takes full JSON quoting
-  // instead — the module's convention for literals (see
-  // `yamlTextConditionLabel`), and alone among the four it carries no `key=` or
-  // `/…/` marker to hold it apart from its neighbours.
+  // breaking the line or driving the terminal. `text` is JSON-quoted first —
+  // the module's convention for literals (see `yamlTextConditionLabel`), and
+  // alone among the four it carries no `key=` or `/…/` marker to hold it apart
+  // from its neighbours.
   if (sel.text !== undefined) parts.push(escapeInline(JSON.stringify(sel.text)));
   if (sel.textMatches !== undefined) parts.push(`/${escapeInline(sel.textMatches)}/`);
   if (sel.identifier) parts.push(`id=${escapeInline(sel.identifier)}`);

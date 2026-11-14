@@ -262,6 +262,25 @@ describe("parseFlow", () => {
     );
   });
 
+  it("spells DEL and C1 in the echoed entry, which JSON quoting leaves raw", () => {
+    expect(entryRejectionMessage('steps:\n  - "a\\x9b[2Jb\\x7f"\n')).toBe(
+      'Unrecognized e2e test entry (step must be an object): "a\\u009b[2Jb\\u007f"'
+    );
+  });
+
+  it.each([
+    ["an escapeInline escape", "\\x7f", "\\u007f"],
+    ["a JSON escape", "\\n", "\\n"],
+    ["a surrogate pair", "\\U0001F600", "\u{1F600}"],
+  ])("cuts the echoed entry beside %s at the cap, not through it", (_what, yaml, shown) => {
+    // The opening quote and 198 x's fill 199 of the 200 places, so the cap
+    // falls on the 200th: the character that renders as `shown`.
+    const x = "x".repeat(198);
+    expect(entryRejectionMessage(`steps:\n  - "${x}${yaml}${"y".repeat(10)}"\n`)).toBe(
+      `Unrecognized e2e test entry (step must be an object): "${x}${shown}…(+11 chars)`
+    );
+  });
+
   it.each([
     ["await.text.in", "steps:\n  - await: { text: { contains: Welcome } }\n"],
     ["assert.text.in", "steps:\n  - assert: { text: { contains: Welcome } }\n"],
@@ -1454,6 +1473,12 @@ describe("output references", () => {
     // `MAX_ENTRY_RENDER_CHARS` (200) plus the ellipsis that replaces the rest.
     expect(quoted!.length).toBe(201);
     expect(message.length).toBeLessThan(1000);
+  });
+
+  it("spells DEL and C1 in the quoted value, which JSON quoting leaves raw", () => {
+    expect(() => parseFlow('steps:\n  - echo: "{{output:id}}\\x9b[2J\\x7f"\n')).toThrow(
+      /needs: "\{\{output:id\}\}\\u009b\[2J\\u007f"$/
+    );
   });
 
   it("leaves a pattern alone, at both levels that spell one", () => {
