@@ -8,10 +8,12 @@ import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  CALLER_DEADLINE_HEADER,
   CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
   ToolParamAliasError,
+  callerDeadlineReason,
   canonicalToolArgs,
   describeParamIssues,
   getFailureSignal,
@@ -75,6 +77,10 @@ import { renderFlagGated } from "./utils/flag-gated-text";
 import { directCallFailure } from "./utils/tool-result-verdict";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
+
+// The caller's deadline clock starts before its request reaches the handler,
+// by the connect and transit time.
+const CALLER_DEADLINE_SLACK_MS = 1_000;
 
 const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 const BEARER_PREFIX = "Bearer ";
@@ -233,6 +239,11 @@ function inferDeviceAttribution(deviceId: string | null): DeviceAttribution | nu
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function parseCallerDeadlineMs(value: string | undefined): number | undefined {
+  const ms = Number(value);
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : undefined;
 }
 
 // The MCP server (a different process) forwards the coarse AI-client identity as
@@ -995,8 +1006,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       if (callerGone) return;
 
       const controller = new AbortController();
+      const deadlineMs = parseCallerDeadlineMs(firstHeader(req.headers[CALLER_DEADLINE_HEADER]));
       res.on("close", () => {
-        if (!res.writableFinished) controller.abort();
+        if (res.writableFinished) return;
+        const atDeadline =
+          deadlineMs !== undefined &&
+          performance.now() - requestStartedAt >= deadlineMs - CALLER_DEADLINE_SLACK_MS;
+        controller.abort(atDeadline ? callerDeadlineReason() : undefined);
       });
 
       // A long-running tool (e.g. await_user_selection) can hold the request open
