@@ -14,6 +14,7 @@ import {
   clearLostProfilerRun,
   getLostProfilerRun,
 } from "../../../blueprints/react-profiler-session";
+import { liveAndroidNetworkCaptureSerials } from "../../../blueprints/android-network-inspector";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-debugger";
 import {
   REACT_NATIVE_PROFILER_SETUP_SCRIPT,
@@ -31,7 +32,7 @@ import {
 } from "../../../utils/react-profiler/session-ownership";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "../../../utils/debugger/device-alias";
-import { findRuntimeDevice } from "../../../utils/debugger/runtime-device";
+import { findRuntimeDevices } from "../../../utils/debugger/runtime-device";
 import { trackProfilingRun } from "../../../utils/profiling-devices";
 import { RESULT_NOTE_KEY } from "../../screenshot/dropped-geometry";
 import {
@@ -149,6 +150,19 @@ function describeTakeover(input: {
 function failedTakeoverText({ session_id, reason }: TakeoverReport): string {
   const run = session_id ? `session ${session_id}` : "a recording with no owner record";
   return `Before it failed, this start stopped ${run} (reason: ${reason}), and nothing is recording now.`;
+}
+
+/**
+ * The serials native network capture is kept under, whose logcat the device
+ * probe waits for in full: missing one would miss capture on the profiled app.
+ * Empty, not a throw, when the lookup fails, like the warning it feeds.
+ */
+function serialsWithCapture(): string[] {
+  try {
+    return liveAndroidNetworkCaptureSerials();
+  } catch {
+    return [];
+  }
 }
 
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
@@ -438,11 +452,12 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
 
       // A session keyed by Metro's logicalDeviceId (two or more devices on one
       // Metro) is not what the tools that drive the device name: they pass its
-      // serial or UDID. Find that id so their calls see the run. Before the
-      // start, so nothing is awaited between the start and the registration.
-      const runtimeDevice = isLogicalKeyedDevice(api.deviceId)
-        ? await findRuntimeDevice(cdp)
-        : undefined;
+      // serial or UDID. Find those ids (one per adb transport) so their calls
+      // see the run. Before the start, so nothing is awaited between the start
+      // and the registration.
+      const runtimeDevices = isLogicalKeyedDevice(api.deviceId)
+        ? await findRuntimeDevices(cdp, { awaitSerials: serialsWithCapture() })
+        : { found: [], unresolved: [] };
 
       const sessionId = crypto.randomUUID();
       const ownerPayload: ProfilerSessionOwner = {
@@ -555,9 +570,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.sessionId = sessionId;
       api.ownerToolServerPid = process.pid;
       trackProfilingRun(api.deviceId, api);
-      if (runtimeDevice) trackProfilingRun(runtimeDevice, api);
+      for (const device of runtimeDevices.found) trackProfilingRun(device, api);
 
-      const warning = nativeNetworkCaptureWarning(deviceId ?? params.device_id, api.runtimeApp);
+      const warning = nativeNetworkCaptureWarning(api.deviceId, api.runtimeApp, runtimeDevices);
       return {
         started_at: new Date(startedAtEpochMs).toISOString(),
         startedAtEpochMs,
@@ -565,7 +580,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         detected_architecture: api.detectedArchitecture,
         ...(tookOver ? { took_over: tookOver } : {}),
         ...(warning ? { warning } : {}),
-        ...(isLogicalKeyedDevice(api.deviceId) && !runtimeDevice
+        ...(isLogicalKeyedDevice(api.deviceId) && runtimeDevices.found.length === 0
           ? { [RESULT_NOTE_KEY]: UNKNOWN_DEVICE_NOTE }
           : {}),
       };

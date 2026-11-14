@@ -307,6 +307,14 @@ export function liveAndroidNetworkCaptures(deviceId: string): string[] {
     .sort();
 }
 
+/** Adb serials with live native network capture for any app. */
+export function liveAndroidNetworkCaptureSerials(): string[] {
+  const serials = allHandles()
+    .filter((handle) => handle.isLive())
+    .map((handle) => handle.serial);
+  return [...new Set(serials)].sort();
+}
+
 /** Adb serials of the devices with live native network capture for the app. */
 export function liveAndroidNetworkCaptureDevices(packageName: string): string[] {
   const serials = allHandles()

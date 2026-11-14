@@ -42,6 +42,7 @@ import {
   findAndroidNativeRecord,
   handshakeProof,
   liveAndroidNetworkCaptureDevices,
+  liveAndroidNetworkCaptureSerials,
   liveAndroidNetworkCaptures,
   openFrame,
   sealFrame,
@@ -2255,6 +2256,8 @@ describe("device identity", () => {
     // Looked up by app, the device is named by its adb serial.
     expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([SERIAL]);
     expect(liveAndroidNetworkCaptureDevices(OTHER)).toEqual([]);
+    // So are the serials with capture for any app.
+    expect(liveAndroidNetworkCaptureSerials()).toEqual([SERIAL]);
   });
 
   it("refuses a second adb serial of the same device for the same app, naming the serial in use", async () => {
