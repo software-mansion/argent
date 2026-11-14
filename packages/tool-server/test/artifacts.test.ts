@@ -341,7 +341,10 @@ describe("GET /artifacts/:id", () => {
       await writeFile(filePath, "");
       await truncate(filePath, 64 * 1024 * 1024);
       const registry = stubRegistry();
-      const artifact = await registry.artifacts.register({ hostPath: filePath, kind: "screenshot" });
+      const artifact = await registry.artifacts.register({
+        hostPath: filePath,
+        kind: "screenshot",
+      });
       handle = createHttpApp(registry);
       server.on("request", handle.app);
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
