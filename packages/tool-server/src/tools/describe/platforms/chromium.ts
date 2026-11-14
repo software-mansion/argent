@@ -91,6 +91,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getScrollHeight = protoGetter(Element.prototype, "scrollHeight");
   const getClientHeight = protoGetter(Element.prototype, "clientHeight");
   const getScrollWidth = protoGetter(Element.prototype, "scrollWidth");
+  const getScrollLeft = protoGetter(Element.prototype, "scrollLeft");
+  const getScrollTop = protoGetter(Element.prototype, "scrollTop");
   const getClientWidth = protoGetter(Element.prototype, "clientWidth");
   const getClientLeft = protoGetter(Element.prototype, "clientLeft");
   const getClientTop = protoGetter(Element.prototype, "clientTop");
@@ -1704,8 +1706,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // client sizes put a clip edge up to a pixel inside the true one, so more than a pixel
   // outside.
   function paintsOutside(el, clip) {
-    const v = intersect(getBCR.call(el), { left: 0, top: 0, right: w, bottom: h });
-    // Nothing in view outside the clip to probe; most calls end here.
+    const r = getBCR.call(el);
+    const v = intersect(r, { left: 0, top: 0, right: w, bottom: h });
+    // Nothing in view outside the clip to probe.
     if (v.left >= v.right || v.top >= v.bottom) return false;
     if (
       v.left >= clip.left &&
@@ -1715,6 +1718,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     ) {
       return false;
     }
+    if (laidOutByParent(el, r)) return false;
     const b = clipperBorders(getParentNode.call(el)) || clip;
     const e = {
       left: Math.min(clip.left, b.left) - 1,
@@ -1738,6 +1742,54 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         (x < e.left || x >= e.right || y < e.top || y >= e.bottom) &&
         carriesHit(el, x, y)
     );
+  }
+
+  // Whether layout shows el where its parent's box puts it, so no closed root slotted it
+  // past the clips; this spares a hit test, a pass over every paint layer. offsetParent
+  // skips a closed tree's boxes, and past a fixed one gives that box's offsetParent, so
+  // a box containing absolute descendants is el's offsetParent unless a closed root put
+  // el in a fixed or top-layer box, the only way out of that box's clips. Under any other
+  // box, el must lie in its border box or scrollable overflow and name no slot. Missed:
+  // default-slotted content a closed root's absolute box (or a fixed box a transform
+  // contains) shows within that overflow.
+  function laidOutByParent(el, r) {
+    if (!(el instanceof HTMLElement)) return false;
+    const op = getOffsetParent.call(el);
+    if (!op) return false;
+    const parent = parentBox(getParentNode.call(el));
+    const o = parent.overflow;
+    if (!o) return op === parent.box;
+    if (hasAttr.call(el, "slot")) return false;
+    return r.left >= o.left && r.top >= o.top && r.right <= o.right && r.bottom <= o.bottom;
+  }
+
+  // The box n's children lie in and, unless it contains absolute descendants, its border
+  // box and scrollable overflow in viewport px. Memoized: siblings share it.
+  const parentBoxes = nodeMap();
+  function parentBox(n) {
+    if (parentBoxes.has(n)) return parentBoxes.get(n);
+    let box = n;
+    let style = window.getComputedStyle(box);
+    while (style.display === "contents") {
+      box = flatParent(box);
+      style = window.getComputedStyle(box);
+    }
+    const found = { box, overflow: null };
+    if (style.position === "static" && !containsFixed(box, style)) {
+      const p = paddingBox(box, style);
+      const b = getBCR.call(box);
+      const left = p.left - getScrollLeft.call(box) * p.sx;
+      const top = p.top - getScrollTop.call(box) * p.sy;
+      // Integer scroll sizes, like client sizes, put an edge up to a pixel short.
+      found.overflow = {
+        left: Math.min(b.left, left) - 1,
+        top: Math.min(b.top, top) - 1,
+        right: Math.max(b.right, left + getScrollWidth.call(box) * p.sx) + 1,
+        bottom: Math.max(b.bottom, top + getScrollHeight.call(box) * p.sy) + 1,
+      };
+    }
+    parentBoxes.set(n, found);
+    return found;
   }
 
   // Whether attachShadow accepts el: a custom element or one of the DOM spec's listed

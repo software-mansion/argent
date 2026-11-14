@@ -47,11 +47,15 @@ class MockHTMLSlotElement extends MockHTMLElement {
 // prototype getter still returns the real value — exactly the real [LegacyOverrideBuiltins]
 // behaviour the fix relies on. childNodes lives on Node.prototype, tagName/children on
 // Element.prototype, matching where the script captures each getter. Like Chrome's, an
-// Element.prototype getter throws on a non-element receiver (a text or comment node).
+// Element.prototype getter throws on a non-element receiver (a text or comment node), and
+// an HTMLElement.prototype one on an SVG element.
 function defineNative(proto: object, prop: string, field: string): void {
   Object.defineProperty(proto, prop, {
     get(this: Record<string, unknown>) {
-      if (proto === MockElement.prototype && !(this instanceof MockElement)) {
+      if (
+        (proto === MockElement.prototype && !(this instanceof MockElement)) ||
+        (proto === MockHTMLElement.prototype && !(this instanceof MockHTMLElement))
+      ) {
         throw new TypeError("Illegal invocation");
       }
       return this[field];
@@ -107,6 +111,8 @@ defineNative(MockElement.prototype, "scrollWidth", "__scrollWidth");
 defineNative(MockElement.prototype, "clientWidth", "__clientWidth");
 defineNative(MockElement.prototype, "clientLeft", "__clientLeft");
 defineNative(MockElement.prototype, "clientTop", "__clientTop");
+defineNative(MockElement.prototype, "scrollLeft", "__scrollLeft");
+defineNative(MockElement.prototype, "scrollTop", "__scrollTop");
 defineNative(MockHTMLElement.prototype, "offsetWidth", "__offsetWidth");
 defineNative(MockHTMLElement.prototype, "offsetHeight", "__offsetHeight");
 defineNative(MockHTMLElement.prototype, "offsetLeft", "__offsetLeft");
@@ -203,6 +209,7 @@ type Opts = {
   // Untransformed border-box size, and position from the padding edge of offsetParent.
   offset?: { width: number; height: number; left?: number; top?: number };
   scrollSize?: { width: number; height: number }; // scrollWidth / scrollHeight
+  scrolled?: { left: number; top: number }; // scrollLeft / scrollTop
   svg?: boolean; // an Element in the SVG namespace
   outerSvg?: boolean; // an outermost <svg> element
   // A nested <svg>: its viewport in the parent's user space, mapped by the parent's
@@ -266,6 +273,8 @@ function el(opts: Opts = {}): MockElement {
     node.__scrollWidth = opts.scrollSize.width;
     node.__scrollHeight = opts.scrollSize.height;
   }
+  node.__scrollLeft = opts.scrolled?.left ?? 0;
+  node.__scrollTop = opts.scrolled?.top ?? 0;
   node.children = opts.children ?? [];
   // The text node carries the element's own painted-text rect (`content`) so a Range
   // over just this text node measures the own-text extent — matching the real browser,
@@ -3837,6 +3846,25 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(reads(8, H)).toBe(1);
   });
 
+  it("reads a parent's style once however many light children it lays out past a clip", () => {
+    const body = el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H } });
+    const reads = (rowCount: number) => {
+      const rows = Array.from({ length: rowCount }, (_, i) => {
+        const r = row(`r${i}`, { x: 1, y: 101 + i * 8, w: 285, h: 8 });
+        (r as unknown as Record<string, unknown>).__offsetParent = body;
+        return r;
+      });
+      const sc = scroller(rows, { scrollSize: { width: 285, height: 100 + rowCount * 8 } });
+      const counted = sc as MockElement & Record<string, unknown>;
+      const style = counted.__style;
+      let n = 0;
+      Object.defineProperty(counted, "__style", { get: () => (n++, style) });
+      run([sc], body);
+      return n;
+    };
+    expect(reads(40)).toBe(reads(4));
+  });
+
   it("reads each ancestor's style a bounded number of times however many hit tests list it", () => {
     // Full-viewport wrappers, which every point probed past the scroller hits.
     const reads = (rowCount: number) => {
@@ -3890,6 +3918,161 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     };
     expect(hitTests(1)).toBe(1);
     expect(hitTests(50)).toBe(1);
+  });
+
+  it("hit-tests no light child whose offsetParent and box show its parent laid it out", () => {
+    const body = el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H } });
+    const laidOut = (n: MockElement, offsetParent: unknown = body) => {
+      (n as unknown as Record<string, unknown>).__offsetParent = offsetParent;
+      return n;
+    };
+    const clipper = (
+      rect: Rect,
+      layout: Rect,
+      scrollSize: Opts["scrollSize"],
+      kids: MockElement[]
+    ) =>
+      el({
+        rect,
+        client: { left: 0, top: 0, width: layout.w, height: layout.h },
+        offset: { width: layout.w, height: layout.h },
+        scrollSize,
+        style: { overflow: "hidden" },
+        children: kids,
+      });
+    // Rows past a scrolled list's window (y 101..199), inside its scrollable overflow
+    // (x -9..276, y 52..444); the last ends half a pixel past that integer scrollHeight.
+    const rows = Array.from({ length: 8 }, (_, i) =>
+      laidOut(row(`r${i}`, { x: -9, y: 52 + 49 * i, w: 285, h: i === 7 ? 49.5 : 49 }))
+    );
+    // A row overflowing both sides of a cell that contains absolute boxes, its offsetParent.
+    const cell = (id: string, style: Record<string, string>, y: number) => {
+      const rect = { x: 400, y, w: 100, h: 20 };
+      const box = clipper(rect, rect, { width: 130, height: 20 }, []);
+      Object.assign((box as unknown as Record<string, unknown>).__style as object, style);
+      box.children = [laidOut(row(id, { x: 380, y, w: 150, h: 20 }), box)];
+      return box;
+    };
+    // An inline parent has no scrollable overflow of its own.
+    const span = el({
+      tag: "span",
+      rect: { x: 600, y: 150, w: 80, h: 20 },
+      client: { left: 0, top: 0, width: 0, height: 0 },
+      offset: { width: 80, height: 20 },
+      scrollSize: { width: 0, height: 0 },
+      style: { display: "inline" },
+      children: [laidOut(row("link", { x: 600, y: 150, w: 80, h: 20 }))],
+    });
+    const page = [
+      scroller(rows, {
+        rect: { x: 0, y: 100, w: 300, h: 100 },
+        scrollSize: { width: 285, height: 392 },
+        scrolled: { left: 10, top: 49 },
+      }),
+      cell("rel", { position: "relative" }, 150),
+      cell("moved", { transform: "matrix(1, 0, 0, 1, 0, 0)" }, 200),
+      clipper(
+        { x: 600, y: 150, w: 40, h: 20 },
+        { x: 0, y: 0, w: 40, h: 20 },
+        { width: 80, height: 20 },
+        [laidOut(span)]
+      ),
+      // A display:contents parent's children lie in the box around it.
+      clipper(
+        { x: 0, y: 300, w: 300, h: 50 },
+        { x: 0, y: 0, w: 300, h: 50 },
+        { width: 300, height: 150 },
+        [
+          el({
+            tag: "app-row",
+            rect: ZERO,
+            style: { display: "contents" },
+            children: [laidOut(row("contents", { x: 0, y: 360, w: 300, h: 40 }))],
+          }),
+        ]
+      ),
+      // Over its 4px border, outside its scrollable overflow.
+      el({
+        rect: { x: 0, y: 450, w: 300, h: 58 },
+        client: { left: 4, top: 4, width: 292, height: 50 },
+        offset: { width: 300, height: 58 },
+        scrollSize: { width: 292, height: 150 },
+        style: { overflow: "hidden" },
+        children: [laidOut(row("bordered", { x: 0, y: 450, w: 300, h: 100 }))],
+      }),
+      // Drawn at twice its layout size: its overflow runs to x 900, y 500.
+      clipper(
+        { x: 600, y: 300, w: 200, h: 100 },
+        { x: 0, y: 0, w: 100, h: 50 },
+        { width: 150, height: 100 },
+        [laidOut(row("scaled", { x: 600, y: 450, w: 300, h: 40 }))]
+      ),
+    ];
+    const proto = MockDocument.prototype;
+    const hitTest = proto.elementsFromPoint;
+    let hitTests = 0;
+    proto.elementsFromPoint = function (this: { documentElement: unknown }, x, y) {
+      hitTests++;
+      return hitTest.call(this, x, y);
+    };
+    try {
+      const { tree } = run(page, body);
+      for (const id of ["r0", "r3", "r7", "contents", "scaled"]) {
+        expect(pxFrame(tree, id).h, id).toBe(0);
+      }
+      expect(pxFrame(tree, "rel")).toEqual({ x: 400, y: 150, w: 100, h: 20 });
+      expect(pxFrame(tree, "moved")).toEqual({ x: 400, y: 200, w: 100, h: 20 });
+      expect(pxFrame(tree, "link")).toEqual({ x: 600, y: 150, w: 40, h: 20 });
+      expect(pxFrame(tree, "bordered")).toEqual({ x: 4, y: 454, w: 292, h: 50 });
+    } finally {
+      proto.elementsFromPoint = hitTest;
+    }
+    expect(hitTests).toBe(0);
+  });
+
+  it("hit-tests a light child whose offsetParent or box shows a closed root may place it", () => {
+    const body = el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H } });
+    // A plain <div> host in a clipper, with scrollable overflow over x 100..400, y 100..300.
+    const framed = (child: MockElement, offsetParent: unknown, hostStyle = {}) => {
+      (child as unknown as Record<string, unknown>).__offsetParent = offsetParent;
+      const rect = { x: 100, y: 100, w: 300, h: 20 };
+      const sized = {
+        rect,
+        client: { left: 0, top: 0, width: 300, height: 20 },
+        offset: { width: 300, height: 20 },
+      };
+      const host = el({
+        ...sized,
+        scrollSize: { width: 300, height: 200 },
+        style: hostStyle,
+        children: [child],
+      });
+      const { tree } = run(
+        [el({ ...sized, style: { overflow: "hidden" }, children: [host] })],
+        body
+      );
+      return pxFrame(tree, "popped");
+    };
+    const popped = (rect: Rect, opts: Opts = {}) =>
+      el({ ...opts, attrs: { id: "popped", ...opts.attrs }, rect, painted: rect });
+    const inside = { x: 110, y: 200, w: 120, h: 40 };
+    // Inside a fixed box of a closed tree: no offsetParent.
+    expect(framed(popped(inside), null)).toEqual(inside);
+    // A positioned host is its laid-out children's offsetParent.
+    expect(framed(popped(inside), body, { position: "relative" })).toEqual(inside);
+    // Named for a slot.
+    expect(framed(popped(inside, { attrs: { slot: "pop" } }), body)).toEqual(inside);
+    // An SVG element has no offsetParent.
+    expect(framed(popped(inside, { svg: true }), undefined)).toEqual(inside);
+    // Past each edge of the host's scrollable overflow.
+    for (const rect of [
+      { x: 20, y: 150, w: 60, h: 20 },
+      { x: 110, y: 30, w: 60, h: 20 },
+      { x: 420, y: 150, w: 60, h: 20 },
+      { x: 110, y: 320, w: 60, h: 20 },
+    ]) {
+      expect(framed(popped(rect), body), JSON.stringify(rect)).toEqual(rect);
+    }
   });
 
   it("reads each box of an overlay the rows' hit tests walk through a bounded number of times", () => {
