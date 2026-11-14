@@ -543,13 +543,13 @@ describe("flowRunToMcpContent", () => {
     const blocks = await flowRunToMcpContent({
       flow: "f",
       steps: [
-        { index: 0, kind: "tool", status: "error", tool: "t", reason: "line1\nline2" },
+        { index: 0, kind: "tool", status: "error", tool: "t", reason: "line1\nline2\nline3" },
         { index: 1, kind: "tap", status: "fail", target: '"A"', reason: "a\nb", depth: 1 },
       ],
     });
 
     expect(blocks.slice(1, 3)).toEqual([
-      { type: "text", text: "[1] ✗ t — line1\n  line2" },
+      { type: "text", text: "[1] ✗ t — line1\n  line2\n  line3" },
       { type: "text", text: '[2] ✗   tap "A" — a\n    b' },
     ]);
   });
