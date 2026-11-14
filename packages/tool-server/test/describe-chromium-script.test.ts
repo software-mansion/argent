@@ -1234,6 +1234,11 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
         text("B"),
       ]);
     expect(listbox(option("O1", { "aria-selected": "TRUE" }), option("O2", {}))).toBe("A O1 B");
+    const inlineOption = option("O1", { "aria-selected": "true" }, { display: "inline" });
+    const inlineListbox = elementNode("span", [inlineOption], {
+      __attrs: { role: "listbox" },
+    });
+    expect(labelledBy([text("A"), inlineListbox, text("B")])).toBe("A O1 B");
     expect(listbox(option("O1", {}), option("O2", {}))).toBe("A LB B");
     // A hidden target reads its hidden content, but not its hidden chosen options.
     const hiddenListbox = (target: Record<string, string>, ...options: unknown[]) =>
@@ -1282,6 +1287,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       return node;
     };
     expect(labelledBy([details(false)])).toBe("Shipping");
+    const twoSummaries = elementNode("details", [summary, elementNode("summary", [text("B")])]);
+    expect(labelledBy([twoSummaries])).toBe("Shipping");
     expect(labelledBy([details(true)])).toBe("Shipping Ships in 3 days");
     expect(labelledBy([details(false, "visible")])).toBe("Shipping Ships in 3 days");
     // Display:none content has no layout to skip.
@@ -1292,6 +1299,18 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([text("Delete "), inert, text(" file")])).toBe("Delete file");
     expect(labelledBy([text("Inert")], { display: "inline" }, { inert: "" })).toBeUndefined();
     expect(labelledBy([text("Inert")], { display: "none" }, { inert: "" })).toBe("Inert");
+    // SVG has no inert attribute.
+    const svg = "http://www.w3.org/2000/svg";
+    const svgText = elementNode("text", [text("x")], {
+      namespaceURI: svg,
+      [Symbol.toStringTag]: "SVGTextElement",
+    });
+    const inertSvg = elementNode("svg", [svgText], {
+      namespaceURI: svg,
+      [Symbol.toStringTag]: "SVGSVGElement",
+      __attrs: { inert: "" },
+    });
+    expect(labelledBy([text("a"), inertSvg, text("b")])).toBe("a x b");
 
     const collapsed = (display: string, attrs = {}) => {
       const node = elementNode("div", [text("x")]);
@@ -1330,10 +1349,14 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([styled([text("Save")], shows('"\\1 Z"'))])).toBe("\u0001ZSave");
     expect(labelledBy([styled([text("Save")], shows('counters(c, "-") "K"'))])).toBe("KSave");
     expect(labelledBy([styled([text("Save")], shows('"★" / "Starred"'))])).toBe("Starred Save");
+    expect(labelledBy([styled([], shows('"" / "Disk"')), text("Save")])).toBe("DiskSave");
     expect(labelledBy([styled([text("Save")], shows('"Star"', { display: "block" }))])).toBe(
       "Star Save"
     );
     expect(labelledBy([styled([text("Save")], shows('"Star"', { visibility: "hidden" }))])).toBe(
+      "Save"
+    );
+    expect(labelledBy([styled([text("Save")], shows('"Star"', { visibility: "collapse" }))])).toBe(
       "Save"
     );
     const after = { "::after": { display: "inline", visibility: "visible", content: '" More"' } };
@@ -1360,6 +1383,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     });
     expect(around(save, afterBox("inline-block"))).toBe("preSave Starpost");
     expect(around(save, afterBox("block"))).toBe("preSave Star post");
+    expect(around(save, afterBox("-webkit-box"))).toBe("preSave Star post");
     expect(around([], afterBox("inline-block"))).toBe("preStarpost");
     expect(around([], { ...shows('"B"'), ...afterBox("inline-block") })).toBe("preB Starpost");
     expect(
@@ -1496,6 +1520,13 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     for (const value of ["", "false", "FALSE", "undefined", "Undefined"]) {
       expect(hiding(value), JSON.stringify(value)).toBe("A B C");
     }
+    // A hidden <math> is inline-level, so it parts no words.
+    const math = elementNode("math", [text("x")], {
+      namespaceURI: "http://www.w3.org/1998/Math/MathML",
+      __attrs: { "aria-hidden": "true" },
+    });
+    (math.__style as Record<string, string>).display = "math";
+    expect(labelledBy([text("a"), math, text("b")])).toBe("ab");
     // An ancestor's aria-hidden hides the target, which then reads its display:none content.
     const none = elementNode("span", [text("D")]);
     (none.__style as Record<string, string>).display = "none";
@@ -2151,6 +2182,11 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     };
     expect(read([text("ab cd")])).toBe("Ab cd");
     expect(read([text("AB CD")], block, letter("lowercase"))).toBe("aB CD");
+    // Greek drops the accent of the letter it uppercases, combining marks too.
+    const greek = { "::first-letter": { textTransform: "uppercase", webkitLocale: '"el"' } };
+    expect(read([text("\u03b1\u0301\u03bb\u03c6\u03b1")], block, greek)).toBe(
+      "\u0391\u03bb\u03c6\u03b1"
+    );
     expect(read([text("ab cd")], block, letter("capitalize"))).toBe("Ab cd");
     expect(read([text("ab cd")], { display: "block", textTransform: "capitalize" })).toBe("Ab Cd");
     expect(
@@ -2185,6 +2221,9 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     );
     expect(read([el({ tag: "br", rect: ZERO, style: inline }), text("ab")])).toBe("ab");
     expect(read([elementNode("img", [], { __attrs: { alt: "" } }), text("ab")])).toBe("ab");
+    const blockInput = elementNode("input", []);
+    (blockInput.__style as Record<string, string>).display = "block";
+    expect(read([blockInput, text("hello")])).toBe("hello");
     const before = (content: string) => ({
       ...upper,
       "::before": { display: "inline", visibility: "visible", content },
@@ -2210,14 +2249,15 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
 
   it("cases an aria-labelledby target's first letter by an ancestor's ::first-letter, as Chrome does", () => {
     // The target, an inline span, sits after `before` in a <p> with an uppercase
-    // ::first-letter (in a span of display `wrap` if given) and the ::before `content`,
-    // itself after `outer` in a <div>.
+    // ::first-letter (in a span of display `wrap` if given) and a ::before of `content`
+    // and `beforeDisplay`, itself after `outer` in a <div>.
     const read = (
       before: unknown[],
       target = { display: "inline" },
       outer: unknown[] = [],
       wrap = "",
-      content = "none"
+      content = "none",
+      beforeDisplay = "inline"
     ) => {
       const span = elementNode("span", [text("ab")], { __attrs: { id: "lbl" } });
       Object.assign(span.__style as Record<string, string>, target);
@@ -2228,7 +2268,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       p.childNodes = [...before, inner];
       p.__pseudo = {
         "::first-letter": { textTransform: "uppercase" },
-        "::before": { display: "inline", visibility: "visible", content },
+        "::before": { display: beforeDisplay, visibility: "visible", content },
       };
       const div = el({ rect: BOX, children: [p] }) as MockElement & Record<string, unknown>;
       div.childNodes = [...outer, p];
@@ -2250,6 +2290,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(read([], undefined, [], "inline-block")).toBe("ab");
     expect(read([], undefined, [], "", '"q"')).toBe("ab");
     expect(read([], undefined, [], "", '" "')).toBe("Ab");
+    expect(read([], undefined, [], "", '" "', "block")).toBe("ab");
     const none = elementNode("span", [text("q")]);
     (none.__style as Record<string, string>).display = "none";
     expect(read([none])).toBe("Ab");
@@ -2408,6 +2449,11 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(label([text("foo"), styled([text("q")], { visibility: "hidden" })])).toBe("bar Baz");
     expect(label([text("foo"), { nodeType: 8, nodeValue: " " }])).toBe("bar Baz");
     expect(label([text("foo"), styled([text("q")], { display: "block" })])).toBe("Bar Baz");
+    const blockAfter = styled([text("foo")], {});
+    blockAfter.__pseudo = {
+      "::after": { display: "block", visibility: "visible", content: '"x"' },
+    };
+    expect(label([blockAfter])).toBe("bar Baz");
     expect(label([text("foo"), el({ tag: "br", rect: ZERO, style: { display: "inline" } })])).toBe(
       "Bar Baz"
     );
