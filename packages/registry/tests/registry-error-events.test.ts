@@ -493,13 +493,15 @@ describe("Registry — failure signals", () => {
     );
   });
 
-  it("keeps the tool's own classification when the caller did not abort", async () => {
+  it("keeps the class of a tool's own AbortError when the caller did not abort", async () => {
     const registry = new Registry();
     registry.registerTool({
       id: "failing-tool",
       services: () => ({}),
       execute: async () => {
-        throw new Error("boom");
+        const ownAbort = new Error("request aborted");
+        ownAbort.name = "AbortError";
+        throw ownAbort;
       },
     } as never);
 
@@ -510,7 +512,7 @@ describe("Registry — failure signals", () => {
 
     await expect(
       registry.invokeTool("failing-tool", {}, { signal: new AbortController().signal })
-    ).rejects.toThrow("boom");
+    ).rejects.toThrow("request aborted");
 
     expect(getFailureSignal(emittedError)?.error_code).toBe(
       FAILURE_CODES.REGISTRY_TOOL_EXECUTION_FAILED
