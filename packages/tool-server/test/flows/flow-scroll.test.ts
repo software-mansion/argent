@@ -1140,6 +1140,16 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY).toBeCloseTo(0.45);
   });
 
+  it("scrolls a target the `within` scroller cuts at the walker's anchor, not that scroller's centre", async () => {
+    const swipes = await scrollTo("cut-by-within", (scrolled) => [list, cutRow(scrolled)], {
+      target: { identifier: "row" },
+      within: { identifier: "list" },
+    });
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromX).toBeCloseTo(0.3);
+    expect(swipes[0].fromY).toBeCloseTo(0.45);
+  });
+
   it("anchors a `within` gesture in the named container when the cut is across the axis", async () => {
     const panel = n({ identifier: "panel", frame: { x: 0, y: 0.2, width: 1, height: 0.75 } });
     const swipes = await scrollTo(
@@ -1160,6 +1170,41 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
     expect(swipes[0].fromX).toBeCloseTo(0.5);
     expect(swipes[0].fromY).toBeCloseTo(0.575);
+  });
+
+  it("scrolls a target its cutting window holds at the `within` box's centre while that box cuts it", async () => {
+    // Headless Chrome: an overflow:hidden box moved by its own wheel listener cuts the card
+    // at 0.6875, inside the outer scroller's window (0-0.75) that cuts the card's box. The
+    // second box clips there short of its frame (a scrollbar along its bottom).
+    const boxes = [
+      n({ identifier: "box", frame: { x: 0, y: 0.0625, width: 0.4, height: 0.625 } }),
+      n({
+        identifier: "box",
+        scrollable: true,
+        frame: { x: 0, y: 0.0625, width: 0.4, height: 0.645 },
+        clipFrame: { x: 0, y: 0.0625, width: 0.4, height: 0.625 },
+      }),
+    ];
+    for (const [i, box] of boxes.entries()) {
+      const swipes = await scrollTo(
+        `within-cuts-${i}`,
+        (scrolled) => [
+          box,
+          n({
+            identifier: "card",
+            frame: scrolled
+              ? { x: 0, y: 0.275, width: 0.4, height: 0.1875 }
+              : { x: 0, y: 0.5875, width: 0.4, height: 0.1 },
+            clipBounds: scrolled ? undefined : { x: 0, y: 0, width: 1, height: 0.75 },
+            clipAnchors: scrolled ? undefined : { y: { x: 0.04, y: 0.075 } },
+          }),
+        ],
+        { target: { identifier: "card" }, within: { identifier: "box" } }
+      );
+      expect(swipes, `box ${i}`).toHaveLength(1);
+      expect(swipes[0].fromX, `box ${i}`).toBeCloseTo(0.2);
+      expect(swipes[0].fromY, `box ${i}`).toBeCloseTo(box.frame.y + box.frame.height / 2);
+    }
   });
 
   it("moves a cut target no further than its visible start is from the window's", async () => {

@@ -883,7 +883,10 @@ async function scrollToVisible(
     // container (so the right nested scroller moves), or spans the whole screen
     // when none is named. The axis check measures the target against the window
     // that cuts it along the axis, else the one the container clips its content
-    // to, else the container's frame.
+    // to, else the container's frame. A target clear of its cutting window that the
+    // container still cuts is scrolled as an uncut one: the window leaves out boxes
+    // inside its scroller that clip without scrolling natively (one moved by its own
+    // wheel listener), and a wheel at the anchor carries such a box along.
     const container = within ? flowSelectorToNode(tree, within, orientation) : undefined;
     if (within && !container) {
       return { reason: `scroll container ${describeSelector(within)} is not visible` };
@@ -892,7 +895,12 @@ async function scrollToVisible(
     const frame = targetNode?.frame;
     const cut = frame && targetNode.clipBounds;
     const vertical = axisDirection === "up" || axisDirection === "down";
-    const anchor = cut && targetNode.clipAnchors?.[vertical ? "y" : "x"];
+    const withinCut =
+      cut &&
+      container &&
+      axisFullyInside(frame, axisDirection, cut) &&
+      !axisFullyInside(frame, axisDirection, container.clipFrame ?? container.frame);
+    const anchor = cut && !withinCut ? targetNode.clipAnchors?.[vertical ? "y" : "x"] : undefined;
     const axisCut = anchor ? cut : undefined;
     const region =
       frame && axisCut
