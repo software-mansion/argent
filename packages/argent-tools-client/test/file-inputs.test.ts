@@ -466,6 +466,22 @@ describe("prepareFileInputs — relative paths", () => {
     });
   });
 
+  it("keeps the trailing separator of a relative path", async () => {
+    await fs.writeFile(path.join(cwd, "ok.yaml"), "steps: []\n");
+    const specs: FileInputSpec[] = [
+      { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { e2e_test_path: "ok.yaml/" },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.e2e_test_path!.path).toBe(`${path.join(cwd, "ok.yaml")}${path.sep}`);
+    expect(out.e2e_test_path!.size).toBeUndefined();
+  });
+
   it("prefixes a path with a .. segment instead of collapsing it", async () => {
     await fs.mkdir(path.join(cwd, "sub"));
     await fs.writeFile(path.join(cwd, "app.apk"), "apk");

@@ -184,14 +184,19 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
  * path. A path with a `..` segment is prefixed with the directory it is
  * relative to (on Windows, that of its drive for `D:dir`), not normalized:
  * collapsing `..` ignores symlinks, so it can name another file than the kernel
- * opens. A Windows path on another OS, and a spelling nothing expanded
+ * opens. A trailing separator is kept, so `f.yaml/` still names no file. A
+ * Windows path on another OS, and a spelling nothing expanded
  * ({@link isUnexpandedPath}), are left for the tool-server to refuse.
  */
 export function callerPath(p: string): string {
   if (path.isAbsolute(p) || path.win32.isAbsolute(p) || isUnexpandedPath(p)) return p;
   const { root } = path.parse(p);
   const rest = p.slice(root.length);
-  if (!rest.split(/[\\/]/).includes("..")) return path.resolve(p);
+  if (!rest.split(/[\\/]/).includes("..")) {
+    const resolved = path.resolve(p);
+    const trailing = (p.endsWith("/") || p.endsWith(path.sep)) && !resolved.endsWith(path.sep);
+    return trailing ? `${resolved}${path.sep}` : resolved;
+  }
   const base = path.resolve(root);
   return base.endsWith(path.sep) ? `${base}${rest}` : `${base}${path.sep}${rest}`;
 }
