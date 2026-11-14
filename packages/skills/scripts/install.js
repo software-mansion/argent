@@ -24,34 +24,50 @@ function gitRoot() {
   }
 }
 
+// Makes `path` a dir or, for a file, the dir copyFileSync writes it into.
 // mkdirSync fails on a dangling link anywhere in the path, so create what each
-// one ends at first.
-function ensureDir(dir, hops = 0) {
-  const stat = lstatSync(dir, { throwIfNoEntry: false });
-  if (stat && existsSync(dir)) return;
-  // Past the cap, let mkdirSync report the loop.
-  if (hops >= 40) return void mkdirSync(dir, { recursive: true });
+// one ends at first, but only when that target's parent is on disk, as
+// resolveLinkedDestination in argent-installer does: a mistyped
+// `.claude/skills -> ../.agnets/skills` must fail, not build `.agnets/`.
+function prepare(path, isFile = false, hops = 0, link) {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat && existsSync(path)) return;
   if (stat?.isSymbolicLink()) {
-    ensureDir(resolve(realpathSync(dirname(dir)), readlinkSync(dir)), hops + 1);
+    // Past the cap, let mkdirSync report the loop.
+    if (hops >= 40) return void mkdirSync(path, { recursive: true });
+    prepare(resolve(realpathSync(dirname(path)), readlinkSync(path)), isFile, hops + 1, path);
     return;
   }
-  ensureDir(dirname(dir), hops);
-  mkdirSync(dir);
+  const parent = dirname(path);
+  if (link && !lstatSync(parent, { throwIfNoEntry: false })) {
+    throw new Error(`${link} links to ${path}, but ${parent} does not exist`);
+  }
+  prepare(parent, false, hops);
+  if (!isFile) mkdirSync(path);
 }
 
 // File by file rather than cpSync, which refuses or replaces a symlink inside the
 // destination (a per-skill link from `npx skills add`, a linked SKILL.md) depending on
 // the Node version. mkdirSync and copyFileSync write through one.
 function copyInto(src, dest) {
-  ensureDir(dest);
+  prepare(dest);
   for (const entry of readdirSync(src, { withFileTypes: true })) {
     const from = join(src, entry.name);
     const to = join(dest, entry.name);
-    if (entry.isDirectory()) copyInto(from, to);
-    else copyFileSync(from, to);
+    if (entry.isDirectory()) {
+      copyInto(from, to);
+    } else {
+      prepare(to, true);
+      copyFileSync(from, to);
+    }
   }
 }
 
 const skillsTarget = join(gitRoot(), ".claude", "skills");
-copyInto(skillsDir, skillsTarget);
-console.log(`Installed skills to ${skillsTarget}`);
+try {
+  copyInto(skillsDir, skillsTarget);
+  console.log(`Installed skills to ${skillsTarget}`);
+} catch (err) {
+  console.error(`Could not install skills: ${err.message}`);
+  process.exitCode = 1;
+}

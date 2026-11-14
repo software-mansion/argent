@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,6 +8,8 @@ import * as path from "node:path";
 const SKILLS_PKG = path.resolve(__dirname, "..", "..", "skills");
 const SCRIPT = path.join(SKILLS_PKG, "scripts", "install.js");
 const BUNDLED_SKILLS = path.join(SKILLS_PKG, "skills");
+
+const [SKILL] = fs.readdirSync(BUNDLED_SKILLS).sort();
 
 let project: string;
 
@@ -34,7 +36,7 @@ describe("install-skills script", () => {
   });
 
   it("writes through per-skill and per-file links into their canonical targets", () => {
-    const [dirSkill, fileSkill] = fs.readdirSync(BUNDLED_SKILLS).sort();
+    const [dirSkill, fileSkill, danglingSkill] = fs.readdirSync(BUNDLED_SKILLS).sort();
     const canonical = path.join(project, ".agents", "skills");
     fs.mkdirSync(path.join(canonical, dirSkill), { recursive: true });
     fs.writeFileSync(path.join(canonical, dirSkill, "SKILL.md"), "stale");
@@ -49,6 +51,11 @@ describe("install-skills script", () => {
       path.join("..", "..", "..", ".agents", "skills", "canonical.md"),
       path.join(skills, fileSkill, "SKILL.md")
     );
+    fs.mkdirSync(path.join(skills, danglingSkill));
+    fs.symlinkSync(
+      path.join("..", "..", "..", ".agents", "skills", "dangling.md"),
+      path.join(skills, danglingSkill, "SKILL.md")
+    );
 
     execFileSync(process.execPath, [SCRIPT], { cwd: project, stdio: "pipe" });
 
@@ -59,6 +66,9 @@ describe("install-skills script", () => {
     );
     expect(fs.readFileSync(path.join(canonical, "canonical.md"), "utf8")).toBe(
       fs.readFileSync(path.join(BUNDLED_SKILLS, fileSkill, "SKILL.md"), "utf8")
+    );
+    expect(fs.readFileSync(path.join(canonical, "dangling.md"), "utf8")).toBe(
+      fs.readFileSync(path.join(BUNDLED_SKILLS, danglingSkill, "SKILL.md"), "utf8")
     );
   });
 
@@ -84,26 +94,69 @@ describe("install-skills script", () => {
   });
 
   it.each([
-    [".claude", [["config/claude", ".claude"]], "config/claude/skills"],
+    [".claude", "config", [["config/claude", ".claude"]], "config/claude/skills"],
     [
       "a dir in the .claude/skills link chain",
+      "store",
       [
         ["store/agents", ".agents"],
         ["../.agents/skills", ".claude/skills"],
       ],
       "store/agents/skills",
     ],
-  ])("creates the missing targets when %s is a dangling link", (_name, links, landsIn) => {
-    for (const [target, at] of links) {
+  ])(
+    "creates the missing targets when %s is a dangling link into %s",
+    (_name, parent, links, landsIn) => {
+      fs.mkdirSync(path.join(project, parent));
+      for (const [target, at] of links) {
+        fs.mkdirSync(path.dirname(path.join(project, at)), { recursive: true });
+        fs.symlinkSync(target, path.join(project, at));
+      }
+
+      execFileSync(process.execPath, [SCRIPT], { cwd: project, stdio: "pipe" });
+
+      expect(fs.readdirSync(path.join(project, landsIn)).sort()).toEqual(
+        fs.readdirSync(BUNDLED_SKILLS).sort()
+      );
+    }
+  );
+
+  it.each([
+    [".claude/skills", [["../.agnets/skills", ".claude/skills"]], ".agnets/skills"],
+    [".claude", [["config/claude", ".claude"]], "config/claude"],
+    [
+      ".agents",
+      [
+        ["store/agents", ".agents"],
+        ["../.agents/skills", ".claude/skills"],
+      ],
+      "store/agents",
+    ],
+    [
+      `.claude/skills/${SKILL}/SKILL.md`,
+      [[`../../../.agents/skills/${SKILL}/SKILL.md`, `.claude/skills/${SKILL}/SKILL.md`]],
+      `.agents/skills/${SKILL}/SKILL.md`,
+    ],
+  ])("fails naming %s when its target's parent is missing", (link, links, target) => {
+    for (const [to, at] of links) {
       fs.mkdirSync(path.dirname(path.join(project, at)), { recursive: true });
-      fs.symlinkSync(target, path.join(project, at));
+      fs.symlinkSync(to, path.join(project, at));
     }
 
-    execFileSync(process.execPath, [SCRIPT], { cwd: project, stdio: "pipe" });
+    const { status, stdout, stderr } = spawnSync(process.execPath, [SCRIPT], {
+      cwd: project,
+      encoding: "utf8",
+    });
 
-    expect(fs.readdirSync(path.join(project, landsIn)).sort()).toEqual(
-      fs.readdirSync(BUNDLED_SKILLS).sort()
-    );
+    expect({ status, stdout, stderr }).toEqual({
+      status: 1,
+      stdout: "",
+      stderr:
+        `Could not install skills: ${path.join(project, link)} links to ` +
+        `${path.join(project, target)}, but ${path.join(project, path.dirname(target))} ` +
+        "does not exist\n",
+    });
+    expect(fs.existsSync(path.join(project, path.dirname(target)))).toBe(false);
   });
 
   // A fresh clone runs it before any build, so it must not import a workspace package.
