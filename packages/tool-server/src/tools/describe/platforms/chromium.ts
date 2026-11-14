@@ -150,7 +150,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const name = parts.join(" ");
       if (name) return name.slice(0, NAME_MAX);
     }
-    const aria = getAttr.call(el, "aria-label")?.trim();
+    const aria = (getAttr.call(el, "aria-label") || "").trim();
     if (aria) return aria.slice(0, NAME_MAX);
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       if (el.placeholder) return el.placeholder.slice(0, NAME_MAX);
@@ -280,8 +280,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
     }
     const rootOptions = chosenOptions(root);
-    const own =
-      controlText(root) ?? rangeText(root, !unrendered) ?? (rootOptions ? null : altText(root));
+    const own = shownText(root, !unrendered, rootOptions);
     if (own !== null) return own;
     if (shown && inert) return "";
     let s = "";
@@ -301,7 +300,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // in a block container (an anonymous block follows it). null until something is laid
     // out in an inline-flow root, whose first character runs on from what precedes it.
     let laid = isFlow(root, rootStyle) ? null : " ";
-    const prevLaid = () => laid ?? (laid = laidBefore(root));
+    const prevLaid = () => (laid === null ? (laid = laidBefore(root)) : laid);
     const lay = (text) => {
       if (text) laid = lastChar(text);
     };
@@ -326,7 +325,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       let letter = null;
       for (let i = blocks.length - 1; !letter && i >= 0; i--) {
         if (blocks[i] !== OUTSIDE) letter = firstLetterStyle(blocks[i]);
-        else for (const block of openLetters(root)) letter ??= firstLetterStyle(block);
+        else for (const block of openLetters(root)) if (!letter) letter = firstLetterStyle(block);
       }
       const m = letter && FIRST_LETTER.exec(text);
       if (!m) return caseText(text, style, prevLaid);
@@ -350,7 +349,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         letters = null;
       }
       const strings = caseLaid(pseudo.strings, pseudo.style);
-      read(pseudo.alt ?? strings);
+      read(pseudo.alt === null ? strings : pseudo.alt);
       lay(strings);
       if (pseudo.block && !isInlineBox(parentStyle)) laid = " ";
     };
@@ -403,12 +402,14 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         stack.push(() => {
           const after = pseudoText(el, "::after");
           const filled = !!s.slice(from).replace(WHITESPACE, "");
-          if (before?.spaced && (filled || after)) s = s.slice(0, from) + " " + s.slice(from);
+          if (before && before.spaced && (filled || after)) {
+            s = s.slice(0, from) + " " + s.slice(from);
+          }
           if (after) {
             if (after.spaced && (filled || before)) s += " ";
             readPseudo(after, style);
           }
-          if (before?.block || after?.block) s += " ";
+          if ((before && before.block) || (after && after.block)) s += " ";
         });
       }
       if (rendered && html && tag === "details" && closedDetails(el)) {
@@ -511,8 +512,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         else letters = box ? [node] : null;
       }
       const options = chosenOptions(node);
-      const control = controlText(node);
-      const content = control ?? rangeText(node, rendered) ?? (options ? null : altText(node));
+      const content = shownText(node, rendered, options);
       if (content !== null) {
         read(" " + content + " ");
         if (rendered) layOut(node);
@@ -565,6 +565,16 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
     }
     return false;
+  }
+
+  // What an element reads as in place of its content, or null: what a control shows, a
+  // range widget's value, else its alt text unless it is a listbox with chosen options.
+  function shownText(el, rendered, options) {
+    const control = controlText(el);
+    if (control !== null) return control;
+    const range = rangeText(el, rendered);
+    if (range !== null) return range;
+    return options ? null : altText(el);
   }
 
   // What a <select> or <textarea> shows, which its child text is not; null for others.
@@ -744,7 +754,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         else alt += str;
       }
     }
-    if (!(alt ?? text)) return null;
+    if (!(alt === null ? text : alt)) return null;
     const d = style.display;
     const inline = isInlineBox(style) || /^(contents|math)$/.test(d);
     return {
@@ -1392,7 +1402,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // the parent's user space, moved by its own transforms about its transform-origin.
   function nestedSvgViewport(el, style) {
     if (!(el instanceof SVGSVGElement) || !el.ownerSVGElement) return null;
-    const m = el.parentNode.getScreenCTM?.();
+    const parent = el.parentNode;
+    const m = parent.getScreenCTM && parent.getScreenCTM();
     if (!m) return null;
     const x = el.x.animVal.value;
     const y = el.y.animVal.value;
@@ -1426,7 +1437,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (vp) return vp;
     const r = getBCR.call(el);
     // A quirks-mode body reports the viewport's client size, so its own borders measure it.
-    if (htmlTag(el) === "BODY" && getOwnerDocument.call(el)?.compatMode === "BackCompat") {
+    if (htmlTag(el) === "BODY" && getOwnerDocument.call(el).compatMode === "BackCompat") {
       const border = (side) => parseFloat(style["border" + side + "Width"]) || 0;
       return {
         left: r.left + border("Left"),
