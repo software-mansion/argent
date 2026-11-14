@@ -1079,7 +1079,12 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     // The control inside the target it names itself by, beside a button the target names.
     const inside = (ctl: MockElement & Record<string, unknown>) => {
       (ctl.__attrs as Record<string, string>)["aria-labelledby"] = "l";
-      const label = el({ tag: "span", rect: BOX, attrs: { id: "l" }, children: [ctl] });
+      const label = el({
+        tag: "span",
+        rect: BOX,
+        attrs: { id: "l" },
+        children: [ctl],
+      }) as MockElement & Record<string, unknown>;
       label.childNodes = [text("Name "), ctl, text(" end")];
       const other = el({ tag: "button", rect: BOX, attrs: { "id": "b", "aria-labelledby": "l" } });
       const { tree } = run([label, other]);
@@ -2076,9 +2081,10 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
 
   it("cases an element's own text by its text-transform, as Chrome lays it out", () => {
     const value = (kids: unknown[], style: Record<string, string>, before: unknown[] = []) => {
-      const own = el({ tag: "span", rect: BOX, style, attrs: { id: "own" } });
+      type Fixture = MockElement & Record<string, unknown>;
+      const own = el({ tag: "span", rect: BOX, style, attrs: { id: "own" } }) as Fixture;
       own.childNodes = kids;
-      const wrap = el({ tag: "p", rect: BOX, children: [own] });
+      const wrap = el({ tag: "p", rect: BOX, children: [own] }) as Fixture;
       wrap.childNodes = [...before, own];
       return findById(run([wrap]).tree, "own")!.value;
     };
