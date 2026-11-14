@@ -211,7 +211,7 @@ function cpuRow(timeMs: number, id: number, fn: string): string {
   return (
     `<row><sample-time>${timeMs * MS}</sample-time>` +
     `<thread fmt="Main Thread 0x1 (ExampleExec, pid: 4321)"></thread>` +
-    `<weight>${MS}</weight>` +
+    `<weight>${150 * MS}</weight>` +
     `<backtrace id="${id}"><frame id="${id + 1}" name="${fn}" addr="0x${(0x1000 + id).toString(16)}">` +
     `<binary id="${id + 2}" name="ExampleExec" UUID="00000000-0000-0000-0000-000000000000" ` +
     `arch="arm64" load-addr="0x100000000" path="${APP_EXECUTABLE}"/></frame></backtrace></row>`
@@ -239,7 +239,8 @@ afterEach(() => {
  * A trace of two hangs: one at 3.644 s that a leak check filled but for 56 ms
  * (with a sample of `-[ExampleView layoutA]` in those 56 ms), and one at 20 s of
  * 11 s, 10 s of it a leak check (with `-[ExampleView layoutB]`). The two leak
- * checks are the spans below.
+ * checks are the spans below. Each sample weighs 150 ms, so the main thread ran
+ * for more than 10% of the second hang's own 1 s.
  */
 function writeTrace(leaks = true): Record<string, string | null> {
   const files = {
@@ -339,10 +340,13 @@ function makeApi(
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,
     exportSkipReason: null,
+    leaksCaptureError: null,
     recordedMs: null,
     startReturnedMs: null,
     stopInProgress: null,
@@ -435,11 +439,40 @@ describe("the analyze report's note on the app's suspensions", () => {
     expect(report).toContain("| 1 | Severe Hang | 00:03.644 | 13827ms |");
   });
 
-  it("leaves an iOS simulator's hangs as recorded", async () => {
+  it("takes the suspensions out of an iOS simulator's hangs too", async () => {
+    // The device capture records the leak checks of the Argent template, which
+    // suspend the simulator app as they suspend a Mac app.
     const api = makeApi("ios", LEAK_CHECKS);
     const { report } = await analyzeNativeProfilerIos(api);
+    expect(report).toContain(
+      `> ℹ️ ${NOTE} Instruments held the app suspended 2 times (23.8 s in all) to check it for ` +
+        `leaks. argent left out 1 hang that was only these pauses, and took the pauses out of ` +
+        `the length of 1 other hang.`
+    );
+    expect(report).toContain(`| 1 | Hang | 00:20.000 | 1000ms, not counting 10000ms`);
+    expect(api.parsedData?.uiHangs.map((h) => [h.durationMs, h.suspendedMs])).toEqual([
+      [1_000, 10_000],
+    ]);
+  });
+
+  it("leaves an iOS simulator's hangs as recorded, with the warning in iOS words, when argent did not watch", async () => {
+    const api = makeApi("ios", null);
+    const { report } = await analyzeNativeProfilerIos(api);
     expect(report).not.toContain(NOTE);
+    expect(report).toContain(
+      `> ⚠️ ${OLD_NOTE} Instruments pauses the app for several seconds while it checks the app ` +
+        `for leaks, about every 12 to 15 s. A hang that overlaps a check can include this pause, ` +
+        `so the app's own work can be much shorter than the hang. To check a hang, record the ` +
+        `same actions again with \`template_path: "Time Profiler"\`, which records hangs and CPU ` +
+        `samples but does not check for leaks.`
+    );
+    expect(report).not.toContain("Mac app");
+    expect(report.indexOf(OLD_NOTE)).toBeLessThan(report.indexOf("---"));
     expect(api.parsedData?.uiHangs.map((h) => h.durationMs)).toEqual([13_827, 11_000]);
+
+    // The all-processes fallback records the Time Profiler template: no leak check.
+    const noLeakCheck = await analyzeNativeProfilerIos(makeApi("ios", null, false));
+    expect(noLeakCheck.report).not.toContain(OLD_NOTE);
   });
 });
 
@@ -539,6 +572,7 @@ describe("the suspended time next to a hang's duration", () => {
         memoryLeaks: [],
         leaksRecorded: true,
         mallocStackLogging: null,
+        customTemplate: null,
         wallClockStartMs: START,
       };
       api.parsedData = parsedData;

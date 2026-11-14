@@ -61,6 +61,7 @@ function parsedDataA(): NativeProfilerParsedData {
     memoryLeaks: [],
     leaksRecorded: true,
     mallocStackLogging: true,
+    customTemplate: null,
     wallClockStartMs: A_START, // frozen at analyze — the anchor that must be used
   };
 }

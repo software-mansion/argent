@@ -39,8 +39,8 @@ Three concerns are captured: **CPU hotspots**, **UI hangs**, and **memory leaks*
 | ----------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `com.apple.xray.instrument-type.coresampler2`         | **Time Profiler** (kernel-driven sampling profiler) | **Yes** — exported as the `time-profile` table → CPU hotspots.                                                                                                                                                                                                                                                                                                                                                                    |
 | `com.apple.dt-perfteam.hangs`                         | **Hangs** (main-thread responsiveness detector)     | **Yes** — exported as the `potential-hangs` table → UI hangs.                                                                                                                                                                                                                                                                                                                                                                     |
-| `com.apple.xray.instrument-type.homeleaks`            | **Leaks** (periodic leak scan)                      | **Yes** — exported via the `Leaks` track → memory leaks. Responsible frame/library is populated only when the target ran under Malloc Stack Logging — argent's `malloc_stack_logging` cold launch, or an app launched with the diagnostic externally (e.g. an Xcode scheme) and then attached to (else `<Call stack limit reached>`).                                                                                             |
-| `com.apple.xray.instrument-type.oa`                   | **Allocations** (object lifetime + alloc tree)      | Recorded but not consumed directly; with `malloc_stack_logging` it supplies the allocation backtraces that make leaks attributable. Its C++ object naming (`identifyVirtualCppObjects`) is off: xctrace names each C++ object by symbolicating its vtable while it records, and on a react-native-macos app it fell behind, so the app blocked in Instruments' recorder for 2.3 to 6 s. Leaks names leaked C++ objects by itself. |
+| `com.apple.xray.instrument-type.homeleaks`            | **Leaks** (periodic leak scan)                      | **Yes** — exported via the `Leaks` track → memory leaks. Responsible frame/library is populated for an object allocated after the start of the recording, and for older objects only when the target ran under Malloc Stack Logging - argent's `malloc_stack_logging` cold launch, or an app launched with the diagnostic externally (e.g. an Xcode scheme) and then attached to (else `<Call stack limit reached>`).             |
+| `com.apple.xray.instrument-type.oa`                   | **Allocations** (object lifetime + alloc tree)      | Recorded but not consumed directly; it gives leaks their allocation backtraces, with `malloc_stack_logging` also for older objects. Its C++ object naming (`identifyVirtualCppObjects`) is off: xctrace names each C++ object by symbolicating its vtable while it records, and on a react-native-macos app it fell behind, so the app blocked in Instruments' recorder for 2.3 to 6 s. Leaks names leaked C++ objects by itself. |
 | `com.apple.xray.instrument-type.poi`                  | **Points of Interest** (`os_signpost`)              | Recorded but not consumed.                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `com.apple.xray.instrument-type.device-thermal-state` | **Thermal State**                                   | Recorded but not consumed.                                                                                                                                                                                                                                                                                                                                                                                                        |
 
@@ -65,9 +65,10 @@ All three are wired through `native-profiler-session` (per-device service, keyed
      --output <tmpdir>/argent-profiler-cwd/native-profiler-<ts>.trace
    ```
    With `malloc_stack_logging: true`, it instead **cold-launches** the app so the
-   malloc library records allocation backtraces from the first allocation —
-   required for attributable leaks. `--env` is only honoured with `--launch`, and
-   the launched target must be the final argument:
+   malloc library records allocation backtraces from the first allocation, so
+   leaks of objects allocated before the start are attributable too. Without it,
+   only leaks of objects allocated after the start are. `--env` is only honoured
+   with `--launch`, and the launched target must be the final argument:
    ```
    xctrace record --template <…> --device <udid> \
      --env MallocStackLogging=1 --output <…> --no-prompt \
@@ -132,7 +133,7 @@ parseLeaksFile ┘                                                │
 
 `xctrace` exports rely on an **id/ref deduplication scheme**: each `<frame>`, `<binary>`, `<backtrace>`, `<thread>`, `<weight>`, `<hang-type>`, etc. is defined once with `id="N"` and referenced afterwards by `<… ref="N"/>`. The parser maintains a `Map` per element type and resolves refs as it goes — without this most rows would be empty.
 
-DOM parsing is impractical (multi-MB files, deep nesting), so the parser pulls only what it needs with targeted regex (`<row[\s>](.*?)</row>`). System frames are flagged here using `SYSTEM_LIBRARY_PATH_PREFIXES` (`/usr/lib/`, `/System/Library/`, `/Library/Developer/CoreSimulator/`) so later stages can cheaply filter them out.
+DOM parsing is impractical (multi-MB files, deep nesting), so the parser pulls only what it needs with targeted regex (`<row[\s>](.*?)</row>`). System frames are flagged here using `SYSTEM_LIBRARY_PATH_PREFIXES` (`/usr/lib/`, `/System/Library/`, `/Library/Developer/CoreSimulator/`), and a path that contains `SIMULATOR_RUNTIME_PATH_SEGMENT` (the libraries of the iOS 27 simulator runtime, which macOS mounts under a cryptex path), so later stages can cheaply filter them out.
 
 Output shapes:
 
@@ -142,12 +143,15 @@ RawHang   = { startNs, durationNs, hangType, threadFmt }
 RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count }
 ```
 
+With a filter PID (`cpuFilterPid`, set by the host-wide `all-processes` capture), the parser keeps only the CPU samples and the hangs whose `<process>` has that PID: that capture records every process on the host, also other simulators' SpringBoard.
+
 ### Stage 1 — Correlate (`pipeline/01-correlate.ts`)
 
-- **Hang ↔ CPU correlation.** For each hang, filter CPU samples whose `timestampNs` ∈ `[startNs, startNs + durationNs]`. Within that window, count the **dominant function** of every sample and the **app call chain** (system + hex frames stripped). Top 5 functions and top 3 chains attach to the hang. Their timestamps are also returned in `hangSampleTimestamps` so Stage 2 can flag overlapping CPU hotspots.
-- **Leak aggregation.** Group raw leaks by `(objectType, responsible frame)`, summing `sizeBytes * count` — with `malloc_stack_logging` the same object type can leak from several distinct call sites, and each site is its own finding. The frame half of the key is normalized the way `isLeakAttributed` matches it: trimmed, with every unattributed spelling (`""`, `Unknown`, the `<Call stack limit reached>` sentinel) collapsed into one bucket, so an export that mixes those spellings still yields one unattributed group per type (and under `--attach`, where nothing is attributed, grouping degrades to per-type). Attributed leaks (a resolved responsible frame) sort first, then by total size descending. (Leaks have no timestamps, so they cannot be correlated with CPU samples — they are reported independently.) Severity follows attribution: a resolved responsible frame ⇒ RED, no recorded frame ⇒ a low-confidence YELLOW (see `isLeakAttributed`).
+- **Hang ↔ CPU correlation.** For each hang, filter CPU samples whose `timestampNs` ∈ `[startNs, startNs + durationNs]`; their timestamps are returned in `hangSampleTimestamps` so Stage 2 can flag overlapping CPU hotspots. The suspects come from the samples of the hang's thread (`RawHang.threadFmt`, the main thread in Instruments' hangs, matched by `normalizeThreadName`). When the hang's thread ran for less than 10% of the hang (`hangThreadRanMs`), they come from all threads in the window: `suspectsFromOtherThreads` when other threads ran, the thread's own samples when no other thread ran; with no `appSuspensions` and leak data in the trace, such a hang also gets `mayHoldLeakCheck`. Of each sample, count the **dominant function** and the **app call chain** (system + hex frames stripped). Top 5 functions and top 3 chains attach to the hang (none to a hang with no sample).
+- **Leak aggregation.** Group raw leaks by `(objectType, responsible frame)`, summing `sizeBytes * count` — the same object type can leak from several distinct call sites, and each site is its own finding. The frame half of the key is normalized the way `isLeakAttributed` matches it: trimmed, with every unattributed spelling (`""`, `Unknown`, `(null)`, the `<Call stack limit reached>` sentinel) collapsed into one bucket, so an export that mixes those spellings still yields one unattributed group per type (so a type with no attributed leak gives one group). App leaks sort first, then the leaks whose responsible frame is in a system library, then the unattributed ones; each part by total size descending. (Leaks have no timestamps, so they cannot be correlated with CPU samples — they are reported independently.) Severity follows attribution: a resolved responsible frame in the app's code ⇒ RED; one in a system library ⇒ YELLOW, with a note that names the libraries (the Swift runtime's allocator in `libswiftCore.dylib` counts as the app's); no recorded frame ⇒ a low-confidence YELLOW (see `isLeakAttributed`).
 - Hang severity is classified from the type string: contains `severe` or equals `hang` ⇒ RED; `microhang` ⇒ YELLOW.
-- **Mac apps: suspensions.** When the session has `appSuspensions` (when macOS held the app suspended, on the trace's timeline), the pipeline drops the hangs with under 250 ms of their own before the correlation, and gives each other hang its own length, the label of that length and `suspendedMs`. See `app-suspensions.ts`.
+- **Suspensions (Mac apps, iOS simulators).** When the session has `appSuspensions` (when macOS held the app suspended, on the trace's timeline), the pipeline drops the hangs with under 250 ms of their own before the correlation, and gives each other hang its own length, the label of that length and `suspendedMs`. See `app-suspensions.ts`.
+- **Instruments' recorder.** After the suspensions, the pipeline counts the recorder's main-thread CPU samples (`toolingWork` = `instruments`) in each hang, drops the hangs with under 250 ms left, and gives each other hang the length without the recorder and `recorderMs`. Recorder samples are not suspects. See `recorder-hangs.ts`.
 
 ### Stage 2 — Aggregate CPU (`pipeline/02-aggregate.ts`)
 
@@ -155,6 +159,7 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
   1. First non-system, non-hex, non-RN-framework frame (`RN_FRAMEWORK_SIGNATURES` = `RCT`, `Yoga`, `Hermes`, `JSI`, `React`, `facebook::`, `hermes::`, `jsi::`, `HermesRuntime`). This favours user code and third-party SDKs (FullStory, Sentry, Firebase…).
   2. First non-system, non-hex frame (allowing RN internals).
   3. First named frame, else `stack[0]`.
+     The app's entry point (`main`, `static App.$main()`, `__debug_main_executable_dylib_entry_point`) is picked only when no other app frame is below it. When it is picked with system frames below it, the hotspot gets `systemCode` (the system frameworks that ran, by share) and the report names it "system code under" the entry point. A stack with no app frame (no frame outside the system with a symbol or a binary) is reported under its root, the outermost named frame, also with `systemCode`.
 - **Thread normalisation** — fragments like `"main thread"`, `"Main Thread"`, `"com.apple.main-thread"` collapse to `"Main Thread"`; Hermes/JS variants → `"JS/Hermes"`; `"AppName 0x1e4715 (…)"` → `"AppName"`. Without this, hotspots fragment across name variants.
 - **Group key** = `dominantFunction + "|||" + normalizedThread`. For each group, accumulate sample count, total weight (ns), timestamps, and per-call-chain frequency.
 - **Filter** below `MIN_WEIGHT_PERCENTAGE = 3%` of total trace weight (cuts noise from xctrace's high sample rate).
@@ -168,10 +173,10 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 
 `renderNativeProfilerReport` produces a markdown document with these sections:
 
-1. **Header** — trace filename, platform, timestamp, any export warnings. When the trace has no leak data (the `all-processes` capture, or a leaks export that failed), a warning that memory leaks were not checked and that the app must not be reported as leak-free.
+1. **Header** — trace filename, platform, timestamp, any export warnings. When the trace has no leak data (the `all-processes` capture, a leaks export that failed, or a recording with no leak for which xctrace reported that Instruments could not capture the leak data), a warning that memory leaks were not checked and that the app must not be reported as leak-free. In the last case, the warning gives xctrace's error.
 2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks). Memory Leaks reads `not recorded` when the trace has no leak data.
-3. **CPU Hotspots** — table of dominant function, thread, weight (ms / %), sample count, `duringHang` flag, severity. Per hotspot: top 3 call chains and either burst windows or active range.
-4. **UI Hangs** — table of type / start (`MM:SS.mmm`) / duration / severity. Per hang: top app call chains during the hang window with sample counts (or top suspected functions if chain extraction was empty).
+3. **CPU Hotspots** — table of dominant function, thread, weight (ms / %), sample count, `duringHang` flag, severity. Per hotspot: top 3 call chains (a system-code hotspot gets a line that says so instead) and either burst windows or active range.
+4. **UI Hangs** — table of type / start (`MM:SS.mmm`) / duration / severity. Per hang: top app call chains during the hang window with sample counts (or top suspected functions if chain extraction was empty), and a line that says so when they are what all threads ran because the hang's thread ran for less than 10% of the hang. A label of a function follows its code span, so the span holds the name that `function_callers` matches.
 5. **Memory Leaks** — table of object type, count, total size, responsible frame, library.
 6. **Suggested Improvements** — a one-liner per finding with a templated remediation hint.
 7. **Next Steps** — concrete `profiler-stack-query` invocations the agent can chain into.
@@ -186,12 +191,12 @@ With no findings, the report is a short all clear instead. Without leak data it 
 
 Reads the cached `parsedData` on the session — no XML re-parse. Modes:
 
-| Mode               | Inputs                        | What you get                                                                                                                                                                   |
-| ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `hang_stacks`      | `hang_index`                  | The hang's suspected functions, app call chains during the hang, plus all unique stacks across CPU samples whose dominant function matches a suspect.                          |
-| `function_callers` | `function_name`               | Frames immediately above (callers) and below (callees) the named frame across all samples, ranked by frequency. Effectively a poor-man's call graph for a hot native function. |
-| `thread_breakdown` | optional `thread` filter      | Per-thread weight (ms/%) and sample count. With a filter, also lists hotspots on that thread.                                                                                  |
-| `leak_stacks`      | optional `object_type` filter | Filtered, sorted memory leak table, or a note that no leak data was recorded.                                                                                                  |
+| Mode               | Inputs                        | What you get                                                                                                                                                                                                                                                                                                           |
+| ------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hang_stacks`      | `hang_index`                  | The hang's suspected functions, app call chains during the hang, plus all unique stacks across CPU samples whose dominant function matches a suspect.                                                                                                                                                                  |
+| `function_callers` | `function_name`               | Frames immediately above (callers) and below (callees) the named frame across all samples, ranked by frequency. Effectively a poor-man's call graph for a hot native function. For the function of a system code hotspot (the app's entry point, a thread's root), also the heaviest stack of its system code samples. |
+| `thread_breakdown` | optional `thread` filter      | Per-thread weight (ms/%) and sample count. With a filter, also lists hotspots on that thread.                                                                                                                                                                                                                          |
+| `leak_stacks`      | optional `object_type` filter | Filtered, sorted memory leak table, or a note that no leak data was recorded.                                                                                                                                                                                                                                          |
 
 Top-N is configurable (default 15).
 
@@ -221,7 +226,7 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 
 - **Hang ↔ Commit correlations** — top overlapping commit per hang with its root-cause component, top components, JS CPU hotspots, and native CPU "suspects".
 - **Hangs without React commit match** — likely pure native work.
-- **Memory leaks** — same attribution split as the analyze report: attributed leaks are listed individually (and heuristically tied to a recently-mounted React component when `objectType`/`responsibleFrame` matches its name), while unattributed leaks collapse into a single low-confidence YELLOW caveat.
+- **Memory leaks** — same attribution split as the analyze report: attributed leaks are listed individually, the app's own first (heuristically tied to a recently-mounted React component when `objectType`/`responsibleFrame` matches its name), then those of system libraries with the note that they are not confirmed app leaks, while unattributed leaks collapse into a single low-confidence YELLOW caveat.
 
 ---
 
@@ -234,7 +239,8 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 | CPU hotspot | wall-time < 3 %                                              | filtered out |
 | UI hang     | type contains `severe` or equals `hang`                      | RED          |
 | UI hang     | `microhang`                                                  | YELLOW       |
-| Memory leak | attributed (resolved responsible frame)                      | RED          |
+| Memory leak | attributed, responsible frame in the app's code              | RED          |
+| Memory leak | attributed, responsible frame in a system library            | YELLOW       |
 | Memory leak | unattributed (`<Call stack limit reached>` under `--attach`) | YELLOW       |
 
 ---
@@ -246,7 +252,7 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 - **Run-to-run variance.** Treat changes < ~15 % across a single run as noise.
 - **Live data variance.** Different API responses change rendering work — record an e2e test (`argent-create-e2e`) for stable before/after comparisons.
 - **xctrace requirement.** Needs Xcode CLT installed (`xcrun xctrace version`).
-- **Leak attribution is limited under `--attach`.** Argent attaches to the already-running app, so the `Leaks`/`Allocations` instruments have no malloc-stack history. On the simulator this means leaked objects come back with `responsible-frame = "<Call stack limit reached>"`, an empty library, and the list is dominated by untracked system allocations (`Malloc N Bytes`, `xpc_*`). Treat the simulator leak list as a coarse signal, not a set of attributed app bugs — actionable stacks need malloc stack logging enabled at launch.
+- **Leak attribution is limited under `--attach`.** Argent attaches to the already-running app, so the `Leaks`/`Allocations` instruments have no malloc-stack history of what the app allocated before the start. On the simulator these leaked objects come back with `responsible-frame = "<Call stack limit reached>"`, an empty library, and the list is dominated by untracked system allocations (`Malloc N Bytes`, `xpc_*`). An object allocated after the start has a responsible frame, so attributed leaks do not prove malloc stack logging. Treat the unattributed part of the simulator leak list as a coarse signal, not a set of app bugs: actionable stacks for objects allocated before the start need malloc stack logging enabled at launch.
 
 ---
 

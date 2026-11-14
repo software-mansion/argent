@@ -13,6 +13,11 @@ import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-d
 import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
 import { SIMCTL_KILL_SIGNAL } from "../../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
+import {
+  startSuspensionWatch,
+  suspensionWatchHelper,
+  type SuspensionWatch,
+} from "../../../../utils/macos-suspension-watch";
 import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData, skippedTraceExport } from "../../../../utils/ios-profiler/export";
 import {
@@ -23,6 +28,7 @@ import {
 } from "../../../../utils/ios-profiler/app-suspensions";
 import type { ExportDiagnostics, IosExportKey } from "../../../../utils/ios-profiler/export";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
+import { leaksWereRecorded } from "../../../../utils/ios-profiler/pipeline/xml-parser";
 import {
   selectIosCaptureStrategy,
   resolveIosCaptureStrategy,
@@ -31,6 +37,7 @@ import {
   type CaptureStrategyReason,
 } from "../../../../utils/ios-profiler/capture-strategy";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
+import type { RecorderAdjustment } from "../../../../utils/ios-profiler/recorder-hangs";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 import { formatTraceFreshness } from "../../../../utils/profiler-shared/freshness";
 import {
@@ -464,11 +471,13 @@ async function startIosRecording(
   // Default flow attaches to the running app (preserves state, no overhead).
   // malloc_stack_logging instead cold-launches it *under* xctrace with
   // MallocStackLogging=1, so allocation backtraces exist from the first allocation —
-  // without that, leaks are detected but unattributable ("<Call stack limit
-  // reached>"). `--env` is honoured only with `--launch`, which needs the .app path.
+  // without that, only an object allocated after the start has one, and a leak of an
+  // older object is unattributable ("<Call stack limit reached>"). `--env` is
+  // honoured only with `--launch`, which needs the .app path.
   const useMallocStackLogging = params.malloc_stack_logging === true;
   let appProcess: string;
   let launchBundlePath: string | null = null;
+  let launchBundleId: string | null = null;
   // Bundle id the malloc path terminated for its cold start, so a failed start can
   // best-effort relaunch it instead of leaving the user's app dead.
   let mallocRelaunchBundleId: string | null = null;
@@ -502,6 +511,7 @@ async function startIosRecording(
     // The relaunch below must not beat injection.
     await firstSimulatorPoll();
     appProcess = info.CFBundleExecutable;
+    launchBundleId = info.CFBundleIdentifier;
     launchBundlePath = getAppBundlePath(params.device_id, info.CFBundleIdentifier);
     // Terminate any running instance so the env var is set from process start
     // (best-effort; not-running is fine).
@@ -553,6 +563,15 @@ async function startIosRecording(
       );
     }
   }
+
+  // The leak check of the Argent template suspends the whole app, as on a Mac
+  // app, and analyze takes the suspensions out of the hangs. The all-processes
+  // fallback records no leak check. A pid known now is watched from before
+  // xctrace attaches. The pid of an app that xctrace launches, or attaches to by
+  // name, is known only after the start.
+  const watchesApp = useMallocStackLogging || strategy?.name === "device";
+  let suspensionWatch =
+    watchesApp && detected?.pid != null ? await watchAppSuspensions(detected.pid) : null;
 
   const attemptStart = (): Promise<{ child: ChildProcess; pid: number }> =>
     spawnXctraceRecording(api, (notifyName) => {
@@ -621,14 +640,42 @@ async function startIosRecording(
     );
   };
 
-  let started: { child: ChildProcess; pid: number };
+  let recording = false;
   try {
-    started = await startWithRetry();
+    const started = await startWithRetry();
     await settleAfterStart(api, started.child);
+    // Not when the list failed before the start: a failure can take its 10 s timeout again.
+    if (watchesApp && detected?.pid == null && !detected?.listFailure) {
+      // Before the first leak check, which begins about 4 to 7 s after the start returns.
+      const pid = startedAppPid(
+        params.device_id,
+        launchBundleId !== null ? { bundleId: launchBundleId } : { name: appProcess }
+      );
+      suspensionWatch = pid !== null ? await watchAppSuspensions(pid) : null;
+      // xctrace can quit while the watch starts, before the commit listens for its
+      // exit: then the start fails as the wait above makes it fail.
+      if (started.child.exitCode !== null || started.child.signalCode !== null) {
+        await settleAfterStart(api, started.child);
+      }
+    }
+    const result = commitXctraceRecording(api, started, {
+      appProcess,
+      traceFile: outputFile,
+      mallocStackLogging: useMallocStackLogging,
+      customTemplate: params.template_path !== undefined,
+      // Null for the device strategy (scoped by --attach) and for a malloc cold launch
+      // (scoped by --launch); the app PID only for the host-wide all-processes fallback.
+      cpuFilterPid: strategy ? strategy.cpuFilterPid(detected!) : null,
+    });
+    // A recording that the cap or an exit ended keeps its watch until a stop.
+    api.suspensionWatch?.end();
+    api.suspensionWatch = suspensionWatch;
+    recording = true;
+    return result;
   } catch (err) {
     // The malloc path terminated the running app; if the capture never started,
     // relaunch it. The attach path never terminates, so only this path needs this.
-    // Not after a teardown, as for one that the commit below reports.
+    // Not after a teardown, as for one that the commit reports.
     if (mallocRelaunchBundleId && !api.disposed) {
       try {
         execFileSync(
@@ -649,15 +696,36 @@ async function startIosRecording(
       }
     }
     throw err;
+  } finally {
+    if (!recording) suspensionWatch?.end();
   }
-  return commitXctraceRecording(api, started, {
-    appProcess,
-    traceFile: outputFile,
-    mallocStackLogging: useMallocStackLogging,
-    // Null for the device strategy (scoped by --attach) and for a malloc cold launch
-    // (scoped by --launch); the app PID only for the host-wide all-processes fallback.
-    cpuFilterPid: strategy ? strategy.cpuFilterPid(detected!) : null,
-  });
+}
+
+/**
+ * The host pid of the app that xctrace launched, or attached to by name, from
+ * the simulator's `launchctl list` as the start reads it before xctrace
+ * attaches. Null when the list fails or does not show the app.
+ */
+function startedAppPid(udid: string, app: { bundleId: string } | { name: string }): number | null {
+  try {
+    if ("name" in app) return resolveExplicitApp(udid, app.name).pid;
+    return (
+      enumerateRunningUserApps(udid).find(({ info }) => info.CFBundleIdentifier === app.bundleId)
+        ?.pid ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Watches a simulator app, which is a process of this Mac, with the helper of
+ * Mac apps. Null when there is no helper or it cannot watch: then the hangs
+ * stay as recorded.
+ */
+async function watchAppSuspensions(pid: number): Promise<SuspensionWatch | null> {
+  const helper = suspensionWatchHelper();
+  return helper ? startSuspensionWatch(helper, pid) : null;
 }
 
 export interface IosStopResult {
@@ -698,10 +766,12 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
       ? skippedTraceExport(runErrors.skipReason)
       : await exportIosTraceData(traceFile, ended);
     api.exportedFiles = exportedFiles;
+    api.leaksCaptureError = runErrors?.leaksCaptureError ?? null;
     // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
     api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
-    // Pair the exports with the capture mode of the recording that just ended.
+    // Pair the exports with the capture mode and template of the recording that just ended.
     api.mallocStackLogging = api.recordingMallocStackLogging;
+    api.customTemplate = api.recordingCustomTemplate;
     api.appEndedDuringCapture = ended;
     api.exportSkipReason =
       diagnostics.skipped ?? (cappedEnd ? unfinishedRecordingReason(cappedEnd) : null);
@@ -786,13 +856,15 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     ? skippedTraceExport(runErrors.skipReason)
     : await exportIosTraceData(api.traceFile, ended);
   api.exportedFiles = exportedFiles;
+  api.leaksCaptureError = runErrors?.leaksCaptureError ?? null;
   // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
   api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
-  // Pair the exports with the capture mode of the recording that just ended.
+  // Pair the exports with the capture mode and template of the recording that just ended.
   api.mallocStackLogging = api.recordingMallocStackLogging;
+  api.customTemplate = api.recordingCustomTemplate;
   api.appEndedDuringCapture = ended;
   api.exportSkipReason = diagnostics.skipped ?? unfinishedRecordingReason(end);
-  api.recordedMs = api.platform === "macos" && api.startReturnedMs !== null ? recordedMs : null;
+  api.recordedMs = api.startReturnedMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
   if (ended) {
     // xctrace keeps recording when the app crashes, and the trace then lacks
@@ -816,14 +888,24 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
  */
 const NOT_RECORDED = /^Failed to start the recording/;
 /**
+ * Run errors after which the trace holds no leak check. Measured with Xcode 27.2
+ * on an iOS 27.0 simulator: "An error occurred trying to capture Leaks data." and
+ * "Failed to handshake with LeakAgent (pid: 46018)", and a Leaks export with no
+ * row, which read as "no leak".
+ */
+const LEAKS_NOT_CAPTURED =
+  /^(?:An error occurred trying to capture Leaks data|Failed to handshake with LeakAgent)/;
+
+/**
  * What the run errors that xctrace printed mean for the recording: the warning,
- * and why to export nothing when xctrace recorded nothing (each export of an
- * empty trace waits out its timeout). Null when xctrace printed no run error.
+ * why to export nothing when xctrace recorded nothing (each export of an empty
+ * trace waits out its timeout), and the errors that say Instruments captured no
+ * leak data. Null when xctrace printed no run error.
  */
 function readRunErrors(
   api: NativeProfilerSessionApi,
   runErrors: string[]
-): { warning: string; skipReason?: string } | null {
+): { warning: string; skipReason?: string; leaksCaptureError?: string } | null {
   if (runErrors.length === 0) return null;
   const reported = runErrors.join(" ");
   if (runErrors.some((line) => line.startsWith("Failed to attach to target process"))) {
@@ -842,12 +924,14 @@ function readRunErrors(
       skipReason: "xctrace could not start the recording, so the trace holds no data.",
     };
   }
+  const leakErrors = runErrors.filter((line) => LEAKS_NOT_CAPTURED.test(line));
   return {
     warning: `xctrace reported errors for this recording, so the data may be incomplete: ${reported}`,
+    ...(leakErrors.length > 0 ? { leaksCaptureError: leakErrors.join(" ") } : {}),
   };
 }
 
-/** Ends the Mac app's suspension watch: what it saw, or null when nothing watched. */
+/** Ends the app's suspension watch: what it saw, or null when nothing watched. */
 function endSuspensionWatch(api: NativeProfilerSessionApi): AppSuspensionWindow[] | null {
   const watch = api.suspensionWatch;
   api.suspensionWatch = null;
@@ -867,19 +951,57 @@ const APP_ENDED_NOTE =
   "of what the app did before that, so the report can miss CPU work, hangs and leaks of that " +
   "time. Profile the scenario again with the app running until native-profiler-stop.";
 
-// Measured on two Mac apps that argent drove: each check held up taps and describe for about
-// 10 s, and the report showed hangs of 11 to 14 s where the app did no heavy work. The same
-// actions under the Time Profiler template showed no hang, and that template still found a
-// 1.5 s and a 2 s hang of the app.
-const LEAK_CHECK_HANG_NOTE =
-  "Instruments pauses a Mac app for several seconds while it checks the app for leaks, about " +
-  "every 11 s. A hang, mainly one that began at a tap or a describe, can be this pause and not " +
-  "the app's own work. To check a hang, record the same actions again with `template_path: \"Time " +
-  'Profiler"`, which records hangs and CPU samples but does not check for leaks.';
+const CHECK_A_HANG =
+  'To check a hang, record the same actions again with `template_path: "Time Profiler"`, which ' +
+  "records hangs and CPU samples but does not check for leaks.";
+
+/** Says that the hangs can hold the leak checks' pauses, when argent did not watch for them. */
+const LEAK_CHECK_HANG_NOTE: Record<"macos" | "ios", string> = {
+  // Measured on two Mac apps that argent drove: each check held up taps and describe for about
+  // 10 s, and the report showed hangs of 11 to 14 s where the app did no heavy work. The same
+  // actions under the Time Profiler template showed no hang, and that template still found a
+  // 1.5 s and a 2 s hang of the app.
+  macos:
+    "Instruments pauses a Mac app for several seconds while it checks the app for leaks, about " +
+    "every 11 s. A hang, mainly one that began at a tap or a describe, can be this pause and not " +
+    `the app's own work. ${CHECK_A_HANG}`,
+  // Measured on an iOS 27 simulator with Xcode 27.2, on a loaded Mac: a check held the app
+  // suspended for 1.2 to 19.6 s in five recordings. A check that came while the main thread had
+  // work made the hang longer by the pause: a hang of 17415 ms had 5584 ms of main-thread CPU and
+  // 11842 ms of pause. Taps do not wait for a suspended simulator app.
+  ios:
+    "Instruments pauses the app for several seconds while it checks the app for leaks, about " +
+    "every 12 to 15 s. A hang that overlaps a check can include this pause, so the app's own work " +
+    `can be much shorter than the hang. ${CHECK_A_HANG}`,
+};
 
 /**
- * Says what the pipeline took out of the hangs when argent watched the Mac app's
- * suspensions, in place of LEAK_CHECK_HANG_NOTE. Each leak check suspended the
+ * What argent changed in the hangs, for a note: "left out 1 hang <why>, and took <what>
+ * out of the length of 2 other hangs".
+ */
+function hangChanges(
+  removedHangs: number,
+  removedWhy: string,
+  adjustedHangs: number,
+  takenOut: string
+): string {
+  const hangs = (n: number) => (n === 1 ? "hang" : "hangs");
+  const changes: string[] = [];
+  if (removedHangs > 0) {
+    changes.push(`left out ${removedHangs} ${hangs(removedHangs)} ${removedWhy}`);
+  }
+  if (adjustedHangs > 0) {
+    changes.push(
+      `took ${takenOut} out of the length of ${adjustedHangs} ` +
+        `${removedHangs > 0 ? "other " : ""}${hangs(adjustedHangs)}`
+    );
+  }
+  return changes.join(", and ");
+}
+
+/**
+ * Says what the pipeline took out of the hangs when argent watched the app's
+ * suspensions (a Mac app or an iOS simulator app), in place of LEAK_CHECK_HANG_NOTE. Each leak check suspended the
  * whole app, so a hang that began before or during one included it. Null when
  * no hang changed.
  */
@@ -888,55 +1010,96 @@ function suspensionNote(adjustment: SuspensionAdjustment, leaksRecorded: boolean
   if (removedHangs === 0 && adjustedHangs === 0) return null;
   const seconds = `${(pausedMs / 1000).toFixed(1)} s`;
   const times = pauses === 1 ? `once (${seconds})` : `${pauses} times (${seconds} in all)`;
-  const thePauses = pauses === 1 ? "the pause" : "the pauses";
-  const hangs = (n: number) => (n === 1 ? "hang" : "hangs");
-  const changes: string[] = [];
-  if (removedHangs > 0) {
-    changes.push(
-      `left out ${removedHangs} ${hangs(removedHangs)} that ${removedHangs === 1 ? "was" : "were"} ` +
-        `only ${pauses === 1 ? "this pause" : "these pauses"}`
-    );
-  }
-  if (adjustedHangs > 0) {
-    changes.push(
-      `took ${thePauses} out of the length of ${adjustedHangs} ` +
-        `${removedHangs > 0 ? "other " : ""}${hangs(adjustedHangs)}`
-    );
-  }
+  const thesePauses = pauses === 1 ? "this pause" : "these pauses";
+  const changes = hangChanges(
+    removedHangs,
+    `that ${removedHangs === 1 ? "was" : "were"} only ${thesePauses}`,
+    adjustedHangs,
+    pauses === 1 ? "the pause" : "the pauses"
+  );
   return leaksRecorded
     ? `> ℹ️ **Leak-check pauses:** Instruments held the app suspended ${times} to check it for ` +
-        `leaks. argent ${changes.join(", and ")}.`
-    : `> ℹ️ **App pauses:** macOS held the app suspended ${times}. argent ${changes.join(", and ")}.`;
-}
-
-// Measured on Mac apps with the Argent template: the first leak check began 3.7 s after the
-// start returned and the next ones about every 11 s. A leak is in the trace only after a check
-// that began after it has ended, and a check took up to about 10 s on an app that argent drove:
-// a stop 8 s after the start found no leak at all, and a leak made just after a check began was
-// missing 15 s later and present 20 s later.
-const SHORT_LEAK_RECORDING_MS = 20_000;
-
-function shortLeakRecordingNote(recordedMs: number): string {
-  return (
-    `No leak was found, but the recording lasted only ${Math.round(recordedMs / 1000)} s. ` +
-    `Instruments begins its first leak check about 4 s after native-profiler-start returns, ` +
-    `and a check can take several seconds, so this trace may hold no finished check. Do not report the app as leak-free: record again, and keep recording ` +
-    `about 25 s after the action to check.`
-  );
+        `leaks. argent ${changes}.`
+    : `> ℹ️ **App pauses:** macOS held the app suspended ${times}. argent ${changes}.`;
 }
 
 /**
- * Whether a leaks export holds the trace's Leaks detail, also when it has no row.
- * Measured on a Mac app with `template_path: "Time Profiler"`, which has no Leaks
- * instrument: the xctrace of Xcode 26.6 exports `<trace-query-result>` with no node
- * in it and exits 0. The xctrace of Xcode 27.2 fails that export.
+ * Says what the pipeline took out of the hangs for the recorder that the Allocations
+ * instrument loads into the app. Null when no hang changed.
  */
-async function leaksDetailExported(filePath: string): Promise<boolean> {
-  try {
-    return /<node[\s>]/.test(await fs.readFile(filePath, "utf8"));
-  } catch {
-    return false;
-  }
+function recorderNote(adjustment: RecorderAdjustment | undefined): string | null {
+  if (!adjustment) return null;
+  const { removedHangs, adjustedHangs, recorderMs } = adjustment;
+  if (removedHangs === 0 && adjustedHangs === 0) return null;
+  const changes = hangChanges(
+    removedHangs,
+    "that had under 250 ms of the app's own time without the recorder (xctrace reports no " +
+      "shorter hang)",
+    adjustedHangs,
+    "the recorder's time"
+  );
+  return (
+    `> ℹ️ **Instruments' recorder:** The recorder that Instruments loads into the app to track ` +
+    `allocations ran on the main thread for ${recorderMs} ms in the hangs. argent ` +
+    `${changes}. The recorder stays in the app until the app quits: to see the ` +
+    `hangs without it, start the app again and record the same actions with ` +
+    `\`template_path: "Time Profiler"\`.`
+  );
+}
+
+interface LeakCheckTiming {
+  /** A recording shorter than this, with no leak, can miss leaks, and the report says so. */
+  shortRecordingMs: number;
+  /** When the first leak check begins, in seconds after native-profiler-start returns. */
+  firstCheck: string;
+  /** How long to keep recording after the action that leaks, in seconds. */
+  recordAfterActionS: number;
+  /** Why a short recording can miss leaks, after the time of the first check. */
+  missReason: string;
+}
+
+// Measured with the Argent template. A leak is in the trace only after a check that began after
+// the leak has ended.
+const LEAK_CHECK_TIMING: Record<"macos" | "ios", LeakCheckTiming> = {
+  // Mac apps: the first leak check began 3.7 s after the start returned and the next ones about
+  // every 11 s, and a check took up to about 10 s on an app that argent drove: a stop 8 s after
+  // the start found no leak at all, and a leak made just after a check began was missing 15 s
+  // later and present 20 s later.
+  macos: {
+    shortRecordingMs: 20_000,
+    firstCheck: "about 4 s",
+    recordAfterActionS: 25,
+    missReason: "and a check can take several seconds, so this trace may hold no finished check.",
+  },
+  // An iOS 27 simulator with Xcode 27.2, 13 recordings, times from xctrace's tracing-started
+  // notification: the first leak check began 7.0 to 8.2 s after it and the next ones 12.4 to
+  // 15.2 s apart. A stop before the first check (5.0 to 6.5 s) gave no leak at all, also when the
+  // app had leaked at 1 s. A check that had begun before the stop was in the trace, also when the
+  // stop came 0.1 s after it began. A leak made during a check was found by the next one, 12.8 to
+  // 14.4 s later. The start returns 1.5 s after that notification (settleAfterStart), so the
+  // first check began 5.5 to 6.7 s after the start returned. In a later run with the device
+  // capture and a freshly launched ProfProbe, a stop 4.5 s after the start returned (a 6.7 s
+  // trace) still found leaks, so the first check can begin earlier. A malloc_stack_logging start
+  // returned about 0.4 s later: 1.94 s after xctrace's "Ctrl-C to stop" line, not 1.51 s.
+  ios: {
+    shortRecordingMs: 12_000,
+    firstCheck: "about 4 to 7 s",
+    recordAfterActionS: 20,
+    // A check finds the leaks made before it began, so a recording that holds the first check
+    // still misses those made after it.
+    missReason:
+      "and the next ones 12 to 15 s apart. A check finds only the leaks made before it began, " +
+      "so this trace holds at most the leaks made before the first check.",
+  },
+};
+
+function shortLeakRecordingNote(recordedMs: number, timing: LeakCheckTiming): string {
+  return (
+    `No leak was found, but the recording lasted only ${Math.round(recordedMs / 1000)} s. ` +
+    `Instruments begins its first leak check ${timing.firstCheck} after native-profiler-start returns, ` +
+    `${timing.missReason} Do not report the app as leak-free: record again, and keep recording ` +
+    `about ${timing.recordAfterActionS} s after the action to check.`
+  );
 }
 
 async function checkExportFileMissing(filePath: string | null): Promise<string | null> {
@@ -989,33 +1152,35 @@ export async function analyzeNativeProfilerIos(
     checkExportFileMissing(api.exportedFiles.leaks ?? null),
   ]);
 
-  // Null on iOS and when argent did not watch the Mac app: the hangs stay as recorded.
-  const appSuspensions = api.platform === "macos" ? api.appSuspensions : null;
+  // Null when argent did not watch the app: the hangs stay as recorded.
+  const appSuspensions = api.appSuspensions;
   const {
     bottlenecks,
     cpuSamples,
     uiHangs,
     cpuHotspots,
     memoryLeaks,
+    leaksDetailExported,
     toolingCpuMs,
     totalCpuMs,
     suspensionAdjustment,
+    recorderAdjustment,
   } = await runIosProfilerPipeline(api.exportedFiles, {
     cpuFilterPid: api.cpuFilterPid,
     appSuspensions,
+    macApp: api.platform === "macos",
   });
 
   // No leaks export means no leak data, not zero leaks: a trace whose template
   // has the Leaks instrument exports an empty table when nothing leaked. The
   // all-processes fallback records the built-in Time Profiler template, which
   // has none. A leaks file that stop wrote but is now gone or unreadable is no
-  // leak data either. On a Mac app, so is a leaks export with no Leaks detail in it.
-  const leaksRecorded =
-    api.exportedFiles.leaks != null &&
-    !leaksMissing &&
-    (api.platform !== "macos" ||
-      memoryLeaks.length > 0 ||
-      (await leaksDetailExported(api.exportedFiles.leaks)));
+  // leak data either, and neither is a leaks export with no Leaks detail in it,
+  // nor an empty one of a recording whose leak capture failed.
+  const leaksRecorded = leaksWereRecorded(
+    { memoryLeaks, leaksDetailExported },
+    api.leaksCaptureError
+  );
 
   api.parsedData = {
     cpuSamples,
@@ -1027,6 +1192,7 @@ export async function analyzeNativeProfilerIos(
     // (leak_stacks, combined report) stay paired with it after a newer capture
     // re-stamps the session fields.
     mallocStackLogging: api.mallocStackLogging,
+    customTemplate: api.customTemplate,
     // Freeze the start time too — the combined report anchors these hangs to
     // wall-clock time and must use THIS capture's start, not a later one's.
     wallClockStartMs: api.wallClockStartMs,
@@ -1072,13 +1238,13 @@ export async function analyzeNativeProfilerIos(
     bottlenecks,
   };
 
+  const leakCheckTiming = LEAK_CHECK_TIMING[api.platform === "macos" ? "macos" : "ios"];
   const shortLeakNote =
-    api.platform === "macos" &&
     leaksRecorded &&
     memoryLeaks.length === 0 &&
     api.recordedMs !== null &&
-    api.recordedMs < SHORT_LEAK_RECORDING_MS
-      ? shortLeakRecordingNote(api.recordedMs)
+    api.recordedMs < leakCheckTiming.shortRecordingMs
+      ? shortLeakRecordingNote(api.recordedMs, leakCheckTiming)
       : null;
 
   return renderNativeProfilerReport({
@@ -1099,19 +1265,28 @@ export async function analyzeNativeProfilerIos(
         api.appEndedDuringCapture
           ? `> ⚠️ **The app ended during the recording:** ${APP_ENDED_NOTE}`
           : null,
-        api.platform === "macos" && appSuspensions === null && leaksRecorded && uiHangs.length > 0
-          ? `> ⚠️ **Hangs and the leak check:** ${LEAK_CHECK_HANG_NOTE}`
+        appSuspensions === null && leaksRecorded && uiHangs.length > 0
+          ? "> ⚠️ **Hangs and the leak check:** " +
+            LEAK_CHECK_HANG_NOTE[api.platform === "macos" ? "macos" : "ios"]
           : null,
         suspensionAdjustment ? suspensionNote(suspensionAdjustment, leaksRecorded) : null,
+        recorderNote(recorderAdjustment),
         shortLeakNote ? `> ⚠️ **Memory leaks:** ${shortLeakNote}` : null,
       ]
         .filter(Boolean)
         .join("\n\n") || undefined,
     // Same live-session-only caveat as wallClockStartMs: profiler-load has no
     // capture-mode sidecar, so a restored session renders with null (the
-    // unattributed-leaks note then goes by the attributed-leak count instead).
+    // unattributed-leaks note then reads it as a capture without malloc stack logging).
     mallocStackLogging: api.mallocStackLogging,
+    customTemplate: api.customTemplate,
     leaksRecorded,
+    leaksNotRecordedCause:
+      !leaksRecorded && api.leaksCaptureError
+        ? `xctrace reported that Instruments could not capture the leak data: ` +
+          `${api.leaksCaptureError}${/[.!?]$/.test(api.leaksCaptureError) ? "" : "."} ` +
+          `Record again to check for leaks.`
+        : undefined,
     mayMissFindings: api.appEndedDuringCapture || shortLeakNote !== null,
     cpuDiagnostic: toolingNote(toolingCpuMs, totalCpuMs, api.platform === "macos"),
   });
@@ -1149,8 +1324,9 @@ function toolingNote(
   }
   if (parts.length === 0) return undefined;
   return (
-    `Of the CPU samples, ${parts.join(", and ")}. They are left out of the CPU hotspots. A hang ` +
-    `whose suspects are marked "argent's own library" or "Instruments' own library" was caused ` +
-    `by that tool, not the app.`
+    `Of the CPU samples, ${parts.join(", and ")}. They are left out of the CPU hotspots.` +
+    (toolingMs.argent > 0
+      ? ` A hang whose suspects are marked "argent's own library" was caused by argent, not the app.`
+      : ``)
   );
 }

@@ -122,6 +122,7 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     // .md over the OLD trace's report.
     const api = await buildIosSession();
     api.mallocStackLogging = true;
+    api.customTemplate = false;
     api.cpuFilterPid = 4242;
     api.wallClockStartMs = Date.now() - 2 * DAY_MS;
     api.traceFile = join(tempDir, "previous-live.trace");
@@ -137,6 +138,8 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
 
     expect(api.mallocStackLogging).toBeNull();
     expect(api.parsedData?.mallocStackLogging).toBeNull();
+    expect(api.customTemplate).toBeNull();
+    expect(api.parsedData?.customTemplate).toBeNull();
     expect(api.cpuFilterPid).toBeNull();
     expect(api.wallClockStartMs).toBeNull();
     expect(api.traceFile).toBeNull();

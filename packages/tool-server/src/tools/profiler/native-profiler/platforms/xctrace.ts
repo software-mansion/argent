@@ -669,6 +669,8 @@ export interface XctraceCapture {
   appProcess: string;
   traceFile: string;
   mallocStackLogging: boolean;
+  /** The recording uses a template of the caller (template_path), not the bundled one. */
+  customTemplate: boolean;
   /** The PID to keep CPU samples of, for a host-wide capture; null when xctrace scoped it. */
   cpuFilterPid: number | null;
   /** The app process xctrace attached to, when the stop should check that it still runs. */
@@ -717,6 +719,7 @@ export function commitXctraceRecording(
   // writes exportedFiles. Stamping the report-facing flag here would re-label the
   // previous capture's still-loaded exports/parsedData.
   api.recordingMallocStackLogging = capture.mallocStackLogging;
+  api.recordingCustomTemplate = capture.customTemplate;
   api.cpuFilterPid = capture.cpuFilterPid;
   api.recordingAppPid = capture.appPid ?? null;
   api.profilingActive = true;

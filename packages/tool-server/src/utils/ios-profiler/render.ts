@@ -14,24 +14,104 @@ import type {
   NativeProfilerAnalyzeResult,
 } from "./types";
 import { summarizeHangBlocking } from "../profiler-shared/native-frame-class";
+import { isEntryPoint } from "./pipeline/02-aggregate";
 
 const MAX_INLINE_HOTSPOTS = 5;
 const MAX_INLINE_HANGS = 3;
 
-/** A function of a hang as the report shows it, marked when a tool's library holds it. */
-function hangFunctionName(hang: UiHang, fn: string): string {
+/**
+ * A function of a hang as the report shows it: its name in a code span, which
+ * profiler-stack-query function_callers matches, then its label when a tool's library holds
+ * it or only system code ran under it.
+ */
+export function hangFunctionCode(hang: UiHang, fn: string): string {
   const label = hang.toolingLabels?.[fn];
-  return label ? `${demangleSymbol(fn)} (${label})` : demangleSymbol(fn);
+  return `\`${demangleSymbol(fn)}\`${label ? ` (${label})` : ""}`;
 }
 
 /**
- * Follows a hang's duration when macOS held the app suspended during the hang,
- * time the duration leaves out. Empty otherwise.
+ * Said of a hang whose thread ran for less than 10% of it (`hangThreadRanMs`), before its
+ * suspects: what all threads ran, which is what the main thread ran when no other thread ran.
+ */
+export function waitedHangNote(hang: UiHang): string {
+  const ran = `The main thread ran for ${hang.hangThreadRanMs ?? 0} ms of this ${hang.durationMs} ms hang`;
+  return hang.suspectsFromOtherThreads
+    ? `${ran}, so it very possibly waited, for example for a lock, a synchronous call to ` +
+        `another thread or I/O.${leakCheckCause(hang)} These are what all threads ran.`
+    : `${ran}, and no other thread ran on the CPU, so the main thread very possibly waited, ` +
+        `for example in a sleep, for a lock or for I/O.${leakCheckCause(hang)}` +
+        (hang.suspectedFunctions.length > 0 ? " These are what the main thread ran." : "");
+}
+
+/** The other cause of a waited hang when the app's suspensions are not known. */
+function leakCheckCause(hang: UiHang): string {
+  return hang.mayHoldLeakCheck
+    ? " Instruments may also have held the app suspended for a leak check."
+    : "";
+}
+
+/**
+ * The names of an app call chain of a hang, leaf first, with their labels. The entry
+ * point's label says that only system code ran below it, so it is marked only as the leaf
+ * of a chain.
+ */
+export function hangChainNames(
+  hang: UiHang,
+  chain: string[]
+): Array<{ name: string; label?: string }> {
+  return chain.map((fn, i) => {
+    const label = i > 0 && isEntryPoint(fn) ? undefined : hang.toolingLabels?.[fn];
+    return { name: demangleSymbol(fn), ...(label ? { label } : {}) };
+  });
+}
+
+/** An app call chain in the report: the names between labels in one code span, joined by " > ". */
+function hangChainCode(hang: UiHang, chain: string[]): string {
+  const parts: string[] = [];
+  let names: string[] = [];
+  for (const { name, label } of hangChainNames(hang, chain)) {
+    if (!label) {
+      names.push(name);
+      continue;
+    }
+    if (names.length > 0) parts.push(`\`${names.join(" > ")}\``);
+    parts.push(`\`${name}\` (${label})`);
+    names = [];
+  }
+  if (names.length > 0) parts.push(`\`${names.join(" > ")}\``);
+  return parts.join(" > ");
+}
+
+/**
+ * A hotspot as the report and profiler-stack-query name it. The app's entry point with only
+ * system code below it, or the root of a thread with no app frame, did none of the work
+ * itself, so the name says so.
+ */
+export function hotspotName(b: CpuHotspot): string {
+  const name = `\`${demangleSymbol(b.dominantFunction)}\``;
+  return b.systemCode ? `system code under ${name}` : name;
+}
+
+/** The frameworks of a hotspot of system code: "SwiftUI 34%, QuartzCore 20%". */
+function systemFrameworks(b: CpuHotspot): string {
+  return (b.systemCode?.frameworks ?? [])
+    .map((f) => `${f.name} ${f.weightPercentage < 1 ? "<1" : f.weightPercentage}%`)
+    .join(", ");
+}
+
+/**
+ * Follows a hang's duration when macOS held the app suspended during the hang, or
+ * Instruments' recorder ran on the main thread, time the duration leaves out. Empty otherwise.
  */
 export function hangSuspendedNote(hang: UiHang): string {
-  return hang.suspendedMs !== undefined && hang.suspendedMs > 0
-    ? `, not counting ${hang.suspendedMs}ms when the app was suspended`
-    : "";
+  const parts: string[] = [];
+  if (hang.suspendedMs !== undefined && hang.suspendedMs > 0) {
+    parts.push(`${hang.suspendedMs}ms when the app was suspended`);
+  }
+  if (hang.recorderMs !== undefined && hang.recorderMs > 0) {
+    parts.push(`${hang.recorderMs}ms of Instruments' recorder`);
+  }
+  return parts.length > 0 ? `, not counting ${parts.join(" or ")}` : "";
 }
 
 /**
@@ -59,20 +139,29 @@ interface RenderInput {
   /**
    * Whether the capture cold-launched the app with MallocStackLogging=1
    * (native-profiler-start's malloc_stack_logging flag). Null/undefined when
-   * unknown — a session restored from disk has no capture-mode sidecar — in
-   * which case the unattributed-leaks note infers it from the attributed-leak
-   * count.
+   * unknown — a session restored from disk has no capture-mode sidecar — and
+   * the unattributed-leaks note then reads it as a capture without malloc stack
+   * logging.
    */
   mallocStackLogging?: boolean | null;
   /**
-   * iOS: false when the trace had no leaks export, so the report must not read as
-   * leak-free. Undefined (Android) leaves the report unchanged.
+   * Whether the recording used a template of the caller (template_path). False for the
+   * bundled template, which has the Allocations instrument. Null/undefined when unknown.
+   */
+  customTemplate?: boolean | null;
+  /**
+   * xctrace: false when the trace has no leak data (no leaks export, or one with
+   * no Leaks detail) or Instruments could not capture it, so the report must not
+   * read as leak-free. Undefined (Android) leaves the report unchanged.
    */
   leaksRecorded?: boolean;
+  /** Why no leak was recorded, said with the not-recorded note when known. */
+  leaksNotRecordedCause?: string;
   /**
-   * Mac apps: true when a note in freshnessNote says that the trace can miss
-   * findings (the app ended during the recording, or no leak check finished), so
-   * a report with no finding must not read as all clear.
+   * xctrace: true when a note in freshnessNote says that the trace can miss
+   * findings (a Mac app ended during the recording, or the recording was too
+   * short to hold a leak check), so a report with no finding must not read as
+   * all clear.
    */
   mayMissFindings?: boolean;
 }
@@ -96,7 +185,9 @@ export async function renderNativeProfilerReport(
     freshnessNote,
     cpuDiagnostic,
     mallocStackLogging,
+    customTemplate,
     leaksRecorded,
+    leaksNotRecordedCause,
     mayMissFindings,
   } = input;
   const exportErrors = input.exportErrors ?? {};
@@ -115,7 +206,8 @@ export async function renderNativeProfilerReport(
           freshnessNote,
           cpuDiagnostic,
           leaksRecorded,
-          mayMissFindings
+          mayMissFindings,
+          leaksNotRecordedCause
         )
       : renderFullReport(
           payload,
@@ -127,7 +219,9 @@ export async function renderNativeProfilerReport(
           freshnessNote,
           mallocStackLogging,
           cpuDiagnostic,
-          leaksRecorded
+          leaksRecorded,
+          leaksNotRecordedCause,
+          customTemplate
         );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
@@ -141,7 +235,8 @@ export async function renderNativeProfilerReport(
           freshnessNote,
           cpuDiagnostic,
           leaksRecorded,
-          mayMissFindings
+          mayMissFindings,
+          leaksNotRecordedCause
         )
       : renderFullReport(
           payload,
@@ -153,7 +248,9 @@ export async function renderNativeProfilerReport(
           freshnessNote,
           mallocStackLogging,
           cpuDiagnostic,
-          leaksRecorded
+          leaksRecorded,
+          leaksNotRecordedCause,
+          customTemplate
         );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
@@ -236,7 +333,8 @@ function renderAllClear(
   freshnessNote?: string,
   cpuDiagnostic?: string,
   leaksRecorded?: boolean,
-  mayMissFindings?: boolean
+  mayMissFindings?: boolean,
+  leaksNotRecordedCause?: string
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -250,7 +348,7 @@ function renderAllClear(
 
   if (freshnessNote) lines.push(freshnessNote, ``);
   if (cpuDiagnostic) lines.push(`> ⚠️ **CPU sampling:** ${cpuDiagnostic}`, ``);
-  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(), ``);
+  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(leaksNotRecordedCause), ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -289,7 +387,9 @@ function renderFullReport(
   freshnessNote?: string,
   mallocStackLogging?: boolean | null,
   cpuDiagnostic?: string,
-  leaksRecorded?: boolean
+  leaksRecorded?: boolean,
+  leaksNotRecordedCause?: string,
+  customTemplate?: boolean | null
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -311,7 +411,7 @@ function renderFullReport(
 
   if (freshnessNote) lines.push(freshnessNote, ``);
   if (cpuDiagnostic) lines.push(`> ⚠️ **CPU sampling:** ${cpuDiagnostic}`, ``);
-  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(), ``);
+  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(leaksNotRecordedCause), ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -346,7 +446,7 @@ function renderFullReport(
     cpuHotspots.forEach((b, i) => {
       const hangFlag = b.duringHang ? "Yes" : "—";
       lines.push(
-        `| ${i + 1} | \`${escapeMarkdownTableCell(demangleSymbol(b.dominantFunction))}\` | ${escapeMarkdownTableCell(b.thread)} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
+        `| ${i + 1} | ${escapeMarkdownTableCell(hotspotName(b))} | ${escapeMarkdownTableCell(b.thread)} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
       );
     });
 
@@ -366,10 +466,19 @@ function renderFullReport(
       : cpuHotspots;
     for (const b of hotspotDetailSlice) {
       lines.push(``);
-      lines.push(`### \`${demangleSymbol(b.dominantFunction)}\` (${b.thread})`);
+      lines.push(`### ${hotspotName(b)} (${b.thread})`);
       lines.push(``);
 
-      if (b.topCallChains && b.topCallChains.length > 0) {
+      if (b.systemCode) {
+        // Its call chains hold at most the entry point, so they are not shown. Its frameworks are
+        // in its advice, which the report gives for every hotspot.
+        lines.push(
+          isEntryPoint(b.dominantFunction)
+            ? `Only the entry point of the app is in these stacks: below it, the main run loop ran system code.`
+            : `No function of the app is in these stacks: only system code ran on this thread.`
+        );
+        lines.push(``);
+      } else if (b.topCallChains && b.topCallChains.length > 0) {
         lines.push(`**Call chains:**`);
         for (const { chain, count } of b.topCallChains) {
           lines.push(`- (${count}×) \`${chain.map(demangleSymbol).join(" > ")}\``);
@@ -448,27 +557,30 @@ function renderFullReport(
           lines.push(`App call chains during this hang:`);
           hang.appCallChains.forEach((entry, i) => {
             lines.push(
-              `${i + 1}. \`${entry.chain.map((fn) => hangFunctionName(hang, fn)).join(" > ")}\` (${entry.sampleCount} samples)`
+              `${i + 1}. ${hangChainCode(hang, entry.chain)} (${entry.sampleCount} samples)`
             );
           });
         }
       } else if (hang.appCallChains.length > 0) {
         lines.push(``);
         lines.push(`${header} — app call chains during this hang:`);
+        if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang));
         hang.appCallChains.forEach((entry, i) => {
           lines.push(
-            `${i + 1}. \`${entry.chain.map((fn) => hangFunctionName(hang, fn)).join(" > ")}\` (${entry.sampleCount} samples)`
+            `${i + 1}. ${hangChainCode(hang, entry.chain)} (${entry.sampleCount} samples)`
           );
         });
       } else if (hang.suspectedFunctions.length > 0) {
         lines.push(``);
         lines.push(`${header} — during this hang, the most active functions were:`);
+        if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang));
         for (const fn of hang.suspectedFunctions) {
-          lines.push(`- \`${hangFunctionName(hang, fn)}\``);
+          lines.push(`- ${hangFunctionCode(hang, fn)}`);
         }
       } else {
         lines.push(``);
         lines.push(header);
+        if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang));
       }
     }
     if (isFinite(cap.hangLimit) && uiHangs.length > cap.hangLimit) {
@@ -499,6 +611,8 @@ function renderFullReport(
           `| ${i + 1} | \`${escapeMarkdownTableCell(b.objectType)}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${escapeMarkdownTableCell(demangleSymbol(b.responsibleFrame))}\` | ${escapeMarkdownTableCell(b.responsibleLibrary) || "—"} | ${severityEmoji(b.severity)} |`
         );
       });
+      const systemLeaks = attributedLeaks.filter((b) => b.systemLibrary);
+      if (systemLeaks.length > 0) lines.push(``, renderSystemLibraryLeaksNote(systemLeaks));
     } else {
       lines.push(`_No attributed leaks — nothing with a resolved responsible frame._`);
     }
@@ -510,7 +624,7 @@ function renderFullReport(
           unattributedLeaks,
           attributedLeaks.length,
           mallocStackLogging,
-          payload.metadata.platform.toLowerCase() === "macos"
+          customTemplate
         )
       );
     }
@@ -540,9 +654,13 @@ function renderFullReport(
       const advice =
         b.frameClass === "system"
           ? `Emulator/kernel overhead (GPU-transport pipe or syscall), not app code — it does not appear on a physical device, so it is not directly actionable. Re-profile on a real device to see the app's own CPU cost.`
-          : `High CPU in this function — inspect what calls it with \`function_callers\`, then move the heavy work off the main thread or memoize/throttle it.`;
+          : b.systemCode
+            ? isEntryPoint(b.dominantFunction)
+              ? `Not a function of the app: system frameworks (${systemFrameworks(b)}) did this work for the main run loop, such as drawing, layout or animation. Look for what in the app makes them work: an animation or timer that runs also when the app is idle, or views that redraw or change layout often.`
+              : `Not a function of the app: only system code (${systemFrameworks(b)}) ran on this thread, with no function of the app in its stacks. Look for what in the app starts this work, such as a call that the system completes on a thread of its own.`
+            : `High CPU in this function — inspect what calls it with \`function_callers\`, then move the heavy work off the main thread or memoize/throttle it.`;
       lines.push(
-        `- ${severityEmoji(b.severity)} \`${demangleSymbol(b.dominantFunction)}\` on ${b.thread} (${b.weightPercentage}%): ${advice}`
+        `- ${severityEmoji(b.severity)} ${hotspotName(b)} on ${b.thread} (${b.weightPercentage}%): ${advice}`
       );
     }
     lines.push(``);
@@ -551,10 +669,15 @@ function renderFullReport(
   if (uiHangs.length > 0) {
     lines.push(`### UI Hangs`, ``);
     for (const b of uiHangs) {
+      const top = b.suspectedFunctions[0];
       const funcNote =
-        b.suspectedFunctions.length > 0
-          ? ` Likely caused by: \`${hangFunctionName(b, b.suspectedFunctions[0]!)}\`.`
-          : "";
+        top === undefined
+          ? ""
+          : b.suspectsFromOtherThreads
+            ? ` The function that ran most on all threads: ${hangFunctionCode(b, top)}.`
+            : b.hangThreadRanMs !== undefined
+              ? ` The function that ran most on the main thread: ${hangFunctionCode(b, top)}.`
+              : ` Likely caused by: ${hangFunctionCode(b, top)}.`;
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
         `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms${hangSuspendedNote(b)}): ${hangCoreAdvice(b)}${reasonNote}${funcNote}`
@@ -563,10 +686,10 @@ function renderFullReport(
     lines.push(``);
   }
 
-  const attributedLeaks = memoryLeaks.filter((b) => b.attributed);
-  if (attributedLeaks.length > 0) {
+  const appLeaks = memoryLeaks.filter((b) => b.attributed && !b.systemLibrary);
+  if (appLeaks.length > 0) {
     lines.push(`### Memory Leaks`, ``);
-    for (const b of attributedLeaks) {
+    for (const b of appLeaks) {
       lines.push(
         `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${demangleSymbol(b.responsibleFrame)}\`: Check for retain cycles or strong delegate references.`
       );
@@ -588,12 +711,18 @@ function renderFullReport(
     // Prefer the top *app* hotspot: on Android the leading hotspot is often a
     // `system` (emulator/kernel) frame the report already flags as not
     // actionable. iOS hotspots have no `frameClass`, so this picks their first.
-    const callerHotspot = cpuHotspots.find((b) => b.frameClass !== "system");
+    const callerHotspot = cpuHotspots.find((b) => b.frameClass !== "system" && !b.systemCode);
     if (callerHotspot) {
       // Keep the RAW (possibly mangled) name: function_callers matches against
       // raw frame names, so a demangled one would find nothing.
       lines.push(
         `   - mode=\`function_callers\` function_name=\`${callerHotspot.dominantFunction}\` — who calls this hot function`
+      );
+    }
+    const systemCodeHotspot = cpuHotspots.find((b) => b.systemCode);
+    if (systemCodeHotspot) {
+      lines.push(
+        `   - mode=\`function_callers\` function_name=\`${systemCodeHotspot.dominantFunction}\` — the heaviest system stack below it`
       );
     }
     lines.push(`   - mode=\`thread_breakdown\` — CPU distribution across threads`);
@@ -612,66 +741,100 @@ function renderFullReport(
   return lines.join("\n");
 }
 
-/** Why a leak of a Mac app has no allocation backtrace without malloc stack logging. */
-export const MAC_UNATTRIBUTED_LEAKS =
-  "On a Mac app without malloc stack logging, only an object allocated after the start of the " +
-  "recording has an allocation backtrace. These are most likely older objects or benign system " +
-  "allocations, not confirmed app leaks. To attribute them, record again with " +
-  "`malloc_stack_logging: true`.";
+/** The note on the leaks whose responsible frame is in a system library. */
+export function renderSystemLibraryLeaksNote(systemLeaks: MemoryLeak[]): string {
+  const objs = systemLeaks.reduce((s, b) => s + b.count, 0);
+  const libraries = [...new Set(systemLeaks.map((b) => b.responsibleLibrary))]
+    .map((name) => `\`${name}\``)
+    .join(", ");
+  return (
+    `> ${severityEmoji("YELLOW")} **${systemLeaks.length} leak group(s) from system libraries** ` +
+    `(${objs} object(s); ${libraries}): the responsible frame is in a library of the OS, not in the ` +
+    `app's code. Most likely the OS leaks these objects by itself, so they are not confirmed app leaks.`
+  );
+}
 
-function renderLeaksNotRecordedNote(): string {
-  return `> ⚠️ **Memory leaks:** ${LEAKS_NOT_RECORDED} Do not report the app as leak-free.`;
+/**
+ * Why a leak has no allocation backtrace when the capture did not run with malloc stack
+ * logging (or its mode is unknown), on a Mac app and on an iOS simulator. Without it, an
+ * iOS simulator app under `xctrace --attach` (Xcode 27.2, iOS 27.0) had a responsible
+ * frame for the objects that it leaked 1 s after the start, as a Mac app has.
+ */
+export const UNATTRIBUTED_WITHOUT_MALLOC_LOGGING =
+  "Without malloc stack logging, Instruments records an allocation backtrace only for an " +
+  "object allocated after the start of the recording. These groups have none, so they are " +
+  "most likely older objects or benign system allocations, not confirmed app leaks. To " +
+  "attribute them, record again with `malloc_stack_logging: true`.";
+
+/** Why no leak has a responsible frame when each names `(null)` (see isLeakAttributed). */
+const NO_ALLOCATIONS_LEAKS =
+  "The template of this recording has no Allocations instrument, so Instruments gave no leak a " +
+  "responsible frame, also not a leak of the app's code. To attribute leaks, record again " +
+  "without `template_path`: the bundled Argent template has the Allocations instrument.";
+
+/**
+ * True when each of these leaks names `(null)` as its frame. A template with Leaks but no
+ * Allocations gives `(null)` to every leak, so only with no attributed leak does it mean that.
+ */
+function leaksWithoutAllocations(leaks: MemoryLeak[]): boolean {
+  return leaks.length > 0 && leaks.every((b) => b.responsibleFrame.trim() === "(null)");
+}
+
+function renderLeaksNotRecordedNote(cause?: string): string {
+  return (
+    `> ⚠️ **Memory leaks:** ${LEAKS_NOT_RECORDED}${cause ? ` ${cause}` : ""} ` +
+    `Do not report the app as leak-free.`
+  );
 }
 
 /**
  * The single low-confidence caveat line for unattributed leaks, shared with the
- * combined React × native report so the wording can't diverge.
+ * combined React × native report and leak_stacks so the wording can't diverge.
  *
  * `mallocStackLogging` is the capture mode when known (stamped at stop, frozen
- * into parsedData); null/undefined when unknown. It only disambiguates the
- * zero-attributed case: explicit `true` names the malloc capture that recorded
- * nothing, anything else gets the `--attach` framing.
+ * into parsedData); null/undefined when unknown. Only explicit `true` names the
+ * malloc capture. Attributed leaks do not prove malloc stack logging: without it,
+ * Instruments still records a backtrace for each object allocated after the start,
+ * on a Mac app and on an iOS simulator.
  *
- * On a Mac app, attributed leaks do not prove malloc stack logging: without it,
- * Instruments still records a backtrace for each object allocated after the start.
+ * `customTemplate` is whether the recording used a template of the caller; null/undefined
+ * when unknown. Only such a template can lack the Allocations instrument.
  */
 export function renderUnattributedLeaksNote(
   unattributedLeaks: MemoryLeak[],
   attributedCount: number,
   mallocStackLogging?: boolean | null,
-  macApp = false
+  customTemplate?: boolean | null
 ): string {
   const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
   const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
-  if (macApp && mallocStackLogging !== true) {
+  const nullFrames = leaksWithoutAllocations(unattributedLeaks);
+  const frame = nullFrames ? "`(null)`" : "`<Call stack limit reached>`";
+  // The bundled template has the Allocations instrument.
+  if (nullFrames && attributedCount === 0 && customTemplate !== false) {
     return (
       `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
-      `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
-      MAC_UNATTRIBUTED_LEAKS
+      `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`(null)\`, no library. ` +
+      NO_ALLOCATIONS_LEAKS
     );
   }
-  // Attribution evidence decides first: a responsible frame exists only if the
-  // target ran under malloc stack logging — possible even under `--attach`, if
-  // the app was launched with the diagnostic externally — so an explicit
-  // `false` must not claim "no malloc-stack history" above an attributed table.
+  // Without malloc stack logging, a Mac app and an iOS simulator app still get a backtrace
+  // for an object allocated after the start, so no capture has "no malloc-stack history".
   const hint =
-    attributedCount > 0
-      ? `Some leaks here were attributed, so malloc stack logging was active — these remaining ` +
-        `groups carry no allocation backtrace (freed-region reuse, truncated stack logs, or ` +
-        `allocations outside the instrumented malloc zones) and are most likely benign system ` +
-        `allocations rather than confirmed app leaks.`
-      : mallocStackLogging === true
-        ? `This capture ran with malloc stack logging enabled, yet none of these leaks carry an allocation ` +
+    mallocStackLogging !== true
+      ? UNATTRIBUTED_WITHOUT_MALLOC_LOGGING
+      : attributedCount > 0
+        ? `Some leaks here were attributed, and malloc stack logging was active, so these ` +
+          `remaining groups carry no allocation backtrace for another reason (freed-region ` +
+          `reuse, truncated stack logs, or allocations outside the instrumented malloc zones). ` +
+          `They are most likely benign system allocations rather than confirmed app leaks.`
+        : `This capture ran with malloc stack logging enabled, yet none of these leaks carry an allocation ` +
           `backtrace — the allocator recorded no usable stack for them (freed-region reuse, truncated stack ` +
           `logs, or allocations outside the instrumented malloc zones). Most likely benign system allocations ` +
-          `rather than confirmed app leaks; re-running with malloc stack logging again is unlikely to attribute them.`
-        : `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
-          `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
-          `stack logging enabled at launch.`;
+          `rather than confirmed app leaks; re-running with malloc stack logging again is unlikely to attribute them.`;
   return (
     `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
-    `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
-    hint
+    `(${objs} object(s), ${formatBytes(bytes)}): responsible frame ${frame}, no library. ${hint}`
   );
 }
 
@@ -690,6 +853,15 @@ function renderExportErrors(exportErrors?: Record<string, string>): string[] {
  * the GPU. iOS hangs carry no breakdown and get the generic line.
  */
 function hangCoreAdvice(hang: UiHang): string {
+  if (hang.hangThreadRanMs !== undefined) {
+    return (
+      (hang.suspectsFromOtherThreads
+        ? "The main thread mostly did not run during the hang, so it very possibly waited, " +
+          "for example for a lock, a synchronous call to another thread or I/O."
+        : "No thread ran on the CPU for most of the hang, so the main thread very possibly " +
+          "waited, for example in a sleep, for a lock or for I/O.") + leakCheckCause(hang)
+    );
+  }
   const blocking = summarizeHangBlocking(hang.stateBreakdown);
   if (!blocking) {
     return "Main thread stalled past the frame budget — move heavy work off the main thread.";

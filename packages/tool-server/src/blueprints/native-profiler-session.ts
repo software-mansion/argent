@@ -39,9 +39,12 @@ export interface NativeProfilerParsedData {
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
   /**
-   * False when THIS data has no leaks export (a template without the Leaks
-   * instrument, or a failed export), so an empty `memoryLeaks` means "not
-   * checked" rather than "no leaks". See LEAKS_NOT_RECORDED in ios-profiler/render.ts.
+   * False when THIS data has no leak data: no leaks export, or one with no
+   * Leaks detail (a template without the Leaks instrument, or a failed export).
+   * analyze also sets false when the leaks export holds no leak and xctrace
+   * reported that Instruments could not capture the leak data. An empty
+   * `memoryLeaks` then means "not checked" rather than "no leaks". See
+   * LEAKS_NOT_RECORDED in ios-profiler/render.ts.
    */
   leaksRecorded: boolean;
   /**
@@ -50,6 +53,11 @@ export interface NativeProfilerParsedData {
    * Null when unknown (session restored from disk).
    */
   mallocStackLogging: boolean | null;
+  /**
+   * Whether THIS data was recorded with a template of the caller, frozen at parse time
+   * as `mallocStackLogging` is. Null when unknown (session restored from disk).
+   */
+  customTemplate: boolean | null;
   /**
    * Recording start (wall-clock ms) of THIS data, frozen at parse time: the
    * combined report anchors these hangs, and reading the live session field
@@ -109,6 +117,19 @@ export interface NativeProfilerSessionApi {
    */
   mallocStackLogging: boolean | null;
   /**
+   * xctrace only (iOS and macOS): whether the IN-FLIGHT (or most recently attempted)
+   * recording used a template of the caller (native-profiler-start's template_path), not
+   * the bundled Argent template. Stop copies it into `customTemplate`.
+   */
+  recordingCustomTemplate: boolean | null;
+  /**
+   * xctrace only (iOS and macOS): whether the data in `exportedFiles` was recorded with a
+   * template of the caller. Only such a template can lack the Allocations instrument, which
+   * the leaks need for a responsible frame. Stamped at stop; cleared by profiler-load. Null
+   * before any stop, on Android, or after a load.
+   */
+  customTemplate: boolean | null;
+  /**
    * Mac apps only: the pid of the app that the in-flight (or most recent)
    * recording attached to. Null on iOS and Android.
    */
@@ -133,9 +154,16 @@ export interface NativeProfilerSessionApi {
    */
   exportSkipReason: string | null;
   /**
-   * Mac apps only: how long the last recording ran, from the return of the start
-   * to the stop. Stamped at stop, null when xctrace ended before the stop;
-   * cleared by profiler-load.
+   * xctrace only: what xctrace reported when Instruments could not capture the
+   * leak data of the recording in `exportedFiles` (for example, a failed
+   * handshake with its LeakAgent), null otherwise. Analyze then says that leaks
+   * were not checked. Stamped at stop; cleared by profiler-load.
+   */
+  leaksCaptureError: string | null;
+  /**
+   * xctrace only (iOS and Mac apps): how long the last recording ran, from the
+   * return of the start to the stop. Stamped at stop, null when xctrace ended
+   * before the stop; cleared by profiler-load.
    */
   recordedMs: number | null;
   /** xctrace only: when native-profiler-start returned, for `recordedMs`. */
@@ -147,14 +175,16 @@ export interface NativeProfilerSessionApi {
    */
   stopInProgress: Promise<unknown> | null;
   /**
-   * Mac apps only: the watch of the app's suspensions that runs with the
-   * recording. `end()` stops it and returns what it saw. Null when nothing watches.
+   * Mac apps and iOS simulators, but not the all-processes fallback: the watch of
+   * the app's suspensions that runs with the recording. `end()` stops it and
+   * returns what it saw. Null when nothing watches.
    */
   suspensionWatch: { end(): AppSuspensionWindow[] } | null;
   /**
-   * Mac apps only: when macOS held the app suspended during the recording in
-   * `exportedFiles`, on the trace's timeline. Null when argent did not watch the
-   * app or the trace's start is unknown. Stamped at stop; cleared by profiler-load.
+   * Mac apps and iOS simulators, but not the all-processes fallback: when macOS
+   * held the app suspended during the recording in `exportedFiles`, on the
+   * trace's timeline. Null when argent did not watch the app or the trace's
+   * start is unknown. Stamped at stop; cleared by profiler-load.
    */
   appSuspensions: AppSuspensionSpan[] | null;
   /**
@@ -299,10 +329,13 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       cpuFilterPid: null,
       recordingMallocStackLogging: null,
       mallocStackLogging: null,
+      recordingCustomTemplate: null,
+      customTemplate: null,
       recordingAppPid: null,
       recordingAppEnded: false,
       appEndedDuringCapture: false,
       exportSkipReason: null,
+      leaksCaptureError: null,
       recordedMs: null,
       startReturnedMs: null,
       stopInProgress: null,

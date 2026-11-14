@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { renderLeakStacksIos } from "../src/tools/profiler/query/profiler-stack-query";
+import { UNATTRIBUTED_WITHOUT_MALLOC_LOGGING } from "../src/utils/ios-profiler/render";
 import type { MemoryLeak } from "../src/utils/profiler-shared/types";
 
 function leak(partial: Partial<MemoryLeak> & Pick<MemoryLeak, "objectType">): MemoryLeak {
@@ -22,6 +23,7 @@ function leak(partial: Partial<MemoryLeak> & Pick<MemoryLeak, "objectType">): Me
     responsibleFrame: partial.responsibleFrame ?? "<Call stack limit reached>",
     responsibleLibrary: partial.responsibleLibrary ?? "",
     attributed,
+    ...(partial.systemLibrary ? { systemLibrary: true } : {}),
     severity: partial.severity ?? (attributed ? "RED" : "YELLOW"),
   };
 }
@@ -91,11 +93,12 @@ describe("renderLeakStacksIos — attributed-first ordering", () => {
 });
 
 describe("renderLeakStacksIos — capture-mode-aware unattributed note", () => {
-  // Same contract as the analyze/combined reports: the "captured under
-  // `xctrace --attach`" framing is only apt when the capture actually attached.
-  // A malloc_stack_logging capture (flag threaded from the session) or a
-  // capture that attributed ANY group (a frame is only ever recorded under
-  // malloc stack logging) must not blame --attach for the unattributed rest.
+  // Same contract as the analyze/combined reports. A malloc_stack_logging capture
+  // (flag threaded from the session) must not blame --attach for the unattributed
+  // rest. Without malloc stack logging, Instruments records a backtrace for each
+  // object allocated after the start, on a Mac app and on an iOS simulator app,
+  // so no capture has "no malloc-stack history", and an attributed group does not
+  // prove malloc stack logging.
   it("does not claim --attach for a malloc capture with zero attributed groups", () => {
     const out = renderLeakStacksIos([noise(0)], undefined, 10, true);
     expect(out).toContain("unattributed");
@@ -103,31 +106,39 @@ describe("renderLeakStacksIos — capture-mode-aware unattributed note", () => {
     expect(out).toContain("malloc stack logging");
   });
 
-  it("infers malloc mode from attributed groups when the capture mode is unknown", () => {
+  it("does not claim malloc stack logging from attributed groups when the capture mode is unknown", () => {
     const out = renderLeakStacksIos([ATTRIBUTED_SMALL, noise(0)], undefined, 10, null);
+    expect(out).toContain(
+      "> 🟡 **1 unattributed leak group(s)** (5 object(s), 97.7 KB): responsible frame " +
+        "`<Call stack limit reached>`, no library. " +
+        UNATTRIBUTED_WITHOUT_MALLOC_LOGGING
+    );
+    expect(out).not.toContain("malloc stack logging was active");
     expect(out).not.toContain("--attach");
   });
 
-  it("infers from the FULL capture, not the filtered slice", () => {
+  it("reads attributed groups from the FULL capture, not the filtered slice", () => {
     // The filter matches only unattributed noise, but the capture DID attribute
-    // MyModel — so malloc logging was on and --attach must not be blamed.
+    // MyModel, so --attach with "no malloc-stack history" must not be blamed.
     const out = renderLeakStacksIos([ATTRIBUTED_SMALL, noise(0)], "Malloc", 10, null);
-    expect(out).toContain("unattributed");
+    expect(out).toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
     expect(out).not.toContain("--attach");
   });
 
-  it("keeps the --attach note for an attach capture", () => {
-    const out = renderLeakStacksIos([noise(0)], undefined, 10, false);
-    expect(out).toContain("xctrace --attach");
+  it("names the malloc capture when malloc_stack_logging was on and some groups were attributed", () => {
+    const out = renderLeakStacksIos([ATTRIBUTED_SMALL, noise(0)], undefined, 10, true);
+    expect(out).toContain("malloc stack logging was active");
+    expect(out).not.toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
   });
 
-  it("attribution evidence outranks an explicit attach flag", () => {
-    // The flag says how ARGENT captured; a recorded frame proves the target
-    // process itself ran under malloc stack logging (e.g. launched with the
-    // Xcode scheme diagnostic, then attached to). The note must not claim "no
-    // malloc-stack history" right above a row with a full responsible frame.
+  it("does not claim malloc stack logging from attributed groups of an attach capture", () => {
+    // An iOS simulator app recorded under `xctrace --attach` without
+    // malloc_stack_logging (Xcode 27.2, iOS 27.0) had a responsible frame for
+    // the objects it leaked during the recording. The note must not claim malloc
+    // stack logging, nor "no malloc-stack history" right above such a row.
     const out = renderLeakStacksIos([ATTRIBUTED_SMALL, noise(0)], undefined, 10, false);
-    expect(out).toContain("unattributed");
+    expect(out).toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
+    expect(out).not.toContain("malloc stack logging was active");
     expect(out).not.toContain("--attach");
   });
 
@@ -151,32 +162,93 @@ describe("renderLeakStacksIos — capture-mode-aware unattributed note", () => {
   });
 });
 
-describe("renderLeakStacksIos on a Mac app", () => {
+describe("renderLeakStacksIos without malloc stack logging", () => {
   // Without malloc stack logging, Instruments still records a backtrace for each
-  // object a Mac app allocates after the start, so attributed groups prove nothing.
+  // object allocated after the start, on a Mac app and on an iOS simulator app.
   it("says only newer objects have a backtrace, and does not claim malloc stack logging", () => {
-    for (const mallocStackLogging of [false, null]) {
-      const out = renderLeakStacksIos(
-        [ATTRIBUTED_SMALL, noise(0)],
-        undefined,
-        10,
-        mallocStackLogging,
-        true,
-        true
-      );
-      expect(out).toContain(
-        "> 🟡 1 of 2 group(s) are unattributed (`<Call stack limit reached>`, no library). " +
-          "On a Mac app without malloc stack logging, only an object allocated after the start"
-      );
-      expect(out).toContain("`malloc_stack_logging: true`");
-      expect(out).not.toContain("the capture ran with malloc stack logging");
-      expect(out).not.toContain("--attach");
-    }
+    // Also with no attributed group.
+    for (const leaks of [[ATTRIBUTED_SMALL, noise(0)], [noise(0)]])
+      for (const mallocStackLogging of [false, null]) {
+        const out = renderLeakStacksIos(leaks, undefined, 10, mallocStackLogging, true);
+        expect(out).toContain(
+          "`<Call stack limit reached>`, no library. " + UNATTRIBUTED_WITHOUT_MALLOC_LOGGING
+        );
+        expect(out).toContain("`malloc_stack_logging: true`");
+        expect(out).not.toContain("malloc stack logging was active");
+        expect(out).not.toContain("--attach");
+      }
   });
 
   it("keeps the malloc capture's note when malloc_stack_logging was on", () => {
-    const out = renderLeakStacksIos([noise(0)], undefined, 10, true, true, true);
-    expect(out).toContain("the capture ran with malloc stack logging");
-    expect(out).not.toContain("On a Mac app");
+    const out = renderLeakStacksIos([noise(0)], undefined, 10, true, true);
+    expect(out).toContain("ran with malloc stack logging enabled");
+    expect(out).not.toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
+  });
+});
+
+describe("renderLeakStacksIos — leaks of system libraries", () => {
+  it("lists the app's leaks before the larger ones of system libraries, and says what those are", () => {
+    const system = (i: number) =>
+      leak({
+        objectType: `NSXPCInterface ${i}`,
+        totalSizeBytes: 50_000 + i,
+        responsibleFrame: "+[NSXPCInterface interfaceWithProtocol:]",
+        responsibleLibrary: "Foundation",
+        attributed: true,
+        systemLibrary: true,
+        severity: "YELLOW",
+      });
+    const out = renderLeakStacksIos([system(1), system(2), ATTRIBUTED_SMALL], undefined, 2);
+
+    const rows = out.split("\n").filter((l) => l.startsWith("| `"));
+    expect(rows[0]).toContain("`MyModel`");
+    expect(rows).toHaveLength(2);
+    expect(out).toContain("**1 leak group(s) from system libraries** (1 object(s); `Foundation`)");
+  });
+});
+
+describe("renderLeakStacksIos — a template without the Allocations instrument", () => {
+  it("says that the template has no Allocations instrument, not that malloc stack logging was off", () => {
+    const nullLeak = (objectType: string) =>
+      leak({ objectType, responsibleFrame: "(null)", responsibleLibrary: "(null)" });
+    const out = renderLeakStacksIos(
+      [nullLeak("ProfLeakNodeA"), nullLeak("NSSet")],
+      undefined,
+      10,
+      null,
+      true
+    );
+    expect(out).toContain(
+      "**2 unattributed leak group(s)** (2 object(s), 32 B): responsible frame `(null)`, " +
+        "no library. The template of this recording has no Allocations instrument"
+    );
+    expect(out).not.toContain("malloc_stack_logging");
+    expect(out).not.toContain("xctrace --attach");
+  });
+
+  it("is not said for a recording with the bundled template", () => {
+    const nullGroup = leak({
+      objectType: "Malloc 32 Bytes",
+      responsibleFrame: "(null)",
+      responsibleLibrary: "(null)",
+    });
+    const bundled = renderLeakStacksIos([nullGroup], undefined, 10, true, true, false);
+    expect(bundled).toContain("unattributed");
+    expect(bundled).not.toContain("no Allocations instrument");
+    expect(renderLeakStacksIos([nullGroup], undefined, 10, true, true, true)).toContain(
+      "no Allocations instrument"
+    );
+  });
+
+  it("is not said for a `(null)` group next to attributed groups", () => {
+    const nullGroup = leak({
+      objectType: "Malloc 32 Bytes",
+      responsibleFrame: "(null)",
+      responsibleLibrary: "(null)",
+    });
+    const out = renderLeakStacksIos([ATTRIBUTED_SMALL, nullGroup], undefined, 10, true, true);
+    expect(out).toContain("unattributed");
+    expect(out).not.toContain("no Allocations instrument");
+    expect(out).not.toContain("<Call stack limit reached>");
   });
 });

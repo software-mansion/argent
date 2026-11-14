@@ -22,7 +22,13 @@ import {
   isCaptureInFlight,
   inFlightGuardMessage,
 } from "../../../utils/profiler-shared/capture-guard";
-import { hangSuspendedNote, renderUnattributedLeaksNote } from "../../../utils/ios-profiler/render";
+import {
+  hangFunctionCode,
+  waitedHangNote,
+  hangSuspendedNote,
+  renderSystemLibraryLeaksNote,
+  renderUnattributedLeaksNote,
+} from "../../../utils/ios-profiler/render";
 import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipeline/index";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
@@ -353,11 +359,12 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
             }
           }
 
-          if (hang.suspectedFunctions.length > 0) {
+          if (hang.suspectedFunctions.length > 0 || hang.hangThreadRanMs !== undefined) {
             lines.push("");
             lines.push("Native CPU (Instruments) during this hang:");
+            if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang));
             for (const fn of hang.suspectedFunctions.slice(0, 3)) {
-              lines.push(`- \`${fn}\``);
+              lines.push(`- ${hangFunctionCode(hang, fn)}`);
             }
           }
 
@@ -379,9 +386,19 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
         lines.push("");
         for (const corr of uncorrelated) {
           const { hang } = corr;
+          const top = hang.suspectedFunctions[0];
+          const waited =
+            hang.hangThreadRanMs === undefined
+              ? ""
+              : `${hang.suspectsFromOtherThreads ? "on all threads: " : ""}the main thread very ` +
+                "possibly waited" +
+                (hang.mayHoldLeakCheck
+                  ? ", and Instruments may also have held the app suspended for a leak check"
+                  : "");
           lines.push(
             `- **${hang.hangType}** at ${hang.startTimeFormatted} (${hang.durationMs}ms${hangSuspendedNote(hang)})` +
-              (hang.suspectedFunctions.length > 0 ? ` — \`${hang.suspectedFunctions[0]}\`` : "")
+              (top === undefined ? "" : ` — ${hangFunctionCode(hang, top)}`) +
+              (waited === "" ? "" : top === undefined ? ` — ${waited}` : ` (${waited})`)
           );
         }
         lines.push("");
@@ -399,9 +416,10 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
         ...renderCombinedMemoryLeaks(
           memoryLeaks,
           mountComponents,
-          // From parsedData, not the live session field: a recording started
+          // From parsedData, not the live session fields: a recording started
           // after analyze must not re-label the data rendered here.
-          nativeApi.parsedData?.mallocStackLogging ?? null
+          nativeApi.parsedData?.mallocStackLogging ?? null,
+          nativeApi.parsedData?.customTemplate ?? null
         )
       );
     }
@@ -437,20 +455,24 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
 };
 
 /**
- * Memory Leaks section of the combined report, mirroring the attribution split
- * of the iOS analyze report (`utils/ios-profiler/render.ts`). Attributed leaks
- * are listed individually and heuristically tied to recently-mounted React
- * components; unattributed ones collapse into one low-confidence caveat so
+ * Memory Leaks section of the combined report, with the attribution split of the
+ * iOS analyze report (`utils/ios-profiler/render.ts`). Attributed leaks are listed
+ * individually: the app's own first, heuristically tied to recently-mounted React
+ * components, then those of system libraries, with no component and the note that
+ * analyze gives them. Unattributed ones collapse into one low-confidence caveat so
  * benign system-allocation noise can't masquerade as a wall of confirmed leaks.
- * That caveat comes from render.ts's shared `renderUnattributedLeaksNote`, so
- * its wording and capture-mode handling cannot drift from the analyze report.
- * A null/undefined `mallocStackLogging` makes it infer the capture mode from
- * the attributed count. Exported for unit testing.
+ * The notes come from render.ts's shared `renderSystemLibraryLeaksNote` and
+ * `renderUnattributedLeaksNote`, so their wording and capture-mode handling
+ * cannot drift from the analyze report.
+ * `mallocStackLogging` is the capture mode and `customTemplate` whether the
+ * recording used a template of the caller, null/undefined when unknown, as for
+ * `renderUnattributedLeaksNote`. Exported for unit testing.
  */
 export function renderCombinedMemoryLeaks(
   memoryLeaks: MemoryLeak[],
   mountComponents: Set<string>,
-  mallocStackLogging?: boolean | null
+  mallocStackLogging?: boolean | null,
+  customTemplate?: boolean | null
 ): string[] {
   if (memoryLeaks.length === 0) return [];
 
@@ -460,18 +482,25 @@ export function renderCombinedMemoryLeaks(
   const lines: string[] = ["---", "## Memory Leaks (from Instruments)", ""];
 
   if (attributedLeaks.length > 0) {
+    // aggregateLeaks gives the app's own leaks first, then those of system libraries.
     for (const leak of attributedLeaks) {
-      const possibleComponent = [...mountComponents].find(
-        (name) =>
-          leak.objectType.toLowerCase().includes(name.toLowerCase()) ||
-          leak.responsibleFrame.toLowerCase().includes(name.toLowerCase())
-      );
+      // The OS leaks a system library's objects by itself, so no component of the app explains it.
+      const possibleComponent = leak.systemLibrary
+        ? undefined
+        : [...mountComponents].find(
+            (name) =>
+              leak.objectType.toLowerCase().includes(name.toLowerCase()) ||
+              leak.responsibleFrame.toLowerCase().includes(name.toLowerCase())
+          );
 
       lines.push(
         `- **\`${leak.objectType}\`** ${formatBytes(leak.totalSizeBytes)} (${leak.count}×) — \`${leak.responsibleFrame}\`` +
+          (leak.systemLibrary ? ` (system library \`${leak.responsibleLibrary}\`)` : "") +
           (possibleComponent ? ` — may relate to \`${possibleComponent}\` mount/unmount` : "")
       );
     }
+    const systemLeaks = attributedLeaks.filter((leak) => leak.systemLibrary);
+    if (systemLeaks.length > 0) lines.push(``, renderSystemLibraryLeaksNote(systemLeaks));
   } else {
     lines.push("_No attributed leaks — nothing with a resolved responsible frame._");
   }
@@ -479,7 +508,12 @@ export function renderCombinedMemoryLeaks(
   if (unattributedLeaks.length > 0) {
     lines.push(
       ``,
-      renderUnattributedLeaksNote(unattributedLeaks, attributedLeaks.length, mallocStackLogging)
+      renderUnattributedLeaksNote(
+        unattributedLeaks,
+        attributedLeaks.length,
+        mallocStackLogging,
+        customTemplate
+      )
     );
   }
 

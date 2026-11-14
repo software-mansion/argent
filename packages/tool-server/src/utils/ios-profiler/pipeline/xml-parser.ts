@@ -1,6 +1,10 @@
 import { promises as fs } from "fs";
 import type { CpuSample, RawHang, RawLeak, StackFrame } from "../types";
-import { SYSTEM_LIBRARY_PATH_PREFIXES, TOOLING_LIBRARIES } from "../config";
+import {
+  SIMULATOR_RUNTIME_PATH_SEGMENT,
+  SYSTEM_LIBRARY_PATH_PREFIXES,
+  TOOLING_LIBRARIES,
+} from "../config";
 
 function decodeXml(str: string): string {
   return str
@@ -27,8 +31,11 @@ function extractRows(xml: string): string[] {
   return rows;
 }
 
-function isSystemLibraryPath(path: string): boolean {
-  return SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+export function isSystemLibraryPath(path: string): boolean {
+  return (
+    SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path.includes(SIMULATOR_RUNTIME_PATH_SEGMENT)
+  );
 }
 
 /**
@@ -49,23 +56,11 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
     binaryRegistry.set(bm[1], { name: bm[2], path: bm[3] });
   }
 
-  // Per-process filtering for the host-wide (--all-processes) capture. `fmt` is
-  // "Name (PID)" and names can themselves contain parens ("Code Helper (Plugin) (54394)"),
-  // so the PID is the LAST parenthesised group. `pidByIndex` runs parallel to `samples`
-  // so non-target rows are dropped only after the two passes, keeping row↔sample
-  // alignment intact. A no-op when no filter is set.
-  const processPid = new Map<string, number>();
+  // Per-process filtering for the host-wide (--all-processes) capture. `pidByIndex` runs
+  // parallel to `samples` so non-target rows are dropped only after the two passes,
+  // keeping row↔sample alignment intact. A no-op when no filter is set.
+  const processPid = targetPid != null ? processPids(xml) : new Map<string, number>();
   const pidByIndex: (number | undefined)[] = [];
-  if (targetPid != null) {
-    const procRe = /<process\s+id="(\d+)"\s+fmt="([^"]*)"/g;
-    let pm;
-    while ((pm = procRe.exec(xml)) !== null) {
-      const parens = [...pm[2].matchAll(/\((\d+)\)/g)];
-      if (parens.length > 0) {
-        processPid.set(pm[1], parseInt(parens[parens.length - 1][1], 10));
-      }
-    }
-  }
 
   const rows = extractRows(xml);
 
@@ -153,6 +148,24 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
   return samples;
 }
 
+/**
+ * The PID of each `<process>` the export defines, by element id. `fmt` is "Name (PID)" and
+ * names can themselves contain parens ("Code Helper (Plugin) (54394)"), so the PID is the
+ * LAST parenthesised group.
+ */
+function processPids(xml: string): Map<string, number> {
+  const processPid = new Map<string, number>();
+  const procRe = /<process\s+id="(\d+)"\s+fmt="([^"]*)"/g;
+  let pm;
+  while ((pm = procRe.exec(xml)) !== null) {
+    const parens = [...pm[2].matchAll(/\((\d+)\)/g)];
+    if (parens.length > 0) {
+      processPid.set(pm[1], parseInt(parens[parens.length - 1][1], 10));
+    }
+  }
+  return processPid;
+}
+
 /** A row either defines its process inline or references one; both give a pre-registered id. */
 function rowProcessPid(rowXml: string, processPid: Map<string, number>): number | undefined {
   const def = rowXml.match(/<process\s+id="(\d+)"/);
@@ -230,6 +243,7 @@ function resolveFrames(
 
     let isSystem = false;
     let binaryName: string | undefined;
+    let binaryPath: string | undefined;
     // The frame's own <binary> child, never that of a later frame in the
     // backtrace: a self-closing frame has none, and frames do not nest.
     let ownContent = "";
@@ -243,16 +257,20 @@ function resolveFrames(
     if (binaryIdMatch) {
       isSystem = isSystemLibraryPath(binaryIdMatch[2]);
       binaryName = attr(binaryIdMatch[0], "name") ?? "";
+      binaryPath = binaryIdMatch[2];
       binaryRegistry.set(binaryIdMatch[1], { name: binaryName, path: binaryIdMatch[2] });
     } else if (binaryRefMatch) {
       const bin = binaryRegistry.get(binaryRefMatch[1]);
       if (bin) {
         isSystem = isSystemLibraryPath(bin.path);
         binaryName = bin.name;
+        binaryPath = bin.path;
       }
     }
 
     const frame: StackFrame = { name: frameName, isSystemLibrary: isSystem };
+    if (binaryName) frame.library = binaryName;
+    if (binaryName && binaryPath !== undefined) frame.libraryPath = decodeXml(binaryPath);
     const tooling = binaryName === undefined ? undefined : TOOLING_LIBRARIES.get(binaryName);
     if (tooling) frame.tooling = tooling;
     if (idMatch) frameRegistry.set(idMatch[1], frame);
@@ -262,9 +280,14 @@ function resolveFrames(
   return frames;
 }
 
-function parseHangsXml(xml: string): RawHang[] {
+/**
+ * With `targetPid`, only the hangs of that process: the host-wide (--all-processes)
+ * capture records the hangs of every process, such as other simulators' SpringBoard.
+ */
+function parseHangsXml(xml: string, targetPid: number | null): RawHang[] {
   const hangs: RawHang[] = [];
   const rows = extractRows(xml);
+  const processPid = targetPid != null ? processPids(xml) : new Map<string, number>();
 
   const registry = new Map<string, string>();
   const defRe = /id="(\d+)"\s+fmt="([^"]*)"/g;
@@ -317,6 +340,7 @@ function parseHangsXml(xml: string): RawHang[] {
       threadFmt = registry.get(threadRefMatch[1]) ?? "Main Thread";
     }
 
+    if (targetPid != null && rowProcessPid(row, processPid) !== targetPid) continue;
     if (startNs > 0 || durationNs > 0) {
       hangs.push({ startNs, durationNs, hangType, threadFmt });
     }
@@ -351,6 +375,32 @@ export function parseLeaksXml(xml: string): RawLeak[] {
   return leaks;
 }
 
+/**
+ * Whether a leaks export holds the trace's Leaks detail, also when it has no row.
+ * For a template with no Leaks instrument (`template_path: "Time Profiler"` on a
+ * Mac app, the all-processes capture on iOS), the xctrace of Xcode 26.6 exports
+ * `<trace-query-result>` with no node in it and exits 0. The xctrace of Xcode 27.2
+ * fails that export.
+ */
+function leaksDetailExported(xml: string): boolean {
+  return /<node[\s>]/.test(xml);
+}
+
+/**
+ * Whether the trace's leaks were checked: its leaks export has a leak, or the Leaks
+ * detail with no row. No leaks export, or one with no Leaks detail, is no leak data,
+ * not zero leaks, and so is an empty export of a recording whose leak capture failed.
+ */
+export function leaksWereRecorded(
+  output: { memoryLeaks: readonly unknown[]; leaksDetailExported?: boolean },
+  leaksCaptureError: string | null = null
+): boolean {
+  return (
+    output.memoryLeaks.length > 0 ||
+    (leaksCaptureError === null && output.leaksDetailExported === true)
+  );
+}
+
 export async function parseCpuFile(
   filePath: string | null,
   targetPid: number | null = null
@@ -364,22 +414,28 @@ export async function parseCpuFile(
   }
 }
 
-export async function parseHangsFile(filePath: string | null): Promise<RawHang[]> {
+export async function parseHangsFile(
+  filePath: string | null,
+  targetPid: number | null = null
+): Promise<RawHang[]> {
   if (!filePath) return [];
   try {
     const xml = await fs.readFile(filePath, "utf8");
-    return parseHangsXml(xml);
+    return parseHangsXml(xml, targetPid);
   } catch {
     return [];
   }
 }
 
-export async function parseLeaksFile(filePath: string | null): Promise<RawLeak[]> {
-  if (!filePath) return [];
+/** The rows of a leaks export, and whether it holds the Leaks detail (leaksDetailExported). */
+export async function parseLeaksFile(
+  filePath: string | null
+): Promise<{ leaks: RawLeak[]; detailExported: boolean }> {
+  if (!filePath) return { leaks: [], detailExported: false };
   try {
     const xml = await fs.readFile(filePath, "utf8");
-    return parseLeaksXml(xml);
+    return { leaks: parseLeaksXml(xml), detailExported: leaksDetailExported(xml) };
   } catch {
-    return [];
+    return { leaks: [], detailExported: false };
   }
 }

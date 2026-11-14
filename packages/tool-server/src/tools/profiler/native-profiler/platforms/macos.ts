@@ -189,6 +189,7 @@ async function startMacosRecording(
       appProcess,
       traceFile: outputFile,
       mallocStackLogging: useMallocStackLogging || stillLogs,
+      customTemplate: params.template_path !== undefined,
       // Scoped to the app by --attach.
       cpuFilterPid: null,
       appPid: pid,

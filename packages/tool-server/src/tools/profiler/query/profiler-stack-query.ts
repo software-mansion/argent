@@ -6,10 +6,18 @@ import {
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
 import { adbCommandPrefix } from "../../../utils/adb-server";
-import type { CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../../../utils/ios-profiler/types";
+import type {
+  CpuSample,
+  UiHang,
+  CpuHotspot,
+  MemoryLeak,
+  StackFrame,
+} from "../../../utils/ios-profiler/types";
 import {
   findDominantFunction,
   extractAppCallChain,
+  isSystemCodeSample,
+  toolingWork,
 } from "../../../utils/ios-profiler/pipeline/02-aggregate";
 import {
   runAndroidStackQuery,
@@ -20,10 +28,16 @@ import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-sh
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 import {
   LEAKS_NOT_RECORDED,
-  MAC_UNATTRIBUTED_LEAKS,
+  hangChainNames,
+  hangFunctionCode,
+  waitedHangNote,
   hangSuspendedNote,
+  hotspotName,
+  renderSystemLibraryLeaksNote,
+  renderUnattributedLeaksNote,
 } from "../../../utils/ios-profiler/render";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
+import { leakRank } from "../../../utils/ios-profiler/pipeline/01-correlate";
 
 const stackQueryMode = {
   hang_stacks: "hang stacks",
@@ -66,12 +80,13 @@ export function renderHangStacksIos(
     `**Severity:** ${hang.severity}`,
     "",
   ];
+  if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang), "");
 
   if (hang.suspectedFunctions.length > 0) {
     lines.push("### Suspected Functions (by sample frequency)");
     lines.push("");
     for (let i = 0; i < hang.suspectedFunctions.length; i++) {
-      lines.push(`${i + 1}. \`${demangleSymbol(hang.suspectedFunctions[i]!)}\``);
+      lines.push(`${i + 1}. ${hangFunctionCode(hang, hang.suspectedFunctions[i]!)}`);
     }
     lines.push("");
   }
@@ -81,13 +96,17 @@ export function renderHangStacksIos(
     lines.push("");
     for (const { chain, sampleCount } of hang.appCallChains) {
       lines.push(
-        `- (${sampleCount} samples) ${chain.map((f) => `\`${demangleSymbol(f)}\``).join(" → ")}`
+        `- (${sampleCount} samples) ${hangChainNames(hang, chain)
+          .map(({ name, label }) => `\`${name}\`${label ? ` (${label})` : ""}`)
+          .join(" → ")}`
       );
     }
     lines.push("");
   }
 
+  // The recorder's samples are not the app's work, as in the suspects (01-correlate).
   const relatedSamples = cpuSamples.filter((s) => {
+    if (toolingWork(s.stack) === "instruments") return false;
     const dominant = findDominantFunction(s.stack);
     return dominant !== null && suspectedSet.has(dominant);
   });
@@ -125,11 +144,21 @@ export function renderFunctionCallersIos(
   const callerCounts = new Map<string, number>();
   const calleeCounts = new Map<string, number>();
   let totalOccurrences = 0;
+  // Root first: the frames below the function in each sample of system code reported under it.
+  const systemPathsBelow: StackFrame[][] = [];
 
   for (const sample of cpuSamples) {
     for (let i = 0; i < sample.stack.length; i++) {
       if (sample.stack[i]!.name === functionName) {
         totalOccurrences++;
+        // As in the hotspot: a tool's work (such as Instruments' recorder) is not counted.
+        if (
+          findDominantFunction(sample.stack) === functionName &&
+          isSystemCodeSample(sample.stack) &&
+          toolingWork(sample.stack) === null
+        ) {
+          systemPathsBelow.push(sample.stack.slice(0, i).reverse());
+        }
 
         if (i + 1 < sample.stack.length) {
           const caller = sample.stack[i + 1]!.name;
@@ -181,7 +210,58 @@ export function renderFunctionCallersIos(
     lines.push("");
   }
 
+  // The report's "system code under" this function has no app frame to name: the
+  // heaviest stack of those samples shows what the system code did.
+  const heaviest = heaviestStackBelow(systemPathsBelow, topN);
+  if (heaviest.length > 0) {
+    lines.push("### Heaviest System Stack Below");
+    lines.push("");
+    lines.push(
+      `In the ${systemPathsBelow.length} samples with only system code below the function: ` +
+        "from the function down, the heaviest callee at each level. Frames that run in the " +
+        "same samples share a row."
+    );
+    lines.push("");
+    lines.push("| Frames | Samples | % |");
+    lines.push("|---|---|---|");
+    for (const { frames, count } of heaviest) {
+      const names = frames.map((f) => `\`${escapeMarkdownTableCell(demangleSymbol(f))}\``);
+      const pct = ((count / systemPathsBelow.length) * 100).toFixed(1);
+      lines.push(`| ${names.join(" > ")} | ${count} | ${pct}% |`);
+    }
+    lines.push("");
+  }
+
   return lines.join("\n");
+}
+
+/**
+ * Instruments' heaviest stack trace below a function: from the paths below it (root
+ * first), the callee in the most samples at each level, down to a leaf. A run of frames
+ * in the same samples is one row. At most `maxRows` rows, and none under 1% of the paths.
+ */
+function heaviestStackBelow(
+  paths: StackFrame[][],
+  maxRows: number
+): { frames: string[]; count: number }[] {
+  const rows: { frames: string[]; count: number }[] = [];
+  let current = paths;
+  for (let depth = 0; current.length > 0; depth++) {
+    const counts = new Map<string, number>();
+    for (const path of current) {
+      const frame = path[depth];
+      if (frame) counts.set(frame.name, (counts.get(frame.name) ?? 0) + 1);
+    }
+    const heaviest = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (!heaviest || heaviest[1] * 100 < paths.length) break;
+    const [name, count] = heaviest;
+    const last = rows[rows.length - 1];
+    if (last && last.count === count) last.frames.push(name);
+    else if (rows.length < maxRows) rows.push({ frames: [name], count });
+    else break;
+    current = current.filter((path) => path[depth]?.name === name);
+  }
+  return rows;
 }
 
 export function renderThreadBreakdownIos(
@@ -236,7 +316,7 @@ export function renderThreadBreakdownIos(
       lines.push("|---|---|---|---|");
       for (const h of threadHotspots.slice(0, topN)) {
         lines.push(
-          `| \`${escapeMarkdownTableCell(demangleSymbol(h.dominantFunction))}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
+          `| ${escapeMarkdownTableCell(hotspotName(h))} | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
         );
       }
     }
@@ -251,17 +331,15 @@ export function renderLeakStacksIos(
   topN: number,
   mallocStackLogging?: boolean | null,
   leaksRecorded?: boolean,
-  macApp = false
+  customTemplate?: boolean | null
 ): string {
   // Empty because nothing was recorded, not because nothing leaked.
   if (leaksRecorded === false) return `_${LEAKS_NOT_RECORDED}_`;
 
-  // Read from the FULL capture, never the object_type-filtered slice: one
-  // attributed group proves the process ran under malloc stack logging however
-  // it was launched, so an attach-mode flag must not claim "no malloc-stack
-  // history" above a resolved frame. The flag only lifts the zero-attributed
-  // case — same contract as renderUnattributedLeaksNote in ios-profiler/render.ts.
-  const mallocWasOn = memoryLeaks.some((l) => l.attributed) || mallocStackLogging === true;
+  // Read from the FULL capture, never the object_type-filtered slice: the note on
+  // the unattributed groups depends on whether the capture attributed any group,
+  // as in renderUnattributedLeaksNote in ios-profiler/render.ts.
+  const attributedCount = memoryLeaks.filter((l) => l.attributed).length;
   let filtered = memoryLeaks;
   if (objectTypeFilter) {
     filtered = memoryLeaks.filter((l) =>
@@ -275,19 +353,17 @@ export function renderLeakStacksIos(
       : "_No memory leaks detected._";
   }
 
-  // Attributed first so a small real leak survives the top-N slice ahead of
-  // larger unattributed system noise.
+  // The app's own leaks first, then those of system libraries, then the
+  // unattributed ones, so a small real leak survives the top-N slice ahead of
+  // larger system noise.
   const sorted = [...filtered]
-    .sort((a, b) => {
-      if (a.attributed !== b.attributed) return a.attributed ? -1 : 1;
-      return b.totalSizeBytes - a.totalSizeBytes;
-    })
+    .sort((a, b) => leakRank(a) - leakRank(b) || b.totalSizeBytes - a.totalSizeBytes)
     .slice(0, topN);
 
   const totalBytes = sorted.reduce((s, l) => s + l.totalSizeBytes, 0);
   const totalCount = sorted.reduce((s, l) => s + l.count, 0);
 
-  const unattributedCount = sorted.filter((l) => !l.attributed).length;
+  const unattributed = sorted.filter((l) => !l.attributed);
 
   const lines: string[] = [
     `## Memory Leaks${objectTypeFilter ? ` (filter: "${objectTypeFilter}")` : ""}`,
@@ -296,25 +372,20 @@ export function renderLeakStacksIos(
     "",
   ];
 
-  if (unattributedCount > 0 && macApp && mallocStackLogging !== true) {
+  if (unattributed.length > 0) {
     lines.push(
-      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
-        `(\`<Call stack limit reached>\`, no library). ${MAC_UNATTRIBUTED_LEAKS}`,
-      ""
-    );
-  } else if (unattributedCount > 0) {
-    const cause = mallocWasOn
-      ? "the capture ran with malloc stack logging, but no allocation backtrace was recorded " +
-        "for these (freed-region reuse, truncated stack logs, or allocations outside the " +
-        "instrumented malloc zones)"
-      : "captured under `xctrace --attach`, which has no malloc-stack history";
-    lines.push(
-      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
-        `(\`<Call stack limit reached>\`, no library) — ${cause}. ` +
-        "Most likely benign system allocations, not confirmed app leaks.",
+      renderUnattributedLeaksNote(
+        unattributed,
+        attributedCount,
+        mallocStackLogging,
+        customTemplate
+      ),
       ""
     );
   }
+
+  const systemLeaks = sorted.filter((l) => l.attributed && l.systemLibrary);
+  if (systemLeaks.length > 0) lines.push(renderSystemLibraryLeaksNote(systemLeaks), "");
 
   lines.push(
     "| Object Type | Size | Count | Responsible Frame | Library |",
@@ -371,7 +442,7 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         params.top_n,
         data.mallocStackLogging,
         data.leaksRecorded,
-        api.platform === "macos"
+        data.customTemplate
       );
     default:
       throw new FailureError(`Unknown mode: ${params.mode}`, {

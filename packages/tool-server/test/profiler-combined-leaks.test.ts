@@ -14,6 +14,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { renderCombinedMemoryLeaks } from "../src/tools/profiler/combined/profiler-combined-report";
+import { UNATTRIBUTED_WITHOUT_MALLOC_LOGGING } from "../src/utils/ios-profiler/render";
 import type { MemoryLeak } from "../src/utils/profiler-shared/types";
 
 function leak(partial: Partial<MemoryLeak> & Pick<MemoryLeak, "objectType">): MemoryLeak {
@@ -27,6 +28,7 @@ function leak(partial: Partial<MemoryLeak> & Pick<MemoryLeak, "objectType">): Me
     responsibleFrame: partial.responsibleFrame ?? "<Call stack limit reached>",
     responsibleLibrary: partial.responsibleLibrary ?? "",
     attributed,
+    ...(partial.systemLibrary ? { systemLibrary: true } : {}),
     severity: partial.severity ?? (attributed ? "RED" : "YELLOW"),
   };
 }
@@ -61,12 +63,14 @@ describe("renderCombinedMemoryLeaks", () => {
     expect(out).toContain("🟡");
     expect(out).toContain("1 unattributed leak group(s)");
     expect(out).toContain("`<Call stack limit reached>`");
-    expect(out).toContain("benign system allocations rather than confirmed app leaks");
 
-    // Nothing attributed → the capture was `--attach` (no malloc history), so the
-    // hint DOES advise capturing with malloc stack logging.
-    expect(out).toContain("capture with malloc");
-    expect(out).toContain("stack logging enabled at launch");
+    // Nothing attributed, and no malloc stack logging: only an object allocated after
+    // the start has a backtrace, so the hint advises malloc stack logging. It does not
+    // claim that the capture has no malloc-stack history.
+    expect(out).toContain(
+      "`<Call stack limit reached>`, no library. " + UNATTRIBUTED_WITHOUT_MALLOC_LOGGING
+    );
+    expect(out).not.toContain("--attach");
 
     // With no attributed leaks, it says so explicitly.
     expect(out).toContain("No attributed leaks");
@@ -84,13 +88,13 @@ describe("renderCombinedMemoryLeaks", () => {
     expect(out).toContain("🟡");
     expect(out).toContain("1 unattributed leak group(s)");
 
-    // Attributed + unattributed leaks coexist ONLY when malloc stack logging was
-    // active, so the caveat must NOT tell the user to enable the thing they just
-    // used. It names the active malloc capture and drops the "capture with malloc
-    // stack logging enabled at launch" advice.
-    expect(out).toContain("malloc stack logging was active");
-    expect(out).not.toContain("capture with malloc");
-    expect(out).not.toContain("stack logging enabled at launch");
+    // Attributed + unattributed leaks also coexist without malloc stack logging:
+    // Instruments records a backtrace for each object allocated after the start.
+    // The caveat must not claim malloc stack logging, nor `--attach` with "no
+    // malloc-stack history" above an attributed leak.
+    expect(out).toContain(UNATTRIBUTED_WITHOUT_MALLOC_LOGGING);
+    expect(out).not.toContain("malloc stack logging was active");
+    expect(out).not.toContain("--attach");
 
     // No "no attributed leaks" line when an attributed leak exists.
     expect(out).not.toContain("No attributed leaks");
@@ -159,6 +163,68 @@ describe("renderCombinedMemoryLeaks", () => {
     // Count the rendered per-leak rows: exactly 12, not capped at 10.
     const rowCount = out.split("\n").filter((l) => /^- \*\*`LeakModel\d+`\*\*/.test(l)).length;
     expect(rowCount).toBe(12);
+  });
+
+  it("says that the leaks of system libraries are not confirmed app leaks, as analyze does", async () => {
+    const system = leak({
+      objectType: "NSXPCInterface",
+      totalSizeBytes: 240,
+      count: 3,
+      responsibleFrame: "+[NSXPCInterface interfaceWithProtocol:]",
+      responsibleLibrary: "Foundation",
+      attributed: true,
+      systemLibrary: true,
+      severity: "YELLOW",
+    });
+    // "Interface" is in the object type and the frame: a substring match without the split.
+    const out = renderCombinedMemoryLeaks([ATTRIBUTED, system], new Set(["Interface"])).join("\n");
+
+    expect(out).toContain(
+      "- **`NSXPCInterface`** 240B (3×) — `+[NSXPCInterface interfaceWithProtocol:]` " +
+        "(system library `Foundation`)\n"
+    );
+    expect(out).not.toContain("may relate to `Interface`");
+    const { renderNativeProfilerReport } = await import("../src/utils/ios-profiler/render");
+    const res = await renderNativeProfilerReport({
+      payload: {
+        metadata: { traceFile: null, platform: "iOS", timestamp: "2026-06-16T00:00:00Z" },
+        bottlenecks: [ATTRIBUTED, system],
+      },
+      traceFile: null,
+    });
+    const note = res.report.split("\n").find((l) => l.includes("from system libraries"));
+    expect(note).toBeDefined();
+    expect(out.split("\n")).toContain(note);
+  });
+
+  it("does not say that the template has no Allocations instrument next to an attributed leak", () => {
+    // A template without Allocations gives `(null)` to every leak, also to the app's.
+    const nullGroup = leak({
+      objectType: "Malloc 32 Bytes",
+      totalSizeBytes: 32,
+      responsibleFrame: "(null)",
+      responsibleLibrary: "(null)",
+    });
+    const out = renderCombinedMemoryLeaks([ATTRIBUTED, nullGroup], new Set(), true).join("\n");
+
+    expect(out).toContain("1 unattributed leak group(s)");
+    expect(out).toContain("responsible frame `(null)`, no library.");
+    expect(out).not.toContain("no Allocations instrument");
+  });
+
+  it("does not say that the template has no Allocations instrument for the bundled template", () => {
+    const nullGroup = leak({
+      objectType: "Malloc 32 Bytes",
+      totalSizeBytes: 32,
+      responsibleFrame: "(null)",
+      responsibleLibrary: "(null)",
+    });
+    const bundled = renderCombinedMemoryLeaks([nullGroup], new Set(), true, false).join("\n");
+    expect(bundled).toContain("responsible frame `(null)`, no library.");
+    expect(bundled).not.toContain("no Allocations instrument");
+    expect(renderCombinedMemoryLeaks([nullGroup], new Set(), true, true).join("\n")).toContain(
+      "no Allocations instrument"
+    );
   });
 
   it("returns nothing for an empty leak list", () => {

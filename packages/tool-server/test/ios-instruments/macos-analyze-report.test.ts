@@ -19,6 +19,7 @@ vi.mock("../../src/utils/ios-profiler/pipeline/index", () => ({
 import { runIosProfilerPipeline } from "../../src/utils/ios-profiler/pipeline/index";
 import { analyzeNativeProfilerIos } from "../../src/tools/profiler/native-profiler/platforms/ios";
 import { aggregateCpuHotspots } from "../../src/utils/ios-profiler/pipeline/02-aggregate";
+import { parseLeaksFile } from "../../src/utils/ios-profiler/pipeline/xml-parser";
 import { renderNativeProfilerReport } from "../../src/utils/ios-profiler/render";
 import type { Bottleneck } from "../../src/utils/ios-profiler/types";
 
@@ -56,10 +57,13 @@ function makeApi(platform: "ios" | "macos"): NativeProfilerSessionApi {
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,
     exportSkipReason: null,
+    leaksCaptureError: null,
     recordedMs: null,
     startReturnedMs: null,
     stopInProgress: null,
@@ -90,14 +94,19 @@ function pipeline(
   bottlenecks: Bottleneck[] = [],
   uiHangs: PipelineResult["uiHangs"] = []
 ): void {
-  vi.mocked(runIosProfilerPipeline).mockResolvedValue({
-    bottlenecks,
-    cpuSamples: [],
-    uiHangs,
-    cpuHotspots: [],
-    memoryLeaks: [],
-    ...tooling,
-  } as PipelineResult);
+  // The leaks export stays real: whether it holds the Leaks detail decides "not recorded".
+  vi.mocked(runIosProfilerPipeline).mockImplementation(
+    async (files) =>
+      ({
+        bottlenecks,
+        cpuSamples: [],
+        uiHangs,
+        cpuHotspots: [],
+        memoryLeaks: [],
+        leaksDetailExported: (await parseLeaksFile(files.leaks ?? null)).detailExported,
+        ...tooling,
+      }) as PipelineResult
+  );
 }
 
 /** A real hotspot, so the report takes its full (not all-clear) form. */
@@ -122,7 +131,9 @@ describe("the CPU sampling note on the tools' time", () => {
       `${NOTE} Of the CPU samples, 120 ms (30%) were argent's own work inside the app, such as ` +
         `describe and taps, while the trace recorded. They are left out of the CPU hotspots.`
     );
-    expect(report).toContain(`marked "argent's own library" or "Instruments' own library"`);
+    expect(report).toContain(
+      `A hang whose suspects are marked "argent's own library" was caused by argent, not the app.`
+    );
     expect(report).not.toContain("Instruments loads into the app");
   });
 
@@ -134,6 +145,8 @@ describe("the CPU sampling note on the tools' time", () => {
         "trace recorded, and 50 ms (5%) were the recorder that Instruments loads into the app " +
         "to track allocations."
     );
+    // The recorder's samples are no hang's suspects, so no suspect has a mark of Instruments.
+    expect(both).not.toContain("Instruments' own library");
 
     pipeline({ toolingCpuMs: { argent: 0, instruments: 40 }, totalCpuMs: 200 });
     const instrumentsOnly = (await analyzeNativeProfilerIos(makeApi("macos"))).report;
@@ -141,6 +154,7 @@ describe("the CPU sampling note on the tools' time", () => {
       `${NOTE} Of the CPU samples, 40 ms (20%) were the recorder that Instruments loads`
     );
     expect(instrumentsOnly).not.toContain("argent's own work");
+    expect(instrumentsOnly).not.toContain("own library");
 
     pipeline({ toolingCpuMs: { argent: 3, instruments: 0 }, totalCpuMs: 1000 });
     const sliver = (await analyzeNativeProfilerIos(makeApi("macos"))).report;
@@ -212,7 +226,19 @@ describe("the note on hangs and the leak check", () => {
     expect(report.indexOf(LEAK_NOTE)).toBeLessThan(report.indexOf("---"));
   });
 
-  it("is absent without hangs, without leak data, and on an iOS simulator", async () => {
+  it("is at the top of an iOS report with hangs, in iOS words, when argent did not watch the app", async () => {
+    withHangs([hang]);
+    const { report } = await analyzeNativeProfilerIos(makeApi("ios"));
+    expect(report).toContain(
+      `> ⚠️ ${LEAK_NOTE} Instruments pauses the app for several seconds while it checks the app ` +
+        `for leaks, about every 12 to 15 s.`
+    );
+    expect(report).toContain('`template_path: "Time Profiler"`');
+    expect(report).not.toContain("Mac app");
+    expect(report.indexOf(LEAK_NOTE)).toBeLessThan(report.indexOf("---"));
+  });
+
+  it("is absent without hangs and without leak data", async () => {
     withHangs([]);
     expect((await analyzeNativeProfilerIos(makeApi("macos"))).report).not.toContain(LEAK_NOTE);
 
@@ -226,7 +252,7 @@ describe("the note on hangs and the leak check", () => {
     expect((await analyzeNativeProfilerIos(makeApi("macos"))).report).not.toContain(LEAK_NOTE);
     writeFileSync(join(dir, "leaks.xml"), LEAKS_CHECKED_NONE_FOUND);
 
-    withHangs([hang]);
+    withHangs([]);
     expect((await analyzeNativeProfilerIos(makeApi("ios"))).report).not.toContain(LEAK_NOTE);
   });
 });
@@ -250,8 +276,40 @@ describe("the note on a recording too short for a leak check", () => {
       `> ⚠️ ${SHORT_NOTE} 5 s. Instruments begins its first leak check about 4 s after ` +
         `native-profiler-start returns`
     );
+    expect(report).toContain(
+      "and a check can take several seconds, so this trace may hold no finished check."
+    );
     expect(report).toContain("Do not report the app as leak-free");
     expect(report.indexOf(SHORT_NOTE)).toBeLessThan(report.indexOf("---"));
+  });
+
+  it("is at the top of an iOS report with no leaks from a recording under 12 s", async () => {
+    // On an iOS simulator the first leak check begins later than on a Mac app: a 6 s
+    // recording of an app that leaked at 1 s exported the Leaks detail with no row.
+    pipeline({});
+    const { report } = await analyzeNativeProfilerIos(recorded("ios", 6_000));
+    expect(report).toContain(
+      `> ⚠️ ${SHORT_NOTE} 6 s. Instruments begins its first leak check about 4 to 7 s after ` +
+        `native-profiler-start returns`
+    );
+    // A check that began before the stop is in an iOS trace, so a finished check is not the
+    // issue: a check finds only the leaks made before it began.
+    const reason =
+      "native-profiler-start returns, and the next ones 12 to 15 s apart. A check finds only " +
+      "the leaks made before it began, so this trace holds at most the leaks made before the " +
+      "first check.";
+    expect(report).toContain(reason);
+    expect(report).not.toContain("no finished check");
+    expect(report).toContain("keep recording about 20 s after the action to check.");
+    expect(report.indexOf(SHORT_NOTE)).toBeLessThan(report.indexOf("---"));
+    // A 10 s recording holds the first check, so its reason is the same, not "ended before it".
+    const ten = (await analyzeNativeProfilerIos(recorded("ios", 10_000))).report;
+    expect(ten).toContain(`${SHORT_NOTE} 10 s.`);
+    expect(ten).toContain(reason);
+    expect(ten).not.toContain("ended before the first check");
+    expect((await analyzeNativeProfilerIos(recorded("ios", 12_000))).report).not.toContain(
+      SHORT_NOTE
+    );
   });
 
   it("is absent, and leaks read as not checked, when a Mac trace had no Leaks instrument", async () => {
@@ -266,13 +324,13 @@ describe("the note on a recording too short for a leak check", () => {
     );
     expect(mac.parsedData?.leaksRecorded).toBe(false);
 
-    // iOS keeps its rule: an exported leaks file is leak data.
+    // The same on iOS, where the all-processes capture records no Leaks instrument.
     const ios = recorded("ios", 12_000);
     await analyzeNativeProfilerIos(ios);
-    expect(ios.parsedData?.leaksRecorded).toBe(true);
+    expect(ios.parsedData?.leaksRecorded).toBe(false);
   });
 
-  it("is absent for 20 s and more, with leaks, without leak data, with no duration, and on iOS", async () => {
+  it("is absent for 20 s and more, with leaks, without leak data, and with no duration", async () => {
     pipeline({});
     expect((await analyzeNativeProfilerIos(recorded("macos", 20_000))).report).not.toContain(
       SHORT_NOTE
@@ -309,9 +367,6 @@ describe("the note on a recording too short for a leak check", () => {
     expect((await analyzeNativeProfilerIos(recorded("macos", null))).report).not.toContain(
       SHORT_NOTE
     );
-    expect((await analyzeNativeProfilerIos(recorded("ios", 5_000))).report).not.toContain(
-      SHORT_NOTE
-    );
   });
 });
 
@@ -342,7 +397,7 @@ describe("the closing line of a report with no finding", () => {
     const mac = makeApi("macos");
     mac.recordedMs = 30_000;
     const ios = makeApi("ios");
-    ios.recordedMs = 8_000;
+    ios.recordedMs = 12_000;
     for (const api of [mac, ios]) {
       const { report } = await analyzeNativeProfilerIos(api);
       expect(report).toContain(ALL_CLEAR);

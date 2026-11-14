@@ -31,3 +31,12 @@ export const SYSTEM_LIBRARY_PATH_PREFIXES: string[] = [
   "/System/Library/",
   "/Library/Developer/CoreSimulator/",
 ];
+
+/**
+ * A simulator runtime's libraries are in its runtime bundle. macOS mounts the
+ * iOS 27 runtime under `/private/var/run/com.apple.security.cryptexd/mnt/<volume>/`,
+ * so their paths do not start with a prefix above:
+ * `.../Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 27.0.simruntime/...`.
+ * App binaries of a simulator are under `.../CoreSimulator/Devices/`, never here.
+ */
+export const SIMULATOR_RUNTIME_PATH_SEGMENT = "/Library/Developer/CoreSimulator/Profiles/Runtimes/";

@@ -1,13 +1,17 @@
 import { spawn } from "child_process";
 import * as readline from "readline";
+import { macosArtifacts } from "@argent/native-devtools-ios";
 import type { AppSuspensionWindow } from "./ios-profiler/app-suspensions";
 
 /**
- * When macOS holds a Mac app suspended. Instruments suspends the whole app
- * while it checks it for leaks, about every 11 s and up to about 10 s each on
- * an app that argent drives, and a debugger or a stop signal suspends it too.
- * Nothing in the app runs then, argent's library included, so a call waits
- * until the app runs again.
+ * When macOS holds an app suspended: a Mac app, or an iOS simulator app, which is
+ * a process of this Mac. Instruments suspends the whole app while it checks it
+ * for leaks: a Mac app that argent drives about every 11 s and up to about 10 s
+ * each, an iOS simulator app every 12 to 15 s. A debugger or a stop signal
+ * suspends it too. Nothing in the app runs then, argent's library included. A
+ * call to a Mac app waits until the app runs again, and a call to an iOS app
+ * does not wait. On both, the native profiler takes the suspended time out of
+ * the hangs.
  *
  * `argent-macos-helper watch-suspension --pid <pid>` reads the app's suspend
  * count from outside every 10 ms and prints `{"suspended":bool,"at":ms}` at
@@ -28,6 +32,15 @@ export interface SuspensionWatch {
 
 /** How long the helper gets to report the app's first state. */
 const FIRST_STATE_TIMEOUT_MS = 3_000;
+
+/** The helper that watches, or null when this install has none: then nothing watches. */
+export function suspensionWatchHelper(): string | null {
+  try {
+    return macosArtifacts().helper;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Starts the helper for `pid`. Null, with the reason on stderr, when the helper
@@ -91,8 +104,9 @@ export async function startSuspensionWatch(
     ended = true;
     child.kill();
     process.stderr.write(
-      `[macos-app] argent cannot watch pid ${pid} for suspensions, so a call during a leak ` +
-        `check can time out: ${stderr.trim() || "the helper reported nothing"}\n`
+      `[suspension-watch] argent cannot watch pid ${pid} for suspensions, so a leak check ` +
+        `can count as a hang, and a call to a Mac app during one can time out: ` +
+        `${stderr.trim() || "the helper reported nothing"}\n`
     );
     return null;
   }

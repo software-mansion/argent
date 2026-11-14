@@ -20,6 +20,7 @@ import { InvalidToolInputError } from "../../../utils/capability";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
+import { leaksWereRecorded } from "../../../utils/ios-profiler/pipeline/xml-parser";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
 import {
@@ -402,7 +403,12 @@ async function loadNativeSession(
     );
   }
 
-  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
+  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks, leaksDetailExported } =
+    await runIosProfilerPipeline(files, { macApp: api.platform === "macos" });
+  // Stop writes no raw_leaks.xml when the trace had no Leaks table, or (Xcode 26.6)
+  // one with no Leaks detail in it. The run errors of xctrace are not in these
+  // files, so a trace whose leak capture failed (leaksCaptureError) reads as checked.
+  const leaksRecorded = leaksWereRecorded({ memoryLeaks, leaksDetailExported });
 
   // raw_*.xml carry no start time, so the frozen anchor is null and the combined
   // report reports a missing native anchor rather than mis-anchoring to residue.
@@ -411,9 +417,9 @@ async function loadNativeSession(
     uiHangs,
     cpuHotspots,
     memoryLeaks,
-    // Stop writes no raw_leaks.xml when the trace had no Leaks table.
-    leaksRecorded: files.leaks != null,
+    leaksRecorded,
     mallocStackLogging: null,
+    customTemplate: null,
     wallClockStartMs: null,
   };
   api.exportedFiles = files;
@@ -422,9 +428,11 @@ async function loadNativeSession(
   // by a stale CPU filter PID, a stale-trace note, and the report .md written over
   // the old trace's.
   api.mallocStackLogging = null;
+  api.customTemplate = null;
   api.cpuFilterPid = null;
   api.appEndedDuringCapture = false;
   api.exportSkipReason = null;
+  api.leaksCaptureError = null;
   api.recordedMs = null;
   api.appSuspensions = null;
   api.wallClockStartMs = null;
@@ -436,7 +444,7 @@ async function loadNativeSession(
     `- CPU samples: ${cpuSamples.length}`,
     `- UI hangs: ${uiHangs.length}`,
     `- CPU hotspots: ${cpuHotspots.length}`,
-    `- Memory leaks: ${files.leaks ? memoryLeaks.length : "not recorded"}`,
+    `- Memory leaks: ${leaksRecorded ? memoryLeaks.length : "not recorded"}`,
     "",
     "Query tools (`profiler-stack-query`) are now ready to use against this data.",
   ];

@@ -58,7 +58,13 @@ The report also shows the share of the session that React spent rendering, and t
 
 The native report lists the CPU hotspots, the hangs and the memory leaks. Each entry has a severity indicator and a suggestion.
 
-Argent and Instruments can run their own code inside the app while the native profiler records on iOS or on a Mac app. For example, in a Mac app, the agent reads the screen and clicks through the Argent library inside the app. Instruments loads a recorder into the app to track the memory allocations. The native report gives the CPU time of this code and its share of all CPU time. The CPU hotspots do not include this time. When this code causes a hang, the report marks the suspect functions with the name of the tool.
+On iOS and on a Mac app, the main thread can run only system code. This code can draw, lay out or animate the views. Then the only app function in the stack is the entry point of the app, `main`. The report names this hotspot "system code under `main`" and gives the system frameworks that ran. An animation or a timer that runs while the app is idle can cause this hotspot. A thread that runs only system code gets the same kind of hotspot, under the first function of the thread.
+
+A memory leak gets the red indicator only when the code of the app is responsible for the leak. macOS and iOS also leak some objects by themselves, for example in their XPC connections. When the responsible code is in a library of the system, such as Foundation, the leak gets the yellow indicator. The report gives a note about these leaks.
+
+Argent and Instruments can run their own code inside the app while the native profiler records on iOS or on a Mac app. For example, in a Mac app, the agent reads the screen and clicks through the Argent library inside the app. Instruments loads a recorder into the app to track the memory allocations. The native report gives the CPU time of this code and its share of all CPU time. The CPU hotspots do not include this time. When the Argent code causes a hang, the report marks the suspect functions as Argent code.
+
+The time of the Instruments recorder on the main thread is not part of the length of a hang. When a hang has less than 250 ms without the recorder time and the suspended time, the report does not show the hang. A note gives the time of the recorder.
 
 The React report gives the file and the line of the components in its table that are in the project. When several files define the same name, the report also names the other files. For the five components with the highest render time, the report also shows a suggestion and, if it has the file, 50 lines of source. Thus the agent can propose a fix for the component.
 
@@ -93,7 +99,8 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 - One native profiler recording at a time can run on a Mac, for all iOS simulators and Mac apps together. macOS gives the kernel trace of Instruments to one recording only. Argent does not start a second recording while xctrace records on the Mac. Argent cannot see a recording in the Instruments app.
 - The memory leak data is available on iOS and on Mac apps only. On Android, Argent reports memory growth as a weak signal.
 - Sometimes Instruments does not end after the stop of a recording. This fault also occurs without Argent. When Instruments does no work for some time, Argent ends it and tells the agent. The data of this recording can be incomplete.
-- Instruments checks the app for memory leaks about every 11 seconds, and a leak is in the profile only after a check has ended. Keep the recording on for about 25 seconds after the action that leaks. Otherwise the profile does not contain the leak.
+- Instruments checks the app for memory leaks about every 11 to 15 seconds. A leak is in the profile only after a check that started after the leak. Keep the recording on for about 25 seconds after the action that leaks. Otherwise the profile does not contain the leak.
+- Instruments suspends the whole app during each leak check. On a Mac app and on an iOS simulator, Argent watches for this and takes the suspended time out of each hang. A hang that was only the suspension is not in the report. When Argent cannot watch the app, the report tells that a hang can contain a suspension.
 - On Android, native network capture can slow the app and change the timings in a profile. When native network capture is on for an app on the device, the start of a profiler gives a warning. To profile without it, ask the agent to stop native network capture for the app. Then restart the app. See [Network inspection](/docs/features/network).
 
 Argent does this with the `react-profiler-*`, `native-profiler-*` and `profiler-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

@@ -15,9 +15,13 @@
  * "normalise" the leak parser onto the schema-table format (which would parse
  * zero rows).
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, promises as fsPromises } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { parseLeaksXml } from "../src/utils/ios-profiler/pipeline/xml-parser";
 import { aggregateLeaks, isLeakAttributed } from "../src/utils/ios-profiler/pipeline/01-correlate";
+import { runIosProfilerPipeline } from "../src/utils/ios-profiler/pipeline/index";
 
 const REAL_LEAKS_XML = `<?xml version="1.0"?>
 <trace-query-result>
@@ -243,8 +247,259 @@ describe("isLeakAttributed", () => {
     expect(isLeakAttributed("Unknown")).toBe(false);
   });
 
+  it("treats the (null) frame of a template without the Allocations instrument as unattributed", () => {
+    expect(isLeakAttributed("(null)")).toBe(false);
+  });
+
   it("treats a real responsible frame as attributed", () => {
     expect(isLeakAttributed("-[MyViewController loadData]")).toBe(true);
     expect(isLeakAttributed("MyApp`closure #1")).toBe(true);
+  });
+});
+
+describe("leaks of a template without the Allocations instrument", () => {
+  // Rows of a real Leaks export: the Mac fixture app recorded with `Time Profiler` plus
+  // `--instrument Leaks` (Xcode 27.2), after it made 200 retain cycles of
+  // ProfLeakNodeA <-> ProfLeakNodeB. Each of the 817 rows had this frame and library.
+  const LEAKS_XML = `<?xml version="1.0"?>
+<trace-query-result>
+<node xpath='//trace-toc[1]/run[1]/tracks[1]/track[1]/details[1]/detail[1]'><row leaked-object="Malloc 32 Bytes" size="32" responsible-frame="(null)" count="1" responsible-library="(null)" address="0x7212404060"/>
+<row leaked-object="ProfLeakNodeA" size="32" responsible-frame="(null)" count="1" responsible-library="(null)" address="0x769e518000"/>
+<row leaked-object="ProfLeakNodeB" size="32" responsible-frame="(null)" count="1" responsible-library="(null)" address="0x769f02c040"/>
+<row leaked-object="NSSet" size="80" responsible-frame="(null)" count="1" responsible-library="(null)" address="0x769e43c140"/>
+<row leaked-object="xpc_connection_t" size="320" responsible-frame="(null)" count="1" responsible-library="(null)" address="0x769e819040"/>
+</node></trace-query-result>`;
+
+  it("rates every leak as an unattributed YELLOW, not as a leak of the app", () => {
+    const leaks = aggregateLeaks(parseLeaksXml(LEAKS_XML));
+    expect(leaks).toHaveLength(5);
+    for (const leak of leaks) {
+      expect(leak.attributed).toBe(false);
+      expect(leak.severity).toBe("YELLOW");
+    }
+  });
+});
+
+describe("leaks of system libraries", () => {
+  // Rows of a real Leaks export: the Mac fixture app with malloc stack logging, after it
+  // made 200 retain cycles of ProfLeakNodeA <-> ProfLeakNodeB (Xcode 27.2, macOS 27).
+  // macOS leaks the XPC objects by itself, before any action of the app.
+  const LEAKS_XML = `<?xml version="1.0"?>
+<trace-query-result>
+<node xpath='//trace-toc[1]/run[1]/tracks[1]/track[2]/details[1]/detail[1]'><row leaked-object="Malloc 80 Bytes" size="80" responsible-frame="-[LNProcessInstanceRegistryClient makeXPCConnection]" count="1" responsible-library="AppIntents" address="0x7308810230"/>
+<row leaked-object="Malloc 48 Bytes" size="48" responsible-frame="-[NSXPCConnection initWithMachServiceName:options:]" count="1" responsible-library="Foundation" address="0x7308818360"/>
+<row leaked-object="ProfLeakNodeA" size="48" responsible-frame="swift::swift_slowAllocTyped(unsigned long, unsigned long, unsigned long long)" count="1" responsible-library="libswiftCore.dylib" address="0x7a8a95aeb0"/>
+<row leaked-object="ProfLeakNodeB" size="48" responsible-frame="swift::swift_slowAllocTyped(unsigned long, unsigned long, unsigned long long)" count="1" responsible-library="libswiftCore.dylib" address="0x7a8b1f41e0"/>
+<row leaked-object="NSSet" size="96" responsible-frame="LNDaemonApplicationXPCInterface" count="1" responsible-library="LinkServices" address="0x7a8b0287e0"/>
+<row leaked-object="MyModel" size="128" responsible-frame="-[MyViewController loadData]" count="1" responsible-library="PM-leaks-dbg" address="0x7a8b0287f0"/>
+<row leaked-object="Malloc 32 Bytes" size="32" responsible-frame="&lt;Call stack limit reached&gt;" count="1" responsible-library="" address="0x7a8b028800"/>
+</node></trace-query-result>`;
+
+  // The binaries of the CPU export of the same trace: AppIntents and LinkServices are not in it.
+  const LIBRARY_PATHS = new Map([
+    ["Foundation", "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation"],
+    ["libswiftCore.dylib", "/usr/lib/swift/libswiftCore.dylib"],
+    ["PM-leaks-dbg", "/Users/me/apps/PM-leaks-dbg.app/Contents/MacOS/PM-leaks-dbg"],
+  ]);
+
+  function bySeverity(leaks: ReturnType<typeof aggregateLeaks>) {
+    return leaks.map((l) => [
+      l.objectType,
+      l.responsibleLibrary,
+      l.severity,
+      l.systemLibrary ?? false,
+    ]);
+  }
+
+  it("keeps the app's leaks RED and rates a leak from a system library YELLOW, after them", () => {
+    const leaks = aggregateLeaks(parseLeaksXml(LEAKS_XML), LIBRARY_PATHS);
+    // RED by size first, then the system libraries' leaks, then the unattributed ones.
+    expect(bySeverity(leaks)).toEqual([
+      ["MyModel", "PM-leaks-dbg", "RED", false],
+      // Not in the paths, so not known as a system library.
+      ["NSSet", "LinkServices", "RED", false],
+      ["Malloc 80 Bytes", "AppIntents", "RED", false],
+      // The Swift runtime's allocator stands for whoever made the object: the app here.
+      ["ProfLeakNodeA", "libswiftCore.dylib", "RED", false],
+      ["ProfLeakNodeB", "libswiftCore.dylib", "RED", false],
+      ["Malloc 48 Bytes", "Foundation", "YELLOW", true],
+      ["Malloc 32 Bytes", "", "YELLOW", false],
+    ]);
+  });
+
+  it("keeps every attributed leak RED without the binaries' paths", () => {
+    const leaks = aggregateLeaks(parseLeaksXml(LEAKS_XML));
+    expect(leaks.filter((l) => l.attributed).every((l) => l.severity === "RED")).toBe(true);
+    expect(leaks.some((l) => l.systemLibrary)).toBe(false);
+  });
+});
+
+describe("the pipeline's leak libraries", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "argent-leak-libraries-"));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("finds the paths in the CPU export, and an OS framework that the trace did not sample", async () => {
+    const cpu = join(dir, "cpu.xml");
+    const leaks = join(dir, "leaks.xml");
+    writeFileSync(
+      cpu,
+      `<trace-query-result><node><row><sample-time>1</sample-time><thread fmt="Main Thread"></thread>` +
+        `<weight>1000000</weight><backtrace id="1">` +
+        `<frame id="2" name="-[NSRunLoop runMode:beforeDate:]" addr="0x2"><binary id="3" name="Foundation" path="/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation"/></frame>` +
+        `<frame id="4" name="main" addr="0x4"><binary id="5" name="PM-leaks-dbg" path="/Users/me/apps/PM-leaks-dbg.app/Contents/MacOS/PM-leaks-dbg"/></frame>` +
+        `</backtrace></row></node></trace-query-result>`
+    );
+    writeFileSync(
+      leaks,
+      `<trace-query-result><node>` +
+        `<row leaked-object="NSSet" size="96" responsible-frame="LNDaemonApplicationXPCInterface" count="1" responsible-library="LinkServices" address="0x1"/>` +
+        `<row leaked-object="Malloc 48 Bytes" size="48" responsible-frame="-[NSXPCConnection initWithMachServiceName:options:]" count="1" responsible-library="Foundation" address="0x2"/>` +
+        `<row leaked-object="MyModel" size="128" responsible-frame="-[MyViewController loadData]" count="1" responsible-library="PM-leaks-dbg" address="0x3"/>` +
+        `<row leaked-object="Other" size="16" responsible-frame="-[Other make]" count="1" responsible-library="SomeAppKit" address="0x4"/>` +
+        `</node></trace-query-result>`
+    );
+    // Only LinkServices is an OS framework on this "Mac", whatever runs the test.
+    const access = vi.spyOn(fsPromises, "access").mockImplementation(async (p) => {
+      if (String(p) === "/System/Library/PrivateFrameworks/LinkServices.framework") return;
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+
+    const { memoryLeaks } = await runIosProfilerPipeline({ cpu, hangs: null, leaks });
+
+    expect(memoryLeaks.map((l) => [l.objectType, l.severity, l.systemLibrary ?? false])).toEqual([
+      ["MyModel", "RED", false],
+      ["Other", "RED", false],
+      ["NSSet", "YELLOW", true],
+      ["Malloc 48 Bytes", "YELLOW", true],
+    ]);
+    // Only the names that the CPU export lacks are looked for, in the app's bundle first.
+    expect(access.mock.calls.map(([p]) => String(p))).toEqual([
+      "/Users/me/apps/PM-leaks-dbg.app/Contents/Frameworks/LinkServices.framework",
+      "/Users/me/apps/PM-leaks-dbg.app/Frameworks/LinkServices.framework",
+      "/System/Library/Frameworks/LinkServices.framework",
+      "/System/Library/PrivateFrameworks/LinkServices.framework",
+      "/Users/me/apps/PM-leaks-dbg.app/Contents/Frameworks/SomeAppKit.framework",
+      "/Users/me/apps/PM-leaks-dbg.app/Frameworks/SomeAppKit.framework",
+      "/System/Library/Frameworks/SomeAppKit.framework",
+      "/System/Library/PrivateFrameworks/SomeAppKit.framework",
+    ]);
+  });
+
+  /** A CPU export with one sample, whose frames are in these binaries. */
+  function cpuExport(binaries: Array<[name: string, path: string]>): string {
+    const frames = binaries
+      .map(
+        ([name, binaryPath], i) =>
+          `<frame id="${2 * i + 2}" name="f${i}" addr="0x${i}"><binary id="${2 * i + 3}" name="${name}" path="${binaryPath}"/></frame>`
+      )
+      .join("");
+    return (
+      `<trace-query-result><node><row><sample-time>1</sample-time><thread fmt="Main Thread"></thread>` +
+      `<weight>1000000</weight><backtrace id="1">${frames}</backtrace></row></node></trace-query-result>`
+    );
+  }
+
+  function leaksExport(libraries: string[]): string {
+    const rows = libraries.map(
+      (library, i) =>
+        `<row leaked-object="${library}Object" size="16" responsible-frame="-[${library}Object make]" count="1" responsible-library="${library}" address="0x${i}"/>`
+    );
+    return `<trace-query-result><node>${rows.join("")}</node></trace-query-result>`;
+  }
+
+  /** Each of these frameworks is on this "Mac", whatever runs the test; other paths stay real. */
+  function onThisMac(...names: string[]): void {
+    const access = fsPromises.access.bind(fsPromises);
+    vi.spyOn(fsPromises, "access").mockImplementation(async (p, mode) => {
+      const path = String(p);
+      if (!path.startsWith("/System/Library/")) return access(path, mode);
+      if (names.some((name) => path.endsWith(`Frameworks/${name}.framework`))) return;
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+  }
+
+  async function severities(cpuXml: string, libraries: string[]) {
+    const cpu = join(dir, "cpu.xml");
+    const leaks = join(dir, "leaks.xml");
+    writeFileSync(cpu, cpuXml);
+    writeFileSync(leaks, leaksExport(libraries));
+    const { memoryLeaks } = await runIosProfilerPipeline({ cpu, hangs: null, leaks });
+    return Object.fromEntries(
+      memoryLeaks.map((l) => [l.responsibleLibrary, l.systemLibrary ? "system" : l.severity])
+    );
+  }
+
+  it("takes a framework in the bundle of a Mac app for the app's, also with the name of a macOS framework", async () => {
+    // The app embeds Sentry.framework (sentry-cocoa); macOS has a private framework of that name.
+    const app = join(dir, "Demo.app");
+    mkdirSync(join(app, "Contents/Frameworks/Sentry.framework"), { recursive: true });
+    onThisMac("Sentry", "LinkServices");
+
+    const cpuXml = cpuExport([
+      ["Foundation", "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation"],
+      ["Demo", join(app, "Contents/MacOS/Demo")],
+    ]);
+    expect(await severities(cpuXml, ["Sentry", "LinkServices"])).toEqual({
+      Sentry: "RED",
+      LinkServices: "system",
+    });
+  });
+
+  it("looks for the frameworks of an iOS app in its bundle and its simulator runtime, not on this Mac", async () => {
+    const app = join(dir, "Devices/X/data/Containers/Bundle/Application/Y/Shop.app");
+    const runtime = join(
+      dir,
+      "mnt/iOS_24A434/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 27.0.simruntime/Contents/Resources/RuntimeRoot"
+    );
+    // The app embeds a Charts.framework (danielgindi/Charts); the runtime has Swift Charts.
+    mkdirSync(join(app, "Frameworks/Charts.framework"), { recursive: true });
+    mkdirSync(join(runtime, "System/Library/Frameworks/Charts.framework"), { recursive: true });
+    mkdirSync(join(runtime, "System/Library/PrivateFrameworks/LinkServices.framework"), {
+      recursive: true,
+    });
+    // macOS has frameworks of all three names; iOS has no Sentry framework.
+    onThisMac("Sentry", "Charts", "LinkServices");
+
+    const cpuXml = cpuExport([
+      ["Foundation", join(runtime, "System/Library/Frameworks/Foundation.framework/Foundation")],
+      ["Shop", join(app, "Shop")],
+    ]);
+    expect(await severities(cpuXml, ["Shop", "Sentry", "Charts", "LinkServices"])).toEqual({
+      Shop: "RED",
+      Sentry: "RED",
+      Charts: "RED",
+      LinkServices: "system",
+    });
+  });
+
+  it("does not look for an OS framework when the trace sampled no library of the OS", async () => {
+    onThisMac("Sentry");
+    const cpuXml = cpuExport([
+      ["Shop", "/Users/me/Library/Developer/CoreSimulator/Devices/X/Shop.app/Shop"],
+    ]);
+    expect(await severities(cpuXml, ["Sentry"])).toEqual({ Sentry: "RED" });
+  });
+
+  it("looks on this Mac for the frameworks of a Mac app also with no CPU sample", async () => {
+    // A template without Time Profiler, or a CPU export that failed: no binary path is known.
+    onThisMac("Foundation");
+    const leaks = join(dir, "leaks.xml");
+    writeFileSync(leaks, leaksExport(["Foundation"]));
+    const emptyCpu = join(dir, "cpu.xml");
+    writeFileSync(emptyCpu, "");
+    for (const cpu of [null, emptyCpu]) {
+      const mac = await runIosProfilerPipeline({ cpu, hangs: null, leaks }, { macApp: true });
+      expect(mac.memoryLeaks[0]).toMatchObject({ severity: "YELLOW", systemLibrary: true });
+      // The frameworks of this Mac are not those of an iOS app.
+      const ios = await runIosProfilerPipeline({ cpu, hangs: null, leaks });
+      expect(ios.memoryLeaks[0]).toMatchObject({ severity: "RED", attributed: true });
+      expect(ios.memoryLeaks[0]!.systemLibrary).toBeUndefined();
+    }
   });
 });

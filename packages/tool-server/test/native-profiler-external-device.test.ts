@@ -73,6 +73,13 @@ vi.mock("child_process", () => ({
   },
 }));
 
+// The start also watches the app's suspensions with a helper process, which
+// native-profiler-ios-start.test.ts covers; here only xctrace is spawned.
+vi.mock("../src/utils/macos-suspension-watch", () => ({
+  suspensionWatchHelper: () => "/fake/argent-macos-helper",
+  startSuspensionWatch: async () => null,
+}));
+
 vi.mock("../src/utils/ios-profiler/startup", () => ({
   waitForXctraceReady: async () => ({ via: "notify" }),
 }));
@@ -146,10 +153,13 @@ function newSession(): NativeProfilerSessionApi {
     exportedFiles: null,
     lastExitInfo: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,
     exportSkipReason: null,
+    leaksCaptureError: null,
     recordedMs: null,
     startReturnedMs: null,
     stopInProgress: null,

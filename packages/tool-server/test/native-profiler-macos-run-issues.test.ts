@@ -41,6 +41,7 @@ import {
   spawnXctraceRecording,
 } from "../src/tools/profiler/native-profiler/platforms/xctrace";
 import { exportIosTraceData } from "../src/utils/ios-profiler/export";
+import { LEAKS_NOT_RECORDED } from "../src/utils/ios-profiler/render";
 import { resolveDevice } from "../src/utils/device-info";
 import { RECORDING_CAP_MS } from "../src/utils/profiler-shared/types";
 
@@ -51,6 +52,20 @@ const ATTACH_FAILED = [
   "",
   "\t\t* [Error] Unable to find symbol named '_pthread_self' in owner: libsystem_pthread.dylib.",
 ].join("\n");
+
+// What Xcode 27.2 printed at the stop of an iOS 27.0 simulator recording whose
+// leak checks failed. Its Leaks export had no row.
+const LEAK_AGENT_FAILED = [
+  "* [Warning] This configuration of instruments creates 1 table without a known input source.",
+  "",
+  "\t* [Warning] Recovery Suggestion: This could be due to a missing package, or an error in a package under development.",
+  "",
+  "* [Error] An error occurred trying to capture Leaks data.",
+  "",
+  "\t* [Error] Failed to handshake with LeakAgent (pid: 46018)",
+].join("\n");
+const LEAK_AGENT_ERRORS =
+  "An error occurred trying to capture Leaks data. Failed to handshake with LeakAgent (pid: 46018)";
 
 let dir: string;
 let originalPath: string | undefined;
@@ -135,15 +150,18 @@ async function quit(app: ChildProcess): Promise<void> {
 }
 
 /**
- * A session recording with the stub, as a successful start leaves it.
- * `beforeCommit` runs between the spawn and the commit that sets the 10-minute cap.
+ * A session recording with the stub, as a successful start leaves it: a new
+ * session, or `session` for its next recording. `beforeCommit` runs between the
+ * spawn and the commit that sets the 10-minute cap.
  */
 async function recording(
   deviceId: string,
-  beforeCommit?: () => void | Promise<void>
+  beforeCommit?: () => void | Promise<void>,
+  session?: NativeProfilerSessionApi
 ): Promise<NativeProfilerSessionApi> {
   const device: DeviceInfo = resolveDevice(deviceId);
-  const { api } = await nativeProfilerSessionBlueprint.factory({}, device, { device } as never);
+  const api =
+    session ?? (await nativeProfilerSessionBlueprint.factory({}, device, { device } as never)).api;
   const traceFile = path.join(dir, `native-profiler-${Date.now()}.trace`);
   fs.mkdirSync(traceFile, { recursive: true });
   const started = await spawnXctraceRecording(api, () => ["record", "--output", traceFile]);
@@ -152,6 +170,7 @@ async function recording(
     appProcess: "PM-sdbg",
     traceFile,
     mallocStackLogging: false,
+    customTemplate: false,
     cpuFilterPid: null,
     // Still running, so the app-ended note stays out of the warning.
     appPid: process.pid,
@@ -488,6 +507,94 @@ describe("native-profiler-stop and the run issues xctrace prints", () => {
   });
 });
 
+describe.each([
+  ["an iOS simulator", IOS],
+  ["a Mac app", MAC],
+])("on %s whose leak capture failed", (_name, deviceId) => {
+  /** Exports a CPU and hangs table with no row, and the Leaks detail with no row. */
+  function exportEmptyTables(): void {
+    const file = (name: string, xml: string) => {
+      const filePath = path.join(dir, name);
+      fs.writeFileSync(filePath, xml);
+      return filePath;
+    };
+    vi.mocked(exportIosTraceData).mockImplementationOnce(async () => ({
+      files: {
+        cpu: file("cpu.xml", "<trace-query-result></trace-query-result>"),
+        hangs: file("hangs.xml", "<trace-query-result></trace-query-result>"),
+        leaks: file(
+          "leaks.xml",
+          "<trace-query-result><node xpath='//trace-toc[1]/run[1]/tracks[1]/track[2]" +
+            "/details[1]/detail[1]'></node></trace-query-result>"
+        ),
+      },
+      diagnostics: { tocSchemas: ["time-profile"], cpuSchemaUsed: "time-profile", errors: {} },
+    }));
+  }
+
+  it("analyze says that leaks were not checked, and what xctrace reported", async () => {
+    runIssues(LEAK_AGENT_FAILED);
+    const api = await recording(deviceId);
+    exportEmptyTables();
+    const result = await stopNativeProfilerIos(api);
+
+    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledTimes(1);
+    expect(result.warning).toBe(
+      `xctrace reported errors for this recording, so the data may be incomplete: ${LEAK_AGENT_ERRORS}`
+    );
+
+    const { report, status } = await analyzeNativeProfilerIos(api);
+    expect(report).toContain(
+      `${LEAKS_NOT_RECORDED} xctrace reported that Instruments could not capture the leak ` +
+        `data: ${LEAK_AGENT_ERRORS}. Record again to check for leaks. Do not report the app as ` +
+        `leak-free.`
+    );
+    expect(report).toContain("Memory leaks were not checked");
+    expect(report).not.toContain("All clear");
+    expect(status).toBe("ok");
+    // leak_stacks and the combined report read this flag.
+    expect(api.parsedData?.leaksRecorded).toBe(false);
+  });
+
+  it("says the same when xctrace ended on its own, and not for the next recording", async () => {
+    runIssues(LEAK_AGENT_FAILED);
+    const api = await recording(deviceId);
+    await endXctrace(api);
+    exportEmptyTables();
+    await stopNativeProfilerIos(api);
+    expect((await analyzeNativeProfilerIos(api)).report).toContain(LEAK_AGENT_ERRORS);
+    expect(api.parsedData?.leaksRecorded).toBe(false);
+
+    runIssues(null);
+    await recording(deviceId, undefined, api);
+    exportEmptyTables();
+    await stopNativeProfilerIos(api);
+    const { report } = await analyzeNativeProfilerIos(api);
+    expect(report).not.toContain(LEAKS_NOT_RECORDED);
+    expect(api.parsedData?.leaksRecorded).toBe(true);
+  });
+
+  it("says the same when the recording ended at the 10-minute cap", async () => {
+    runIssues(LEAK_AGENT_FAILED);
+    const api = await recording(deviceId, () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+    const exited = new Promise((resolve) => api.captureProcess!.once("exit", resolve));
+    try {
+      vi.advanceTimersByTime(RECORDING_CAP_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+    await exited;
+    expect(api.recordingTimedOut).toBe(true);
+    exportEmptyTables();
+    await stopNativeProfilerIos(api);
+
+    expect((await analyzeNativeProfilerIos(api)).report).toContain(LEAK_AGENT_ERRORS);
+    expect(api.parsedData?.leaksRecorded).toBe(false);
+  });
+});
+
 describe("a native-profiler-stop that is still exporting", () => {
   /** An export that waits until the test lets it end. */
   function slowExport(files: Record<"cpu" | "hangs" | "leaks", string>): () => void {
@@ -553,16 +660,14 @@ describe("a native-profiler-stop that is still exporting", () => {
     expect(analyzedWith).toBe("/tmp/new-cpu.xml");
   });
 
-  it("stamps how long a Mac app's recording ran, and not an iOS one's", async () => {
+  it("stamps how long the recording ran, on a Mac app and on iOS", async () => {
     runIssues(null);
-    const mac = await recording(MAC);
-    await stopNativeProfilerIos(mac);
-    expect(mac.recordedMs).toBeGreaterThanOrEqual(0);
-    expect(mac.recordedMs).toBeLessThan(60_000);
-
-    const ios = await recording(IOS);
-    await stopNativeProfilerIos(ios);
-    expect(ios.recordedMs).toBeNull();
+    for (const device of [MAC, IOS]) {
+      const api = await recording(device);
+      await stopNativeProfilerIos(api);
+      expect(api.recordedMs).toBeGreaterThanOrEqual(0);
+      expect(api.recordedMs).toBeLessThan(60_000);
+    }
   });
 });
 
