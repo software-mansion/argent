@@ -130,9 +130,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return t;
   }
 
-  // Per document or shadow root, aria-labelledby id -> its target and, once read, the
-  // target's trimmed text for a control that reads in it as any other does; null for a
-  // missing id.
+  // Per document or shadow root, aria-labelledby id -> its target and, once read, its
+  // trimmed text for controls that read it alike; null for a missing id.
   const labelTargets = nodeMap();
   const NAME_MAX = 200;
 
@@ -630,18 +629,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return selfText(el, target === el) !== shownText(el, true, chosenOptions(el));
   }
 
-  // A text field's value, a password's as bullets.
   function fieldText(el) {
     return isPassword(el) ? "\\u2022".repeat(el.value.length) : el.value;
   }
 
-  // A button input's value, or null when it has none.
   function buttonText(el) {
     const button = isHtml(el, "input") && /^(button|submit|reset|image)$/.test(el.type);
     return button && el.value ? el.value : null;
   }
 
-  // Whether an element is a <textarea> or an <input> that takes typed text.
   function isTextField(el) {
     if (getNamespaceURI.call(el) !== "http://www.w3.org/1999/xhtml") return false;
     const tag = getLocalName.call(el);
