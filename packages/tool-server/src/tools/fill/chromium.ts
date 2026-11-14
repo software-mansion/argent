@@ -73,7 +73,9 @@ export function buildChromiumFillScript(text: string): string {
       // box the user can scroll; one with focus that is none of these, or whose
       // selection is in its shadow tree, holds it in a closed shadow root. The
       // browser shows such a selection collapsed before the host, or in place
-      // when the page set it there.
+      // when the page set it there, even in an editing host's own text. In a
+      // focused page, which :focus needs, an editing host focused itself
+      // matches :focus-visible; one whose focus is in its shadow tree does not.
       const scrolls = (style) =>
         (/^(auto|scroll)$/.test(style.overflowY) && el.scrollHeight > el.clientHeight) ||
         (/^(auto|scroll)$/.test(style.overflowX) && el.scrollWidth > el.clientWidth);
@@ -88,12 +90,22 @@ export function buildChromiumFillScript(text: string): string {
         const sel = el.getRootNode().getSelection();
         return inShadow(sel.anchorNode, sel.anchorOffset) && inShadow(sel.focusNode, sel.focusOffset);
       };
+      const focusInShadow = () => {
+        if (el.isContentEditable !== true) return false;
+        try {
+          return el.matches(":focus") && !el.matches(":focus-visible");
+        } catch (e) {
+          // Chromium before 86 has no :focus-visible.
+          return false;
+        }
+      };
       const closedHost =
         /-|^(article|aside|blockquote|div|footer|h[1-6]|header|main|nav|p|section|span)$/.test(tag) &&
         ((!el.hasAttribute("tabindex") &&
           (el.isContentEditable !== true || (el.parentElement !== null && el.parentElement.isContentEditable === true)) &&
           !scrolls(win.getComputedStyle(el))) ||
-          selectionInShadow());
+          selectionInShadow() ||
+          focusInShadow());
       if (closedHost) return { status: "unsupported", detail: "focus is in a closed shadow root, which fill cannot reach" };
       if (el.isContentEditable !== true) return { status: "no_focus" };
     }

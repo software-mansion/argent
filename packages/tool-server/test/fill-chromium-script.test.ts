@@ -4,12 +4,13 @@ import { buildChromiumFillScript } from "../src/tools/fill/chromium";
 /**
  * Runs the real page script against a hand-built document. The mock carries
  * only what the script reads: the focused element (through an open shadow
- * root or a frame), its kind, `select()`, the document selection and
- * `execCommand`, which stores line breaks as LF outside an input and fires
- * `input` through the window's capture listeners, `createElementNS` for a
- * detached input that applies the HTML value sanitization of number and email
- * inputs and for a detached link that parses its href, the window's native
- * value setters and Event, and the computed overflow of an element.
+ * root or a frame), its kind, whether it matches `:focus` and
+ * `:focus-visible`, `select()`, the document selection and `execCommand`,
+ * which stores line breaks as LF outside an input and fires `input` through
+ * the window's capture listeners, `createElementNS` for a detached input that
+ * applies the HTML value sanitization of number and email inputs and for a
+ * detached link that parses its href, the window's native value setters and
+ * Event, and the computed overflow of an element.
  */
 
 // Captured before a test shadows the page's URL global.
@@ -179,6 +180,8 @@ function editable(page: Page, props: Record<string, unknown> = {}) {
     tagName: "DIV",
     isContentEditable: true,
     hasAttribute: () => false,
+    // A focused editing host in a focused page.
+    matches: (selector: string) => selector === ":focus" || selector === ":focus-visible",
     innerText: "old text",
     parentElement: page.doc.body,
     ownerDocument: page.doc,
@@ -526,6 +529,8 @@ describe("fill page script", () => {
     tagName,
     isContentEditable: false,
     hasAttribute: (name: string) => name in ((props.attributes as object) ?? {}),
+    // As for a host whose focus is in its shadow tree, or a clicked one that takes no text.
+    matches: (selector: string) => selector === ":focus",
     scrollHeight: 20,
     clientHeight: 20,
     scrollWidth: 100,
@@ -671,6 +676,34 @@ describe("fill page script", () => {
       await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
     }
   );
+
+  it("refuses an editing host whose focus is in its closed shadow root, with the selection the page set in the host's text", async () => {
+    const page = makePage();
+    const host = editable(page, { matches: (selector: string) => selector === ":focus" });
+    const text = { getRootNode: () => page.doc };
+    page.doc.caret = { anchorNode: text, anchorOffset: 2, focusNode: text, focusOffset: 2 };
+    page.doc.activeElement = host;
+    await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
+    expect(host.innerText).toBe("old text");
+    expect(page.doc.selected).toBeNull();
+  });
+
+  it.each([
+    ["a page without focus, which matches neither", () => false],
+    [
+      "Chromium without :focus-visible",
+      (selector: string) => {
+        if (selector === ":focus-visible") throw new SyntaxError("not a valid selector");
+        return true;
+      },
+    ],
+  ])("fills an editing host in %s", async (_n, matches) => {
+    const page = makePage();
+    const host = editable(page, { matches });
+    page.doc.activeElement = host;
+    await expect(runScript(page, "x")).resolves.toEqual({ status: "ok", verified: true });
+    expect(host.innerText).toBe("x");
+  });
 
   it("reads the selection of the host's own tree, a shadow root showing a closed one as before the host", async () => {
     const page = makePage();
