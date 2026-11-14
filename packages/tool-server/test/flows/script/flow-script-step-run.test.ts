@@ -142,6 +142,15 @@ describe("a script step in a run", () => {
     expect(result.steps[0]!.scriptLogTruncated).toBeUndefined();
   });
 
+  it("spells the control characters in its log, all but the newlines", async () => {
+    await write("scripts/ansi.mjs", 'process.stdout.write("a\\rb\\x1b[1Ac\\x9b[2K\\nnext\\n");');
+    await flow("ansi", "steps:\n  - script: { path: ../../scripts/ansi.mjs }\n");
+
+    const { result } = await runFlow("ansi");
+
+    expect(result.steps[0]!.scriptLog).toBe("a\\rb\\u001b[1Ac\\u009b[2K\nnext\n");
+  });
+
   it("flags a log a limit cut short, because the text carries no marker", async () => {
     await write(
       "scripts/chatty.mjs",

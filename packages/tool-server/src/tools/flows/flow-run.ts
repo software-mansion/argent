@@ -2359,10 +2359,11 @@ function pushReport(state: ExecState, report: StepReport): void {
   // Renderers print these in the target's place, on one line.
   if (report.tool !== undefined) report.tool = escapeInline(String(report.tool));
   if (report.message !== undefined) report.message = escapeInline(report.message);
-  // A reason quotes foreign text (a tool's error, a flow's tool name).
-  // Renderers indent its later lines, so newlines stay; any other control
-  // character could move the cursor off that indent.
+  // A reason quotes foreign text (a tool's error, a flow's tool name); a
+  // script's log is nothing else. Renderers break both at newlines, so those
+  // stay; any other control character could move the cursor off its line.
   if (report.reason !== undefined) report.reason = escapeLines(report.reason);
+  if (report.scriptLog !== undefined) report.scriptLog = escapeLines(report.scriptLog);
   state.reports.push(report);
   state.onStepReport?.(report);
 }
