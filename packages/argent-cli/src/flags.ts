@@ -118,6 +118,7 @@ function runToggle(
 
   const filePath = getFlagsPath(parsed.scope);
   const warning = degenerateProjectScopeWarning(parsed.scope, filePath);
+  let wrote = true;
   try {
     if (command === "enable") {
       setFlag(parsed.name, true, parsed.scope);
@@ -127,14 +128,14 @@ function runToggle(
       setFlag(parsed.name, false, parsed.scope);
     } else {
       // Opt-in flag: the off default takes over once the entry is gone.
-      unsetFlag(parsed.name, parsed.scope);
+      wrote = unsetFlag(parsed.name, parsed.scope);
     }
   } catch (err) {
     console.error(`Failed to ${command} flag: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 
-  if (warning) console.error(pc.yellow(warning));
+  if (wrote && warning) console.error(pc.yellow(warning));
   if (command === "enable") {
     console.log(`Enabled flag "${parsed.name}" (${parsed.scope}). Stored at ${filePath}.`);
   } else {

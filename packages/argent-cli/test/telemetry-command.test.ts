@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { telemetry } from "../src/telemetry.js";
 import { getConsentState, _resetConsentCacheForTest } from "@argent/telemetry";
+import { findProjectRoot } from "@argent/configuration-core";
 
 // Real-filesystem test of `argent telemetry enable|disable [--scope]`: a
 // sandboxed HOME (global scope) and a tmp project root (`.git` marker), so the
@@ -91,6 +92,20 @@ describe("argent telemetry — scopes", () => {
 
       expect(errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n")).toContain(
         `resolved to the home directory, so this writes the GLOBAL config file (${path.join(homeDir, ".argent", "config.json")}).`
+      );
+    }
+  );
+
+  it.each(["enable", "disable"])(
+    "%s --scope project in a markerless dir warns that it creates the project file",
+    async (command) => {
+      fs.rmSync(path.join(projectDir, ".git"), { recursive: true });
+      expect(findProjectRoot(projectDir)).toBeNull();
+
+      await telemetry([command, "--scope", "project"]);
+
+      expect(errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n")).toContain(
+        `found above ${projectDir} — treating it as the project root and creating ${path.join(projectDir, ".argent", "config.json")}.`
       );
     }
   );

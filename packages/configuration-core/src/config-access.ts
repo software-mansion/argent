@@ -201,6 +201,8 @@ export function listConfig(
   options: ConfigPathOptions = {},
   registry: readonly ConfigDefinition[] = CONFIG_SCHEMA
 ): ConfigEntryView[] {
+  // A home-rooted project's file is the global one: list its values once, as global.
+  const projectIsHome = isHomeDir(resolveProjectRoot(options.cwd ?? process.cwd()), options);
   return registry.map((def) => ({
     key: def.key,
     description: def.description,
@@ -209,7 +211,7 @@ export function listConfig(
     ...(describeExpectedValue(def) ? { expected: describeExpectedValue(def)! } : {}),
     ...(def.example ? { example: def.example } : {}),
     effective: getConfigValue(def, options),
-    project: readScopeValue(def, "project", options),
+    project: projectIsHome ? undefined : readScopeValue(def, "project", options),
     global: readScopeValue(def, "global", options),
   }));
 }

@@ -223,6 +223,16 @@ describe("listConfig", () => {
     expect(telemetry.manageCommand).toBe("argent telemetry");
     expect(telemetry.scopes).toEqual(["project", "global"]);
   });
+
+  it("lists a home-rooted project's values once, as global", () => {
+    setConfigValue("lens.agent", "codex", "global", opts());
+    const cwd = path.join(homeDir, "Downloads");
+    fs.mkdirSync(cwd);
+    const lens = listConfig({ homeDir, cwd }).find((e) => e.key === "lens.agent")!;
+    expect(lens.global).toBe("codex");
+    expect(lens.project).toBeUndefined();
+    expect(lens.effective).toBe("codex");
+  });
 });
 
 describe("telemetry.enabled — opt-out default", () => {

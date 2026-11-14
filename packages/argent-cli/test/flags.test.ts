@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { disable, enable, flags as flagsCmd } from "../src/flags.js";
 import {
+  findProjectRoot,
   getFlagsPath,
   isFlagEnabled,
   readFlags,
@@ -131,9 +132,30 @@ describe("enable / disable CLI", () => {
     ["disable", disable],
   ] as const)("%s --scope project warns when the project is home", (_command, run) => {
     chdirUnderHome();
+    setFlag("my-feature-flag", true, "global");
     const out = captureConsole(() => run(["my-feature-flag", "--scope", "project"], TEST_REGISTRY));
     expect(out.stderr).toContain(
       `resolved to the home directory, so this writes the GLOBAL flags file (${path.join(tmpHome, ".argent", "flags.json")}).`
+    );
+  });
+
+  it("disable --scope project does not warn when it removes nothing", () => {
+    chdirUnderHome();
+    const out = captureConsole(() =>
+      disable(["my-feature-flag", "--scope", "project"], TEST_REGISTRY)
+    );
+    expect(out.stderr).toBe("");
+    expect(fs.existsSync(path.join(tmpHome, ".argent", "flags.json"))).toBe(false);
+  });
+
+  it("enable --scope project in a markerless dir warns that it creates the project file", () => {
+    fs.rmSync(path.join(tmpProject, "package.json"));
+    expect(findProjectRoot(tmpProject)).toBeNull();
+    const out = captureConsole(() =>
+      enable(["my-feature-flag", "--scope", "project"], TEST_REGISTRY)
+    );
+    expect(out.stderr).toContain(
+      `found above ${tmpProject} — treating it as the project root and creating ${path.join(tmpProject, ".argent", "flags.json")}.`
     );
   });
 
@@ -141,6 +163,11 @@ describe("enable / disable CLI", () => {
     const out = captureConsole(() =>
       enable(["my-feature-flag", "--scope", "project"], TEST_REGISTRY)
     );
+    expect(out.stderr).toBe("");
+  });
+
+  it("does not warn for a global write", () => {
+    const out = captureConsole(() => enable(["my-feature-flag"], TEST_REGISTRY));
     expect(out.stderr).toBe("");
   });
 
