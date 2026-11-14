@@ -259,8 +259,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // non-inline element, an <img> (but a presentational alt=""), an <svg> with content, an
   // SVG <style> or a <br> parts the words around it, and an SVG <style>'s text never
   // counts. Nor does the text of a <noscript>, or of a <script> or <style> with no box,
-  // which parts words only under display:none. A shown target leaves out its
-  // display:none, visibility:hidden, aria-hidden and inert subtrees, and SVG elements SVG
+  // which parts words only under display:none. A shown target leaves out its display:none,
+  // visibility:hidden or collapse, aria-hidden and inert subtrees, and SVG elements SVG
   // never renders (one it does not know, <metadata>, <script>); a hidden one reads them
   // all, and there any <svg> parts words, as does every element under display:none, which
   // has no layout to run inline in. Neither reads what layout skips: a closed <details>
@@ -273,7 +273,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // NAME_MAX non-whitespace characters are in, which settles the name accessibleName cuts.
   function labelText(root) {
     const rootStyle = window.getComputedStyle(root);
-    let shown = rootStyle.visibility !== "hidden";
+    let shown = rootStyle.visibility === "visible";
     let ariaHidden = false;
     let inert = false;
     // How many display:none elements enclose the walk's position.
@@ -493,7 +493,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       ) {
         continue;
       }
-      if (shown && (style.visibility === "hidden" || isAriaHidden(node) || isInert(node))) {
+      if (shown && (style.visibility !== "visible" || isAriaHidden(node) || isInert(node))) {
         // Laid out but not read: an in-flow block-level box still parts the words around it.
         if (
           isBlockLevel(style) &&
@@ -1727,10 +1727,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // rect; walk() descends and promotes the visible content.
     if (style.display === "contents") return false;
     if (style.opacity === "0") return true;
-    // visibility:hidden is deliberately NOT hard-pruned here: visibility inherits but a
-    // descendant can override it back to visible, so cutting the subtree would drop
-    // painted content. walk() descends and suppresses only this element's own paint
-    // (see \`invisibleSelf\`), pruning it only if no visible descendant survives.
+    // visibility:hidden or collapse is deliberately NOT hard-pruned here: visibility
+    // inherits but a descendant can override it back to visible, so cutting the subtree
+    // would drop painted content. walk() descends and suppresses only this element's own
+    // paint (see \`invisibleSelf\`), pruning it only if no visible descendant survives.
     const r = getBCR.call(el);
     if (r.width > 0 && r.height > 0) return false;
     // Zero-area box: prune it only when it clips its overflow (a collapsed
@@ -1947,13 +1947,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       return null;
     }
     // Charge the node budget only for elements that can actually EMIT. A
-    // visibility:hidden element paints nothing itself and is descended into
-    // purely to catch a descendant that overrides visibility back to visible
+    // visibility:hidden or collapse element paints nothing itself and is descended
+    // into purely to catch a descendant that overrides visibility back to visible
     // (see hidden()); it is otherwise promoted/dropped. Counting it would let a
     // large fully-hidden subtree (a closed drawer/modal) exhaust the budget and
     // truncate genuinely visible content elsewhere in the tree. Its visible
     // descendants, if any, still consume the budget themselves.
-    if (style.visibility !== "hidden") {
+    if (style.visibility === "visible") {
       if (nodeBudget <= 0) {
         truncated = true;
         return null;
@@ -2024,12 +2024,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
     childResults.push(...shadowResults);
 
-    // A visibility:hidden element paints nothing itself, but a descendant can override
-    // visibility back to visible, so walk() descended instead of pruning (see hidden()).
-    // Suppress this element's own paint — its text / name / interactivity are invisible —
-    // and treat it as box-less so it contributes no box of its own: it survives only
-    // through, and is framed by, whatever visible descendants it has.
-    const invisibleSelf = style.visibility === "hidden";
+    // A visibility:hidden or collapse element paints nothing itself, but a descendant can
+    // override visibility back to visible, so walk() descended instead of pruning (see
+    // hidden()). Suppress this element's own paint — its text / name / interactivity are
+    // invisible — and treat it as box-less so it contributes no box of its own: it
+    // survives only through, and is framed by, whatever visible descendants it has.
+    const invisibleSelf = style.visibility !== "visible";
     const text = invisibleSelf || closed || skipsContent(el, style) ? "" : ownText(el);
     const name = invisibleSelf ? null : accessibleName(el);
     const clickable = invisibleSelf ? false : isInteractive(el);

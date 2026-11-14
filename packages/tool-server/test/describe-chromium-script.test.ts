@@ -1501,6 +1501,21 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelOf([text("Fallback")], { attrs: { "aria-label": "  " } })).toBe("Fallback");
   });
 
+  it("reads visibility:collapse in an aria-labelledby target as hidden, as Chrome does", () => {
+    const styled = (kids: unknown[], style: Record<string, string>) => {
+      const node = elementNode("span", kids);
+      Object.assign(node.__style as Record<string, string>, style);
+      return node;
+    };
+    const collapsed = styled([text("(old)")], { visibility: "collapse" });
+    expect(labelledBy([text("Delete "), collapsed, text(" file")])).toBe("Delete file");
+    // A collapsed target is read whole: its display:none part too.
+    const none = styled([text("X")], { display: "none" });
+    expect(
+      labelledBy([text("Lab"), none, text("el")], { display: "inline", visibility: "collapse" })
+    ).toBe("Lab X el");
+  });
+
   it("reads a <br> under a display:none element of an aria-labelledby target as nothing", () => {
     // Each <br> sits two elements below the target. Its own display stays inline under
     // the display:none span, as display does not inherit.
@@ -2429,6 +2444,25 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     ]);
     expect(valuesOf(tree)).toContain("VISIBLECHILD");
     expect(valuesOf(tree)).not.toContain("HIDDENOWN");
+  });
+
+  it("treats a visibility:collapse element as a visibility:hidden one, which Chrome never hits", () => {
+    const collapsed = Array.from({ length: 5100 }, (_, i) =>
+      el({ text: "CK" + i, style: { visibility: "collapse" }, rect: BOX })
+    );
+    const { tree, truncated } = run([
+      el({ tag: "button", text: "COLLAPSED", style: { visibility: "collapse" }, rect: BOX }),
+      el({
+        text: "COLLAPSEDOWN",
+        style: { visibility: "collapse" },
+        rect: { x: 0, y: 100, w: 200, h: 200 },
+        children: [el({ text: "VISIBLECHILD", style: { visibility: "visible" }, rect: BOX })],
+      }),
+      el({ style: { display: "contents" }, rect: ZERO, children: collapsed }),
+      el({ text: "VISIBLE_AFTER", rect: BOX }),
+    ]);
+    expect(truncated).toBe(false);
+    expect(valuesOf(tree)).toEqual(["VISIBLECHILD", "VISIBLE_AFTER"]);
   });
 
   it("prunes a fully visibility:hidden subtree with no visible descendant (no phantom)", () => {
