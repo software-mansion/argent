@@ -5861,6 +5861,26 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       style: { contentVisibility: "hidden" },
     });
     expect(findById(run([own]).tree, "own")!.value).toBeUndefined();
+    // It skips nothing on an inline box, nor on display: contents, which has no box.
+    const unskipped = run([
+      el({
+        tag: "span",
+        rect: { x: 0, y: 0, w: 300, h: 20 },
+        style: { display: "inline", contentVisibility: "hidden" },
+        children: [row("in-inline", { x: 1, y: 1, w: 100, h: 20 })],
+      }),
+      el({
+        attrs: { id: "contents" },
+        text: "kept",
+        rect: ZERO,
+        content: { x: 1, y: 40, w: 60, h: 15 },
+        style: { display: "contents", contentVisibility: "hidden" },
+        children: [row("in-contents", { x: 1, y: 60, w: 100, h: 20 })],
+      }),
+    ]).tree;
+    expect(pxFrame(unskipped, "in-inline")).toEqual({ x: 1, y: 1, w: 100, h: 20 });
+    expect(pxFrame(unskipped, "in-contents")).toEqual({ x: 1, y: 60, w: 100, h: 20 });
+    expect(findById(unskipped, "contents")!.value).toBe("kept");
   });
 
   it("frames nothing in a closed <details> but its first <summary> child", () => {
