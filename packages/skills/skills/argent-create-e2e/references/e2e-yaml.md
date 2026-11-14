@@ -180,6 +180,8 @@ A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinc
 - `equals`: case-insensitive full match.
 - `matches`: case-sensitive JavaScript regex.
 
+On Chromium, text has the letter case the page shows: a button whose CSS `text-transform: uppercase` shows `Save` as `SAVE` reads as `SAVE`. Write a `matches` regex in that case.
+
 Use `equals` or an anchored regex when boundaries matter. For example, `contains: "Taps: 3"` also matches `Taps: 30`.
 
 Use `await` for an outcome that can take time. Its default is 7500 ms. Add a larger timeout only after the default expires. Use `assert` for settled state. It has a fixed 1000 ms grace and rejects `timeout`.

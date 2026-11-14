@@ -209,7 +209,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // JS \\s, minus U+FEFF: a zero-width no-break space must not collapse to a visible one.
   const WHITESPACE = /[^\\S\\uFEFF]+/g;
 
-  function ownText(el) {
+  // An element's text children in the case its style's text-transform lays them out in,
+  // and a rendered <br> as a space. Not in a ::first-letter's case: finding the block whose
+  // first letter a text holds would cost every text a climb through its ancestors' styles.
+  function ownText(el, style) {
     let s = "";
     for (const child of getChildNodes.call(el)) {
       // nodeType/nodeValue via the prototype getters, keeping the "every inherited
@@ -217,8 +220,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       // clobbering <form> whose named control shadows these to a control element.
       // (=== 3 already made a clobbered nodeType safe; this removes the lone
       // directly-read member so no read's safety rests on the comparison semantics.)
-      if (getNodeType.call(child) === 3) s += getNodeValue.call(child);
-      else if (isRenderedBr(child)) s += " ";
+      if (getNodeType.call(child) === 3) {
+        s += caseText(getNodeValue.call(child), style, () => laidBefore(child));
+      } else if (isRenderedBr(child)) s += " ";
     }
     return s.replace(WHITESPACE, " ").trim();
   }
@@ -2097,7 +2101,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // invisible — and treat it as box-less so it contributes no box of its own: it
     // survives only through, and is framed by, whatever visible descendants it has.
     const invisibleSelf = style.visibility !== "visible";
-    const text = invisibleSelf || closed || skipsContent(el, style) ? "" : ownText(el);
+    const text = invisibleSelf || closed || skipsContent(el, style) ? "" : ownText(el, style);
     const name = invisibleSelf ? null : accessibleName(el);
     const clickable = invisibleSelf ? false : isInteractive(el);
     const role = nodeRole(el);

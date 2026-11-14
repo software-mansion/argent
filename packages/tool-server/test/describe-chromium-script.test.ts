@@ -2043,6 +2043,32 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(read("logo")).toEqual({ label: "Logo", value: undefined });
   });
 
+  it("cases an element's own text by its text-transform, as Chrome lays it out", () => {
+    const value = (kids: unknown[], style: Record<string, string>, before: unknown[] = []) => {
+      const own = el({ tag: "span", rect: BOX, style, attrs: { id: "own" } });
+      own.childNodes = kids;
+      const wrap = el({ tag: "p", rect: BOX, children: [own] });
+      wrap.childNodes = [...before, own];
+      return findById(run([wrap]).tree, "own")!.value;
+    };
+    const upper = { display: "inline", textTransform: "uppercase" };
+    const capital = { display: "inline", textTransform: "capitalize" };
+    const br = el({ tag: "br", rect: BOX });
+    expect(value([text("save "), br, text("it")], upper)).toBe("SAVE IT");
+    expect(value([text("straße")], upper)).toBe("STRASSE");
+    expect(value([text("istanbul")], { ...upper, webkitLocale: '"tr"' })).toBe("İSTANBUL");
+    expect(value([text("SAVE It")], { display: "inline", textTransform: "lowercase" })).toBe(
+      "save it"
+    );
+    expect(value([text("Save it")], { display: "inline", textTransform: "none" })).toBe("Save it");
+    // Each text runs on from what is laid out before it.
+    expect(value([text("read more")], capital)).toBe("Read More");
+    expect(value([text("cd ef")], capital, [text("ab")])).toBe("cd Ef");
+    expect(value([text("cd ef")], capital, [text("ab ")])).toBe("Cd Ef");
+    const bold = el({ tag: "b", text: "bar", rect: BOX, style: capital });
+    expect(value([text("foo"), bold, text("baz qux")], capital)).toBe("Foobaz Qux");
+  });
+
   it("cases aria-labelledby text and ::before/::after strings by text-transform, as Chrome does", () => {
     const cased = (tag: string, kids: unknown[], style: Record<string, string>) => {
       const node = elementNode(tag, kids);
