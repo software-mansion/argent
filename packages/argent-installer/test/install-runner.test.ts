@@ -317,6 +317,11 @@ describe("install under Yarn 2+", () => {
         })
       ).rejects.toThrow(ExitCalled);
 
+      // Outside the project, so its yarnPath or `packageManager` pin cannot pick Yarn 2+.
+      expect(runShellCommand).toHaveBeenCalledWith(
+        { bin: "yarn", args: ["global", "add", "/tmp/argent.tgz"] },
+        { cwd: os.tmpdir() }
+      );
       expect(advice("Install manually with: ")).toBe(
         "Install manually with: yarn global add /tmp/argent.tgz (with Yarn classic, outside this Yarn 2+ project)"
       );
@@ -353,10 +358,11 @@ describe("install under Yarn 2+", () => {
       })
     ).rejects.toThrow(ExitCalled);
 
-    expect(runShellCommand).toHaveBeenCalledWith({
-      bin: "npm",
-      args: ["install", "-g", "@swmansion/argent"],
-    });
+    // npm keeps the caller's cwd: under nodenv or asdf it picks the Node.
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", "@swmansion/argent"] },
+      { cwd: undefined }
+    );
     const esc = String.fromCharCode(27);
     const advice = vi
       .mocked(p.log.info)
@@ -381,10 +387,11 @@ describe("install under Yarn 2+", () => {
       tel: makeTel(),
     });
 
-    expect(runShellCommand).toHaveBeenCalledWith({
-      bin: "npm",
-      args: ["install", "-g", "/tmp/argent.tgz"],
-    });
+    // npm keeps the caller's cwd: under nodenv or asdf it picks the Node.
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", "/tmp/argent.tgz"] },
+      { cwd: undefined }
+    );
   });
 
   it("updates an outdated global install with npm", async () => {
@@ -401,10 +408,11 @@ describe("install under Yarn 2+", () => {
       tel: makeTel(),
     });
 
-    expect(runShellCommand).toHaveBeenCalledWith({
-      bin: "npm",
-      args: ["install", "-g", "@swmansion/argent@99.0.0"],
-    });
+    // npm keeps the caller's cwd: under nodenv or asdf it picks the Node.
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", "@swmansion/argent@99.0.0"] },
+      { cwd: undefined }
+    );
   });
 
   it("adds a local devDependency with the project's yarn", async () => {

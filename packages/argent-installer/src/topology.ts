@@ -50,9 +50,8 @@ function isProjectBinPath(binaryPath: string): boolean {
   }
 }
 
-// Every permanent argent on PATH, in PATH order: temp-runner and project copies
-// are skipped so they do not mask a real global install.
-function getGlobalBinaryPaths(): string[] {
+// Every argent on PATH but a temp runner's, in PATH order.
+function getPermanentBinaryPaths(): string[] {
   try {
     const [cmd, args] =
       process.platform === "win32"
@@ -65,25 +64,33 @@ function getGlobalBinaryPaths(): string[] {
     return output
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .filter((line) => line && !isTempRunnerPath(line) && !isProjectBinPath(line));
+      .filter((line) => line && !isTempRunnerPath(line));
   } catch {
     return [];
   }
 }
 
+// Project copies are skipped too, so they do not mask a real global install.
+function getGlobalBinaryPaths(): string[] {
+  return getPermanentBinaryPaths().filter((line) => !isProjectBinPath(line));
+}
+
 /**
- * Path of the globally-installed argent binary, or null when argent is not
- * permanently on PATH.
+ * Whether a bare `argent` may still resolve for the editors, live here or
+ * not: a version-manager shim that fails in this directory can run another
+ * Node's global elsewhere, and a project's bin answers it too. Deciding to
+ * clear what those editor entries rely on needs this, not a live global.
  */
-export function getGlobalBinaryPath(): string | null {
-  return getGlobalBinaryPaths()[0] ?? null;
+export function isArgentOnPath(): boolean {
+  return getPermanentBinaryPaths().length > 0;
 }
 
 /**
  * The first live global argent on PATH: a link or pnpm shim that resolves to
  * the package, or a binary that still runs. A version-manager shim (nodenv's,
- * mise's) outlives the package until a reshim and then fails, so it is passed
- * over: an install behind it still counts.
+ * mise's) fails where no Node it selects has argent: until a reshim after an
+ * uninstall, or in a directory pinned to another Node. It is passed over: an
+ * install behind it still counts.
  */
 export function getRemainingGlobalBinaryPath(): string | null {
   for (const binaryPath of getGlobalBinaryPaths()) {
@@ -127,7 +134,7 @@ export function readShimScript(binaryPath: string): string | null {
   }
 }
 
-// pnpm's global bin is a shim script, not a link. pnpm 10+ ends it with a
+// pnpm's global bin is a shim script, not a link. pnpm 11+ ends it with a
 // `# cmd-shim-target=` line; older ones exec a path under `$basedir`.
 function shimTargetOf(binaryPath: string): string | null {
   const shim = readShimScript(binaryPath);
@@ -138,7 +145,7 @@ function shimTargetOf(binaryPath: string): string | null {
   return relative ? path.resolve(canonicalPath(path.dirname(binaryPath)), relative[1]!) : null;
 }
 
-function globalPackageRootOf(binaryPath: string): string | null {
+export function globalPackageRootOf(binaryPath: string): string | null {
   const root = packageRootOf(binaryPath);
   if (root) return root;
   const target = shimTargetOf(binaryPath);

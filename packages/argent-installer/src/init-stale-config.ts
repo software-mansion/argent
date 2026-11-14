@@ -1,6 +1,6 @@
 import pc from "picocolors";
 import { MCP_BINARY_NAME } from "./constants.js";
-import { isGloballyInstalled } from "./utils.js";
+import { isArgentOnPath } from "./utils.js";
 import { hasCustomizingEnv, type McpConfigAdapter, type McpServerEntry } from "./mcp-configs.js";
 
 interface StaleConfigCleanupResult {
@@ -57,7 +57,7 @@ export async function cleanupStaleMcpConfigs(args: {
   let removedCount = 0;
   let warnedCount = 0;
   // Hoisted: one PATH probe (a `which`/`where` subprocess) per run.
-  const globalArgentOnPath = isGloballyInstalled();
+  const globalArgentOnPath = isArgentOnPath();
 
   // No env that could make it resolvable inside the client (a custom PATH is
   // exactly what an nvm user adds) — so it is dead in every environment that

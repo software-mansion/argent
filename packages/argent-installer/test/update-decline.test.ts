@@ -221,7 +221,7 @@ describe("update — interactive decline", () => {
     expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
       "npm",
       ["install", "-g", "@swmansion/argent@99.0.0"],
-      expect.anything()
+      expect.not.objectContaining({ cwd: expect.anything() })
     );
   });
 
@@ -245,6 +245,11 @@ describe("update — interactive decline", () => {
 
       await expect(update([])).rejects.toThrow(ExitSentinel);
 
+      expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+        "yarn",
+        ["global", "add", "@swmansion/argent@99.0.0"],
+        expect.objectContaining({ cwd: os.tmpdir() })
+      );
       const esc = String.fromCharCode(27);
       const info = promptsMock.log.info.mock.calls.map((c: unknown[]) =>
         String(c[0])

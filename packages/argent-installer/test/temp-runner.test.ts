@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isGloballyInstalled } from "../src/utils.js";
-import { getGlobalBinaryPath } from "../src/topology.js";
+import { isArgentOnPath, isGloballyInstalled } from "../src/utils.js";
+import { getRemainingGlobalBinaryPath } from "../src/topology.js";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand } from "../src/shell.js";
 import type { InitTelemetry } from "../src/init-telemetry.js";
@@ -136,7 +136,7 @@ describe("isGloballyInstalled — temp package runners", () => {
       fs.writeFileSync(bin, "");
       process.env.npm_config_local_prefix = path.join(tmp, "project");
       whichFinds(`${bin}\n/usr/local/bin/argent`);
-      expect(getGlobalBinaryPath()).toBe("/usr/local/bin/argent");
+      expect(getRemainingGlobalBinaryPath()).toBe("/usr/local/bin/argent");
     } finally {
       if (savedPrefix === undefined) delete process.env.npm_config_local_prefix;
       else process.env.npm_config_local_prefix = savedPrefix;
@@ -153,6 +153,39 @@ describe("isGloballyInstalled — temp package runners", () => {
   it.each(GLOBAL_BINS)("counts a %s global install", (_pm, bin) => {
     whichFinds(bin);
     expect(isGloballyInstalled()).toBe(true);
+  });
+});
+
+describe("isArgentOnPath", () => {
+  beforeEach(() => {
+    childProcessMock.execFileSync.mockReset();
+  });
+
+  it.each(TEMP_RUNNER_BINS)("ignores the copy %s puts on PATH", (_runner, bin) => {
+    whichFinds(bin);
+    expect(isArgentOnPath()).toBe(false);
+  });
+
+  it("counts a project copy, which a bare `argent` runs", () => {
+    whichFinds(path.join(process.cwd(), "node_modules", ".bin", "argent"));
+    expect(isGloballyInstalled()).toBe(false);
+    expect(isArgentOnPath()).toBe(true);
+  });
+
+  it("counts a version-manager shim that fails in this directory", () => {
+    childProcessMock.execFileSync.mockImplementation((bin: string) => {
+      if (bin === "which") return "/home/u/.nodenv/shims/argent\n";
+      throw Object.assign(new Error("nodenv: argent: command not found"), { status: 127 });
+    });
+    expect(isGloballyInstalled()).toBe(false);
+    expect(isArgentOnPath()).toBe(true);
+  });
+
+  it("is false with no argent on PATH", () => {
+    childProcessMock.execFileSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    expect(isArgentOnPath()).toBe(false);
   });
 });
 
@@ -181,9 +214,9 @@ describe("init under pnpm dlx", () => {
       tel,
     });
 
-    expect(runShellCommand).toHaveBeenCalledWith({
-      bin: "pnpm",
-      args: ["add", "-g", "@swmansion/argent"],
-    });
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "pnpm", args: ["add", "-g", "@swmansion/argent"] },
+      { cwd: os.tmpdir() }
+    );
   });
 });

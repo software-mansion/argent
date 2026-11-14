@@ -20,9 +20,11 @@ import {
   formatShellCommand,
   getRemainingGlobalBinaryPath,
   getGloballyInstalledPackageRoot,
+  globalCommandCwd,
   globalUninstallCommand,
   localUninstallCommand,
   isDeclaredLocally,
+  isArgentOnPath,
   isGloballyInstalled,
   LEGACY_ARGENT_SKILL_NAMES,
   probeLocalInstall,
@@ -437,7 +439,7 @@ export async function uninstall(args: string[]): Promise<void> {
     // local-mode project keeps its project-scope entries (committed team files)
     // unless the local install itself is being removed.
     const scopesToClean = new Set<"local" | "global">(["local", "global"]);
-    if (globalPresent && !removeTargets.includes("global")) {
+    if (isArgentOnPath() && !removeTargets.includes("global")) {
       scopesToClean.delete("global");
       if (installMode === "global") scopesToClean.delete("local");
     }
@@ -676,9 +678,11 @@ export async function uninstall(args: string[]): Promise<void> {
         };
       }
       if (!globalPresent) return null;
+      const cmd = globalUninstallCommand(detectGlobalPackageManager(), PACKAGE_NAME);
       return {
         kind: "global",
-        cmd: globalUninstallCommand(detectGlobalPackageManager(), PACKAGE_NAME),
+        cmd,
+        cwd: globalCommandCwd(cmd),
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
         installDir: getGloballyInstalledPackageRoot(),
@@ -779,7 +783,7 @@ export async function uninstall(args: string[]): Promise<void> {
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
     // Only once no global install is left behind: clearing machine-wide state out
     // from under an installation the user kept would be wrong.
-    if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isGloballyInstalled())) {
+    if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isArgentOnPath())) {
       try {
         await resetLocalTelemetryState();
       } catch {

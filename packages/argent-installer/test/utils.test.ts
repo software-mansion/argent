@@ -28,11 +28,20 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     default: { ...actual, execSync: execSyncMock },
     execSync: execSyncMock,
-    // A win32-stubbed PATH probe runs `where`, which macOS and Linux lack.
-    execFileSync: ((bin: string, args: string[], opts: object) =>
-      bin === "where"
-        ? actual.execFileSync("which", ["-a", ...args], opts)
-        : actual.execFileSync(bin, args, opts)) as typeof actual.execFileSync,
+    // A win32-stubbed PATH probe runs `where`, which macOS and Linux lack. Like
+    // `where`, it also matches `<name>.exe`.
+    execFileSync: ((bin: string, args: string[], opts: object) => {
+      if (bin !== "where") return actual.execFileSync(bin, args, opts);
+      const found = [args[0]!, `${args[0]}.exe`].flatMap((name) => {
+        try {
+          return [String(actual.execFileSync("which", ["-a", name], opts))];
+        } catch {
+          return [];
+        }
+      });
+      if (found.length === 0) throw new Error(`where: ${args[0]} not found`);
+      return found.join("");
+    }) as typeof actual.execFileSync,
   };
 });
 
@@ -792,6 +801,24 @@ describe("detectGlobalPackageManager", () => {
       }
     );
 
+    it("returns bun over a global in a BUN_INSTALL_GLOBAL_DIR folder", () => {
+      putGlobalOnPath("bun-global/node_modules");
+      fs.writeFileSync(path.join(dir, "bun-global", "bun.lock"), "{}");
+      expect(detectGlobalPackageManager()).toBe("bun");
+    });
+
+    it("returns pnpm over a shim into a pnpm global-dir", () => {
+      const pkg = path.join(dir, "gd", "5", ".pnpm", "a@1", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.writeFileSync(path.join(dir, "gd", "5", "pnpm-lock.yaml"), "");
+      putScriptOnPath(
+        'exec node "$basedir/../gd/5/.pnpm/a@1/node_modules/@swmansion/argent/dist/cli.js" "$@"'
+      );
+      expect(detectGlobalPackageManager()).toBe("pnpm");
+    });
+
     it.each(LAUNCHERS)("returns pnpm over a pnpm shim under %s launcher", (_launcher, agent) => {
       setAgent(agent);
       putScriptOnPath(
@@ -825,6 +852,15 @@ describe("detectGlobalPackageManager", () => {
         expect(detectGlobalPackageManager()).toBe("npm");
       }
     );
+
+    it("returns npm through a relative link inside a linked PATH directory", () => {
+      // A stow-style folded dir: the link's `..` steps from its real directory.
+      fs.mkdirSync(path.join(dir, "dotfiles", "bin"), { recursive: true });
+      fs.symlinkSync("../../prefix/bin/argent", path.join(dir, "dotfiles", "bin", "argent"));
+      fs.symlinkSync(path.join(dir, "dotfiles", "bin"), path.join(dir, "stowed-bin"));
+      process.env.PATH = [path.join(dir, "stowed-bin"), "/usr/bin", "/bin"].join(path.delimiter);
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
 
     it.each(LAUNCHERS)("returns npm through a link to npm's bin under %s launcher", (_l, agent) => {
       setAgent(agent);
@@ -942,10 +978,10 @@ describe("detectGlobalPackageManager", () => {
     });
 
     describe("on Windows", () => {
-      function putWindowsShim(binDir: string, body: string): void {
+      function putWindowsShim(binDir: string, body: string, name = "argent"): void {
         fs.mkdirSync(path.join(dir, binDir), { recursive: true });
-        fs.writeFileSync(path.join(dir, binDir, "argent"), body);
-        fs.chmodSync(path.join(dir, binDir, "argent"), 0o755);
+        fs.writeFileSync(path.join(dir, binDir, name), body);
+        fs.chmodSync(path.join(dir, binDir, name), 0o755);
         process.env.PATH = `${path.join(dir, binDir)}:/usr/bin:/bin`;
         vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       }
@@ -968,7 +1004,7 @@ describe("detectGlobalPackageManager", () => {
       });
 
       it("returns bun over bun's .exe shim beside its .bunx", () => {
-        putWindowsShim(".bun/bin", "MZ");
+        putWindowsShim(".bun/bin", "MZ", "argent.exe");
         fs.writeFileSync(path.join(dir, ".bun", "bin", "argent.bunx"), "");
         expect(detectGlobalPackageManager()).toBe("bun");
       });

@@ -191,6 +191,25 @@ describe("uninstall — telemetry consent preservation", () => {
     expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
   });
 
+  it("counts nothing removed when a live global with no package root stays on PATH", async () => {
+    // A version manager's binary shim: it runs, but resolves to no package.
+    const shim = path.join(tmpDir, "volta", "bin", "argent");
+    writeFile(shim, "MZ");
+    childProcessMock.which.mockImplementation(() => `${shim}\n`);
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(process.exitCode).toBe(1);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
+        has_uninstalled_package: false,
+      })
+    );
+  });
+
   it("uninstalls the global package with npm when launched from Yarn 2+", async () => {
     process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
     process.chdir(tmpDir);
@@ -200,7 +219,7 @@ describe("uninstall — telemetry consent preservation", () => {
     expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
       "npm",
       ["uninstall", "-g", "@swmansion/argent"],
-      expect.any(Object)
+      expect.not.objectContaining({ cwd: expect.anything() })
     );
   });
 
@@ -229,7 +248,7 @@ describe("uninstall — telemetry consent preservation", () => {
       expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
         "yarn",
         ["global", "remove", "@swmansion/argent"],
-        expect.any(Object)
+        expect.objectContaining({ cwd: os.tmpdir() })
       );
       expect(childProcessMock.execFileSync).not.toHaveBeenCalledWith(
         "npm",
@@ -691,6 +710,33 @@ describe("uninstall — telemetry consent preservation", () => {
       ["remove", "@swmansion/argent"],
       expect.any(Object)
     );
+  });
+
+  it("gives a failed local yarn remove under Yarn 2+ no Yarn classic note", async () => {
+    const clack = await import("@clack/prompts");
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "host", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    const pkgDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    process.chdir(tmpDir);
+    childProcessMock.execFileSync.mockImplementation((bin: string) => {
+      if (bin === "yarn") throw new Error("YN0001: network error");
+      return undefined;
+    });
+
+    await uninstall(["--yes", "--local"]);
+
+    const info = vi.mocked(clack.log.info).mock.calls.map((c) => String(c[0]));
+    expect(info.filter((line) => line.includes("Yarn classic"))).toEqual([]);
+    expect(process.exitCode).toBe(1);
   });
 
   it("drains queued uninstall telemetry before deleting the local telemetry id", async () => {
@@ -1163,6 +1209,23 @@ describe("uninstall — local (committable) mode package removal", () => {
     expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
   });
 
+  it("keeps the local telemetry state when the global's version-manager shim fails here", async () => {
+    stageLocalProject();
+    process.chdir(tmpDir);
+    // A project pinned to a Node without argent: the global runs elsewhere.
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("exit 127"), { status: 127 });
+    });
+
+    await uninstall(["--yes", "--local"]);
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({ has_uninstalled_package: true })
+    );
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+  });
+
   it("resets the local telemetry state when the removed local install was the last one", async () => {
     stageLocalProject();
     process.chdir(tmpDir);
@@ -1306,6 +1369,21 @@ describe("uninstall — scoped config cleanup", () => {
 
     const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
     expect(calls.some(([, args]) => args.includes("-g"))).toBe(false);
+  });
+
+  it("--local keeps the global configs when the global's version-manager shim fails here", async () => {
+    stageProject({ materialized: true });
+    const { projectMcp, globalCursor } = stageConfigs();
+    process.chdir(projDir);
+    // A project pinned to a Node without argent: the global runs elsewhere.
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("exit 127"), { status: 127 });
+    });
+
+    await uninstall(["--yes", "--local"]);
+
+    expect(hasArgentEntry(projectMcp)).toBe(false);
+    expect(hasArgentEntry(globalCursor)).toBe(true);
   });
 
   // `npx skills add` links .kiro/skills/<name> -> ../../.agents/skills/<name>

@@ -25,6 +25,7 @@ import {
   isNewerVersion,
   detectGlobalPackageManager,
   detectProjectPackageManager,
+  globalCommandCwd,
   globalInstallCommand,
   localInstallCommand,
   probeLocalInstall,
@@ -448,7 +449,7 @@ export async function update(args: string[]): Promise<void> {
             // so they stay quiet and don't double-kill the tool server.
             env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
             // Local installs must rewrite the project's manifest/lockfile.
-            ...(mode === "local" ? { cwd: projectRoot } : {}),
+            cwd: mode === "local" ? projectRoot : globalCommandCwd(cmd),
           });
         },
         () => {

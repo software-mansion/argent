@@ -24,6 +24,7 @@ export {
   shellQuotePath,
   detectPackageManager,
   detectGlobalPackageManager,
+  globalCommandCwd,
   detectProjectPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
@@ -35,6 +36,7 @@ export type { PackageManager, ShellCommand } from "./package-manager.js";
 export { hasProjectPackageJson, isYarnPnp } from "./preflight.js";
 export {
   getRemainingGlobalBinaryPath,
+  isArgentOnPath,
   isGloballyInstalled,
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,

@@ -1,8 +1,14 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { canonicalPath } from "@argent/configuration-core";
 import { PACKAGE_NAME } from "./constants.js";
-import { getRemainingGlobalBinaryPath, packageRootOf, readShimScript } from "./topology.js";
+import {
+  getRemainingGlobalBinaryPath,
+  globalPackageRootOf,
+  packageRootOf,
+  readShimScript,
+} from "./topology.js";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
@@ -55,15 +61,16 @@ const BUN_GLOBAL_ROOT = new RegExp(
 // .bunx. A bin that resolves to no package is a shim script: pnpm's names its
 // global folder, so pnpm owns it. A shim that names no node_modules path
 // (nodenv's, asdf's) or is a binary (Volta's) runs a version manager's npm
-// global, so it keeps npm. Any other names a package outside npm's layout
-// (Yarn classic's) and gets `yarn`.
+// global, so it keeps npm. Any other global sits outside npm's layout: a
+// lockfile above it names its manager, which covers a folder moved by pnpm's
+// global-dir or BUN_INSTALL_GLOBAL_DIR, and with none it is Yarn classic's.
 export function detectGlobalPackageManager(): PackageManager {
   const binaryPath = getRemainingGlobalBinaryPath();
   if (!binaryPath) return isYarnBerryLauncher() ? "npm" : detectPackageManager();
   const root = packageRootOf(binaryPath);
   if (root) {
     if (isInNpmLayout(binaryPath, root)) return "npm";
-    return BUN_GLOBAL_ROOT.test(root) ? "bun" : "yarn";
+    return BUN_GLOBAL_ROOT.test(root) ? "bun" : (lockfileOwnerOf(root) ?? "yarn");
   }
   if (process.platform === "win32") {
     if (fs.existsSync(path.join(npmCopyBeside(path.dirname(binaryPath)), "package.json"))) {
@@ -73,7 +80,17 @@ export function detectGlobalPackageManager(): PackageManager {
   }
   const shim = readShimScript(binaryPath);
   if (shim === null || !/node_modules[\\/]/.test(shim)) return "npm";
-  return PNPM_GLOBAL_TARGET.test(shim) ? "pnpm" : "yarn";
+  if (PNPM_GLOBAL_TARGET.test(shim)) return "pnpm";
+  const target = globalPackageRootOf(binaryPath);
+  return (target ? lockfileOwnerOf(target) : null) ?? "yarn";
+}
+
+function lockfileOwnerOf(root: string): PackageManager | null {
+  for (let dir = path.dirname(root); path.dirname(dir) !== dir; dir = path.dirname(dir)) {
+    const pm = pmFromLockfile(dir);
+    if (pm) return pm;
+  }
+  return null;
 }
 
 function npmCopyBeside(binDir: string): string {
@@ -107,7 +124,7 @@ function isYarnBerryLauncher(): boolean {
 // Appended to a pasted `yarn global` command when the launcher is Yarn 2+, whose
 // own `yarn` rejects it.
 export function yarnClassicNote(cmd: ShellCommand): string {
-  return cmd.bin === "yarn" && isYarnBerryLauncher()
+  return cmd.bin === "yarn" && cmd.args[0] === "global" && isYarnBerryLauncher()
     ? " (with Yarn classic, outside this Yarn 2+ project)"
     : "";
 }
@@ -205,6 +222,15 @@ export function globalInstallCommand(pm: PackageManager, pkg: string): ShellComm
     default:
       return { bin: "npm", args: ["install", "-g", pkg] };
   }
+}
+
+// The cwd a global command runs in. yarn, pnpm and bun take their version and
+// config from the cwd's project (yarnPath, a corepack `packageManager` pin),
+// which can swap in Yarn 2+ or refuse to run, and their global folders do not
+// depend on it. npm keeps the caller's cwd: it ignores project config under -g,
+// and under nodenv or asdf the cwd picks the Node whose prefix holds the global.
+export function globalCommandCwd(cmd: ShellCommand): string | undefined {
+  return cmd.bin === "npm" ? undefined : os.tmpdir();
 }
 
 export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {

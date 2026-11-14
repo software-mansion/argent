@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import * as path from "node:path";
 import { track } from "@argent/telemetry";
 import {
   getInstalledVersion,
@@ -8,6 +9,7 @@ import {
   isNewerVersion,
   detectGlobalPackageManager,
   detectProjectPackageManager,
+  globalCommandCwd,
   globalInstallCommand,
   localInstallCommand,
   projectInstallCommand,
@@ -227,14 +229,14 @@ async function runGlobal(opts: {
     p.log.info(`Argent is not installed globally — installing.`);
     track("installation:global_install_decision", { decision: "install" });
 
-    const installTarget = fromTar ?? PACKAGE_NAME;
+    const installTarget = fromTar ? path.resolve(fromTar) : PACKAGE_NAME;
     const cmd = globalInstallCommand(pm, installTarget);
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing ${PACKAGE_NAME} globally...`);
     const packageActionStartedAt = performance.now();
     try {
-      await runShellCommand(cmd);
+      await runShellCommand(cmd, { cwd: globalCommandCwd(cmd) });
       spinner.stop(pc.green("Installed globally."));
       if (!isGloballyInstalled()) {
         p.log.warn(
@@ -246,7 +248,7 @@ async function runGlobal(opts: {
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
+      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
       await tel.trackPackageAction(
         "fresh_install",
         packageActionStartedAt,
@@ -262,12 +264,12 @@ async function runGlobal(opts: {
   if (fromTar) {
     // Developer-only reinstall (`--from`) — not a product install decision, so
     // no decision event.
-    const cmd = globalInstallCommand(pm, fromTar);
+    const cmd = globalInstallCommand(pm, path.resolve(fromTar));
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing from ${fromTar}...`);
     try {
-      await runShellCommand(cmd);
+      await runShellCommand(cmd, { cwd: globalCommandCwd(cmd) });
       spinner.stop(pc.green("Installed from tarball."));
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
     } catch (err) {
@@ -351,7 +353,7 @@ async function runGlobal(opts: {
         updateSpinner.start(`Updating to v${latest}...`);
         const updateStartedAt = performance.now();
         try {
-          await runShellCommand(cmd);
+          await runShellCommand(cmd, { cwd: globalCommandCwd(cmd) });
           updateSpinner.stop(pc.green(`Updated to v${latest}.`));
           version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
           await tel.trackPackageAction("init_triggered_update", updateStartedAt, true);

@@ -178,9 +178,9 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it.each([
-      ["pnpm 10+'s cmd-shim-target line", (pkg: string) => `# cmd-shim-target=${pkg}/dist/cli.js`],
+      ["pnpm 11+'s cmd-shim-target line", (pkg: string) => `# cmd-shim-target=${pkg}/dist/cli.js`],
       [
-        "pnpm 9's $basedir path",
+        "pnpm 9 and 10's $basedir path",
         () => 'exec node "$basedir/global/5/node_modules/@swmansion/argent/dist/cli.js" "$@"',
       ],
     ])("reads the version of a pnpm global through %s", (_shape, line) => {
