@@ -3287,7 +3287,7 @@ function assertFlowPathShape(flowPath: string): void {
   // anchor derived from the one canonical result would otherwise resolve
   // against the tool server's working directory, which is not the caller's.
   // The argent client resolves a relative e2e_test_path before sending it; a direct
-  // HTTP caller and an older client do not.
+  // HTTP caller, an older client and a `tool:` step run without a link do not.
   const windows = windowsPathRefusal("e2e_test_path", flowPath);
   if (windows) {
     throw new FailureError(windows, {

@@ -22,8 +22,9 @@ import type { InvokeToolOptions, Registry, ResolvedFileInput, ToolContext } from
  * `clientSecrets`, which a nested `type:` step resolves against. `extra` is
  * what a dispatcher decided for this one call, and a key in it wins over the
  * same key of `ctx`: `fileInputs`, the outcome of the file boundary it applied
- * to `args` itself (a `tool:` step whose files are on the client, or a nested
- * `flow-execute` whose flow and files the client sent with the outer call),
+ * to `args` itself (a `tool:` step's file arguments, read from the client or,
+ * without a link, from this host, or a nested `flow-execute` whose flow and
+ * files the client sent with the outer call),
  * forwarded as an HTTP call forwards it; `flowStack`; and `flowSecret`.
  * `ctx.fileInputs` and `ctx.linked` are never forwarded on their own: a
  * sub-tool call is not an HTTP call.

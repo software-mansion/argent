@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -227,7 +228,7 @@ export async function prepareToolStepInputs(
  * Wraps each file argument as an unlinked argent client does (stat, no
  * content), giving the tool a direct call's `ctx.fileInputs`; `e2e-execute`
  * and `e2e-read-prerequisite` refuse an `e2e_test_path` without them. A path
- * that is not a file fails the step. Other inputs (directories, apps, paths
+ * that is not a readable file fails the step. Other inputs (directories, apps, paths
  * built from several args) stay as written.
  */
 async function prepareHostFileArguments(
@@ -239,18 +240,24 @@ async function prepareHostFileArguments(
   if (fileArgs.length === 0) return { args, cleanup: async () => {} };
   const wrapped: Record<string, unknown> = { ...args };
   for (const file of fileArgs) {
-    const st = await stat(file.path).catch(() => null);
-    if (!st?.isFile()) {
+    const where = `"${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId})`;
+    let st: Stats;
+    try {
+      st = await stat(file.path);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        throw new FileInputError(`cannot read ${where}: ${escapeInline(String(code ?? err))}`);
+      }
       const relative =
         path.isAbsolute(file.path) || path.win32.isAbsolute(file.path)
           ? ""
           : isUnexpandedPath(file.path)
             ? `; nothing expands "~", variables, commands or URLs in a file argument, so pass the file's absolute path`
-            : `; a relative path is resolved against the tool server's working directory, not the e2e test's`;
-      throw new FileInputError(
-        `there is no file at "${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId})${relative}`
-      );
+            : `; a relative path is looked up in the tool server's working directory, not the e2e test's, so pass the file's absolute path`;
+      throw new FileInputError(`there is no file at ${where}${relative}`);
     }
+    if (!st.isFile()) throw new FileInputError(`${where} is not a file`);
     const wire: FileInputWire = {
       [FILE_INPUT_MARKER]: true,
       path: file.path,

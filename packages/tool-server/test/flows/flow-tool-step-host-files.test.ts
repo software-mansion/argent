@@ -107,7 +107,8 @@ describe("a tool: step with e2e_test_path, without a link", () => {
     expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toBe(
       `there is no file at "elsewhere/frag.yaml" (argument e2e_test_path of e2e-execute); a relative ` +
-        `path is resolved against the tool server's working directory, not the e2e test's`
+        `path is looked up in the tool server's working directory, not the e2e test's, so pass the ` +
+        `file's absolute path`
     );
   });
 
@@ -161,7 +162,42 @@ describe("a tool: step with e2e_test_path, without a link", () => {
 
     expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toBe(
-      `there is no file at "${dir}" (argument baselinePath of screenshot-diff)`
+      `"${dir}" (argument baselinePath of screenshot-diff) is not a file`
+    );
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "names the error of a file argument it cannot read, not a missing file",
+    async () => {
+      const locked = path.join(root, "locked");
+      await fs.mkdir(locked);
+      const frag = path.join(locked, "frag.yaml");
+      await fs.writeFile(frag, "steps: []\n", "utf8");
+      await fs.chmod(locked, 0o000);
+      try {
+        const result = await runOuter(
+          `  - tool: e2e-read-prerequisite\n    args: { e2e_test_path: ${frag}, project_root: ${root} }\n`
+        );
+
+        expect(result.steps[0].status).toBe("error");
+        expect(result.steps[0].reason).toBe(
+          `cannot read "${frag}" (argument e2e_test_path of e2e-read-prerequisite): EACCES`
+        );
+      } finally {
+        await fs.chmod(locked, 0o755);
+      }
+    }
+  );
+
+  it("says there is no file at a path one of whose directories is a file", async () => {
+    const frag = path.join(flowsDir, "elsewhere", "frag.yaml", "x.yaml");
+    const result = await runOuter(
+      `  - tool: e2e-read-prerequisite\n    args: { e2e_test_path: ${frag}, project_root: ${root} }\n`
+    );
+
+    expect(result.steps[0].status).toBe("error");
+    expect(result.steps[0].reason).toBe(
+      `there is no file at "${frag}" (argument e2e_test_path of e2e-read-prerequisite)`
     );
   });
 
