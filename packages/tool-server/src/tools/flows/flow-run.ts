@@ -2332,7 +2332,8 @@ function summarize(
     e2eTest: flowName,
     flow: flowName,
     device: deviceId,
-    executionPrerequisite,
+    // Flow-file text, printed on one line (`assumes:`, `Prerequisite:`).
+    executionPrerequisite: escapeInline(executionPrerequisite),
     // A cancelled run must never read as PASS — it may contain skips alone
     // (no fail/error report), so the verdict folds the abort in directly. A
     // skip by itself is NOT a failure: an unmet `when:` guard skips its block
