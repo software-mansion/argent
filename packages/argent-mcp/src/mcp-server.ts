@@ -44,7 +44,7 @@ import { listDevicesText } from "./list-devices-text.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
-import { createToolCaller } from "./tool-caller.js";
+import { createToolCaller, deadlineSignal } from "./tool-caller.js";
 
 export { fetchWithReconnect } from "./tool-caller.js";
 
@@ -169,7 +169,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         "await-screen-idle",
         { udid, timeoutMs: maxWaitMs },
         // The tool bounds its poll to maxWaitMs; the rest covers its setup.
-        { signal: AbortSignal.timeout(maxWaitMs + captureTimeoutMs) }
+        { signal: deadlineSignal(maxWaitMs + captureTimeoutMs) }
       );
       await spyLog({
         ts: new Date().toISOString(),
@@ -349,7 +349,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         }
       } else if (udid && (wantScreenshot || wantTree)) {
         const screenSettled = await awaitScreenSettled(udid, params.name);
-        const signal = AbortSignal.timeout(captureTimeoutMs);
+        const signal = deadlineSignal(captureTimeoutMs);
         const screenshot = wantScreenshot
           ? captureScreenshotBlocks(udid, signal)
           : Promise.resolve([]);

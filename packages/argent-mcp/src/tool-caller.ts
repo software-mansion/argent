@@ -1,8 +1,25 @@
-import { createToolsClient, type ToolMeta, type ToolsServerHandle } from "@argent/tools-client";
+import {
+  CALLER_DEADLINE_HEADER,
+  createToolsClient,
+  type ToolMeta,
+  type ToolsServerHandle,
+} from "@argent/tools-client";
 
 const MAX_RETRIES = 4;
 const EXP_BACKOFF_BASE = 250;
 const FETCH_TIMEOUT_MS = 30_000;
+
+const deadlines = new WeakMap<AbortSignal, number>();
+
+/**
+ * `AbortSignal.timeout(ms)` whose deadline {@link fetchWithReconnect} declares
+ * to the tool-server, so a hang-up at it counts as a timeout, not a cancel.
+ */
+export function deadlineSignal(ms: number): AbortSignal {
+  const signal = AbortSignal.timeout(ms);
+  deadlines.set(signal, performance.now() + ms);
+  return signal;
+}
 
 export async function fetchWithReconnect(
   getUrl: () => string,
@@ -35,7 +52,16 @@ export async function fetchWithReconnect(
       const signal = callerSignal
         ? AbortSignal.any([controller.signal, callerSignal])
         : controller.signal;
-      return await fetch(getUrl(), { ...attemptInit, signal });
+      const callerDeadline = callerSignal ? deadlines.get(callerSignal) : undefined;
+      const waitMs = Math.min(
+        fetchTimeoutMs ?? Infinity,
+        callerDeadline === undefined ? Infinity : callerDeadline - performance.now()
+      );
+      const headers = new Headers(attemptInit?.headers);
+      if (waitMs !== Infinity) {
+        headers.set(CALLER_DEADLINE_HEADER, String(Math.max(1, Math.ceil(waitMs))));
+      }
+      return await fetch(getUrl(), { ...attemptInit, headers, signal });
     } catch (err) {
       lastError = err;
       // The caller stopped waiting, so a retry would only queue work behind

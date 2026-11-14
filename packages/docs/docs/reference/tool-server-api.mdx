@@ -309,6 +309,23 @@ An argent client that is older than the tool-server sends no header and no membe
 
 Keep the client and the tool-server at the same version.
 
+## The `x-argent-deadline-ms` header
+
+The MCP server sends this header with each call that it stops waiting for at a time limit. The value is the number of milliseconds after the send at which the MCP server closes the connection. The value is the smaller of these limits:
+
+- The limit of one attempt, 30 seconds. A `longRunning` tool and a call that sends an upload have no such limit.
+- For the screenshot and the element tree after an interaction tool, the time that is left of the 15 seconds for the capture. See [Interacting](/docs/reference/tools#interacting).
+- For the wait until the screen stops changing, the longest time of that wait plus 15 seconds.
+
+When the connection closes before the result, the tool-server stops the tool. The tool-server then compares the time since the call arrived with the value minus 1 second:
+
+| Close of the connection                                | Class of the failure that the stop causes                   |
+| ------------------------------------------------------ | ----------------------------------------------------------- |
+| At or after that time                                  | The class that the tool gives, else `error_kind: "timeout"` |
+| Before that time, or for a call without a valid header | `error_kind: "cancelled"`                                   |
+
+The tool-server ignores a value that is not a positive integer.
+
 ## The `x-argent-client-secrets` header
 
 The client sends this header with a `POST /tools/<name>` call over a link when the `forward-secrets` flag is on and the call contains a `{{secret:NAME}}` placeholder. See [Secrets over a link](/docs/reference/configuration#secrets-over-a-link). The value is base64 text of a JSON object. Each key is a secret name, and each value is the secret value as a string:

@@ -10,6 +10,8 @@ import { randomUUID } from "node:crypto";
 // HOME is redirected before the import, so no case can reach the developer's
 // real link or tool-server state.
 let createToolCaller: typeof import("../src/tool-caller.js").createToolCaller;
+let deadlineSignal: typeof import("../src/tool-caller.js").deadlineSignal;
+let fetchWithReconnect: typeof import("../src/tool-caller.js").fetchWithReconnect;
 let TEST_HOME: string;
 const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
 
@@ -18,7 +20,8 @@ beforeAll(async () => {
   process.env.HOME = TEST_HOME;
   process.env.USERPROFILE = TEST_HOME;
   vi.resetModules();
-  ({ createToolCaller } = await import("../src/tool-caller.js"));
+  ({ createToolCaller, deadlineSignal, fetchWithReconnect } =
+    await import("../src/tool-caller.js"));
 });
 
 afterAll(() => {
@@ -306,6 +309,67 @@ describe("createToolCaller", () => {
     }
   });
 
+  it("declares the per-attempt timeout as the call's deadline", async () => {
+    const { callTool } = caller({ fetchTimeoutMs: 2_000 });
+
+    await callTool("hinted", {});
+
+    expect(postsTo("/tools/hinted")[0]!.headers["x-argent-deadline-ms"]).toBe("2000");
+  });
+
+  it("declares the deadline of a deadlineSignal when it comes first", async () => {
+    const { callTool } = caller({ fetchTimeoutMs: 2_000 });
+
+    await callTool("hinted", {}, { signal: deadlineSignal(500) });
+    await callTool("hinted", {}, { signal: deadlineSignal(60_000) });
+
+    const [first, second] = postsTo("/tools/hinted").map((r) =>
+      Number(r.headers["x-argent-deadline-ms"])
+    );
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThanOrEqual(500);
+    expect(second).toBe(2_000);
+  });
+
+  it("declares a deadline that passed before its timer fired as 1 ms", async () => {
+    const sent: Headers[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL, init?: RequestInit) => {
+        sent.push(new Headers(init?.headers));
+        return new Response("{}");
+      })
+    );
+    try {
+      const signal = deadlineSignal(1);
+      // Blocks the event loop past the deadline, so the timeout has not fired yet.
+      const until = performance.now() + 5;
+      while (performance.now() < until);
+      await fetchWithReconnect(
+        () => `${stub.url}/tools/fast`,
+        async () => {},
+        {
+          init: { signal },
+          fetchTimeoutMs: null,
+        }
+      );
+      expect(sent[0]!.get("x-argent-deadline-ms")).toBe("1");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("declares no deadline for a longRunning tool without a deadlineSignal", async () => {
+    const { callTool } = caller();
+
+    await callTool("slow", {}, { signal: AbortSignal.timeout(5_000) });
+    await callTool("slow", {}, { signal: deadlineSignal(5_000) });
+
+    const [plain, declared] = postsTo("/tools/slow");
+    expect(plain!.headers).not.toHaveProperty("x-argent-deadline-ms");
+    expect(Number(declared!.headers["x-argent-deadline-ms"])).toBeLessThanOrEqual(5_000);
+  });
+
   it("disables the per-attempt timeout for a longRunning tool", async () => {
     // The stub answers `slow` after 80 ms, past this per-attempt timeout.
     const { callTool, reconnect } = caller({ fetchTimeoutMs: 40 });
@@ -450,7 +514,9 @@ describe("createToolCaller", () => {
       ).resolves.toEqual({ result: { reinstalled: true, bundleId: "x" } });
 
       expect(slow.requests.filter((r) => r.url === "/upload")).toHaveLength(1);
-      expect(slow.requests.filter((r) => r.url === "/tools/reinstall-app")).toHaveLength(1);
+      const calls = slow.requests.filter((r) => r.url === "/tools/reinstall-app");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.headers).not.toHaveProperty("x-argent-deadline-ms");
       expect(reconnect).not.toHaveBeenCalled();
     } finally {
       await slow.close();

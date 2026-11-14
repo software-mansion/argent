@@ -596,6 +596,21 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(content.at(-1)!.text).toBe(`--- Elements after action (describe) ---\n${describeText}`);
   });
 
+  it("declares the capture budget as the deadline of each capture call", async () => {
+    await tap();
+
+    const deadline = (url: string) =>
+      Number(stub.requests.find((r) => r.url === url)!.headers["x-argent-deadline-ms"]);
+    expect(deadline("/tools/gesture-tap")).toBe(30_000);
+    const idleBudget = getAutoScreenshotDelayMs("gesture-tap") + CAPTURE_MS;
+    expect(deadline("/tools/await-screen-idle")).toBeGreaterThan(idleBudget - 500);
+    expect(deadline("/tools/await-screen-idle")).toBeLessThanOrEqual(idleBudget);
+    for (const url of ["/tools/screenshot", "/tools/describe"]) {
+      expect(deadline(url)).toBeGreaterThan(0);
+      expect(deadline(url)).toBeLessThanOrEqual(CAPTURE_MS);
+    }
+  });
+
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {
     await tap();
 
