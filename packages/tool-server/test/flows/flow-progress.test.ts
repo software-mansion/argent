@@ -173,6 +173,34 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
     }
   );
 
+  it.each([
+    ["a CRLF as one line break", "first\r\nsecond", "first\nsecond"],
+    ["a lone CR as a CR, beside a CRLF too", "first\r\r\nsecond\r", "first\\r\nsecond\\r"],
+  ])("reads %s in a reason", async (_what, message, spelled) => {
+    const registry = new Registry();
+    registry.registerTool({
+      id: "boom",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      async execute() {
+        throw new Error(message);
+      },
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "boom", args: {} }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps[0]!.reason).toBe(`[Tool:boom] ${spelled}`);
+  });
+
   it("streams nested fragment steps (run:) with their source-flow attribution", async () => {
     await writeFlow("login", {
       executionPrerequisite: "On login screen",

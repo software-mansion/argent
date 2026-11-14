@@ -2369,7 +2369,8 @@ function pushReport(state: ExecState, report: StepReport): void {
 }
 
 function escapeLines(text: string): string {
-  return text.split("\n").map(escapeInline).join("\n");
+  // A CRLF is a Windows line break, not a cursor move.
+  return text.split(/\r?\n/).map(escapeInline).join("\n");
 }
 
 /**
