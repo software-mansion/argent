@@ -1111,7 +1111,11 @@ async function rewriteSiblingFlowPath(
   ) {
     throw invalid(
       `it is not in the recording's e2e test directory ("${flowsDir}") or the project's other ` +
-        `e2e test directory`
+        `e2e test directory` +
+        (path.isAbsolute(flowPath)
+          ? ""
+          : `, as the tool server resolves a relative path against its own cwd ("${process.cwd()}"), ` +
+            `not the calling agent's - pass the absolute path`)
     );
   }
   // basename leaves a suffix in place when stripping it would leave nothing, and
