@@ -20,6 +20,7 @@ import {
   FailureError,
   getFailureSignal,
   getFailureSignalOrFallback,
+  isCallerDeadlineReason,
   withFailureSignal,
 } from "./errors";
 import { FAILURE_CODES } from "./failure-codes";
@@ -239,16 +240,19 @@ export class Registry {
           : new ToolExecutionError(toolId, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
-      // After the caller's abort, the cancel is a failure the tool did not
-      // classify, an AbortError it threw, or one carrying the abort's reason.
+      // A failure the caller's abort caused (an AbortError, or one carrying the
+      // abort's reason) is a cancel. When the caller hung up at the deadline it
+      // declared, it keeps the class the tool gave it, or else is a timeout.
       const signal = options?.signal;
       if (
         signal?.aborted &&
-        (!getFailureSignal(error) ||
-          (error instanceof Error && error.name === "AbortError") ||
-          hasCause(error, signal.reason))
+        ((error instanceof Error && error.name === "AbortError") || hasCause(error, signal.reason))
       ) {
-        withFailureSignal(wrappedError, CANCELLED_SIGNAL);
+        if (!isCallerDeadlineReason(signal.reason)) {
+          withFailureSignal(wrappedError, CANCELLED_SIGNAL);
+        } else if (!getFailureSignal(error)) {
+          withFailureSignal(wrappedError, TIMED_OUT_SIGNAL);
+        }
       }
       const failureSignal = getFailureSignalOrFallback(wrappedError);
       const failedMsg = formatInteractionMessage(
@@ -510,6 +514,13 @@ const CANCELLED_SIGNAL = {
   failure_stage: "registry_tool_cancelled",
   failure_area: "registry",
   error_kind: "cancelled",
+} as const;
+
+const TIMED_OUT_SIGNAL = {
+  error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_TIMED_OUT,
+  failure_stage: "registry_tool_timed_out",
+  failure_area: "registry",
+  error_kind: "timeout",
 } as const;
 
 /**

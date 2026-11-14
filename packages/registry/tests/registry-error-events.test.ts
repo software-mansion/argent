@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Registry } from "../src/registry";
 import { ServiceState } from "../src/types";
 import {
+  callerDeadlineReason,
   getFailureSignal,
   ServiceInitializationError,
   subprocessFailureMetadata,
@@ -245,7 +246,7 @@ describe("Registry — failure signals", () => {
       services: () => ({}),
       execute: async () => {
         controller.abort();
-        throw new Error("lift refused");
+        throw Object.assign(new Error("lift refused"), { name: "AbortError" });
       },
       interaction: {
         failedMsg: ({ failureSignal }: { failureSignal: { error_code: string } }) =>
@@ -265,15 +266,56 @@ describe("Registry — failure signals", () => {
     expect(failedMsg).toBe(`Failed to drag: ${FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED}`);
   });
 
-  it("classifies an unclassified failure after its caller's abort as cancelled", async () => {
+  it.each([
+    ["a cancel", () => undefined],
+    ["its deadline", callerDeadlineReason],
+  ])(
+    "classes a failure the abort did not cause as an execution failure after %s",
+    async (_label, reason) => {
+      const registry = new Registry();
+      const controller = new AbortController();
+      registry.registerTool({
+        id: "describe-tool",
+        services: () => ({}),
+        execute: async () => {
+          controller.abort(reason());
+          throw new TypeError("Cannot read properties of undefined");
+        },
+      } as never);
+
+      let emittedError: Error | null = null;
+      registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+        emittedError = error;
+      });
+
+      await expect(
+        registry.invokeTool("describe-tool", {}, { signal: controller.signal })
+      ).rejects.toThrow("Cannot read properties of undefined");
+
+      expect(getFailureSignal(emittedError)?.error_code).toBe(
+        FAILURE_CODES.REGISTRY_TOOL_EXECUTION_FAILED
+      );
+    }
+  );
+
+  it("keeps the class a tool derived from its caller's deadline", async () => {
     const registry = new Registry();
     const controller = new AbortController();
+    const ownSignal = {
+      error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
+      failure_stage: "simulator_server_network",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    } as const;
     registry.registerTool({
-      id: "adb-tool",
+      id: "fetching-tool",
       services: () => ({}),
       execute: async () => {
-        controller.abort();
-        throw new Error("adb exited with SIGTERM");
+        controller.abort(callerDeadlineReason());
+        throw withFailureSignal(
+          new Error("request timed out", { cause: controller.signal.reason }),
+          ownSignal
+        );
       },
     } as never);
 
@@ -283,12 +325,39 @@ describe("Registry — failure signals", () => {
     });
 
     await expect(
-      registry.invokeTool("adb-tool", {}, { signal: controller.signal })
-    ).rejects.toThrow("adb exited with SIGTERM");
+      registry.invokeTool("fetching-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("request timed out");
 
-    expect(getFailureSignal(emittedError)?.error_code).toBe(
-      FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED
-    );
+    expect(getFailureSignal(emittedError)).toEqual(ownSignal);
+  });
+
+  it("classifies an unclassified AbortError at the caller's deadline as timed out", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "gesture-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort(callerDeadlineReason());
+        throw Object.assign(new Error("Swipe cancelled"), { name: "AbortError" });
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("gesture-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("Swipe cancelled");
+
+    expect(getFailureSignal(emittedError)).toEqual({
+      error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_TIMED_OUT,
+      failure_stage: "registry_tool_timed_out",
+      failure_area: "registry",
+      error_kind: "timeout",
+    });
   });
 
   it("keeps the tool's own classification when it fails after the caller aborted", async () => {

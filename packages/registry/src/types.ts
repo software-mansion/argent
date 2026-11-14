@@ -20,6 +20,14 @@ export enum ServiceState {
 export const LINKED_CALL_HEADER = "x-argent-linked";
 
 /**
+ * The request header the MCP adapter sets on a call it stops waiting for at a
+ * deadline: the milliseconds after sending at which it hangs up. The
+ * tool-server reads a hang-up at that point as the caller's timeout, not as a
+ * cancel.
+ */
+export const CALLER_DEADLINE_HEADER = "x-argent-deadline-ms";
+
+/**
  * The request header the argent tools client sets to `1` on every call, to say
  * it writes client files under `.argent/e2e/`. The tool-server reads its absence
  * as {@link InvokeToolOptions.legacyE2eDir}. Remove one release after the rename,

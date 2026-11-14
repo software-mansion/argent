@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { FAILURE_CODES, Registry, withFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, Registry, callerDeadlineReason, withFailureSignal } from "@argent/registry";
 import { attachRegistryTelemetry } from "../src/registry-listener.js";
 import { sanitize } from "../src/sanitize.js";
 import { scopeHome } from "./helpers.js";
@@ -210,34 +210,54 @@ describe("attachRegistryTelemetry", () => {
     handle.detach();
   });
 
-  it("tracks a call its caller cancelled as a cancelled tool:fail", async () => {
-    const trackSpy = vi.spyOn(telemetry, "track");
-    const registry = new Registry();
-    const controller = new AbortController();
-    registry.registerTool({
-      id: "gesture-swipe",
-      services: () => ({}),
-      execute: async () => {
-        controller.abort();
-        throw Object.assign(new Error("Swipe cancelled"), { name: "AbortError" });
+  it.each([
+    {
+      ended: "cancelled",
+      reason: () => undefined,
+      signal: {
+        error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED,
+        failure_stage: "registry_tool_cancelled",
+        error_kind: "cancelled",
       },
-    });
-    const handle = attachRegistryTelemetry(registry);
+    },
+    {
+      ended: "timed out",
+      reason: callerDeadlineReason,
+      signal: {
+        error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_TIMED_OUT,
+        failure_stage: "registry_tool_timed_out",
+        error_kind: "timeout",
+      },
+    },
+  ])(
+    "tracks a call its caller $ended as a $signal.error_kind tool:fail",
+    async ({ reason, signal }) => {
+      const trackSpy = vi.spyOn(telemetry, "track");
+      const registry = new Registry();
+      const controller = new AbortController();
+      registry.registerTool({
+        id: "gesture-swipe",
+        services: () => ({}),
+        execute: async () => {
+          controller.abort(reason());
+          throw Object.assign(new Error("Swipe cancelled"), { name: "AbortError" });
+        },
+      });
+      const handle = attachRegistryTelemetry(registry);
 
-    await expect(
-      registry.invokeTool("gesture-swipe", {}, { signal: controller.signal })
-    ).rejects.toThrow("Swipe cancelled");
+      await expect(
+        registry.invokeTool("gesture-swipe", {}, { signal: controller.signal })
+      ).rejects.toThrow("Swipe cancelled");
 
-    const failProps = trackSpy.mock.calls.find(([event]) => event === "tool:fail")![1];
-    expect(sanitize("tool:fail", failProps as Record<string, unknown>)).toMatchObject({
-      tool: "gesture-swipe",
-      error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED,
-      failure_stage: "registry_tool_cancelled",
-      failure_area: "registry",
-      error_kind: "cancelled",
-    });
-    handle.detach();
-  });
+      const failProps = trackSpy.mock.calls.find(([event]) => event === "tool:fail")![1];
+      expect(sanitize("tool:fail", failProps as Record<string, unknown>)).toMatchObject({
+        tool: "gesture-swipe",
+        ...signal,
+        failure_area: "registry",
+      });
+      handle.detach();
+    }
+  );
 
   it("totalToolCalls counter increments per invocation", () => {
     const registry = new Registry();

@@ -161,6 +161,28 @@ export function wrapFailure(
   });
 }
 
+// Symbol.for, so a second copy of this module still reads the mark.
+const CALLER_DEADLINE = Symbol.for("argent.caller_deadline");
+
+/**
+ * The abort reason of a call whose caller hung up at the deadline it declared
+ * in `CALLER_DEADLINE_HEADER`. Tools match an abort by the AbortError name and
+ * the "aborted" in its message, so both stay; the registry reads the mark to
+ * class the failure as a timeout.
+ */
+export function callerDeadlineReason(): DOMException {
+  const reason = new DOMException(
+    "This operation was aborted at the caller's deadline",
+    "AbortError"
+  );
+  Object.defineProperty(reason, CALLER_DEADLINE, { value: true });
+  return reason;
+}
+
+export function isCallerDeadlineReason(reason: unknown): boolean {
+  return reason instanceof DOMException && CALLER_DEADLINE in reason;
+}
+
 const FAILURE_SIGNAL_NAME_SET = new Set<FailureSignalName>(FAILURE_SIGNAL_NAMES);
 
 const FAILURE_SPAWN_CODE_SET = new Set<FailureSpawnCode>(FAILURE_SPAWN_CODES);
