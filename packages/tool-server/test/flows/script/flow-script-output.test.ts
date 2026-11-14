@@ -152,6 +152,7 @@ describe("flow script executor — output validation", () => {
     ["new ArrayBuffer(1)", "an ArrayBuffer"],
     ["new Int8Array(1)", "an Int8Array"],
     ["Object.create({})", "an object with an unusual prototype"],
+    ["Object.create(Object.create(null))", "an object with an unusual prototype"],
   ])("names a non-plain output (%s) as %s", async (value, named) => {
     const result = await run(`output = ${value};`);
     expect(result.failure?.message).toBe(`output is ${named}; output must be a plain object`);
