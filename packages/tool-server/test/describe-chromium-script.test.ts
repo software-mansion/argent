@@ -3754,6 +3754,96 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(tree, "unpainted")).toBeNull();
   });
 
+  // A host in the card above whose shadow root nests `path`, outermost first, round a
+  // slot holding an in-flow, an absolute and a fixed row; `count` counts reads of path[0]'s style.
+  const collapsed = {
+    rect: { x: 1, y: 1, w: 200, h: 0 },
+    client: { left: 0, top: 0, width: 200, height: 0 },
+    style: { overflow: "hidden" },
+  };
+  const prunedSlot = (path: Opts[], count?: { n: number }) => {
+    const slot = el({ tag: "slot", rect: ZERO, style: { display: "contents" } });
+    const light = [
+      row("flow", { x: 1, y: 1, w: 100, h: 20 }),
+      row("abs", { x: 400, y: 450, w: 80, h: 20 }, { position: "absolute" }),
+      row("fixed", { x: 400, y: 400, w: 80, h: 20 }, { position: "fixed" }),
+    ];
+    for (const n of light) (n as Record<string, unknown>).assignedSlot = slot;
+    const outer = path.reduceRight((inner, o) => el({ ...o, children: [inner] }), slot);
+    if (count) {
+      const counted = outer as MockElement & Record<string, unknown>;
+      const style = counted.__style;
+      Object.defineProperty(counted, "__style", { get: () => (count.n++, style) });
+    }
+    const host = el({
+      tag: "x-host",
+      rect: { x: 1, y: 1, w: 285, h: 20 },
+      children: light,
+      shadow: [outer],
+    });
+    return run([scroller([host], { style: { overflow: "hidden" } })]).tree;
+  };
+
+  it("frames slotted content that escapes the clips of a pruned element round its slot", () => {
+    const frames = (path: Opts[]) => {
+      const tree = prunedSlot(path);
+      return ["flow", "abs", "fixed"].map((id) => findById(tree, id) && pxFrame(tree, id).h);
+    };
+    const restyle = (o: Opts, style: Record<string, string>) => ({
+      ...o,
+      style: { ...o.style, ...style },
+    });
+    const sliver = {
+      ...collapsed,
+      rect: { x: 1, y: 1, w: 0, h: 50 },
+      client: { left: 0, top: 0, width: 0, height: 50 },
+    };
+    const card = {
+      rect: { x: 0, y: 0, w: 300, h: 100 },
+      client: { left: 0, top: 0, width: 300, height: 100 },
+      style: { overflow: "hidden", position: "relative" },
+    };
+    const popup = { rect: { x: 1, y: 1, w: 100, h: 20 }, style: { position: "fixed" } };
+    const cases: [Opts[], (number | null)[]][] = [
+      [[collapsed], [null, 20, 20]],
+      [[sliver], [null, 20, 20]],
+      [[restyle(collapsed, { position: "relative" })], [null, null, 20]],
+      [[restyle(collapsed, { transform: "scale(2)" })], [null, null, null]],
+      // Clips above the pruned element still cut what escapes it.
+      [
+        [card, collapsed],
+        [null, 0, 20],
+      ],
+      // A fixed or top-layer box round the slot takes its content out of the clipper.
+      [
+        [collapsed, popup],
+        [20, 20, 20],
+      ],
+      [
+        [restyle(collapsed, { transform: "scale(2)" }), { ...popup, topLayer: ":popover-open" }],
+        [20, 20, 20],
+      ],
+      [
+        [collapsed, restyle(popup, { display: "none" })],
+        [null, null, null],
+      ],
+      [
+        [collapsed, restyle(popup, { opacity: "0" })],
+        [null, null, null],
+      ],
+      [[restyle(popup, { opacity: "0" })], [null, null, null]],
+    ];
+    for (const [path, expected] of cases)
+      expect(frames(path), JSON.stringify(path)).toEqual(expected);
+  });
+
+  it("reads a pruned element's style once however many nodes its slot holds", () => {
+    const count = { n: 0 };
+    prunedSlot([collapsed], count);
+    // Once for its own walk, once for its slot's clips.
+    expect(count.n).toBe(2);
+  });
+
   it("frames content a closed shadow root paints outside its host's clip", () => {
     // A custom element without an open shadow root: its light child either paints
     // where a closed root's slot sits (here a fixed popup) or in the host itself.

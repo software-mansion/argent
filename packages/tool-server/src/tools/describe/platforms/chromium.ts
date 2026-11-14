@@ -1084,11 +1084,33 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const slotClips = nodeMap();
   // A rendered legend takes its fieldset's own clips, wherever in the DOM it sits.
   const legendClips = nodeMap();
-  // Elements hidden() pruned: a slot inside one paints nothing.
+  // Elements hidden() pruned, each with the clips it was walked under.
   const pruned = nodeMap();
-  function inPruned(node) {
-    for (let n = node; n; n = getParentNode.call(n)) if (pruned.has(n)) return true;
-    return false;
+  // The clips a slot in a pruned element gives its nodes, found down its path from there
+  // as walk() finds them: null where it paints nothing, undefined outside pruned elements.
+  // Memoized: a slot's nodes share it.
+  const prunedSlots = nodeMap();
+  function prunedSlotClips(slot) {
+    if (prunedSlots.has(slot)) return prunedSlots.get(slot);
+    const path = [];
+    let n = slot;
+    for (; n && !pruned.has(n); n = getParentNode.call(n)) path.push(n);
+    let clips;
+    if (n) {
+      path.push(n);
+      clips = pruned.get(n);
+    }
+    for (let i = path.length - 1; clips && i >= 0; i--) {
+      const style = window.getComputedStyle(path[i]);
+      if (style.display === "none" || (style.display !== "contents" && style.opacity === "0")) {
+        clips = null;
+      } else {
+        if (inTopLayer(path[i], style)) clips = NO_CLIP;
+        clips = childClips(path[i], style, clips, ownClip(clips, style));
+      }
+    }
+    prunedSlots.set(slot, clips);
+    return clips;
   }
 
   // Each walked element's scrollers, its own last when it scrolls; the elements a
@@ -1901,7 +1923,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (!(el instanceof Element)) return null;
     const style = window.getComputedStyle(el);
     if (hidden(el, style)) {
-      pruned.set(el, true);
+      pruned.set(el, clips);
       return null;
     }
     // Charge the node budget only for elements that can actually EMIT. A
@@ -1958,8 +1980,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const summary = closed ? Array.prototype.find.call(kids, (k) => isHtml(k, "summary")) : null;
     for (let i = 0; i < kids.length; i++) {
       const slot = getAssignedSlot.call(kids[i]);
-      // A slot in a pruned subtree paints none of its assigned nodes.
-      if (slot && !slotClips.has(slot) && inPruned(slot)) continue;
+      const unwalked = slot && !slotClips.has(slot) ? prunedSlotClips(slot) : undefined;
+      // Of what a slot in a pruned element holds, only content escaping its clips paints.
+      const shown = unwalked && ownClip(unwalked, window.getComputedStyle(kids[i]));
+      if (
+        unwalked === null ||
+        (shown && (shown.right <= shown.left || shown.bottom <= shown.top))
+      ) {
+        continue;
+      }
       const kidClips =
         closed && kids[i] !== summary
           ? SKIPPED
@@ -1969,7 +1998,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
               ? legendClips.get(kids[i])
               : slot && slotClips.has(slot)
                 ? slotClips.get(slot)
-                : inner;
+                : unwalked || inner;
       const c = walk(kids[i], depth + 1, kidClips, closedHost && !slot);
       if (c) childResults.push(c);
     }
