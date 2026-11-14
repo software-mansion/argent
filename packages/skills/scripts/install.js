@@ -26,8 +26,8 @@ function gitRoot() {
 
 // Makes `path` a dir or, for a file, the dir copyFileSync writes it into.
 // mkdirSync fails on a dangling link anywhere in the path, so create what each
-// one ends at first, but only when that target's parent is on disk, as
-// resolveLinkedDestination in argent-installer does: a mistyped
+// one ends at first, but only when something is at that target's parent (a
+// dangling link there is completed the same way): a mistyped
 // `.claude/skills -> ../.agnets/skills` must fail, not build `.agnets/`.
 function prepare(path, isFile = false, hops = 0, link) {
   const stat = lstatSync(path, { throwIfNoEntry: false });
