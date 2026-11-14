@@ -23,6 +23,14 @@ afterEach(() => {
 });
 
 describe("install-skills script", () => {
+  it("creates .claude/skills in a project without one", () => {
+    execFileSync(process.execPath, [SCRIPT], { cwd: project, stdio: "pipe" });
+
+    expect(fs.readdirSync(path.join(project, ".claude", "skills")).sort()).toEqual(
+      fs.readdirSync(BUNDLED_SKILLS).sort()
+    );
+  });
+
   it("writes through a .claude/skills symlink into the canonical dir", () => {
     const canonical = path.join(project, ".agents", "skills");
     fs.mkdirSync(canonical, { recursive: true });
