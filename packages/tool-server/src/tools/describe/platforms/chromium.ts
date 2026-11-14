@@ -113,6 +113,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getDocBody = protoGetter(docProto, "body");
   const getRootNode = Node.prototype.getRootNode;
   const docElementsFromPoint = docProto.elementsFromPoint;
+  const docGetElementById = docProto.getElementById;
   const slotAssignedNodes = HTMLSlotElement.prototype.assignedNodes;
   // A document's named getter can shadow elementsFromPoint; a shadow root has none.
   function elementsAt(root, x, y) {
@@ -128,22 +129,30 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return t;
   }
 
-  // aria-labelledby id -> trimmed target text, or null for a missing id. Not a Map: a
-  // page script's own global Map shadows the builtin here.
-  const labelTexts = Object.create(null);
+  // Per document or shadow root, aria-labelledby id -> trimmed target text, or null for a
+  // missing id.
+  const labelTexts = nodeMap();
   const NAME_MAX = 200;
 
   // A blank aria-labelledby name or aria-label falls through to the next source.
   function accessibleName(el) {
     const labelledBy = getAttr.call(el, "aria-labelledby");
     if (labelledBy) {
+      // Its ids name elements in el's own tree. A document's named getter can shadow
+      // getElementById; a shadow root has none.
+      const root = getRootNode.call(el);
+      let texts = labelTexts.get(root);
+      if (!texts) labelTexts.set(root, (texts = Object.create(null)));
       const ids = labelledBy.split(/\\s+/);
       const parts = [];
       for (const id of ids) {
-        let text = labelTexts[id];
+        let text = texts[id];
         if (text === undefined) {
-          const ref = document.getElementById(id);
-          text = labelTexts[id] = ref ? labelText(ref).trim() : null;
+          const ref =
+            getNodeType.call(root) === 9
+              ? docGetElementById.call(root, id)
+              : root.getElementById(id);
+          text = texts[id] = ref ? labelText(ref).trim() : null;
         }
         if (text) parts.push(text);
       }

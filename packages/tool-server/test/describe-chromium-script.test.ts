@@ -155,7 +155,20 @@ nodeProto.contains = function (this: Record<string, unknown>, other: unknown): b
     (nodeProto.contains as (o: unknown) => boolean).call(k, other)
   );
 };
+// The element with an id among nodes and their descendants, by the backing __children
+// (the real children, unaffected by any structural clobber), not crossing into shadow trees.
+function elementWithId(nodes: unknown[], id: string): unknown {
+  for (const n of nodes as Record<string, unknown>[]) {
+    if (((n.__attrs as Record<string, string>) ?? {}).id === id) return n;
+    const found = elementWithId((n.__children as unknown[]) ?? [], id);
+    if (found) return found;
+  }
+  return null;
+}
 class MockDocument {
+  getElementById(this: { documentElement: unknown }, id: string): unknown {
+    return elementWithId([this.documentElement], id);
+  }
   createElementNS(ns: string, tag: string): MockElement {
     const svg = ns === "http://www.w3.org/2000/svg";
     const made: Record<string, typeof MockElement> = svg
@@ -302,6 +315,7 @@ function el(opts: Opts = {}): MockElement {
       host: node,
       children: opts.shadow,
       __childNodes: opts.shadow,
+      getElementById: (id: string) => elementWithId(opts.shadow!, id),
       elementsFromPoint: (x: number, y: number) => {
         // A script hit-testing one point over and over would otherwise hang the suite.
         if (++hitTests > 10_000) throw new Error("hit-tested a shadow root without end");
@@ -376,13 +390,15 @@ function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: str
   return node;
 }
 
-// `pageGlobals` are globals a page script defines, in scope while the script evaluates.
+// `pageGlobals` are globals a page script defines, in scope while the script evaluates;
+// `documentProps` are the document's own properties, as a named <form> shadows a method.
 function run(
   rootChildren: MockElement[],
   body: MockElement = el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H } }),
   rootStyle: Record<string, string> = {},
   compatMode = "CSS1Compat",
-  pageGlobals: Record<string, unknown> = {}
+  pageGlobals: Record<string, unknown> = {},
+  documentProps: Record<string, unknown> = {}
 ): { tree: unknown; truncated: boolean } {
   const root = el({
     tag: "html",
@@ -436,20 +452,6 @@ function run(
     nodeType: 9,
     documentElement: root,
     compatMode,
-    // Resolve aria-labelledby targets by walking the mock tree's backing __children
-    // (the real children, unaffected by any structural clobber) for a matching id.
-    getElementById: (id: string) => {
-      const find = (n: Record<string, unknown>): Record<string, unknown> | null => {
-        const attrs = (n.__attrs as Record<string, string>) ?? {};
-        if (attrs.id === id) return n;
-        for (const k of (n.__children as Record<string, unknown>[]) ?? []) {
-          const f = find(k);
-          if (f) return f;
-        }
-        return null;
-      };
-      return find(root);
-    },
     createRange: () => {
       let target: Record<string, unknown> | null = null;
       return {
@@ -499,6 +501,7 @@ function run(
       };
     },
   });
+  Object.assign(g.document as object, documentProps);
   (body as Record<string, unknown>).ownerDocument = g.document;
   root.parentNode = g.document;
   Object.assign(g, builtins, pageGlobals);
@@ -1681,6 +1684,51 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       expect(findById(tree, "b1")!.label).toBe("Shared");
       expect(findById(tree, "b2")!.label).toBe("Shared");
     }
+  });
+
+  it("resolves aria-labelledby ids in the control's own document or shadow root, as Chrome does", () => {
+    const field = (id: string, label: string) =>
+      el({
+        tag: "x-field",
+        rect: BOX,
+        shadow: [
+          el({ tag: "span", text: label, rect: BOX, attrs: { id: "lbl" } }),
+          el({ tag: "button", rect: BOX, attrs: { "id": id, "aria-labelledby": "lbl" } }),
+          el({
+            tag: "button",
+            rect: BOX,
+            attrs: { "id": `${id}-outside`, "aria-labelledby": "page", "aria-label": "Own" },
+          }),
+        ],
+      });
+    const { tree } = run([
+      el({ tag: "span", text: "Page", rect: BOX, attrs: { id: "lbl" } }),
+      el({ tag: "span", text: "Page only", rect: BOX, attrs: { id: "page" } }),
+      el({ tag: "button", rect: BOX, attrs: { "id": "doc", "aria-labelledby": "lbl" } }),
+      field("a", "Field A"),
+      field("b", "Field B"),
+    ]);
+    expect(findById(tree, "doc")!.label).toBe("Page");
+    expect(findById(tree, "a")!.label).toBe("Field A");
+    expect(findById(tree, "b")!.label).toBe("Field B");
+    expect(findById(tree, "a-outside")!.label).toBe("Own");
+  });
+
+  it("reads aria-labelledby on a page whose <form name=getElementById> shadows the document's", () => {
+    const form = el({ tag: "form", rect: BOX, attrs: { name: "getElementById" } });
+    const { tree } = run(
+      [
+        form,
+        el({ tag: "span", text: "Label", rect: BOX, attrs: { id: "lbl" } }),
+        el({ tag: "button", rect: BOX, attrs: { "id": "btn", "aria-labelledby": "lbl" } }),
+      ],
+      undefined,
+      {},
+      "CSS1Compat",
+      {},
+      { getElementById: form }
+    );
+    expect(findById(tree, "btn")!.label).toBe("Label");
   });
 
   it("falls back to the title when no aria-labelledby id resolves, however often", () => {
