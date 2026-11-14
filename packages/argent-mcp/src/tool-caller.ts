@@ -52,12 +52,16 @@ export async function fetchWithReconnect(
       const signal = callerSignal
         ? AbortSignal.any([controller.signal, callerSignal])
         : controller.signal;
+      const headers = new Headers(attemptInit?.headers);
+      // The tools client declares fetch's own idle timeout; a nearer limit of
+      // this attempt replaces it.
+      const declared = Number(headers.get(CALLER_DEADLINE_HEADER));
       const callerDeadline = callerSignal ? deadlines.get(callerSignal) : undefined;
       const waitMs = Math.min(
+        Number.isSafeInteger(declared) && declared > 0 ? declared : Infinity,
         fetchTimeoutMs ?? Infinity,
         callerDeadline === undefined ? Infinity : callerDeadline - performance.now()
       );
-      const headers = new Headers(attemptInit?.headers);
       if (waitMs !== Infinity) {
         headers.set(CALLER_DEADLINE_HEADER, String(Math.max(1, Math.ceil(waitMs))));
       }

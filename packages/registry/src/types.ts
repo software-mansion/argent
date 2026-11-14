@@ -20,10 +20,10 @@ export enum ServiceState {
 export const LINKED_CALL_HEADER = "x-argent-linked";
 
 /**
- * The request header the MCP adapter sets on a call it stops waiting for at a
- * deadline: the milliseconds after sending at which it hangs up. The
- * tool-server reads a hang-up at that point as the caller's timeout, not as a
- * cancel.
+ * The request header the argent clients set on every tool call: the
+ * milliseconds the caller waits for the next byte of the answer, the first
+ * included, before it hangs up. The tool-server reads a hang-up at that point
+ * as the caller's timeout, not as a cancel.
  */
 export const CALLER_DEADLINE_HEADER = "x-argent-deadline-ms";
 

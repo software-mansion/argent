@@ -359,15 +359,23 @@ describe("createToolCaller", () => {
     }
   });
 
-  it("declares no deadline for a longRunning tool without a deadlineSignal", async () => {
+  it("keeps fetch's own 300 s for a longRunning tool without a deadlineSignal", async () => {
     const { callTool } = caller();
 
     await callTool("slow", {}, { signal: AbortSignal.timeout(5_000) });
     await callTool("slow", {}, { signal: deadlineSignal(5_000) });
 
     const [plain, declared] = postsTo("/tools/slow");
-    expect(plain!.headers).not.toHaveProperty("x-argent-deadline-ms");
+    expect(plain!.headers["x-argent-deadline-ms"]).toBe("300000");
     expect(Number(declared!.headers["x-argent-deadline-ms"])).toBeLessThanOrEqual(5_000);
+  });
+
+  it("declares fetch's own 300 s when the per-attempt timeout is longer", async () => {
+    const { callTool } = caller({ fetchTimeoutMs: 600_000 });
+
+    await callTool("hinted", {});
+
+    expect(postsTo("/tools/hinted")[0]!.headers["x-argent-deadline-ms"]).toBe("300000");
   });
 
   it("disables the per-attempt timeout for a longRunning tool", async () => {
@@ -516,7 +524,7 @@ describe("createToolCaller", () => {
       expect(slow.requests.filter((r) => r.url === "/upload")).toHaveLength(1);
       const calls = slow.requests.filter((r) => r.url === "/tools/reinstall-app");
       expect(calls).toHaveLength(1);
-      expect(calls[0]!.headers).not.toHaveProperty("x-argent-deadline-ms");
+      expect(calls[0]!.headers["x-argent-deadline-ms"]).toBe("300000");
       expect(reconnect).not.toHaveBeenCalled();
     } finally {
       await slow.close();

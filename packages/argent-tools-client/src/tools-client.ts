@@ -11,6 +11,7 @@ import {
   secretSources,
 } from "@argent/configuration-core";
 import {
+  CALLER_DEADLINE_HEADER,
   CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LEGACY_E2E_DIRS,
@@ -446,6 +447,9 @@ export function secretsTransportRefusal(url: string): string | undefined {
 /** Upper bound of the head bytes fetch adds to a call's own headers and URL. */
 const FETCH_HEAD_BYTES = 256;
 
+/** How long Node's fetch waits for the head and for each chunk of the body (undici's defaults). */
+const FETCH_IDLE_TIMEOUT_MS = 300_000;
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -608,6 +612,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       // Tells the tool-server this client writes recordings under
       // `.argent/e2e/`; an older client writes only `.argent/flows/`.
       [E2E_DIR_CLIENT_HEADER]: "1",
+      // So the tool-server reads fetch's own hang-up as a timeout, not a cancel.
+      [CALLER_DEADLINE_HEADER]: String(FETCH_IDLE_TIMEOUT_MS),
       ...(encodedSecrets ? { [CLIENT_SECRETS_HEADER]: encodedSecrets } : {}),
       // A proxy that compresses the stream holds each line until its buffer
       // fills. `identity` keeps the stream uncompressed end to end.
