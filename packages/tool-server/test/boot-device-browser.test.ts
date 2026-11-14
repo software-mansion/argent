@@ -64,9 +64,12 @@ describe("boot-device browser", () => {
     expect(tool.interaction!.startedMsg!({ params: { browser: "edge" } } as never)).toBe(
       "Starting edge"
     );
-    expect(tool.interaction!.startedMsg!({ params: { udid: "", browser: "edge" } } as never)).toBe(
-      "Starting edge"
-    );
+    // Every empty target field is skipped, as the exactly-one check skips it.
+    for (const field of ["udid", "avdName", "vvdImage", "harmonyInstance", "electronAppPath"]) {
+      expect(
+        tool.interaction!.startedMsg!({ params: { [field]: "", browser: "edge" } } as never)
+      ).toBe("Starting edge");
+    }
   });
 
   it("rejects a browser outside the supported set at the schema", () => {

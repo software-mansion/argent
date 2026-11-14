@@ -818,8 +818,9 @@ export function chromiumRefusal(info: MacosAppInfo): string | null {
   }
   if (info.chromium === "browser") {
     return (
-      `${info.bundleId} is a Chromium browser: argent drives its web pages when the browser ` +
-      `runs with --remote-debugging-port (a Chromium device in list-devices), not as a Mac app.`
+      `${info.bundleId} is a Chromium browser: argent drives its web pages as a Chromium ` +
+      `device, not as a Mac app. Launch Chrome, Chromium, Edge or Brave through boot-device ` +
+      `with browser, or drive one already running with --remote-debugging-port.`
     );
   }
   return null;

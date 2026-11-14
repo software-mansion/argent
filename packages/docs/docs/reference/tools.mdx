@@ -66,7 +66,7 @@ On a local iOS simulator, `boot-device` fails if `simctl list` does not answer w
 - Windows: `Program Files`, `Program Files (x86)` and `LocalAppData`.
 - Linux: the directories in `PATH`.
 
-Argent starts the browser on a new, empty profile and deletes the profile after the browser exits. The browser opens `about:blank` unless `electronArgs` contains a URL. `electronArgs` adds arguments to the command line of the browser. For a browser without a window, put `--headless=new` in `electronArgs`. The tool fails in these cases:
+Argent starts the browser on a new, empty profile. Argent deletes the profile when the browser exits. If Argent stops before the browser exits, the next `boot-device` with `browser` deletes the profile. The browser opens `about:blank` unless `electronArgs` contains a URL. `electronArgs` adds arguments to the command line of the browser. For a browser without a window, put `--headless=new` in `electronArgs`. The tool fails in these cases:
 
 - The browser is not installed. The message names the supported browsers that are installed.
 - `electronArgs` contains `--user-data-dir`.
@@ -292,7 +292,7 @@ After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 secon
 `boot-device` fails in these cases:
 
 - The Mac runs a macOS older than 14.4.
-- The bundle is an Electron app or a Chromium browser. Use `electronAppPath` for an Electron app.
+- The bundle is an Electron app or a Chromium browser. Use `electronAppPath` for an Electron app, and `browser` for Chrome, Chromium, Edge or Brave.
 - The bundle is a Mac Catalyst app.
 - The bundle has the hardened runtime, and macOS does not load the Argent library into it. For a Debug build, the error names the steps of [The hardened runtime](/docs/features/mac-apps#the-hardened-runtime). For a Release build, the error says that Argent cannot drive the app.
 - The code signature has library validation, the `codesign` option `--options library`. The entitlement `com.apple.security.cs.disable-library-validation` does not turn it off. The error says to sign the app without this option.

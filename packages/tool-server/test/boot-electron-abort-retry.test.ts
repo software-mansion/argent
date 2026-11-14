@@ -178,6 +178,43 @@ describe("bootElectronApp", () => {
     expect(trackMock).not.toHaveBeenCalled();
   });
 
+  it("keeps a fixed port claimed until confirm settles", async () => {
+    const port = await pickFreePort();
+    spawnMock.mockImplementation(() => makeFakeChild());
+    readyMock.mockResolvedValue(undefined);
+    let confirmed: (() => void) | undefined;
+    const first = bootElectronApp({
+      appPath: appBinary,
+      port,
+      kind: "browser",
+      confirm: () => new Promise<void>((resolve) => (confirmed = resolve)),
+    });
+    await vi.waitFor(() => expect(confirmed).toBeDefined());
+    const second = await bootElectronApp({ appPath: appBinary, port, kind: "browser" }).catch(
+      (e: unknown) => e
+    );
+    expect((second as Error).message).toMatch(
+      new RegExp(`^Browser boot: another boot on port ${port} is still starting`)
+    );
+    confirmed!();
+    await expect(first).resolves.toMatchObject({ port });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails the boot when confirm throws, and frees the fixed port", async () => {
+    const port = await pickFreePort();
+    spawnMock.mockImplementation(() => makeFakeChild());
+    readyMock.mockResolvedValue(undefined);
+    await expect(
+      bootElectronApp({
+        appPath: appBinary,
+        port,
+        confirm: () => Promise.reject(new Error("not ours")),
+      })
+    ).rejects.toThrow("not ours");
+    await expect(bootElectronApp({ appPath: appBinary, port })).resolves.toMatchObject({ port });
+  });
+
   it("waits for a failed boot's dying child to free its fixed port before probing it again", async () => {
     const port = await pickFreePort();
     const first = makeFakeChild();

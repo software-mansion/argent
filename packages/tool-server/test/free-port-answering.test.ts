@@ -12,9 +12,13 @@ class FakeSocket extends EventEmitter {
   }
 }
 let socket: FakeSocket;
+let dialed: unknown;
 vi.mock("node:net", async () => ({
   ...(await vi.importActual<typeof import("node:net")>("node:net")),
-  connect: () => (socket = new FakeSocket()),
+  connect: (options: unknown) => {
+    dialed = options;
+    return (socket = new FakeSocket());
+  },
 }));
 
 import { isLoopbackPortAnswering } from "../src/utils/free-port";
@@ -29,6 +33,13 @@ describe("isLoopbackPortAnswering", () => {
     settle(socket);
     expect(await verdict).toBe(answering);
     expect(socket.destroy).toHaveBeenCalled();
+  });
+
+  // Chromium binds 127.0.0.1 first, so a listener on [::1] alone leaves the port free for it.
+  it("dials 127.0.0.1, not a name that may resolve to [::1]", () => {
+    void isLoopbackPortAnswering(9333);
+    expect(dialed).toEqual({ host: "127.0.0.1", port: 9333 });
+    socket.emit("connect");
   });
 
   it("gives the connect 500 ms by default", () => {

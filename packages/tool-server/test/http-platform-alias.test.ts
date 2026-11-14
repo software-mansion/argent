@@ -55,6 +55,11 @@ describe("http platform inference and the device alias", () => {
     expect(platformFromArgs({ vvdImage: "tv" })).toBe("vega");
   });
 
+  it("attributes a Mac app boot by its bundle path", () => {
+    expect(platformFromArgs({ macosAppPath: "/Applications/Foo.app" })).toBe("macos");
+    expect(platformFromArgs({ macosAppPath: "", browser: "chrome" })).toBe("chromium");
+  });
+
   it("skips an empty target field, as boot-device does", () => {
     expect(platformFromArgs({ electronAppPath: "", vvdImage: "tv" })).toBe("vega");
     expect(platformFromArgs({ avdName: "", browser: "chrome" })).toBe("chromium");

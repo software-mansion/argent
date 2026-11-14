@@ -262,14 +262,16 @@ describe("bootElectronApp onProcessGone / label", () => {
     await new Promise((r) => setTimeout(r, 20));
     child.stderr.emit(
       "data",
-      Buffer.from("Multiple targets are not supported in headless mode.\n")
+      Buffer.from(
+        "[13:ERROR:headless] exiting\nMultiple targets are not supported in headless mode.\n"
+      )
     );
     child.stderr.emit("end");
 
     const err = await boot;
     expect((err as Error).message).toBe(
       "Browser boot: child process exited with code 13 before CDP was ready. Its stderr ended " +
-        "with:\nline 2\nline 3\nMultiple targets are not supported in headless mode."
+        "with:\nline 3\n[13:ERROR:headless] exiting\nMultiple targets are not supported in headless mode."
     );
     expect(getFailureSignal(err)).toMatchObject({
       error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,

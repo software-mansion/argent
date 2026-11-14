@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FAILURE_CODES, FailureError, wrapFailure, type FailureSignal } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type FailureSignal } from "@argent/registry";
 import { browserWebSocketUrl } from "../../chromium-server/cdp-session";
 import { CDPClient } from "../../utils/debugger/cdp-client";
 import { pidIsAlive } from "../../utils/process-kill";
@@ -208,10 +208,31 @@ function removeStaleProfiles(): void {
     }
     // A browser exiting deletes its lock, so a fresh mtime may be a relaunch.
     const settled = Date.now() - mtimeMs >= RELAUNCH_GRACE_MS;
-    if (settled && !holderOf(dir, pidFile) && !profileLocked(dir)) {
-      fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => {});
-    }
+    if (settled && !holderOf(dir, pidFile) && !profileLocked(dir)) removeProfile(dir);
   }
+}
+
+/**
+ * The temp dir `dir`'s `SingletonSocket` links into, which a browser stopped by
+ * a signal leaves behind outside the profile. Only a dir holding nothing but
+ * Chromium's singleton files is the browser's own.
+ */
+function singletonSocketDir(dir: string): string | null {
+  try {
+    const socketDir = path.dirname(fs.readlinkSync(path.join(dir, "SingletonSocket")));
+    const own = fs
+      .readdirSync(socketDir)
+      .every((n) => n === "SingletonSocket" || n === "SingletonCookie");
+    return own ? socketDir : null;
+  } catch {
+    return null;
+  }
+}
+
+function removeProfile(dir: string): void {
+  const socketDir = singletonSocketDir(dir);
+  fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => {});
+  if (socketDir) fs.rm(socketDir, { recursive: true, force: true }, () => {});
 }
 
 /**
@@ -228,6 +249,9 @@ const IDENTITY_CHECK_FAILURE: FailureSignal = {
   failure_command: "cdp",
 };
 
+/** How long a browser's exit can trail the close of its CDP socket. */
+const EXIT_SETTLE_MS = 250;
+
 /**
  * Whether the browser answering on 127.0.0.1:`port` runs on `profileDir`. A
  * browser that loses 127.0.0.1 to one booting at the same moment in another
@@ -235,8 +259,8 @@ const IDENTITY_CHECK_FAILURE: FailureSignal = {
  */
 async function answersOnProfile(
   port: number,
-  pid: number,
   profileDir: string,
+  gone: Promise<void>,
   signal?: AbortSignal
 ): Promise<boolean> {
   const deadline = new AbortController();
@@ -253,13 +277,17 @@ async function answersOnProfile(
     )) as { commandLine?: string };
     // The random dir name is matched rather than the path, which Windows may quote.
     return commandLine?.includes(path.basename(profileDir)) ?? false;
-  })().catch((err: unknown) => {
-    throw wrapFailure(
-      err,
-      IDENTITY_CHECK_FAILURE,
+  })().catch(async (err: unknown) => {
+    const exited = await Promise.race([
+      gone.then(() => true),
+      new Promise<false>((resolve) => setTimeout(resolve, EXIT_SETTLE_MS, false).unref()),
+    ]);
+    throw new FailureError(
       `Browser boot: the browser on port ${port} ` +
-        `${holderAlive(pid) ? "could not be identified" : "exited"} right after it started: ` +
-        (err instanceof Error ? err.message : String(err))
+        `${exited ? "exited" : "could not be identified"} right after it started: ` +
+        (err instanceof Error ? err.message : String(err)),
+      IDENTITY_CHECK_FAILURE,
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   });
   let timer: NodeJS.Timeout | undefined;
@@ -359,7 +387,9 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     fs.rmSync(profileDir, { recursive: true, force: true });
     throw err;
   }
-  const result = await bootElectronApp({
+  let markGone!: () => void;
+  const gone = new Promise<void>((resolve) => (markGone = resolve));
+  return bootElectronApp({
     appPath: executable,
     port: options.port,
     kind: "browser",
@@ -373,41 +403,39 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
       ...(hasStartUrl ? [] : ["about:blank"]),
     ],
     onProcessGone: () => {
+      markGone();
       setTimeout(() => {
-        if (!profileLocked(profileDir)) {
-          fs.rm(profileDir, { recursive: true, force: true, maxRetries: 3 }, () => {});
-        }
+        if (!profileLocked(profileDir)) removeProfile(profileDir);
       }, RELAUNCH_GRACE_MS).unref();
     },
-  });
-  try {
-    fs.writeFileSync(path.join(profileDir, PID_FILE), `${BROWSER_PID_TAG}${result.pid}`);
-  } catch {
-    // The tool-server's pid it already holds keeps the profile until that exits.
-  }
-
-  const ours = await answersOnProfile(result.port, result.pid, profileDir, options.signal).catch(
-    async (err: unknown) => {
-      await killChromiumByPortAndWait(result.port);
-      throw err;
-    }
-  );
-  if (!ours) {
-    // The port stays tracked: the browser holding it is still a device.
-    await killChromiumByPortAndWait(result.port);
-    throw new FailureError(
-      `Browser boot: another browser took port ${result.port} on 127.0.0.1 while this one ` +
-        `started. ` +
-        (options.port === undefined
-          ? "Retry."
-          : "Pass another `electronPort`, or omit it to get a free port."),
-      {
-        error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
-        failure_stage: "browser_port_taken",
-        failure_area: "tool_server",
-        error_kind: "validation",
+    confirm: async (result) => {
+      try {
+        fs.writeFileSync(path.join(profileDir, PID_FILE), `${BROWSER_PID_TAG}${result.pid}`);
+      } catch {
+        // The tool-server's pid it already holds keeps the profile until that exits.
       }
-    );
-  }
-  return result;
+      const ours = await answersOnProfile(result.port, profileDir, gone, options.signal).catch(
+        async (err: unknown) => {
+          await killChromiumByPortAndWait(result.port);
+          throw err;
+        }
+      );
+      if (ours) return;
+      // The port stays tracked: the browser holding it is still a device.
+      await killChromiumByPortAndWait(result.port);
+      throw new FailureError(
+        `Browser boot: another browser took port ${result.port} on 127.0.0.1 while this one ` +
+          `started. ` +
+          (options.port === undefined
+            ? "Retry."
+            : "Pass another `electronPort`, or omit it to get a free port."),
+        {
+          error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
+          failure_stage: "browser_port_taken",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    },
+  });
 }

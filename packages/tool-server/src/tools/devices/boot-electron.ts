@@ -36,6 +36,11 @@ interface BootElectronOptions {
    * tool-server is alive.
    */
   onProcessGone?: () => void;
+  /**
+   * Runs on the ready process while a fixed port is still claimed; a throw
+   * fails the boot, and the hook stops the process itself.
+   */
+  confirm?: (result: ElectronBootResult) => Promise<void>;
 }
 
 type LauncherKind = "electron" | "browser";
@@ -365,7 +370,7 @@ async function portHeld(port: number): Promise<boolean> {
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
   const kind = options.kind ?? "electron";
   const port = options.port;
-  if (port === undefined) return bootOnce(options, kind);
+  if (port === undefined) return bootConfirmed(options, kind);
   if (bootingPorts.has(port)) {
     options.onProcessGone?.();
     throw portInUseError(
@@ -376,10 +381,19 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   }
   bootingPorts.add(port);
   try {
-    return await bootOnce(options, kind);
+    return await bootConfirmed(options, kind);
   } finally {
     bootingPorts.delete(port);
   }
+}
+
+async function bootConfirmed(
+  options: BootElectronOptions,
+  kind: LauncherKind
+): Promise<ElectronBootResult> {
+  const result = await bootOnce(options, kind);
+  await options.confirm?.(result);
+  return result;
 }
 
 async function bootOnce(

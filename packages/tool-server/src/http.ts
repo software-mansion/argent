@@ -267,9 +267,10 @@ function extractInvocationMeta(
 /**
  * Telemetry platform and device kind from a tool call's device arg, else from
  * the boot target it names (`avdName`, `harmonyInstance`, `electronAppPath`,
- * `browser`, `vvdImage`), or null when it carries neither. A device id refines
- * to `tvos` / `android-tv` once the runtime-kind cache is warm (coarse `ios` /
- * `android` until then); a boot target is always coarse and carries no kind.
+ * `browser`, `vvdImage`, `macosAppPath`), or null when it carries neither. A
+ * device id refines to `tvos` / `android-tv` once the runtime-kind cache is warm
+ * (coarse `ios` / `android` until then); a boot target is always coarse and
+ * carries no kind.
  * Exported for tests (http-platform-alias.test.ts).
  */
 export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | null {
@@ -280,10 +281,8 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
   // to resolve a runtime kind from, so it stays coarse `android`; later `udid` /
   // `device_id` calls refine an Android TV AVD once the cache is warm.
   // An empty field names no target: boot-device skips it too (an empty `browser` fails its enum).
-  const { avdName, harmonyInstance, electronAppPath, browser, vvdImage } = data as Record<
-    string,
-    unknown
-  >;
+  const { avdName, harmonyInstance, electronAppPath, browser, vvdImage, macosAppPath } =
+    data as Record<string, unknown>;
   const named = (v: unknown) => typeof v === "string" && v !== "";
   if (named(avdName)) return { platform: "android" };
   // HarmonyOS twin: an instance is named, not addressed.
@@ -291,6 +290,7 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
   // Electron apps and browsers boot as Chromium devices.
   if (named(electronAppPath) || named(browser)) return { platform: "chromium" };
   if (named(vvdImage)) return { platform: "vega" };
+  if (named(macosAppPath)) return { platform: "macos" };
   return null;
 }
 

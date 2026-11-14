@@ -2,13 +2,18 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { spawn, type ChildProcess } from "node:child_process";
 import { getEventListeners } from "node:events";
 import * as fs from "node:fs";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 
 const bootElectronAppMock = vi.fn();
 const killMock = vi.fn();
 vi.mock("../src/tools/devices/boot-electron", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/tools/devices/boot-electron")>()),
-  bootElectronApp: (opts: unknown) => bootElectronAppMock(opts),
+  // Runs `confirm` on the result, as the launcher does.
+  bootElectronApp: async (opts: { confirm?: (result: unknown) => Promise<void> }) => {
+    const result = await bootElectronAppMock(opts);
+    await opts.confirm?.(result);
+    return result;
+  },
   killChromiumByPortAndWait: (port: number) => killMock(port),
 }));
 
@@ -349,6 +354,38 @@ describe("bootBrowser", () => {
     holders.push(child);
     return child.pid!;
   };
+  // Chromium's singleton socket: a temp dir of its own that the profile links into.
+  const socketFor = (dir: string, ...extra: string[]) => {
+    const sock = fs.mkdtempSync(path.join(os.tmpdir(), "com.google.Chrome."));
+    for (const name of ["SingletonSocket", "SingletonCookie", ...extra]) {
+      fs.writeFileSync(path.join(sock, name), "");
+    }
+    fs.symlinkSync(path.join(sock, "SingletonSocket"), path.join(dir, "SingletonSocket"));
+    return sock;
+  };
+
+  it("deletes the singleton socket dir a browser stopped by a signal leaves behind", async () => {
+    installed.set(chrome!, "exec");
+    await bootBrowser({ browser: "chrome" });
+    await bootBrowser({ browser: "chrome" });
+    const [a, b] = bootElectronAppMock.mock.calls.map((c) => c[0]);
+    const dirA = profileDirOf(a.extraArgs)!;
+    const dirB = profileDirOf(b.extraArgs)!;
+    const sockA = socketFor(dirA);
+    // Not Chromium's alone, so not ours to delete.
+    const sockB = socketFor(dirB, "other");
+
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      a.onProcessGone();
+      b.onProcessGone();
+      vi.advanceTimersByTime(5000);
+    } finally {
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => expect([dirA, dirB, sockA].filter((d) => fs.existsSync(d))).toEqual([]));
+    expect(fs.existsSync(sockB)).toBe(true);
+  });
 
   it("gives every launch its own profile and deletes it once the process is gone", async () => {
     installed.set(chrome!, "exec");
@@ -444,6 +481,7 @@ describe("bootBrowser", () => {
 
     it("deletes only profiles that neither their tool-server nor a browser holds", async () => {
       const dead = make("argent-browser-dead", DEAD_PID);
+      const deadSocket = socketFor(dead);
       const crashed = make("argent-browser-crashed", DEAD_PID);
       lockFor(crashed, DEAD_PID);
       const live = make("argent-browser-live", process.pid);
@@ -498,6 +536,7 @@ describe("bootBrowser", () => {
         otherSnap,
         reusedLock,
         reusedPid,
+        deadSocket,
       ];
       await vi.waitFor(() => expect(gone.filter((d) => fs.existsSync(d))).toEqual([]));
       const kept = [live, locked, browser, noPidFile, foreign, justLeft, leftLately, otherHost];
@@ -515,15 +554,43 @@ describe("bootBrowser", () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       process.env["LOCALAPPDATA"] = "C:\\L";
       installed.set(browserExecutableCandidates("chrome", "win32")[0]!, "exec");
+      // Windows has no ps of its own, and one that cannot answer would keep every profile.
+      psBin.path = path.join(fakeHome.dir, "no-such-ps");
       try {
         await bootBrowser({ browser: "chrome" });
       } finally {
         delete process.env["LOCALAPPDATA"];
+        psBin.path = "";
       }
       await vi.waitFor(() =>
         expect([dead, deadBrowser, reusedPid].filter((d) => fs.existsSync(d))).toEqual([])
       );
       expect(fs.existsSync(locked)).toBe(true);
+    });
+
+    it("asks ps for the whole command line, which it cuts to the terminal width otherwise", async () => {
+      const browser = make("argent-browser-pswide");
+      fs.writeFileSync(path.join(browser, "argent-browser.pid"), `browser ${browserOn(browser)}`);
+      settle();
+      const ps = (
+        await vi.importActual<typeof import("../src/utils/vega-process")>(
+          "../src/utils/vega-process"
+        )
+      ).PS_BIN;
+      const narrowPs = path.join(fakeHome.dir, "narrow-ps");
+      fs.writeFileSync(
+        narrowPs,
+        `#!/bin/sh\nif [ "$1" = "-ww" ]; then exec ${ps} "$@"; fi\n${ps} "$@" | cut -c1-20\n`
+      );
+      fs.chmodSync(narrowPs, 0o755);
+      psBin.path = narrowPs;
+      try {
+        installed.set(chrome!, "exec");
+        await bootBrowser({ browser: "chrome" });
+      } finally {
+        psBin.path = "";
+      }
+      expect(rmCalls).not.toContain(browser);
     });
 
     describe("when ps cannot answer", () => {
@@ -844,11 +911,38 @@ describe("bootBrowser", () => {
 
   it("says the browser exited when it died during the identity check", async () => {
     installed.set(chrome!, "exec");
-    bootElectronAppMock.mockResolvedValue({ platform: "chromium", port: 9333, pid: DEAD_PID });
-    cdpSend.mockRejectedValue(new Error("CDP connection closed"));
-    await expect(bootBrowser({ browser: "chrome" })).rejects.toThrow(
+    // Its socket closes before its exit is reaped.
+    cdpSend.mockImplementation(async () => {
+      setTimeout(() => bootElectronAppMock.mock.lastCall![0].onProcessGone(), 50);
+      throw new Error("CDP connection closed");
+    });
+    const err = await bootBrowser({ browser: "chrome" }).catch((e: unknown) => e);
+    expect((err as Error).message).toBe(
       "Browser boot: the browser on port 9333 exited right after it started: CDP connection closed"
     );
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
+      failure_stage: "browser_identity_check",
+    });
+  });
+
+  it("names the identity check, not the CDP client, when a failure carries its own signal", async () => {
+    installed.set(chrome!, "exec");
+    cdpConnect.mockRejectedValue(
+      new FailureError("CDP connection closed", {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED,
+        failure_stage: "debugger_cdp_lifecycle",
+        failure_area: "tool_server",
+        error_kind: "network",
+      })
+    );
+    const err = await bootBrowser({ browser: "chrome" }).catch((e: unknown) => e);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
+      failure_stage: "browser_identity_check",
+      failure_command: "cdp",
+    });
+    expect((err as Error).message).toMatch(/could not be identified .*: CDP connection closed$/);
   });
 
   it("fails naming the browsers that are installed when the requested one is not", async () => {
