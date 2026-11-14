@@ -268,7 +268,8 @@ export async function setSimulatorEnv(udid: string, key: string, value: string):
 const REVERSE_START_RETRY_DELAYS_MS = [500, 2_000];
 // No retry starts later than this after the first attempt. Retries share the
 // first attempt's timeout, so retrying never ends a start later than one
-// attempt could.
+// attempt could, and the window leaves each most of it: a retry killed while
+// awaiting the orchestrator's reply leaves a rule there that nothing owns.
 const REVERSE_START_RETRY_WINDOW_MS = 5_000;
 
 /**
@@ -294,8 +295,8 @@ function isTransientReverseStartError(message: string): boolean {
  *
  * Idempotent: the daemon's "tunnel already active" for the same (udid, port)
  * counts as started, so blueprints don't have to track tunnel ownership across
- * service restarts. A request that never reached the orchestrator is retried
- * a bounded number of times.
+ * service restarts. A start whose connection was lost before its request was
+ * sent is retried a bounded number of times.
  */
 export async function reverseStart(udid: string, port: number): Promise<void> {
   const args = ["reverse", "start", stripRemotePrefix(udid), String(port)];
