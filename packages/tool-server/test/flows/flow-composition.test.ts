@@ -569,6 +569,30 @@ describe("flow composition (run:)", () => {
     );
   });
 
+  it("reports an echo message on one line whether it runs or is skipped", async () => {
+    await writeFlow("narrated", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "echo", message: "first\nsecond \u001b[31mred" },
+        { kind: "run", flow: "missing.yaml" },
+        { kind: "echo", message: "after\nthe failure" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "narrated", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.message}`)).toEqual([
+      "echo:pass:first\\nsecond \\u001b[31mred",
+      "run:error:undefined",
+      "echo:skip:after\\nthe failure",
+    ]);
+  });
+
   it("attributes a same-stem fragment on one line whether it loads or not", async () => {
     // Root login.yaml composing sub<LF>ok/login.yaml: on a stem collision the
     // attribution keeps the directory, line break included.

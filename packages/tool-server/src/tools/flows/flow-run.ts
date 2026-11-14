@@ -193,7 +193,7 @@ export interface StepReport {
   outputHint?: string;
   /** The args the tool ran with (device id injected). */
   args?: unknown;
-  /** Echo message. */
+  /** Echo message, control characters escaped. */
   message?: string;
   /**
    * The e2e test a step belongs to: the run's own name, or for a fragment (a
@@ -2497,7 +2497,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         ...(stopReason ? { reason: stopReason } : {}),
         // Carry the echo's message so a skipped narration renders as a skip
         // line rather than vanishing — matching reportBlockSkipped.
-        ...(step.kind === "echo" ? { message: step.message } : {}),
+        ...(step.kind === "echo" ? { message: escapeInline(step.message) } : {}),
       });
       // A block directive's literal steps are known — expand them so the report
       // keeps one line per authored step no matter where the stop landed.
@@ -2536,7 +2536,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         e2eTest: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
-        ...(step.kind === "echo" ? { message: step.message } : {}),
+        ...(step.kind === "echo" ? { message: escapeInline(step.message) } : {}),
       });
       const inner = blockSteps(step);
       if (inner) reportBlockSkipped(state, inner, childScope(scope), "run aborted");
@@ -2615,7 +2615,7 @@ function reportBlockSkipped(
       e2eTest: stepFlow(step, scope),
       target: stepTarget(step),
       ...depthOf(scope),
-      ...(step.kind === "echo" ? { message: step.message } : {}),
+      ...(step.kind === "echo" ? { message: escapeInline(step.message) } : {}),
     });
     const inner = blockSteps(step);
     if (inner) reportBlockSkipped(state, inner, childScope(scope), reason);
@@ -3007,7 +3007,7 @@ async function execLeafStep(
 
   switch (step.kind) {
     case "echo":
-      return { ...base, status: "pass", message: step.message };
+      return { ...base, status: "pass", message: escapeInline(step.message) };
 
     case "launch": {
       const r = await runLaunch(state, step.app);
