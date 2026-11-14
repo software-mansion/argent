@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
+import * as http from "node:http";
+import type { ReadStream } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, truncate, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { ArtifactStore } from "@argent/registry";
 import type { Registry } from "@argent/registry";
 
 const isFlagEnabledMock = vi.hoisted(() => vi.fn(() => false));
+const readStreams = vi.hoisted(() => [] as ReadStream[]);
 
 // supertest/superagent doesn't buffer binary bodies (gzip) by default.
 function binaryParser(res: NodeJS.ReadableStream, cb: (err: Error | null, body: Buffer) => void) {
@@ -31,6 +35,19 @@ vi.mock("../src/utils/update-checker", () => ({
 vi.mock("@argent/configuration-core", () => ({
   isFlagEnabled: isFlagEnabledMock,
 }));
+
+// Records each file stream the route opens, so a test can see whether it was released.
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    createReadStream: ((...args: Parameters<typeof actual.createReadStream>) => {
+      const stream = actual.createReadStream(...args);
+      readStreams.push(stream);
+      return stream;
+    }) as typeof actual.createReadStream,
+  };
+});
 
 // A minimal Registry carrying a real ArtifactStore — the `/artifacts/:id` route
 // resolves files from `registry.artifacts`, so the test registers into the same
@@ -311,6 +328,40 @@ describe("GET /artifacts/:id", () => {
       expect(res.headers["content-disposition"]).toBeUndefined();
       expect(res.body).toEqual({ error: `Failed to read artifact "${artifact.id}"` });
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("closes the file when the client aborts mid-download", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "artifact-abort-"));
+    const server = http.createServer();
+    try {
+      const filePath = join(dir, "big.bin");
+      // Far more than the socket buffers hold, so the route is still reading when the client leaves.
+      await writeFile(filePath, "");
+      await truncate(filePath, 64 * 1024 * 1024);
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({ hostPath: filePath, kind: "screenshot" });
+      handle = createHttpApp(registry);
+      server.on("request", handle.app);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      readStreams.length = 0;
+
+      await new Promise<void>((resolve) => {
+        const req = http.get(`http://127.0.0.1:${port}/artifacts/${artifact.id}`, (res) => {
+          res.on("error", () => {});
+          res.once("data", () => req.destroy());
+        });
+        req.on("error", () => {});
+        req.on("close", resolve);
+      });
+
+      expect(readStreams).toHaveLength(1);
+      await vi.waitFor(() => expect(readStreams[0]!.closed).toBe(true), { timeout: 2_000 });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(dir, { recursive: true, force: true });
     }
   });

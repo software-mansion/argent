@@ -77,6 +77,8 @@ export function makeArtifactRoute(registry: Registry) {
       if (!res.headersSent) sendDownloadError(res, `Failed to read artifact "${id}"`);
       else res.destroy();
     });
+    // pipe() leaves the file open when the client aborts mid-download.
+    res.on("close", () => stream.destroy());
     stream.pipe(res);
   };
 }
