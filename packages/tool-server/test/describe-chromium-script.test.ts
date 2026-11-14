@@ -4091,9 +4091,10 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     // A row overflowing both sides of a cell that contains absolute boxes, its offsetParent.
     const cell = (id: string, style: Record<string, string>, y: number) => {
       const rect = { x: 400, y, w: 100, h: 20 };
-      const box = clipper(rect, rect, { width: 130, height: 20 }, []);
+      const kid = row(id, { x: 380, y, w: 150, h: 20 });
+      const box = clipper(rect, rect, { width: 130, height: 20 }, [kid]);
       Object.assign((box as unknown as Record<string, unknown>).__style as object, style);
-      box.children = [laidOut(row(id, { x: 380, y, w: 150, h: 20 }), box)];
+      laidOut(kid, box);
       return box;
     };
     // An inline parent has no scrollable overflow of its own.
