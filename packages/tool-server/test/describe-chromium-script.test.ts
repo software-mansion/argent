@@ -4010,6 +4010,31 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(hitTests(50)).toBe(1);
   });
 
+  it("keeps apart the hits of probe points that share an x or a y", () => {
+    // Each pair probes outside the card's clip at one x (below it) or one y (beside it);
+    // only the second row of a pair paints there.
+    for (const [first, second] of [
+      [
+        { x: 1, y: 150, w: 200, h: 20 },
+        { x: 1, y: 300, w: 200, h: 20 },
+      ],
+      [
+        { x: 400, y: 50, w: 100, h: 20 },
+        { x: 600, y: 50, w: 100, h: 20 },
+      ],
+    ]) {
+      const { tree } = run([
+        scroller([
+          row("unpainted", first),
+          el({ attrs: { id: "popped" }, rect: second, painted: second }),
+        ]),
+      ]);
+      const cut = pxFrame(tree, "unpainted");
+      expect(Math.min(cut.w, cut.h)).toBe(0);
+      expect(pxFrame(tree, "popped")).toEqual(second);
+    }
+  });
+
   it("hit-tests no light child whose offsetParent and box show its parent laid it out", () => {
     const body = el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H } });
     const laidOut = (n: MockElement, offsetParent: unknown = body) => {
