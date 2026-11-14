@@ -142,7 +142,7 @@ describe("diffPngFiles", () => {
       const lines = result.summary.split("\n");
       expect(lines).toContain("- status: dimension_mismatch");
       expect(lines).toContain(
-        "  - only images of identical dimensions are compared; capture both on the same device model, in the same orientation, at the same screenshot scale (live captures use scale: 1.0)"
+        "  - only images of identical dimensions are compared; capture both with the same device model, orientation, foldable posture and screenshot scale (live captures use scale: 1.0) and, on a Mac app, the same window size, counting a sheet, popover, alert or menu reaching past it"
       );
       expect(result.diffPath).toBeUndefined();
       expect(result.contextDiffPath).toBeUndefined();

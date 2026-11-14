@@ -27,7 +27,7 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   if (result.dimensionMismatch) {
     lines.push(
       `- dimension_mismatch: expected=${formatSize(result.dimensionMismatch.expected)} actual=${formatSize(result.dimensionMismatch.actual)}`,
-      "  - only images of identical dimensions are compared; capture both on the same device model, in the same orientation, at the same screenshot scale (live captures use scale: 1.0)"
+      "  - only images of identical dimensions are compared; capture both with the same device model, orientation, foldable posture and screenshot scale (live captures use scale: 1.0) and, on a Mac app, the same window size, counting a sheet, popover, alert or menu reaching past it"
     );
   } else {
     lines.push(
