@@ -610,6 +610,20 @@ describe("fill page script", () => {
     expect(child.innerText).toBe("x");
   });
 
+  it("fills an editing host at the top of an open shadow root, which has no parent element", async () => {
+    const page = makePage();
+    const root: any = {
+      host: { getRootNode: () => page.doc },
+      getSelection: () => page.doc.getSelection(),
+    };
+    const field = editable(page, { parentElement: null, getRootNode: () => root });
+    const text = { getRootNode: () => root };
+    page.doc.caret = { anchorNode: text, anchorOffset: 0, focusNode: text, focusOffset: 0 };
+    page.doc.activeElement = { tagName: "X-EDITOR", shadowRoot: { activeElement: field } };
+    await expect(runScript(page, "x")).resolves.toEqual({ status: "ok", verified: true });
+    expect(field.innerText).toBe("x");
+  });
+
   // A host that can hold focus itself, second in its parent, with the selection placed at `at`.
   const selfFocusableHost = (
     page: Page,
