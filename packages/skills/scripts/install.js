@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Copies skills/ and agents/ into .claude/ at the nearest git root (cwd if none). */
+/** Copies skills/ into .claude/skills at the nearest git root (cwd if none). */
 import { execSync } from "node:child_process";
 import {
   copyFileSync,
@@ -15,7 +15,6 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const skillsDir = join(__dirname, "..", "skills");
-const agentsDir = join(__dirname, "..", "agents");
 
 function gitRoot() {
   try {
@@ -53,14 +52,6 @@ function copyInto(src, dest) {
   }
 }
 
-const root = gitRoot();
-
-const skillsTarget = join(root, ".claude", "skills");
+const skillsTarget = join(gitRoot(), ".claude", "skills");
 copyInto(skillsDir, skillsTarget);
 console.log(`Installed skills to ${skillsTarget}`);
-
-if (existsSync(agentsDir)) {
-  const agentsTarget = join(root, ".claude", "agents");
-  copyInto(agentsDir, agentsTarget);
-  console.log(`Installed agents to ${agentsTarget}`);
-}
