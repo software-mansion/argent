@@ -2921,6 +2921,21 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(unseen, "cut")!.clipAnchors).toEqual(fallback);
   });
 
+  it("anchors a cut that also runs off screen by its part on screen", () => {
+    // A pane twice the screen's width cuts the row at the screen's bottom, and the row
+    // runs past its right edge; no wheel is seen to reach the pane.
+    const offRight = el({ attrs: { id: "cut" }, rect: { x: 800, y: 950, w: 800, h: 100 } });
+    const pane = scroller([offRight], {
+      rect: { x: 0, y: 0, w: 2 * W, h: H },
+      client: { left: 0, top: 0, width: 2 * W - 15, height: H },
+      offset: { width: 2 * W, height: H },
+      scrollSize: { width: 2 * W - 15, height: 2 * H },
+    });
+    const { tree } = run([pane]);
+    expect(pxFrame(tree, "cut", "clipBounds")).toEqual({ x: 0, y: 0, w: W, h: H });
+    expect(findById(tree, "cut")!.clipAnchors).toEqual({ y: { x: 0.9, y: 0.5 } });
+  });
+
   it("anchors a cut in a strip beside the box every grid point lands on", () => {
     const LIST = { x: 0, y: 0, w: 300, h: 200 };
     const list = (kids: MockElement[]) =>
@@ -3351,6 +3366,19 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "kid", "clipBounds")).toEqual(window);
     expect(findById(tree, "kid")!.clipAnchors!).toHaveProperty("y");
     expect(pxFrame(tree, "text", "clipBounds")).toEqual(window);
+    // A wrapper spans its box-less children's extents, of those that have one.
+    const nested = run([
+      scroller([
+        contents("outer", [
+          contents("inner", [el({ rect: { x: 1, y: -19, w: 285, h: 40 } })]),
+          contents("escaping", [
+            el({ rect: { x: 1, y: 60, w: 200, h: 20 }, style: { position: "absolute" } }),
+          ]),
+        ]),
+      ]),
+    ]).tree;
+    expect(pxFrame(nested, "outer", "clipBounds")).toEqual(window);
+    expect(findById(nested, "escaping")!.clipBounds).toBeUndefined();
     // An absolute child takes the outer scroller's clips, so the inner one does not cut it.
     const escaping = run([
       scroller(
@@ -5791,6 +5819,11 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(
       pxFrame(nested({ rotate: "90deg", transformOrigin: "150px 130px" }, turned), "moved")
     ).toEqual(turned);
+    // rotate(90deg) about its top-left corner turns it clockwise: x 40..100, y 100..200.
+    const swung = { x: 45, y: 105, w: 50, h: 90 };
+    expect(
+      pxFrame(nested({ rotate: "90deg", transformOrigin: "100px 100px" }, swung), "moved")
+    ).toEqual(swung);
   });
 
   it("clips everything under an HTML clipper whose padding box is empty", () => {
