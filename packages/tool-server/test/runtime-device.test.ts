@@ -97,6 +97,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A probe that never settles times out its test before any `finally` runs,
+  // so the fakes are undone here, not left on for the rest of the file.
+  vi.useRealTimers();
+  vi.mocked(listIosSimulators).mockReset();
   deviceLogs.clear();
   adb.readDelayMs.clear();
   adb.failing.clear();
@@ -138,14 +142,11 @@ describe("findRuntimeDevices", () => {
   // The simulator listing is refused while Xcode's install is pending.
   it("still answers when the simulator listing is refused", async () => {
     vi.mocked(listIosSimulators).mockRejectedValue(new XcodeFirstLaunchPendingError("simctl"));
-    try {
-      await expect(findRuntimeDevices(runtimeOn("ext:cloud-phone"))).resolves.toEqual(NOT_FOUND);
-      await expect(findRuntimeDevices(runtimeOn("emulator-5556"))).resolves.toEqual(
-        foundOn("emulator-5556")
-      );
-    } finally {
-      vi.mocked(listIosSimulators).mockReset();
-    }
+
+    await expect(findRuntimeDevices(runtimeOn("ext:cloud-phone"))).resolves.toEqual(NOT_FOUND);
+    await expect(findRuntimeDevices(runtimeOn("emulator-5556"))).resolves.toEqual(
+      foundOn("emulator-5556")
+    );
   });
 
   it("finds a device whose first matching read takes longer than the grace window", async () => {
@@ -161,23 +162,18 @@ describe("findRuntimeDevices", () => {
   // and `adb -s` on that serial fails as ambiguous.
   it("answers when adb lists one serial twice", async () => {
     vi.useFakeTimers();
-    try {
-      const SHARED = "0123456789ABCDEF";
-      adb.serials = [SHARED, SHARED, "emulator-5554"];
-      adb.failing.add(SHARED);
-      vi.mocked(listIosSimulators).mockResolvedValue([]);
+    const SHARED = "0123456789ABCDEF";
+    adb.serials = [SHARED, SHARED, "emulator-5554"];
+    adb.failing.add(SHARED);
+    vi.mocked(listIosSimulators).mockResolvedValue([]);
 
-      const probe = findRuntimeDevices(runtimeOn("ext:cloud-phone"));
-      await vi.runAllTimersAsync();
-      await expect(probe).resolves.toEqual(NOT_FOUND);
+    const probe = findRuntimeDevices(runtimeOn("ext:cloud-phone"));
+    await vi.runAllTimersAsync();
+    await expect(probe).resolves.toEqual(NOT_FOUND);
 
-      const found = findRuntimeDevices(runtimeOn("emulator-5554"), { awaitSerials: [SHARED] });
-      await vi.runAllTimersAsync();
-      await expect(found).resolves.toEqual({ found: ["emulator-5554"], unresolved: [SHARED] });
-    } finally {
-      vi.mocked(listIosSimulators).mockReset();
-      vi.useRealTimers();
-    }
+    const found = findRuntimeDevices(runtimeOn("emulator-5554"), { awaitSerials: [SHARED] });
+    await vi.runAllTimersAsync();
+    await expect(found).resolves.toEqual({ found: ["emulator-5554"], unresolved: [SHARED] });
   });
 
   // The grace window starts at the first hit, not the first answer, so a serial
@@ -256,6 +252,29 @@ describe("findRuntimeDevices", () => {
 
     // An offline or disconnected transport is not read, yet capture kept under
     // it stays on, so it may be this device as much as a failed read.
+    // Several serials are often awaited, every simulator-server id among them.
+    it("waits in full for every awaited serial, not only the first to answer", async () => {
+      adb.readDelayMs.set(WIRELESS, OTHER_TRANSPORTS_GRACE_MS + 300);
+
+      await expect(
+        findRuntimeDevices(runtimeOn(USB, WIRELESS), { awaitSerials: [OTHER, WIRELESS] })
+      ).resolves.toEqual(foundOn(USB, WIRELESS));
+    });
+
+    // A simulator's UDID or a provider's `ext:` id is awaited too, and adb never
+    // answers for it.
+    it("does not wait out a hung transport for an awaited id adb does not list", async () => {
+      adb.readDelayMs.set(WIRELESS, Infinity);
+      const startedAt = Date.now();
+
+      await expect(
+        findRuntimeDevices(runtimeOn(USB, WIRELESS), {
+          awaitSerials: ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"],
+        })
+      ).resolves.toEqual({ found: [USB], unresolved: ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"] });
+      expect(Date.now() - startedAt).toBeLessThan(OTHER_TRANSPORTS_GRACE_MS + 1_000);
+    });
+
     it("reports an awaited serial adb does not list as ready as unresolved", async () => {
       adb.serials = [USB, OTHER];
 

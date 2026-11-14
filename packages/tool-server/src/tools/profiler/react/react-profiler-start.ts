@@ -32,7 +32,8 @@ import {
 } from "../../../utils/react-profiler/session-ownership";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "../../../utils/debugger/device-alias";
-import { findRuntimeDevices } from "../../../utils/debugger/runtime-device";
+import { findRuntimeDevices, type RuntimeDevices } from "../../../utils/debugger/runtime-device";
+import type { CDPClient } from "../../../utils/debugger/cdp-client";
 import { simulatorServerDeviceIds, trackProfilingRun } from "../../../utils/profiling-devices";
 import { RESULT_NOTE_KEY } from "../../screenshot/dropped-geometry";
 import {
@@ -153,22 +154,37 @@ function failedTakeoverText({ session_id, reason }: TakeoverReport): string {
 }
 
 /**
- * The ids whose logcat the device probe waits for in full, as missing one would
- * miss state kept under it: native network capture on the profiled app, and the
- * simulator-server the agent drives the device through, which the run must
- * reach (capture on demand, and the `profiling` flag on that id's calls). Each
- * lookup that fails adds nothing, not a throw, like the warning they feed.
+ * Where the profiled runtime runs (see `findRuntimeDevices`). The probe waits in
+ * full for two kinds of id, which a slow transport of the profiled device must
+ * not miss:
+ * - Serials with native network capture for any app: the warning names every
+ *   app captured on the device. These alone are kept in `unresolved`, as
+ *   capture under a serial the probe could not read may be on this device.
+ * - Ids with a simulator-server, which the agent drives devices by, so that a
+ *   transport answering late is still tracked (capture on demand, and the
+ *   `profiling` flag on that id's calls). One whose read fails is not tracked,
+ *   as it may be another device. Nor is a provider's `ext:` id, which adb does
+ *   not list under that name.
+ * A lookup that fails adds nothing, not a throw, like the warning it feeds.
  */
-function idsToAwait(): string[] {
-  const ids = new Set<string>();
-  for (const lookup of [liveAndroidNetworkCaptureSerials, simulatorServerDeviceIds]) {
-    try {
-      for (const id of lookup()) ids.add(id);
-    } catch {
-      // Nothing to add.
-    }
+async function findProfiledDevices(cdp: Pick<CDPClient, "evaluate">): Promise<RuntimeDevices> {
+  const captured = idsOf(liveAndroidNetworkCaptureSerials);
+  const driven = idsOf(simulatorServerDeviceIds);
+  const devices = await findRuntimeDevices(cdp, {
+    awaitSerials: [...new Set([...captured, ...driven])],
+  });
+  return {
+    found: devices.found,
+    unresolved: devices.unresolved.filter((id) => captured.includes(id)),
+  };
+}
+
+function idsOf(lookup: () => string[]): string[] {
+  try {
+    return lookup();
+  } catch {
+    return [];
   }
-  return [...ids];
 }
 
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
@@ -462,7 +478,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // see the run. Before the start, so nothing is awaited between the start
       // and the registration.
       const runtimeDevices = isLogicalKeyedDevice(api.deviceId)
-        ? await findRuntimeDevices(cdp, { awaitSerials: idsToAwait() })
+        ? await findProfiledDevices(cdp)
         : { found: [], unresolved: [] };
 
       const sessionId = crypto.randomUUID();

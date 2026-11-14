@@ -31,8 +31,9 @@ export interface RuntimeDevices {
    * Ids from `awaitSerials` whose logcat could not be read, so they may be this
    * device too: the read failed or timed out, or `adb devices` does not list
    * the serial as ready (offline, unauthorized or disconnected). Only set
-   * alongside an Android `found`. An id that is no adb serial at all, such as a
-   * simulator's UDID, is listed too, since adb cannot read it either.
+   * alongside an Android `found`. Any id adb does not list is reported, even one
+   * that names a device read under another id, such as a provider's `ext:` id,
+   * so a caller keeps only the ids it can act on.
    */
   unresolved: string[];
 }

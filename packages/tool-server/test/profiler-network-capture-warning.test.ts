@@ -59,6 +59,7 @@ import type { NativeProfilerSessionApi } from "../src/blueprints/native-profiler
 import type { RuntimeAppMetadata } from "../src/blueprints/js-runtime-debugger";
 import type { RuntimeDevices } from "../src/utils/debugger/runtime-device";
 import { rememberLogicalKeyedDevice, resetDeviceAliases } from "../src/utils/debugger/device-alias";
+import { registerCaptureOnDemandSender } from "../src/utils/profiling-devices";
 
 const SERIAL = "emulator-5554";
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
@@ -305,28 +306,35 @@ describe("nativeNetworkCaptureWarning", () => {
               `Argent attaches its in-app agent to the processes of that app there. It can slow the ` +
               `app, so the timings in this profile can differ from a run without it. To profile ` +
               `without it, stop this profile, call native-network-logs with stop: true for ${PKG} ` +
-              `once with each of udid ${WIRELESS}, udid ${OTHER_WIRELESS}, then restart-app on ` +
+              `with udid ${WIRELESS}, ${PKG} with udid ${OTHER_WIRELESS}, then restart-app on ` +
               `${USB} and profile again.`
           );
         });
 
-        it("adds it after the found serial's warning when both have capture", () => {
+        // Two sets of steps would have the agent stop the run it just restarted,
+        // and could name two serials of one device to restart.
+        it("names it in the found device's warning, with one set of steps", () => {
+          const OTHER_DEVICE = "emulator-5556";
           connectedWithLogicalId();
           live.mockImplementation((deviceId) =>
-            deviceId === USB ? [OTHER_PKG] : deviceId === WIRELESS ? [PKG] : []
+            deviceId === WIRELESS ? [OTHER_PKG] : deviceId === OTHER_DEVICE ? [PKG] : []
           );
 
-          const warning = nativeNetworkCaptureWarning(
-            LOGICAL,
-            ANDROID_APP,
-            unresolvedOn(USB, WIRELESS)
-          );
+          const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, {
+            found: [USB, WIRELESS],
+            unresolved: [OTHER_DEVICE],
+          });
 
-          expect(warning).toMatch(
-            new RegExp(
-              `^Native network capture is on for ${OTHER_PKG} on ${USB}, the device this profile runs on: .* ` +
-                `Native network capture is on for ${PKG} on ${WIRELESS}, which may also be`
-            )
+          expect(warning).toBe(
+            `Native network capture is on for ${OTHER_PKG} on ${WIRELESS}, the device this profile ` +
+              `runs on: Argent attaches its in-app agent to the processes of that app. Native ` +
+              `network capture is also on for ${PKG} on ${OTHER_DEVICE}, which may also be the ` +
+              `device this profile runs on: its logcat could not be read to tell. Argent attaches ` +
+              `its in-app agent to the processes of that app there. It can slow the app, so the ` +
+              `timings in this profile can differ from a run without it. To profile without it, ` +
+              `stop this profile, call native-network-logs with stop: true for ${OTHER_PKG} with ` +
+              `udid ${WIRELESS}, ${PKG} with udid ${OTHER_DEVICE}, then restart-app on ${WIRELESS} ` +
+              `and profile again.`
           );
         });
 
@@ -577,6 +585,30 @@ describe("react-profiler-start", () => {
         expect(result.warning).toContain(
           `Native network capture is on for ${PKG} on ${WIRELESS}, which may also be the device this profile runs on`
         );
+      });
+
+      // A provider's emulator drives its simulator-server by its `ext:` id, which
+      // adb does not list, although adb read the device under its serial.
+      it("does not name a driven id the probe could not read, which only capture serials are", async () => {
+        const PROVIDER_ID = "ext:acme-3f2a9c:emulator-5556";
+        const unregister = registerCaptureOnDemandSender(
+          PROVIDER_ID,
+          "ws://127.0.0.1:9000",
+          () => {}
+        );
+        try {
+          findRuntimeDevices.mockResolvedValue({ found: [SERIAL], unresolved: [PROVIDER_ID] });
+          live.mockImplementation((deviceId) => (deviceId === PROVIDER_ID ? [PKG] : []));
+
+          const result = await start(ANDROID_APP);
+
+          expect(findRuntimeDevices).toHaveBeenCalledWith(expect.anything(), {
+            awaitSerials: [PROVIDER_ID],
+          });
+          expect(result).not.toHaveProperty("warning");
+        } finally {
+          unregister();
+        }
       });
 
       it("still probes when the capture lookup fails", async () => {

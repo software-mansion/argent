@@ -24,9 +24,10 @@ const CAPTURE_COST =
  *
  * For a `deviceId` that is a Metro logicalDeviceId, which names no device:
  * `runtimeDevices` is where the profiled runtime was found (see
- * {@link foundDeviceWarning} and {@link unresolvedDeviceWarning}).
- * `runtimeApp` is what the runtime said about itself, for when it was not
- * found (see {@link logicalDeviceWarning}).
+ * {@link foundDeviceWarning}). `runtimeApp` is what the runtime said about
+ * itself: it picks the capture to name under a serial that could not be read,
+ * and on every Android device when the runtime was not found (see
+ * {@link logicalDeviceWarning}).
  */
 export function nativeNetworkCaptureWarning(
   deviceId: string,
@@ -34,13 +35,8 @@ export function nativeNetworkCaptureWarning(
   runtimeDevices: RuntimeDevices = { found: [], unresolved: [] }
 ): string | undefined {
   try {
-    const [profiled] = runtimeDevices.found;
-    if (profiled !== undefined) {
-      const parts = [
-        foundDeviceWarning(runtimeDevices.found),
-        unresolvedDeviceWarning(runtimeDevices.unresolved, profiled, runtimeApp),
-      ].filter((part) => part !== undefined);
-      return parts.length > 0 ? parts.join(" ") : undefined;
+    if (runtimeDevices.found.length > 0) {
+      return foundDeviceWarning(runtimeDevices, runtimeApp);
     }
     const packages = liveAndroidNetworkCaptures(deviceId);
     if (packages.length === 0) return logicalDeviceWarning(deviceId, runtimeApp);
@@ -62,57 +58,62 @@ export function nativeNetworkCaptureWarning(
  * adb transport, and capture is kept under the one `native-network-logs` was
  * called with. The caller's own id reaches none of them, so the warning names
  * the id each capture is under, as the `udid` to pass.
+ *
+ * It also names the serials whose logcat could not be read (see
+ * `findRuntimeDevices`) where capture is on for the profiled app: each may be
+ * another transport of the profiled device, or another device. Like
+ * {@link logicalDeviceWarning}, only capture for the profiled app is named
+ * there, and only for an Android runtime. Both kinds share one set of steps.
  */
-function foundDeviceWarning(devices: readonly string[]): string | undefined {
-  const captures = devices
-    .map((device) => ({ device, packages: liveAndroidNetworkCaptures(device) }))
-    .filter(({ packages }) => packages.length > 0);
-  const first = captures[0];
-  if (!first) return undefined;
-  const apps = [...new Set(captures.flatMap(({ packages }) => packages))].sort();
-  const one = apps.length === 1;
-  const where =
-    captures.length === 1
-      ? `${first.device}, the device this profile runs on`
-      : `${captures.map(({ device }) => device).join(" and ")}, adb serials of the device this profile runs on`;
-  const stop =
-    captures.length === 1
-      ? `with udid ${first.device} and stop: true for ${one ? "that app" : "each of these apps"}`
-      : `with stop: true for ${captures
-          .flatMap(({ device, packages }) => packages.map((pkg) => `${pkg} with udid ${device}`))
-          .join(", ")}`;
-  return (
-    `Native network capture is on for ${apps.join(", ")} on ${where}: Argent attaches its in-app agent ` +
-    `to the processes of ${one ? "that app" : "these apps"}. ${CAPTURE_COST} ` +
-    `To profile without it, stop this profile, call native-network-logs ${stop}, ` +
-    `then restart-app on ${first.device} and profile again.`
-  );
-}
-
-/**
- * For a logicalDeviceId session whose runtime was found, the serials whose
- * logcat could not be read (see `findRuntimeDevices`): each may be another adb
- * transport of the profiled device, or another device. Like
- * {@link logicalDeviceWarning}, only capture for the profiled app is named, and
- * only for an Android runtime.
- */
-function unresolvedDeviceWarning(
-  unresolved: readonly string[],
-  profiled: string,
+function foundDeviceWarning(
+  { found, unresolved }: RuntimeDevices,
   runtimeApp: RuntimeAppMetadata | undefined
 ): string | undefined {
-  const appId = runtimeApp?.appId;
-  if (runtimeApp?.platform !== "android" || !appId) return undefined;
-  const serials = unresolved.filter((serial) => liveAndroidNetworkCaptures(serial).includes(appId));
-  if (serials.length === 0) return undefined;
-  const one = serials.length === 1;
+  const captures = found
+    .map((device) => ({ device, packages: liveAndroidNetworkCaptures(device) }))
+    .filter(({ packages }) => packages.length > 0);
+  const appId = runtimeApp?.platform === "android" ? runtimeApp.appId : undefined;
+  const maybe = appId
+    ? unresolved.filter((serial) => liveAndroidNetworkCaptures(serial).includes(appId))
+    : [];
+  const first = captures[0];
+  if (!first && (!appId || maybe.length === 0)) return undefined;
+
+  const sentences: string[] = [];
+  if (first) {
+    const apps = [...new Set(captures.flatMap(({ packages }) => packages))].sort();
+    const where =
+      captures.length === 1
+        ? `${first.device}, the device this profile runs on`
+        : `${captures.map(({ device }) => device).join(" and ")}, adb serials of the device this profile runs on`;
+    sentences.push(
+      `Native network capture is on for ${apps.join(", ")} on ${where}: Argent attaches its in-app ` +
+        `agent to the processes of ${apps.length === 1 ? "that app" : "these apps"}.`
+    );
+  }
+  if (appId && maybe.length > 0) {
+    const one = maybe.length === 1;
+    sentences.push(
+      `Native network capture is ${first ? "also " : ""}on for ${appId} on ${maybe.join(", ")}, ` +
+        `${one ? "which" : "each of which"} may also be the device this profile runs on: ` +
+        `${one ? "its logcat" : "their logcats"} could not be read to tell. Argent attaches its ` +
+        `in-app agent to the processes of that app there.`
+    );
+  }
+
+  const stops = [
+    ...captures.flatMap(({ device, packages }) => packages.map((app) => ({ app, device }))),
+    ...(appId ? maybe.map((device) => ({ app: appId, device })) : []),
+  ];
+  const stop =
+    first && captures.length === 1 && maybe.length === 0
+      ? `with udid ${first.device} and stop: true for ${first.packages.length === 1 ? "that app" : "each of these apps"}`
+      : `with stop: true for ${stops.map(({ app, device }) => `${app} with udid ${device}`).join(", ")}`;
+  // Any id of the profiled device restarts it; one of them for every case.
+  const restart = first?.device ?? found[0];
   return (
-    `Native network capture is on for ${appId} on ${serials.join(", ")}, ` +
-    `${one ? "which" : "each of which"} may also be the device this profile runs on: ` +
-    `${one ? "its logcat" : "their logcats"} could not be read to tell. Argent attaches its in-app agent to the processes of that app there. ` +
-    `${CAPTURE_COST} To profile without it, stop this profile, call native-network-logs with stop: true ` +
-    `for ${appId} ${one ? `with udid ${serials[0]}` : `once with each of ${serials.map((serial) => `udid ${serial}`).join(", ")}`}, ` +
-    `then restart-app on ${profiled} and profile again.`
+    `${sentences.join(" ")} ${CAPTURE_COST} To profile without it, stop this profile, ` +
+    `call native-network-logs ${stop}, then restart-app on ${restart} and profile again.`
   );
 }
 

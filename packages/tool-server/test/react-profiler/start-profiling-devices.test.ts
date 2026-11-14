@@ -151,6 +151,21 @@ describe("react-profiler-start registers the run where the device's calls look",
     expect(sends).toEqual([true]);
   });
 
+  it("adds no unknown-device note when the device is found under one serial", async () => {
+    rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
+    findRuntimeDevicesMock.mockResolvedValue({ found: ["emulator-5554"], unresolved: [] });
+    const { registry } = fakeSession(LOGICAL_ID);
+    const tool = createReactProfilerStartTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { device_id: LOGICAL_ID, port: 8081, sample_interval_us: 100, force: false }
+    );
+
+    expect(isProfiling("emulator-5554")).toBe(true);
+    expect(result).not.toHaveProperty("__argentNote");
+  });
+
   it("notes that captures go on when the device cannot be found", async () => {
     rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
     const { registry } = fakeSession(LOGICAL_ID);
