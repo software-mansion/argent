@@ -59,7 +59,7 @@ const SENTINEL_PREFIX = `${WORKER_LIFETIME_SECONDS}.${RUN_TAG}`;
  * have. A two-digit slot breaks that: pid 1234 / 567 / slot 10 spells `600.123456710`,
  * which pid 12345 / 671's sweep glob `600\.12345671[0-9]` matches and kills.
  */
-type SentinelSlot = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+type SentinelSlot = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 const sentinel = (slot: SentinelSlot): string => `${SENTINEL_PREFIX}${slot}`;
 const SENTINEL_DEADLINE = sentinel(1);
 const SENTINEL_REAP = sentinel(2);
@@ -70,6 +70,7 @@ const SENTINEL_LINGER_NEAR_DEADLINE = sentinel(6);
 const SENTINEL_LINGER_GROUPED = sentinel(7);
 const SENTINEL_SWEEP = sentinel(8);
 const SENTINEL_ORPHAN = sentinel(9);
+const SENTINEL_HANG_SELF = sentinel(0);
 let dir: string;
 let prevPath: string | undefined;
 
@@ -110,8 +111,10 @@ if (cmd === "hang") {
 }
 if (cmd === "hang-self") {
   // The launcher wedges itself with no child under it, like a real \`vega\` blocked on its
-  // device-agent socket: the descendant sweep finds nothing, so only the group kill reaps
-  // it. \`secs\` bounds its life, as it does a sentinel worker's.
+  // device-agent socket, but with a worker left in its group: the double fork leaves the
+  // launcher no ppid edge to it. The descendant sweep finds nothing, so only the group kill
+  // reaps either. \`secs\` bounds the launcher's life, as it does a sentinel worker's.
+  spawnSync("sh", ["-c", "sleep " + secs + " &"], { stdio: "ignore" });
   setTimeout(() => process.exit(0), Number(secs) * 1000);
   return;
 }
@@ -308,6 +311,24 @@ function launcherPattern(cmd: "hang-self" | "orphan", tag: string): string {
   return `/vega ${cmd} ${tag.replaceAll(".", "\\.")}$`;
 }
 
+// Live children of the launcher matching `pattern`, read in the same `ps` as the launcher so
+// a 0 is never about one already reaped; -1 when none matches or the read failed.
+function launcherChildren(pattern: string): number {
+  try {
+    const rows = execSync("ps -Ao pid=,ppid=,command=", {
+      encoding: "utf-8",
+      maxBuffer: 16 * 1024 * 1024,
+    })
+      .split("\n")
+      .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/))
+      .filter((m) => m !== null);
+    const launcher = rows.find((m) => new RegExp(pattern).test(m[3]!));
+    return launcher ? rows.filter((m) => m[2] === launcher[1]).length : -1;
+  } catch {
+    return -1;
+  }
+}
+
 function strayCount(pattern: string): number {
   try {
     const out = execSync(`pgrep -f '${pattern}' || true`, { encoding: "utf-8" });
@@ -404,17 +425,21 @@ describe("runVega timeout (real subprocess)", () => {
     expect(await waitForClear(SENTINEL_REAP)).toBe(0);
   });
 
-  it("reaps a launcher wedged with nothing under it (the group kill alone)", async () => {
-    const pattern = launcherPattern("hang-self", SENTINEL_PREFIX);
+  it("reaps a launcher wedged with nothing under it, and the worker left in its group (the group kill alone)", async () => {
+    const pattern = launcherPattern("hang-self", SENTINEL_HANG_SELF);
     const HANG_SELF_DEADLINE_MS = 4_000;
-    const run = runVega(["hang-self", SENTINEL_PREFIX], { timeoutMs: HANG_SELF_DEADLINE_MS }).catch(
-      (e: unknown) => e
-    );
+    const run = runVega(["hang-self", SENTINEL_HANG_SELF], {
+      timeoutMs: HANG_SELF_DEADLINE_MS,
+    }).catch((e: unknown) => e);
     try {
-      expect(await pollCount(() => strayCount(pattern), 1, HANG_SELF_DEADLINE_MS)).toBe(1);
+      expect(await waitForCount(SENTINEL_HANG_SELF, 1, HANG_SELF_DEADLINE_MS)).toBe(1);
+      // Nothing under the launcher leaves the worker to the group kill alone. Checked once the
+      // worker is up: before it forks, the launcher has nothing under it either.
+      expect(await pollCount(() => launcherChildren(pattern), 0, HANG_SELF_DEADLINE_MS)).toBe(0);
       const err = await run;
       expect((err as Error).message).toMatch(/timed out/i);
       expect(await pollCount(() => strayCount(pattern), 0, 3_000)).toBe(0);
+      expect(await waitForClear(SENTINEL_HANG_SELF)).toBe(0);
     } finally {
       // Outside sweep()'s `sleep` namespace.
       execSync(`pkill -9 -f '${pattern}' || true`);
