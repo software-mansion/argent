@@ -2359,8 +2359,16 @@ function pushReport(state: ExecState, report: StepReport): void {
   // Renderers print these in the target's place, on one line.
   if (report.tool !== undefined) report.tool = escapeInline(String(report.tool));
   if (report.message !== undefined) report.message = escapeInline(report.message);
+  // A reason quotes foreign text (a tool's error, a flow's tool name).
+  // Renderers indent its later lines, so newlines stay; any other control
+  // character could move the cursor off that indent.
+  if (report.reason !== undefined) report.reason = escapeLines(report.reason);
   state.reports.push(report);
   state.onStepReport?.(report);
+}
+
+function escapeLines(text: string): string {
+  return text.split("\n").map(escapeInline).join("\n");
 }
 
 /**
@@ -2862,19 +2870,18 @@ async function execRunStep(
 type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "scriptLogTruncated">;
 
 /**
- * A `script` step is the one step whose `reason` is written by something other
- * than this server: the child's own `throw` message crosses into it verbatim,
- * and a multi-line message is the ordinary shape of a rethrown API error. The
- * CLI's step line and `flowRunToMcpContent` indent a reason's later lines, but
- * only at `\n`: a `\r` or an escape sequence reaching the CLI's terminal moves
- * the cursor itself, so script-controlled text could overprint its `✗` line
- * with a forged "PASS — 3 passed, 0 failed". So every control character is
- * spelled the way `escapeInline` spells it, and the reason keeps to its step's
- * own line.
+ * A `script` step's `reason` is written by the child: its own `throw` message
+ * crosses into it verbatim, and a multi-line message is the ordinary shape of a
+ * rethrown API error. The CLI's step line and `flowRunToMcpContent` indent a
+ * reason's later lines, but only at `\n`: a `\r` or an escape sequence reaching
+ * the CLI's terminal moves the cursor itself, so script-controlled text could
+ * overprint its `✗` line with a forged "PASS — 3 passed, 0 failed". So every
+ * control character is spelled the way `escapeInline` spells it, `\n` too
+ * (which `pushReport` leaves in other reasons), and the reason keeps to its
+ * step's own line.
  *
  * Escaped rather than stripped, and here rather than in each renderer: the
- * original characters stay recoverable, and the one step whose reason is not
- * server-composed is the one that pays for it. `describe`'s tree renderer takes
+ * original characters stay recoverable. `describe`'s tree renderer takes
  * the same measure for the same reason (`format-tree.ts`), on labels read off a
  * device — a less hostile source than a local process's uncaught throw.
  *

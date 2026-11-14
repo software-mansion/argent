@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry, ToolContext } from "@argent/registry";
+import { Registry, type ToolContext } from "@argent/registry";
+import { z } from "zod";
 import {
   createRunFlowTool,
   type FlowRunResult,
@@ -125,6 +126,52 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
       ["skip", escaped],
     ]);
   });
+
+  it.each([
+    ["an unknown tool's name", "ta\rp\u001b[1A", "error", 'Tool "ta\\rp\\u001b[1A" not found'],
+    ["a tool's thrown message", "boom", "error", "[Tool:boom] kaput\\r\\u009b[1A\nPASS"],
+    [
+      "a nested run's failure",
+      "run-sequence",
+      "fail",
+      "run-sequence stopped at tap after 0 of 1 steps: kaput\\r\\u009b[1A\nPASS",
+    ],
+  ])(
+    "escapes the control characters %s brings into a reason, all but its newlines",
+    async (_what, name, status, reason) => {
+      const message = "kaput\r\u009b[1A\nPASS";
+      const registry = new Registry();
+      registry.registerTool({
+        id: "boom",
+        zodSchema: z.object({}),
+        services: () => ({}),
+        async execute() {
+          throw new Error(message);
+        },
+      });
+      registry.registerTool({
+        id: "run-sequence",
+        zodSchema: z.object({}),
+        services: () => ({}),
+        async execute() {
+          return { steps: [{ tool: "tap", error: message }], completed: 0, total: 1 };
+        },
+      });
+      await writeFlow("main", {
+        executionPrerequisite: "",
+        steps: [{ kind: "tool", name, args: {} }],
+      });
+
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
+      );
+
+      expect(result.steps[0]).toMatchObject({ kind: "tool", status, reason });
+    }
+  );
 
   it("streams nested fragment steps (run:) with their source-flow attribution", async () => {
     await writeFlow("login", {
