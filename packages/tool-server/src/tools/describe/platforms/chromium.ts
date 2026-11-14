@@ -951,19 +951,16 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   const CASED = /^(uppercase|lowercase|capitalize)/;
   // Text as a style's text-transform cases it under its lang; prev gives the character
-  // before it, which decides whether capitalize starts a word there.
+  // before it, which decides whether capitalize starts a word there. As in Blink, a lang
+  // cases by its first 2 letters when a "-", "_", "@" or the end follows them: tr_TR as
+  // Turkish, but tr.UTF-8 and tur as no lang.
   function caseText(text, style, prev) {
     const mode = style && CASED.exec(style.textTransform);
     if (!mode) return text;
     if (mode[1] === "capitalize") return capitalize(text, prev());
-    const lang = /^"(.*)"$/.exec(style.webkitLocale || "");
-    const upper = mode[1] === "uppercase";
-    try {
-      if (lang) return upper ? text.toLocaleUpperCase(lang[1]) : text.toLocaleLowerCase(lang[1]);
-    } catch {
-      // A lang that is no locale tag cases as no lang does.
-    }
-    return upper ? text.toUpperCase() : text.toLowerCase();
+    const lang = /^"([a-z]{2})([-_@].*)?"$/i.exec(style.webkitLocale || "");
+    if (mode[1] === "uppercase") return lang ? text.toLocaleUpperCase(lang[1]) : text.toUpperCase();
+    return lang ? text.toLocaleLowerCase(lang[1]) : text.toLowerCase();
   }
 
   // Blink's capitalize: each ICU word of prev + text starts in its first code unit's

@@ -1921,11 +1921,17 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([text("ǆemal ǉubav ǌoj ǳin გამარჯობა ᾳa ᾀa ﬀa")], capital)).toBe(
       "ǅemal ǈubav ǋoj ǲin გამარჯობა ᾼa ᾈa ﬀa"
     );
-    // The element's lang, as its -webkit-locale; one that is no locale tag cases as none.
-    const locale = (webkitLocale: string) =>
-      labelledBy([text("istanbul")], { display: "inline", ...upper, webkitLocale });
-    expect(locale('"tr"')).toBe("İSTANBUL");
-    expect(locale('"not a tag"')).toBe("ISTANBUL");
+    // The element's lang, as its -webkit-locale, cases by its first 2 letters, as in Blink.
+    const locale = (webkitLocale: string, word = "istanbul", style = upper) =>
+      labelledBy([text(word)], { display: "inline", ...style, webkitLocale });
+    for (const lang of ['"tr"', '"TR-tr"', '"tr_TR"', '"tr@euro"', '"tr-"', '"az_AZ"']) {
+      expect(locale(lang), lang).toBe("İSTANBUL");
+    }
+    for (const lang of ['"not a tag"', '"tr.UTF-8"', '" tr"', '"tur"', "auto"]) {
+      expect(locale(lang), lang).toBe("ISTANBUL");
+    }
+    expect(locale('"tr_TR"', "IŞIK", { textTransform: "lowercase" })).toBe("ışık");
+    expect(locale('"el_GR"', "άλφα")).toBe("ΑΛΦΑ");
     // Content under display:none has no layout to case it.
     expect(labelledBy([text("ab")], { display: "none", ...upper })).toBe("ab");
     const pseudo = (which: string, content: string) => {
