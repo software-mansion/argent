@@ -165,7 +165,6 @@ export HOME_REAL="$HOME"
 export HOME="$E2E_HOME"
 # An exported XDG dir outranks $HOME for Electron's profile, editor configs and
 # the skills lock, so those would land in the real one.
-XDG_CONFIG_REAL="${XDG_CONFIG_HOME:-}"
 export XDG_CONFIG_HOME="$E2E_HOME/.config" XDG_CACHE_HOME="$E2E_HOME/.cache" \
   XDG_DATA_HOME="$E2E_HOME/.local/share" XDG_STATE_HOME="$E2E_HOME/.local/state"
 # Device state must stay visible through the sandbox HOME or the android tier
@@ -175,11 +174,6 @@ export XDG_CONFIG_HOME="$E2E_HOME/.config" XDG_CACHE_HOME="$E2E_HOME/.cache" \
 # Linux uses XDG_RUNTIME_DIR for that discovery and is unaffected. Deliberately
 # not ~/Library wholesale, which would expose the real editor configs.
 [ -d "$HOME_REAL/.android" ] && ln -s "$HOME_REAL/.android" "$E2E_HOME/.android"
-# AVDs can live under $XDG_CONFIG_HOME/Android/avd too.
-if [ -n "$XDG_CONFIG_REAL" ] && [ -d "$XDG_CONFIG_REAL/Android" ]; then
-  mkdir -p "$XDG_CONFIG_HOME"
-  ln -s "$XDG_CONFIG_REAL/Android" "$XDG_CONFIG_HOME/Android"
-fi
 if [ "$E2E_OS" = darwin ] && [ -d "$HOME_REAL/Library/Caches/TemporaryItems" ]; then
   mkdir -p "$E2E_HOME/Library/Caches"
   ln -s "$HOME_REAL/Library/Caches/TemporaryItems" "$E2E_HOME/Library/Caches/TemporaryItems"

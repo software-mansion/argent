@@ -17,7 +17,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -141,14 +140,11 @@ test("run-e2e.sh hands its tools XDG base directories inside the sandbox HOME", 
     writeFileSync(join(dir, "pkg", "package", "package.json"), '{"version":"0.0.0-e2e"}');
     writeFileSync(
       join(dir, "pkg", "package", "dist", "cli.js"),
-      `const { appendFileSync, existsSync, realpathSync } = require("node:fs");
-const { join } = require("node:path");
+      `const { appendFileSync } = require("node:fs");
 const { env, argv } = process;
-const android = join(env.XDG_CONFIG_HOME || "", "Android");
 appendFileSync(env.E2E_ENV_LOG, JSON.stringify({
   HOME: env.HOME, XDG_CONFIG_HOME: env.XDG_CONFIG_HOME, XDG_CACHE_HOME: env.XDG_CACHE_HOME,
   XDG_DATA_HOME: env.XDG_DATA_HOME, XDG_STATE_HOME: env.XDG_STATE_HOME,
-  android: existsSync(android) ? realpathSync(android) : null,
 }) + "\\n");
 if (argv.slice(2).join(" ") === "server status --json") console.log('{"running":true,"healthy":true}');
 `
@@ -164,7 +160,6 @@ if (argv.slice(2).join(" ") === "server status --json") console.log('{"running":
       XDG_DATA_HOME: join(home, "data"),
       XDG_STATE_HOME: join(home, "state"),
     };
-    mkdirSync(join(xdg.XDG_CONFIG_HOME, "Android"), { recursive: true });
     const log = join(dir, "env.jsonl");
     const run = spawnSync(
       "bash",
@@ -177,7 +172,7 @@ if (argv.slice(2).join(" ") === "server status --json") console.log('{"running":
     );
     assert.ok(existsSync(log), `argent never ran: ${run.stderr}`);
     const seen = readFileSync(log, "utf8").split("\n").filter(Boolean)[0];
-    const { HOME, android, ...dirs } = JSON.parse(seen);
+    const { HOME, ...dirs } = JSON.parse(seen);
     assert.ok(HOME.startsWith(join(dir, "argent-e2e.")), HOME);
     assert.deepEqual(dirs, {
       XDG_CONFIG_HOME: join(HOME, ".config"),
@@ -185,7 +180,6 @@ if (argv.slice(2).join(" ") === "server status --json") console.log('{"running":
       XDG_DATA_HOME: join(HOME, ".local", "share"),
       XDG_STATE_HOME: join(HOME, ".local", "state"),
     });
-    assert.equal(android, realpathSync(join(xdg.XDG_CONFIG_HOME, "Android")));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
