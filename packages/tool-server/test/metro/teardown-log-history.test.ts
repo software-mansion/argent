@@ -31,7 +31,7 @@ import { scopeTempHome } from "../helpers/temp-home";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, writeSync: vi.fn(actual.writeSync) };
+  return { ...actual, writeSync: vi.fn(actual.writeSync), openSync: vi.fn(actual.openSync) };
 });
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
@@ -435,6 +435,29 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       expect(fs.existsSync(result.file)).toBe(false);
       expect(result.note).toContain(`No log file exists at ${result.file}`);
       expect(result.note).toContain(`stop-all-simulator-servers with devices: ["${LOGICAL_ID}"]`);
+    });
+
+    it("names a full disk alongside permissions when the log file could not be created", async () => {
+      // A full APFS disk refuses the open itself with ENOSPC.
+      vi.mocked(fs.openSync).mockImplementation(() => {
+        throw Object.assign(new Error("ENOSPC: no space left on device, open"), {
+          code: "ENOSPC",
+        });
+      });
+      try {
+        await connectAndCapture(LOGICAL_ID, 2);
+      } finally {
+        vi.mocked(fs.openSync).mockReset();
+      }
+
+      const result = await readRegistry();
+
+      expect(fs.existsSync(result.file)).toBe(false);
+      expect(result.note).toBe(
+        `No log file exists at ${result.file}, so there is nothing to grep: the counts and clusters are all that was captured. ` +
+          `Usually the disk was full or ~/.argent/tmp was not writable when this session started (if root owns ~/.argent: sudo chown -R "$USER" ~/.argent). ` +
+          `Only a new debugger session gets a file: once that is fixed, call stop-all-simulator-servers with devices: ["${LOGICAL_ID}"], then debugger-connect again.`
+      );
     });
 
     it("names the session's connect id in the recovery scope when read by its logical id", async () => {
