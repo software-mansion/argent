@@ -24,7 +24,7 @@ export {
   shellQuotePath,
   detectPackageManager,
   detectGlobalPackageManager,
-  globalCommandCwd,
+  globalCommandOptions,
   detectProjectPackageManager,
   globalInstallCommand,
   globalUninstallCommand,

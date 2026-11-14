@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { track } from "@argent/telemetry";
 import {
@@ -9,7 +10,7 @@ import {
   isNewerVersion,
   detectGlobalPackageManager,
   detectProjectPackageManager,
-  globalCommandCwd,
+  globalCommandOptions,
   globalInstallCommand,
   localInstallCommand,
   projectInstallCommand,
@@ -57,6 +58,12 @@ export async function runInstall(args: {
   return runGlobal({ fromTar, nonInteractive, version: args.version, tel });
 }
 
+// A --from tarball or folder made absolute, since the package manager may run
+// elsewhere; any other value is a package spec and passes through.
+function installSpec(fromTar: string): string {
+  return fs.existsSync(fromTar) ? path.resolve(fromTar) : fromTar;
+}
+
 // Exits the process on a missing package.json or a failed/empty install — the
 // caller proceeds only once the dep is verified on disk (or is a Yarn PnP
 // layout, which has no node_modules).
@@ -90,7 +97,7 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   }
 
   const pm = detectProjectPackageManager(projectRoot);
-  const installTarget = fromTar ?? PACKAGE_NAME;
+  const installTarget = fromTar ? installSpec(fromTar) : PACKAGE_NAME;
   // Declared but not materialized (fresh clone): the plain project install
   // honors the committed pin — `add` would resolve to @latest and rewrite it.
   const materializeOnly = isDeclaredLocally(projectRoot) && !fromTar;
@@ -229,14 +236,14 @@ async function runGlobal(opts: {
     p.log.info(`Argent is not installed globally — installing.`);
     track("installation:global_install_decision", { decision: "install" });
 
-    const installTarget = fromTar ? path.resolve(fromTar) : PACKAGE_NAME;
+    const installTarget = fromTar ? installSpec(fromTar) : PACKAGE_NAME;
     const cmd = globalInstallCommand(pm, installTarget);
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing ${PACKAGE_NAME} globally...`);
     const packageActionStartedAt = performance.now();
     try {
-      await runShellCommand(cmd, { cwd: globalCommandCwd(cmd) });
+      await runShellCommand(cmd, globalCommandOptions(pm));
       spinner.stop(pc.green("Installed globally."));
       if (!isGloballyInstalled()) {
         p.log.warn(
@@ -264,12 +271,12 @@ async function runGlobal(opts: {
   if (fromTar) {
     // Developer-only reinstall (`--from`) — not a product install decision, so
     // no decision event.
-    const cmd = globalInstallCommand(pm, path.resolve(fromTar));
+    const cmd = globalInstallCommand(pm, installSpec(fromTar));
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing from ${fromTar}...`);
     try {
-      await runShellCommand(cmd, { cwd: globalCommandCwd(cmd) });
+      await runShellCommand(cmd, globalCommandOptions(pm));
       spinner.stop(pc.green("Installed from tarball."));
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
     } catch (err) {
@@ -353,7 +360,7 @@ async function runGlobal(opts: {
         updateSpinner.start(`Updating to v${latest}...`);
         const updateStartedAt = performance.now();
         try {
-          await runShellCommand(cmd, { cwd: globalCommandCwd(cmd) });
+          await runShellCommand(cmd, globalCommandOptions(pm));
           updateSpinner.stop(pc.green(`Updated to v${latest}.`));
           version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
           await tel.trackPackageAction("init_triggered_update", updateStartedAt, true);

@@ -57,6 +57,7 @@ import {
   detectPackageManager,
   detectGlobalPackageManager,
   globalInstallCommand,
+  globalCommandOptions,
   globalUninstallCommand,
   formatShellCommand,
   getGlobalSkillLockPath,
@@ -819,6 +820,28 @@ describe("detectGlobalPackageManager", () => {
       expect(detectGlobalPackageManager()).toBe("pnpm");
     });
 
+    it("returns pnpm over a pnpm 11 shim into a global-dir, whose package lives in its store", () => {
+      const stored = path.join(
+        dir,
+        "store",
+        "v11",
+        "links",
+        "h",
+        "node_modules",
+        "@swmansion",
+        "argent"
+      );
+      fs.mkdirSync(path.join(stored, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(stored, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(stored, "dist", "cli.js"), "");
+      const scope = path.join(dir, "gd", "v11", "61e7", "node_modules", "@swmansion");
+      fs.mkdirSync(scope, { recursive: true });
+      fs.symlinkSync(stored, path.join(scope, "argent"));
+      fs.writeFileSync(path.join(dir, "gd", "v11", "61e7", "pnpm-lock.yaml"), "");
+      putScriptOnPath(`# cmd-shim-target=${path.join(scope, "argent", "dist", "cli.js")}`);
+      expect(detectGlobalPackageManager()).toBe("pnpm");
+    });
+
     it.each(LAUNCHERS)("returns pnpm over a pnpm shim under %s launcher", (_launcher, agent) => {
       setAgent(agent);
       putScriptOnPath(
@@ -1074,6 +1097,55 @@ describe("globalUninstallCommand", () => {
       bin: "bun",
       args: ["remove", "-g", "pkg"],
     });
+  });
+});
+
+describe("globalCommandOptions", () => {
+  const saved = {
+    home: process.env.HOME,
+    agent: process.env.npm_config_user_agent,
+    prefix: process.env.npm_config_prefix,
+  };
+  afterEach(() => {
+    for (const [key, value] of [
+      ["HOME", saved.home],
+      ["npm_config_user_agent", saved.agent],
+      ["npm_config_prefix", saved.prefix],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("keeps the caller's cwd and env for npm", () => {
+    expect(globalCommandOptions("npm")).toEqual({});
+  });
+
+  it.each(["yarn", "pnpm", "bun"] as const)("runs %s in the home dir", (pm) => {
+    delete process.env.npm_config_user_agent;
+    expect(globalCommandOptions(pm)).toEqual({ cwd: os.homedir() });
+  });
+
+  it.skipIf(process.platform === "win32")("keeps the caller's cwd when home is missing", () => {
+    delete process.env.npm_config_user_agent;
+    process.env.HOME = path.join(os.tmpdir(), "argent-no-such-home");
+    expect(globalCommandOptions("yarn")).toEqual({});
+  });
+
+  it("drops the prefix npm exec exports from yarn's env, not from pnpm's", () => {
+    process.env.npm_config_user_agent = "npm/11.6.2 node/v24.14.1 darwin arm64";
+    process.env.npm_config_prefix = "/opt/homebrew";
+    const yarn = globalCommandOptions("yarn");
+    expect(yarn.env).toBeDefined();
+    expect(yarn.env).not.toHaveProperty("npm_config_prefix");
+    expect(yarn.env?.npm_config_user_agent).toBe(process.env.npm_config_user_agent);
+    expect(globalCommandOptions("pnpm").env).toBeUndefined();
+  });
+
+  it("keeps a prefix set outside npm exec", () => {
+    delete process.env.npm_config_user_agent;
+    process.env.npm_config_prefix = "/opt/homebrew";
+    expect(globalCommandOptions("yarn").env).toBeUndefined();
   });
 });
 

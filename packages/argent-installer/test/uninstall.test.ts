@@ -248,7 +248,7 @@ describe("uninstall — telemetry consent preservation", () => {
       expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
         "yarn",
         ["global", "remove", "@swmansion/argent"],
-        expect.objectContaining({ cwd: os.tmpdir() })
+        expect.objectContaining({ cwd: os.homedir() })
       );
       expect(childProcessMock.execFileSync).not.toHaveBeenCalledWith(
         "npm",
@@ -278,6 +278,44 @@ describe("uninstall — telemetry consent preservation", () => {
         "Run yarn global remove @swmansion/argent (with Yarn classic, outside this Yarn 2+ project)."
       );
       expect(process.exitCode).toBe(1);
+    });
+
+    it("gives a failed yarn global remove no Yarn classic note under an npm launcher", async () => {
+      const clack = await import("@clack/prompts");
+      childProcessMock.execFileSync.mockImplementation((bin: string) => {
+        if (bin === "yarn") throw new Error("yarn: command not found");
+        return undefined;
+      });
+
+      await uninstall(["--yes"]);
+
+      const esc = String.fromCharCode(27);
+      const info = vi.mocked(clack.log.info).mock.calls.map((c) =>
+        String(c[0])
+          .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+          .join("")
+      );
+      expect(vi.mocked(clack.log.error)).toHaveBeenCalled();
+      expect(info.filter((line) => line.includes("Yarn classic"))).toEqual([]);
+    });
+
+    it("drops the prefix npm exec exports from yarn's env", async () => {
+      const saved = process.env.npm_config_prefix;
+      process.env.npm_config_prefix = "/opt/homebrew";
+      try {
+        await uninstall(["--yes"]);
+      } finally {
+        if (saved === undefined) delete process.env.npm_config_prefix;
+        else process.env.npm_config_prefix = saved;
+      }
+
+      expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+        "yarn",
+        ["global", "remove", "@swmansion/argent"],
+        expect.objectContaining({
+          env: expect.not.objectContaining({ npm_config_prefix: expect.anything() }),
+        })
+      );
     });
 
     it("keeps the CLI record of a global the uninstall left in place", async () => {
@@ -487,6 +525,8 @@ describe("uninstall — telemetry consent preservation", () => {
       expect(vi.mocked(clack.log.error)).not.toHaveBeenCalled();
       expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
       expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed local package.");
+      // The stale shim stays on PATH, but the global it ran is gone.
+      expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
     }
   );
 
@@ -1383,6 +1423,19 @@ describe("uninstall — scoped config cleanup", () => {
     await uninstall(["--yes", "--local"]);
 
     expect(hasArgentEntry(projectMcp)).toBe(false);
+    expect(hasArgentEntry(globalCursor)).toBe(true);
+  });
+
+  it("--local in a global-mode project keeps its entries when the global's shim fails here", async () => {
+    const { projectMcp, globalCursor } = stageConfigs();
+    process.chdir(projDir);
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("exit 127"), { status: 127 });
+    });
+
+    await uninstall(["--yes", "--local"]);
+
+    expect(hasArgentEntry(projectMcp)).toBe(true);
     expect(hasArgentEntry(globalCursor)).toBe(true);
   });
 

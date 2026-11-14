@@ -200,6 +200,28 @@ describe.skipIf(process.platform === "win32")(
       expect(getGloballyInstalledVersion()).toBe("9.9.9");
     });
 
+    it("reads the version of a pnpm global through a $basedir shim in a linked PATH dir", () => {
+      const pnpmHome = path.join(fs.realpathSync(tmpDir), "pnpm", "bin");
+      fs.mkdirSync(pnpmHome, { recursive: true });
+      const pkg = path.join(pnpmHome, "..", "global", "5", "node_modules", PACKAGE_NAME);
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(
+        path.join(pkg, "package.json"),
+        JSON.stringify({ name: PACKAGE_NAME, version: "9.9.9" })
+      );
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.writeFileSync(
+        path.join(pnpmHome, "argent"),
+        '#!/bin/sh\nexit 1\nexec node "$basedir/../global/5/node_modules/@swmansion/argent/dist/cli.js" "$@"\n'
+      );
+      fs.chmodSync(path.join(pnpmHome, "argent"), 0o755);
+      // `..` climbs from the real bin dir, not from the link.
+      fs.symlinkSync(pnpmHome, path.join(tmpDir, "linked-bin"));
+      process.env.PATH = `${path.join(tmpDir, "linked-bin")}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBe("9.9.9");
+    });
+
     it("reads the version of the global behind a stale version-manager shim", () => {
       const shims = path.join(tmpDir, "shims");
       fs.mkdirSync(shims);

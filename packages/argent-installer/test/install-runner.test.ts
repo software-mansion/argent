@@ -317,10 +317,9 @@ describe("install under Yarn 2+", () => {
         })
       ).rejects.toThrow(ExitCalled);
 
-      // Outside the project, so its yarnPath or `packageManager` pin cannot pick Yarn 2+.
       expect(runShellCommand).toHaveBeenCalledWith(
         { bin: "yarn", args: ["global", "add", "/tmp/argent.tgz"] },
-        { cwd: os.tmpdir() }
+        { cwd: os.homedir() }
       );
       expect(advice("Install manually with: ")).toBe(
         "Install manually with: yarn global add /tmp/argent.tgz (with Yarn classic, outside this Yarn 2+ project)"
@@ -339,6 +338,10 @@ describe("install under Yarn 2+", () => {
         tel: makeTel(),
       });
 
+      expect(runShellCommand).toHaveBeenCalledWith(
+        { bin: "yarn", args: ["global", "add", "@swmansion/argent@99.0.0"] },
+        { cwd: os.homedir() }
+      );
       expect(advice("You can update manually later: ")).toBe(
         "You can update manually later: yarn global add @swmansion/argent@99.0.0 (with Yarn classic, outside this Yarn 2+ project)"
       );
@@ -358,10 +361,9 @@ describe("install under Yarn 2+", () => {
       })
     ).rejects.toThrow(ExitCalled);
 
-    // npm keeps the caller's cwd: under nodenv or asdf it picks the Node.
     expect(runShellCommand).toHaveBeenCalledWith(
       { bin: "npm", args: ["install", "-g", "@swmansion/argent"] },
-      { cwd: undefined }
+      {}
     );
     const esc = String.fromCharCode(27);
     const advice = vi
@@ -387,10 +389,9 @@ describe("install under Yarn 2+", () => {
       tel: makeTel(),
     });
 
-    // npm keeps the caller's cwd: under nodenv or asdf it picks the Node.
     expect(runShellCommand).toHaveBeenCalledWith(
       { bin: "npm", args: ["install", "-g", "/tmp/argent.tgz"] },
-      { cwd: undefined }
+      {}
     );
   });
 
@@ -408,10 +409,9 @@ describe("install under Yarn 2+", () => {
       tel: makeTel(),
     });
 
-    // npm keeps the caller's cwd: under nodenv or asdf it picks the Node.
     expect(runShellCommand).toHaveBeenCalledWith(
       { bin: "npm", args: ["install", "-g", "@swmansion/argent@99.0.0"] },
-      { cwd: undefined }
+      {}
     );
   });
 
@@ -478,5 +478,83 @@ describe("global install PATH check", () => {
 
     expect(runShellCommand).toHaveBeenCalledTimes(1);
     expect(p.log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("--from values", () => {
+  const savedAgent = process.env.npm_config_user_agent;
+  const originalCwd = process.cwd();
+  let dir: string;
+
+  beforeEach(() => {
+    delete process.env.npm_config_user_agent;
+    vi.mocked(runShellCommand).mockReset();
+    vi.mocked(runShellCommand).mockResolvedValue(undefined);
+    vi.mocked(isGloballyInstalled).mockReset();
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-from-")));
+    fs.writeFileSync(path.join(dir, "argent.tgz"), "");
+    fs.mkdirSync(path.join(dir, "sub"));
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    if (savedAgent === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = savedAgent;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function install(installMode: "global" | "local", fromTar: string): Promise<string> {
+    return runInstall({
+      installMode,
+      fromTar,
+      nonInteractive: true,
+      version: "0.0.0",
+      tel: makeTel(),
+    });
+  }
+
+  it.each([
+    ["a fresh", false],
+    ["a re-", true],
+  ])("passes a package spec through to %sinstall", async (_kind, installed) => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(installed);
+
+    await install("global", "@swmansion/argent@0.0.2");
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", "@swmansion/argent@0.0.2"] },
+      {}
+    );
+  });
+
+  it.each([
+    ["a fresh", false],
+    ["a re-", true],
+  ])("makes a relative tarball path absolute for %sinstall", async (_kind, installed) => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(installed);
+    process.chdir(path.join(dir, "sub"));
+
+    await install("global", "../argent.tgz");
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", path.join(dir, "argent.tgz")] },
+      {}
+    );
+  });
+
+  it("makes a relative tarball path absolute for a local install, which runs in the project root", async () => {
+    vi.mocked(isLocallyInstalled).mockReset();
+    vi.mocked(isLocallyInstalled).mockReturnValue(false);
+    vi.mocked(runShellCommand).mockImplementationOnce(async () => {
+      vi.mocked(isLocallyInstalled).mockReturnValue(true);
+    });
+    process.chdir(path.join(dir, "sub"));
+
+    await install("local", "../argent.tgz");
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "pnpm", args: ["add", "-D", path.join(dir, "argent.tgz")] },
+      { cwd: "/fake/project" }
+    );
   });
 });

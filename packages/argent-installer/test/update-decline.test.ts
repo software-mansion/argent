@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { update } from "../src/update.js";
 import { hashBundledContent } from "../src/utils.js";
+import { resolveInstallableUpdateTarget } from "../src/update-target.js";
 
 // Declining the update prompt must cancel + exit 0 without the config refresh
 // (entry rewrites, allowlists, stale-config sweep, rules/agents, skills)
@@ -245,10 +246,12 @@ describe("update — interactive decline", () => {
 
       await expect(update([])).rejects.toThrow(ExitSentinel);
 
+      // The release-age policy is read where the install runs.
+      expect(resolveInstallableUpdateTarget).toHaveBeenCalledWith("yarn", "1.0.0", os.homedir());
       expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
         "yarn",
         ["global", "add", "@swmansion/argent@99.0.0"],
-        expect.objectContaining({ cwd: os.tmpdir() })
+        expect.objectContaining({ cwd: os.homedir() })
       );
       const esc = String.fromCharCode(27);
       const info = promptsMock.log.info.mock.calls.map((c: unknown[]) =>
@@ -258,6 +261,44 @@ describe("update — interactive decline", () => {
       );
       expect(info).toContain(
         "Run yarn global add @swmansion/argent@99.0.0 (with Yarn classic, outside this Yarn 2+ project)."
+      );
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "drops the prefix npm exec exports from yarn's env for a Yarn classic global",
+    async () => {
+      process.env.npm_config_user_agent = "npm/11.6.2 node/v24.14.1 darwin arm64";
+      const savedPrefix = process.env.npm_config_prefix;
+      process.env.npm_config_prefix = "/opt/homebrew";
+      const pkg = path.join(tmpDir, "yarn-global", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.mkdirSync(path.join(tmpDir, "yarn-bin"));
+      fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(tmpDir, "yarn-bin", "argent"));
+      childProcessMock.which.mockImplementation(
+        () => path.join(tmpDir, "yarn-bin", "argent") + "\n"
+      );
+      promptsMock.confirm.mockResolvedValueOnce(true);
+      childProcessMock.execFileSync.mockImplementationOnce((() => {
+        topologyState.globalVersion = "99.0.0";
+        return undefined;
+      }) as never);
+
+      try {
+        await update([]);
+      } finally {
+        if (savedPrefix === undefined) delete process.env.npm_config_prefix;
+        else process.env.npm_config_prefix = savedPrefix;
+      }
+
+      expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+        "yarn",
+        ["global", "add", "@swmansion/argent@99.0.0"],
+        expect.objectContaining({
+          env: expect.not.objectContaining({ npm_config_prefix: expect.anything() }),
+        })
       );
     }
   );

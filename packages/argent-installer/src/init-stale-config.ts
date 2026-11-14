@@ -164,8 +164,8 @@ export async function cleanupStaleMcpConfigs(args: {
             "if it is a leftover, remove it"
         );
       }
-      // Bare `argent` that IS on PATH: a working global install the user
-      // kept — legitimate coexistence, stay quiet.
+      // Bare `argent` with an argent on PATH: possibly a global install the
+      // user kept — legitimate coexistence, stay quiet.
     }
   } else if (scope === "global") {
     // A project-scope entry at this root can outrank the global entry just

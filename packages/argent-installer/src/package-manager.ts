@@ -5,9 +5,9 @@ import { canonicalPath } from "@argent/configuration-core";
 import { PACKAGE_NAME } from "./constants.js";
 import {
   getRemainingGlobalBinaryPath,
-  globalPackageRootOf,
   packageRootOf,
   readShimScript,
+  shimTargetOf,
 } from "./topology.js";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
@@ -81,7 +81,8 @@ export function detectGlobalPackageManager(): PackageManager {
   const shim = readShimScript(binaryPath);
   if (shim === null || !/node_modules[\\/]/.test(shim)) return "npm";
   if (PNPM_GLOBAL_TARGET.test(shim)) return "pnpm";
-  const target = globalPackageRootOf(binaryPath);
+  // The shim's own target, not its realpath: pnpm 11 links that into its store.
+  const target = shimTargetOf(binaryPath);
   return (target ? lockfileOwnerOf(target) : null) ?? "yarn";
 }
 
@@ -224,13 +225,24 @@ export function globalInstallCommand(pm: PackageManager, pkg: string): ShellComm
   }
 }
 
-// The cwd a global command runs in. yarn, pnpm and bun take their version and
-// config from the cwd's project (yarnPath, a corepack `packageManager` pin),
-// which can swap in Yarn 2+ or refuse to run, and their global folders do not
-// depend on it. npm keeps the caller's cwd: it ignores project config under -g,
-// and under nodenv or asdf the cwd picks the Node whose prefix holds the global.
-export function globalCommandCwd(cmd: ShellCommand): string | undefined {
-  return cmd.bin === "npm" ? undefined : os.tmpdir();
+// Where and with what env a global command of `pm` runs. In a project, Yarn
+// classic defers to its yarnPath and corepack's shims to its `packageManager`
+// pin, which can swap in Yarn 2+ or refuse to run, so the other managers run in
+// home: Yarn reads a .yarnrc in every parent of its cwd, and only root can write
+// home's parents, unlike a shared /tmp. npm keeps the caller's cwd: it ignores
+// project config under -g, and under nodenv or asdf the cwd picks the Node whose
+// prefix holds the global. npm exec exports its prefix as npm_config_prefix,
+// which Yarn classic would take for its global bin dir.
+export function globalCommandOptions(pm: PackageManager): {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+} {
+  if (pm === "npm") return {};
+  const home = os.homedir();
+  const cwd = fs.existsSync(home) ? { cwd: home } : {};
+  if (pm !== "yarn" || !process.env.npm_config_user_agent?.startsWith("npm/")) return cwd;
+  const { npm_config_prefix: _npmPrefix, ...env } = process.env;
+  return { ...cwd, env };
 }
 
 export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {

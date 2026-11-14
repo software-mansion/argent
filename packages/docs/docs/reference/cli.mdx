@@ -36,7 +36,7 @@ Run `argent --help` for the list of commands, `argent <command> --help` for the 
 
 `argent update` and `argent uninstall` use the package manager that installed the global `argent` on `PATH`: npm, pnpm, bun or Yarn classic.
 
-`argent uninstall` exits with code `1` when a package removal fails, or when an `argent` command stays on `PATH` after the removal. It still removes the other install that you selected.
+`argent uninstall` exits with code `1` when a package removal fails, or when a global `argent` install is still on `PATH` after the removal. A version manager's shim that no longer runs, or a project's own copy, does not count. It still removes the other install that you selected.
 
 ## `argent server start`
 

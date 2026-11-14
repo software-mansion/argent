@@ -25,7 +25,7 @@ import {
   isNewerVersion,
   detectGlobalPackageManager,
   detectProjectPackageManager,
-  globalCommandCwd,
+  globalCommandOptions,
   globalInstallCommand,
   localInstallCommand,
   probeLocalInstall,
@@ -298,6 +298,8 @@ export async function update(args: string[]): Promise<void> {
 
     const pm =
       mode === "local" ? detectProjectPackageManager(projectRoot) : detectGlobalPackageManager();
+    // Local installs must rewrite the project's manifest/lockfile.
+    const runIn = mode === "local" ? { cwd: projectRoot } : globalCommandOptions(pm);
     let latest: string | null = null;
     let target: string | null;
     let minReleaseAgeMs = 0;
@@ -308,7 +310,7 @@ export async function update(args: string[]): Promise<void> {
     } else {
       let resolved;
       try {
-        resolved = await resolveInstallableUpdateTarget(pm, installed);
+        resolved = await resolveInstallableUpdateTarget(pm, installed, runIn.cwd);
       } catch (err) {
         spinner.stop(pc.red("Could not reach registry."));
         await trackPackageAction(
@@ -447,9 +449,8 @@ export async function update(args: string[]): Promise<void> {
             // Current versions ship no postinstall, but downgrades and pinned
             // installs fetch older ones whose postinstall honors this — keep it
             // so they stay quiet and don't double-kill the tool server.
-            env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
-            // Local installs must rewrite the project's manifest/lockfile.
-            cwd: mode === "local" ? projectRoot : globalCommandCwd(cmd),
+            env: { ...(runIn.env ?? process.env), ARGENT_SKIP_POSTINSTALL: "1" },
+            cwd: runIn.cwd,
           });
         },
         () => {

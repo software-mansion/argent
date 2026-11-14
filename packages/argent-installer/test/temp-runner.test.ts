@@ -166,7 +166,7 @@ describe("isArgentOnPath", () => {
     expect(isArgentOnPath()).toBe(false);
   });
 
-  it("counts a project copy, which a bare `argent` runs", () => {
+  it("counts a project copy that npx or npm exec puts on PATH", () => {
     whichFinds(path.join(process.cwd(), "node_modules", ".bin", "argent"));
     expect(isGloballyInstalled()).toBe(false);
     expect(isArgentOnPath()).toBe(true);
@@ -216,7 +216,7 @@ describe("init under pnpm dlx", () => {
 
     expect(runShellCommand).toHaveBeenCalledWith(
       { bin: "pnpm", args: ["add", "-g", "@swmansion/argent"] },
-      { cwd: os.tmpdir() }
+      { cwd: os.homedir() }
     );
   });
 });

@@ -20,7 +20,7 @@ import {
   formatShellCommand,
   getRemainingGlobalBinaryPath,
   getGloballyInstalledPackageRoot,
-  globalCommandCwd,
+  globalCommandOptions,
   globalUninstallCommand,
   localUninstallCommand,
   isDeclaredLocally,
@@ -433,11 +433,12 @@ export async function uninstall(args: string[]): Promise<void> {
       removeTargets = targetDecision.targets;
     }
 
-    // Clean every scope EXCEPT those keeping a RETAINED install wired up: a kept
-    // global install keeps its global-scope entries (and, in global mode, its
-    // project-scope entries too — those run the bare `argent` command); a
-    // local-mode project keeps its project-scope entries (committed team files)
-    // unless the local install itself is being removed.
+    // Clean every scope EXCEPT those keeping a RETAINED install wired up: while
+    // argent is on PATH and the global is not being removed, its global-scope
+    // entries stay (and, in global mode, the project-scope ones too — those run
+    // the bare `argent` command); a local-mode project keeps its project-scope
+    // entries (committed team files) unless the local install itself is being
+    // removed.
     const scopesToClean = new Set<"local" | "global">(["local", "global"]);
     if (isArgentOnPath() && !removeTargets.includes("global")) {
       scopesToClean.delete("global");
@@ -641,6 +642,7 @@ export async function uninstall(args: string[]): Promise<void> {
       kind: "local" | "global";
       cmd: ShellCommand;
       cwd?: string;
+      env?: NodeJS.ProcessEnv;
       prompt: string;
       // Default when auto-selected: a local devDep is likely meant to go, a shared
       // global install is not.
@@ -678,11 +680,11 @@ export async function uninstall(args: string[]): Promise<void> {
         };
       }
       if (!globalPresent) return null;
-      const cmd = globalUninstallCommand(detectGlobalPackageManager(), PACKAGE_NAME);
+      const pm = detectGlobalPackageManager();
       return {
         kind: "global",
-        cmd,
-        cwd: globalCommandCwd(cmd),
+        cmd: globalUninstallCommand(pm, PACKAGE_NAME),
+        ...globalCommandOptions(pm),
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
         installDir: getGloballyInstalledPackageRoot(),
@@ -732,7 +734,7 @@ export async function uninstall(args: string[]): Promise<void> {
 
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
-        execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
+        execShellCommandSync(removable.cmd, { cwd: removable.cwd, env: removable.env });
         // The owner is read from the layout, which can misjudge, and the wrong
         // manager exits 0 and leaves the package.
         const leftover = removable.kind === "global" ? getRemainingGlobalBinaryPath() : null;

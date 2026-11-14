@@ -76,10 +76,11 @@ function getGlobalBinaryPaths(): string[] {
 }
 
 /**
- * Whether a bare `argent` may still resolve for the editors, live here or
- * not: a version-manager shim that fails in this directory can run another
- * Node's global elsewhere, and a project's bin answers it too. Deciding to
- * clear what those editor entries rely on needs this, not a live global.
+ * Whether any argent but a temp runner's is on PATH, live here or not. Clearing
+ * what the editors' bare `argent` relies on goes by this, not by a live global:
+ * a version-manager shim that fails in this directory can run another Node's
+ * global elsewhere, and under npx or npm exec this PATH, which then holds the
+ * project's bin, is not the one the editors run.
  */
 export function isArgentOnPath(): boolean {
   return getPermanentBinaryPaths().length > 0;
@@ -136,7 +137,7 @@ export function readShimScript(binaryPath: string): string | null {
 
 // pnpm's global bin is a shim script, not a link. pnpm 11+ ends it with a
 // `# cmd-shim-target=` line; older ones exec a path under `$basedir`.
-function shimTargetOf(binaryPath: string): string | null {
+export function shimTargetOf(binaryPath: string): string | null {
   const shim = readShimScript(binaryPath);
   if (!shim) return null;
   const trailer = /^# cmd-shim-target=(.+)$/m.exec(shim);
@@ -145,7 +146,7 @@ function shimTargetOf(binaryPath: string): string | null {
   return relative ? path.resolve(canonicalPath(path.dirname(binaryPath)), relative[1]!) : null;
 }
 
-export function globalPackageRootOf(binaryPath: string): string | null {
+function globalPackageRootOf(binaryPath: string): string | null {
   const root = packageRootOf(binaryPath);
   if (root) return root;
   const target = shimTargetOf(binaryPath);
