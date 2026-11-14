@@ -14,6 +14,7 @@ import {
   clearLostProfilerRun,
   getLostProfilerRun,
 } from "../../../blueprints/react-profiler-session";
+import { liveAndroidNetworkCaptureSerials } from "../../../blueprints/android-network-inspector";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-debugger";
 import {
   REACT_NATIVE_PROFILER_SETUP_SCRIPT,
@@ -149,6 +150,19 @@ function describeTakeover(input: {
 function failedTakeoverText({ session_id, reason }: TakeoverReport): string {
   const run = session_id ? `session ${session_id}` : "a recording with no owner record";
   return `Before it failed, this start stopped ${run} (reason: ${reason}), and nothing is recording now.`;
+}
+
+/**
+ * The serials native network capture is kept under, whose logcat the device
+ * probe waits for in full: missing one would miss capture on the profiled app.
+ * Empty, not a throw, when the lookup fails, like the warning it feeds.
+ */
+function serialsWithCapture(): string[] {
+  try {
+    return liveAndroidNetworkCaptureSerials();
+  } catch {
+    return [];
+  }
 }
 
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
@@ -442,8 +456,8 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // see the run. Before the start, so nothing is awaited between the start
       // and the registration.
       const runtimeDevices = isLogicalKeyedDevice(api.deviceId)
-        ? await findRuntimeDevices(cdp)
-        : [];
+        ? await findRuntimeDevices(cdp, { awaitSerials: serialsWithCapture() })
+        : { found: [], unresolved: [] };
 
       const sessionId = crypto.randomUUID();
       const ownerPayload: ProfilerSessionOwner = {
@@ -556,7 +570,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.sessionId = sessionId;
       api.ownerToolServerPid = process.pid;
       trackProfilingRun(api.deviceId, api);
-      for (const device of runtimeDevices) trackProfilingRun(device, api);
+      for (const device of runtimeDevices.found) trackProfilingRun(device, api);
 
       const warning = nativeNetworkCaptureWarning(api.deviceId, api.runtimeApp, runtimeDevices);
       return {
@@ -566,7 +580,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         detected_architecture: api.detectedArchitecture,
         ...(tookOver ? { took_over: tookOver } : {}),
         ...(warning ? { warning } : {}),
-        ...(isLogicalKeyedDevice(api.deviceId) && runtimeDevices.length === 0
+        ...(isLogicalKeyedDevice(api.deviceId) && runtimeDevices.found.length === 0
           ? { [RESULT_NOTE_KEY]: UNKNOWN_DEVICE_NOTE }
           : {}),
       };

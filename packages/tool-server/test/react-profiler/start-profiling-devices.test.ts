@@ -9,8 +9,11 @@ import {
 import { __resetProfilingDevicesForTesting, isProfiling } from "../../src/utils/profiling-devices";
 
 import { createReactProfilerStartTool } from "../../src/tools/profiler/react/react-profiler-start";
+import type { RuntimeDevices } from "../../src/utils/debugger/runtime-device";
 
-const findRuntimeDevicesMock = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
+const findRuntimeDevicesMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<RuntimeDevices> => ({ found: [], unresolved: [] }))
+);
 vi.mock("../../src/utils/debugger/runtime-device", () => ({
   findRuntimeDevices: () => findRuntimeDevicesMock(),
 }));
@@ -72,7 +75,7 @@ afterEach(() => {
   __resetProfilingDevicesForTesting();
   resetDeviceAliases();
   findRuntimeDevicesMock.mockReset();
-  findRuntimeDevicesMock.mockResolvedValue([]);
+  findRuntimeDevicesMock.mockResolvedValue({ found: [], unresolved: [] });
 });
 
 describe("react-profiler-start registers the run where the device's calls look", () => {
@@ -97,7 +100,10 @@ describe("react-profiler-start registers the run where the device's calls look",
 
   it("registers a run keyed by a logicalDeviceId under every id of the device it runs on too", async () => {
     rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
-    findRuntimeDevicesMock.mockResolvedValue(["emulator-5554", "127.0.0.1:5555"]);
+    findRuntimeDevicesMock.mockResolvedValue({
+      found: ["emulator-5554", "127.0.0.1:5555"],
+      unresolved: [],
+    });
     const { registry } = fakeSession(LOGICAL_ID);
     const tool = createReactProfilerStartTool(registry);
 
