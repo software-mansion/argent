@@ -68,9 +68,9 @@ function makePage(options: PageOptions = {}): Page {
     HTMLTextAreaElement,
     Event,
     listeners,
-    getComputedStyle: (el: { overflow?: string }) => ({
-      overflowX: el.overflow ?? "visible",
-      overflowY: el.overflow ?? "visible",
+    getComputedStyle: (el: { overflow?: string; overflowX?: string; overflowY?: string }) => ({
+      overflowX: el.overflowX ?? el.overflow ?? "visible",
+      overflowY: el.overflowY ?? el.overflow ?? "visible",
     }),
     addEventListener: (type: string, fn: () => void, capture?: boolean) =>
       type === "input" && capture === true && listeners.add(fn),
@@ -568,6 +568,14 @@ describe("fill page script", () => {
     ["a tabindex", { attributes: { tabindex: "0" } }],
     ["scrolling down", { scrollHeight: 500, overflow: "auto" }],
     ["scrolling sideways", { scrollWidth: 500, overflow: "scroll" }],
+    [
+      "scrolling down on overflow-y scroll",
+      { scrollHeight: 500, overflowX: "hidden", overflowY: "scroll" },
+    ],
+    [
+      "scrolling sideways on overflow-x auto",
+      { scrollWidth: 500, overflowX: "auto", overflowY: "hidden" },
+    ],
   ])("answers no_focus for a host that %s makes focusable itself", async (_n, props) => {
     const page = makePage();
     page.doc.activeElement = closedHost("MY-FIELD", props);
@@ -583,6 +591,26 @@ describe("fill page script", () => {
         scrollWidth: 500,
         overflow,
       });
+      await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
+    }
+  );
+
+  it.each([
+    ["overflow auto whose content fits", { overflow: "auto" }],
+    ["overflow scroll whose content fits", { overflow: "scroll" }],
+    [
+      "overflow-y auto overflowing sideways",
+      { scrollWidth: 500, overflowX: "hidden", overflowY: "auto" },
+    ],
+    [
+      "overflow-x auto overflowing downwards",
+      { scrollHeight: 500, overflowX: "auto", overflowY: "hidden" },
+    ],
+  ])(
+    "refuses focus in a closed shadow root of a host with %s, which no user scrolls",
+    async (_n, props) => {
+      const page = makePage();
+      page.doc.activeElement = closedHost("MY-FIELD", props);
       await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
     }
   );
