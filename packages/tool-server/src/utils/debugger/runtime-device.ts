@@ -28,8 +28,11 @@ export interface RuntimeDevices {
    */
   found: string[];
   /**
-   * Serials from `awaitSerials` whose logcat could not be read, so they may be
-   * this device too. Only set alongside an Android `found`.
+   * Ids from `awaitSerials` whose logcat could not be read, so they may be this
+   * device too: the read failed or timed out, or `adb devices` does not list
+   * the serial as ready (offline, unauthorized or disconnected). Only set
+   * alongside an Android `found`. An id that is no adb serial at all, such as a
+   * simulator's UDID, is listed too, since adb cannot read it either.
    */
   unresolved: string[];
 }
@@ -53,8 +56,8 @@ const NOT_FOUND: RuntimeDevices = { found: [], unresolved: [] };
  * Every serial that holds the marker names this device, and state that argent
  * keys by serial, such as native network capture, may sit under any of them.
  * `awaitSerials` are the serials such state sits under: their reads are waited
- * for in full, and one that fails is reported in `unresolved`, since a read
- * that fails cannot tell this device from another.
+ * for in full, and one that cannot be read is reported in `unresolved`, since
+ * it cannot be told apart from this device.
  *
  * Nothing is found when the runtime has no native logger, or when no device
  * argent can read the log of holds the marker (a physical iPhone, a provider's
@@ -112,30 +115,34 @@ function firstFound<T>(checks: Array<() => Promise<T | undefined>>): Promise<T |
 }
 
 /**
- * The serials whose logcat holds the marker. It reads every serial at once and
- * stops once all have answered, or once {@link OTHER_TRANSPORTS_GRACE_MS} has
- * passed since the first hit and every serial in `awaitSerials` has answered.
- * Undefined when none holds it.
+ * The serials whose logcat holds the marker. It reads every listed serial at
+ * once and stops once all have answered, or once
+ * {@link OTHER_TRANSPORTS_GRACE_MS} has passed since the first hit and every
+ * listed serial in `awaitSerials` has answered. Undefined when none holds it.
  */
 async function androidDevices(
   serials: readonly string[],
   marker: string,
   awaitSerials: readonly string[]
 ): Promise<RuntimeDevices | undefined> {
-  const awaited = serials.filter((serial) => awaitSerials.includes(serial));
+  // adb lists one line per transport, so two devices that report one serial
+  // number list it twice. `answers` is keyed by serial, so a repeat would keep
+  // it from ever counting every serial as answered.
+  const listed = [...new Set(serials)];
+  const awaited = listed.filter((serial) => awaitSerials.includes(serial));
   const answers = new Map<string, LogRead>();
   await new Promise<void>((resolve) => {
     let graceOver = false;
     let grace: ReturnType<typeof setTimeout> | undefined;
     const settle = () => {
-      const allAnswered = answers.size === serials.length;
+      const allAnswered = answers.size === listed.length;
       if (allAnswered || (graceOver && awaited.every((serial) => answers.has(serial)))) {
         clearTimeout(grace);
         resolve();
       }
     };
     settle();
-    for (const serial of serials) {
+    for (const serial of listed) {
       void logcatHolds(serial, marker).then((read) => {
         answers.set(serial, read);
         if (read === "held") {
@@ -150,7 +157,9 @@ async function androidDevices(
   });
   const found = [...answers].filter(([, read]) => read === "held").map(([serial]) => serial);
   if (found.length === 0) return undefined;
-  const unresolved = awaited.filter((serial) => answers.get(serial) === "failed");
+  const unresolved = [...new Set(awaitSerials)].filter(
+    (serial) => !listed.includes(serial) || answers.get(serial) === "failed"
+  );
   return { found, unresolved };
 }
 

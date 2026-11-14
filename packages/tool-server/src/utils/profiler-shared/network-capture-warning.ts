@@ -108,8 +108,8 @@ function unresolvedDeviceWarning(
   const one = serials.length === 1;
   return (
     `Native network capture is on for ${appId} on ${serials.join(", ")}, ` +
-    `${one ? "which" : "each of which"} may also be the device this profile runs on: its logcat ` +
-    `could not be read to tell. Argent attaches its in-app agent to the processes of that app there. ` +
+    `${one ? "which" : "each of which"} may also be the device this profile runs on: ` +
+    `${one ? "its logcat" : "their logcats"} could not be read to tell. Argent attaches its in-app agent to the processes of that app there. ` +
     `${CAPTURE_COST} To profile without it, stop this profile, call native-network-logs with stop: true ` +
     `for ${appId} ${one ? `with udid ${serials[0]}` : `once with each of ${serials.map((serial) => `udid ${serial}`).join(", ")}`}, ` +
     `then restart-app on ${profiled} and profile again.`

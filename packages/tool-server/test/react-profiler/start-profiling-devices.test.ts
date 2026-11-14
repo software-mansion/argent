@@ -6,16 +6,24 @@ import {
   rememberLogicalKeyedDevice,
   resetDeviceAliases,
 } from "../../src/utils/debugger/device-alias";
-import { __resetProfilingDevicesForTesting, isProfiling } from "../../src/utils/profiling-devices";
+import {
+  __resetProfilingDevicesForTesting,
+  isProfiling,
+  registerCaptureOnDemandSender,
+} from "../../src/utils/profiling-devices";
 
 import { createReactProfilerStartTool } from "../../src/tools/profiler/react/react-profiler-start";
 import type { RuntimeDevices } from "../../src/utils/debugger/runtime-device";
 
+type ProbeOptions = { awaitSerials?: readonly string[] };
 const findRuntimeDevicesMock = vi.hoisted(() =>
-  vi.fn(async (): Promise<RuntimeDevices> => ({ found: [], unresolved: [] }))
+  vi.fn(async (_cdp?: unknown, _opts?: ProbeOptions): Promise<RuntimeDevices> => ({
+    found: [],
+    unresolved: [],
+  }))
 );
 vi.mock("../../src/utils/debugger/runtime-device", () => ({
-  findRuntimeDevices: () => findRuntimeDevicesMock(),
+  findRuntimeDevices: (cdp: unknown, opts?: ProbeOptions) => findRuntimeDevicesMock(cdp, opts),
 }));
 
 const LOGICAL_ID = "1c3346c4a6889e88dbb8116da34f0f4af6f8067c";
@@ -116,6 +124,31 @@ describe("react-profiler-start registers the run where the device's calls look",
     expect(isProfiling("127.0.0.1:5555")).toBe(true);
     expect(isProfiling(LOGICAL_ID)).toBe(true);
     expect(result).not.toHaveProperty("__argentNote");
+  });
+
+  // Only an awaited serial is kept when it answers after the grace window, so
+  // the probe must await the one the agent drives the device by.
+  it("asks the probe to wait in full for a serial with a simulator-server", async () => {
+    const WIRELESS = "192.168.1.5:5555";
+    rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
+    const sends: boolean[] = [];
+    registerCaptureOnDemandSender(WIRELESS, "ws://127.0.0.1:9000", (onDemand) =>
+      sends.push(onDemand)
+    );
+    findRuntimeDevicesMock.mockImplementation(async (_cdp, opts) => ({
+      found: opts?.awaitSerials?.includes(WIRELESS) ? ["R58M123ABC", WIRELESS] : ["R58M123ABC"],
+      unresolved: [],
+    }));
+    const { registry } = fakeSession(LOGICAL_ID);
+    const tool = createReactProfilerStartTool(registry);
+
+    await tool.execute(
+      {},
+      { device_id: LOGICAL_ID, port: 8081, sample_interval_us: 100, force: false }
+    );
+
+    expect(isProfiling(WIRELESS)).toBe(true);
+    expect(sends).toEqual([true]);
   });
 
   it("notes that captures go on when the device cannot be found", async () => {

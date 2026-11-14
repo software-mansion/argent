@@ -33,7 +33,7 @@ import {
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "../../../utils/debugger/device-alias";
 import { findRuntimeDevices } from "../../../utils/debugger/runtime-device";
-import { trackProfilingRun } from "../../../utils/profiling-devices";
+import { simulatorServerDeviceIds, trackProfilingRun } from "../../../utils/profiling-devices";
 import { RESULT_NOTE_KEY } from "../../screenshot/dropped-geometry";
 import {
   bootstrapFailureMessage,
@@ -153,16 +153,22 @@ function failedTakeoverText({ session_id, reason }: TakeoverReport): string {
 }
 
 /**
- * The serials native network capture is kept under, whose logcat the device
- * probe waits for in full: missing one would miss capture on the profiled app.
- * Empty, not a throw, when the lookup fails, like the warning it feeds.
+ * The ids whose logcat the device probe waits for in full, as missing one would
+ * miss state kept under it: native network capture on the profiled app, and the
+ * simulator-server the agent drives the device through, which the run must
+ * reach (capture on demand, and the `profiling` flag on that id's calls). Each
+ * lookup that fails adds nothing, not a throw, like the warning they feed.
  */
-function serialsWithCapture(): string[] {
-  try {
-    return liveAndroidNetworkCaptureSerials();
-  } catch {
-    return [];
+function idsToAwait(): string[] {
+  const ids = new Set<string>();
+  for (const lookup of [liveAndroidNetworkCaptureSerials, simulatorServerDeviceIds]) {
+    try {
+      for (const id of lookup()) ids.add(id);
+    } catch {
+      // Nothing to add.
+    }
   }
+  return [...ids];
 }
 
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
@@ -456,7 +462,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // see the run. Before the start, so nothing is awaited between the start
       // and the registration.
       const runtimeDevices = isLogicalKeyedDevice(api.deviceId)
-        ? await findRuntimeDevices(cdp, { awaitSerials: serialsWithCapture() })
+        ? await findRuntimeDevices(cdp, { awaitSerials: idsToAwait() })
         : { found: [], unresolved: [] };
 
       const sessionId = crypto.randomUUID();

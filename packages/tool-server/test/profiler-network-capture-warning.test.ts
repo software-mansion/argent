@@ -286,6 +286,30 @@ describe("nativeNetworkCaptureWarning", () => {
           expect(liveDevices).not.toHaveBeenCalled();
         });
 
+        it("names each of several such serials, and how to stop capture under each", () => {
+          const OTHER_WIRELESS = "10.0.0.8:5555";
+          connectedWithLogicalId();
+          live.mockImplementation((deviceId) =>
+            deviceId === WIRELESS || deviceId === OTHER_WIRELESS ? [PKG] : []
+          );
+
+          const warning = nativeNetworkCaptureWarning(
+            LOGICAL,
+            ANDROID_APP,
+            unresolvedOn(USB, WIRELESS, OTHER_WIRELESS)
+          );
+
+          expect(warning).toBe(
+            `Native network capture is on for ${PKG} on ${WIRELESS}, ${OTHER_WIRELESS}, each of which ` +
+              `may also be the device this profile runs on: their logcats could not be read to tell. ` +
+              `Argent attaches its in-app agent to the processes of that app there. It can slow the ` +
+              `app, so the timings in this profile can differ from a run without it. To profile ` +
+              `without it, stop this profile, call native-network-logs with stop: true for ${PKG} ` +
+              `once with each of udid ${WIRELESS}, udid ${OTHER_WIRELESS}, then restart-app on ` +
+              `${USB} and profile again.`
+          );
+        });
+
         it("adds it after the found serial's warning when both have capture", () => {
           connectedWithLogicalId();
           live.mockImplementation((deviceId) =>
