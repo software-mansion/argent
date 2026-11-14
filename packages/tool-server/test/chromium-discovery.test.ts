@@ -18,6 +18,8 @@ interface FakeCdpServer {
 }
 
 async function startFakeCdpServer(options?: {
+  /** Bind this port instead of an ephemeral one. */
+  port?: number;
   responses?: {
     version?: number | object;
     /** A function is re-read per request, so a test can change the reply mid-run. */
@@ -63,7 +65,22 @@ async function startFakeCdpServer(options?: {
     res.end();
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  if (options?.port !== undefined) {
+    const requested = options.port;
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => {
+        server.off("error", onError);
+        reject(err);
+      };
+      server.once("error", onError);
+      server.listen(requested, "127.0.0.1", () => {
+        server.off("error", onError);
+        resolve();
+      });
+    });
+  } else {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  }
   const port = (server.address() as AddressInfo).port;
   return {
     port,
@@ -134,6 +151,33 @@ describe("getCandidateChromiumPorts", () => {
 });
 
 describe("discoverChromiumDevices", () => {
+  it("discovers a CDP endpoint on a port Node's fetch refuses", async () => {
+    // electronPort accepts 1024–65535, including the Fetch bad-port list
+    // (6000, 10080, …). undici rejects those before dialing, so a listener
+    // there used to be invisible and boot waited out the readiness deadline.
+    const blocked = [10080, 6000, 6667, 6697, 5060];
+    let server: FakeCdpServer | undefined;
+    let lastError: unknown;
+    for (const port of blocked) {
+      try {
+        server = await startFakeCdpServer({ port });
+        break;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    expect(server, `none of ${blocked.join(",")} could bind (${String(lastError)})`).toBeDefined();
+    serversToCleanup.push(server!);
+
+    const started = Date.now();
+    const devices = await discoverChromiumDevices({ timeoutMs: 1500, ports: [server!.port] });
+    const ours = devices.find((d) => d.port === server!.port);
+    expect(ours?.title).toBe("Test Page");
+    expect(ours?.browser).toMatch(/Chrome/);
+    expect(ours?.id).toBe(`chromium-cdp-${server!.port}`);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
   it("finds a fake CDP endpoint when its port is tracked", async () => {
     const server = await startFakeCdpServer();
     serversToCleanup.push(server);
