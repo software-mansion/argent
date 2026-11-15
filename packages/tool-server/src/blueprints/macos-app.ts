@@ -780,14 +780,19 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
   const network: ChannelNetworkSink = {
     event(method, params, pid) {
-      // Events come only after the Network.enable of an adopted channel.
+      // The app sends the events of a request in flight to whichever client is
+      // connected: also after Network.disable, and on a new connection to the
+      // same process before it acknowledges Network.enable. Only a new request
+      // waits for the capture to be on.
       if (recordedProcess?.pid === pid) records.fold(recordedProcess.index, method, params);
     },
     closed(ch) {
       const process = recordedProcess;
       if (!ch.handshake || process?.pid !== ch.handshake.pid) return;
-      // The app turns capture off when argent's connection closes, so the
-      // open requests get no more events. A reconnect fails them in adopt.
+      // The app turns capture off when argent's connection closes. The events
+      // of its open requests that come before argent reconnects reach no
+      // client, so an end can be lost. A reconnect fails them in adopt, and
+      // one that still runs completes when its end comes on the new connection.
       void pollPidsUntilGone([process.pid], {
         timeoutMs: PROCESS_EXIT_WAIT_MS,
         pollIntervalMs: POLL_MS,
