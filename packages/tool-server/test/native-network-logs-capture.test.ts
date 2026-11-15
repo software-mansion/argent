@@ -196,6 +196,21 @@ describe("native network capture started through the blueprint", () => {
     });
   });
 
+  it("says the launch was missed only once, also when the started app is started again", async () => {
+    await withService(async (api) => {
+      const app = await connectApp(api.socketPath, BUNDLE);
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+      expect(headerOf(await callTool(api))).toMatch(/were not recorded.*restart-app/);
+
+      // A second start keeps the capture that is on, so nothing more was missed.
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+      const next = await callTool(api);
+      expect(next).toMatchObject({ status: "ok", armed: true });
+      expect(headerOf(next)).not.toMatch(/were not recorded/);
+      app.close();
+    });
+  });
+
   it("does not say the launch was missed at a start after a stop, when capture recorded the process from its launch", async () => {
     await withService(async (api) => {
       await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(false);
