@@ -44,6 +44,8 @@ import {
   type NativeDevtoolsApi,
 } from "../src/blueprints/native-devtools";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
+import type { CaptureResult, StoppedLayer } from "../src/tools/network/network-capture";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 
 const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
@@ -363,6 +365,44 @@ describe("native-network-logs only reads iOS capture", () => {
       // The next start of the running app missed what came before it, and its first read says so.
       await api.startNetworkCapture(BUNDLE, 8081);
       expect(headerOf(await callTool(api))).toMatch(/were not recorded/);
+      app.close();
+    });
+  });
+
+  it("leaves the requests to Metro on the port out of what a stop keeps, in the stop's total and in the list", async () => {
+    await withRegistry(async (registry) => {
+      registry.registerTool(createNetworkCaptureStopTool(registry));
+      const ref = nativeDevtoolsRef(device);
+      const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+      const app = await connectApp(api.socketPath, BUNDLE);
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+      const request = (requestId: string, url: string) =>
+        app.sendEvent("Network.requestWillBeSent", {
+          requestId,
+          request: { url, method: "GET", headers: {} },
+        });
+      request("metro", "http://localhost:8081/symbolicate");
+      request("app", "https://example.com/kept");
+      await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.records(0)).toHaveLength(2));
+
+      const stopped = await registry.invokeTool<CaptureResult<StoppedLayer>>(
+        "network-capture-stop",
+        { udid: UDID, bundleId: BUNDLE }
+      );
+      expect(stopped.layers.find((layer) => layer.layer === "ios-native")).toEqual({
+        layer: "ios-native",
+        armed: false,
+        total: 1,
+      });
+
+      expect(
+        await registry.invokeTool("native-network-logs", { udid: UDID, bundleId: BUNDLE })
+      ).toMatchObject({
+        header: `ios-native: stopped, 1 request (${STOPPED_DETAIL})`,
+        stopped: true,
+        total: 1,
+        requests: [expect.objectContaining({ url: "https://example.com/kept" })],
+      });
       app.close();
     });
   });
