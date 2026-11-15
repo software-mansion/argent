@@ -909,6 +909,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
                 ? `the agent did not acknowledge Network.enable within ${NETWORK_ENABLE_TIMEOUT_MS / 1000} s; the next call asks again`
                 : `the agent did not enable capture (${detail}); the next call asks again`;
             process.stderr.write(`[native-devtools ${udid.slice(0, 8)}] ${conn.enableFailure}\n`);
+            wakeConnectionWaiters();
             return false;
           }
         )
@@ -1325,14 +1326,24 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed`;
           }
         }
-        const armed = await waitForConnection(() => ofLaunch()?.armed === true, LAUNCH_ARM_WAIT_MS);
+        // A launch is a next call too, so it asks again after a failed ask.
+        const asked = ofLaunch();
+        if (asked && !asked.armed && !asked.enabling) void enableOn(asked);
+        await waitForConnection(() => {
+          const conn = ofLaunch();
+          return conn !== undefined && (conn.armed || conn.enableFailure !== undefined);
+        }, LAUNCH_ARM_WAIT_MS);
         if (disposed) return undefined;
-        const shownPid = pid ?? ofLaunch()?.pid;
+        const launched = ofLaunch();
+        const shownPid = pid ?? launched?.pid;
         const pidText = shownPid !== undefined ? ` (pid ${shownPid})` : "";
-        if (armed) {
+        if (launched?.armed) {
           return `native network capture is armed for ${bundleId}${pidText}; stop-all-simulator-servers for this device, then restart-app, ends it`;
         }
-        return ofLaunch()
+        if (launched?.enableFailure !== undefined) {
+          return `native network capture is on for ${bundleId}, but its process${pidText} is not armed: ${launched.enableFailure}`;
+        }
+        return launched
           ? `native network capture is on for ${bundleId}, and its new process${pidText} has not acknowledged Network.enable yet; native-network-logs shows when it is armed`
           : `native network capture is on for ${bundleId}, and its new process has not connected yet; native-network-logs shows when it is armed`;
       },

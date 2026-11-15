@@ -238,10 +238,11 @@ interface FakeApp {
 /**
  * Dials the service as the app's in-app agent does. It acknowledges each CDP
  * request unless `acknowledge` is false, which leaves Network.enable unanswered.
+ * With `refuse`, it answers each CDP request with that error message.
  */
 function connectApp(
   socketPath: string,
-  { acknowledge = true }: { acknowledge?: boolean } = {}
+  { acknowledge = true, refuse }: { acknowledge?: boolean; refuse?: string } = {}
 ): Promise<FakeApp> {
   return new Promise((resolve, reject) => {
     const received: FakeApp["received"] = [];
@@ -259,8 +260,9 @@ function connectApp(
         const frame = JSON.parse(line) as FakeApp["received"][number];
         received.push(frame);
         if (acknowledge && frame.type === "CDP" && frame.payload?.id !== undefined) {
+          const reply = refuse ? { error: { message: refuse } } : { result: {} };
           sock.write(
-            JSON.stringify({ type: "CDP", payload: { id: frame.payload.id, result: {} } }) + "\n"
+            JSON.stringify({ type: "CDP", payload: { id: frame.payload.id, ...reply } }) + "\n"
           );
         }
       }
@@ -269,7 +271,7 @@ function connectApp(
 }
 
 /** Connects the fake app and waits until the service has taken its handshake. */
-async function dial(api: NativeDevtoolsApi, options?: { acknowledge?: boolean }) {
+async function dial(api: NativeDevtoolsApi, options?: { acknowledge?: boolean; refuse?: string }) {
   const app = await connectApp(api.socketPath, options);
   await vi.waitFor(() => expect(api.isConnected(APP)).toBe(true));
   return app;
@@ -277,6 +279,10 @@ async function dial(api: NativeDevtoolsApi, options?: { acknowledge?: boolean })
 
 const askedToEnable = (app: FakeApp): boolean =>
   app.received.some((frame) => frame.type === "CDP" && frame.payload?.method === "Network.enable");
+
+const enableRequests = (app: FakeApp): number =>
+  app.received.filter((frame) => frame.type === "CDP" && frame.payload?.method === "Network.enable")
+    .length;
 
 /**
  * Runs `run` against the real native-devtools service for IOS_UDID, then
@@ -769,6 +775,50 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
 
       expect(settled).toEqual({
         note: `native network capture is armed for ${APP} (pid ${PID}); stop-all-simulator-servers for this device, then restart-app, ends it`,
+      });
+      app.close();
+    });
+  });
+
+  it("asks a connected process again whose Network.enable got no answer, and says why it is not armed", async () => {
+    await withService(async (api) => {
+      const app = await dial(api, { acknowledge: false });
+      await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const first = api.activateNetworkInspection(APP);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(first).resolves.toBe(false);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(enableRequests(app)).toBe(1));
+
+      const note = await afterTheLaunchWait(() => api.networkCaptureAfterLaunch(APP));
+
+      expect(note).toBe(
+        `native network capture is on for ${APP}, but its process (pid ${PID}) is not armed: the agent did not acknowledge Network.enable within 5 s; the next call asks again`
+      );
+      expect(enableRequests(app)).toBe(2);
+      app.close();
+    });
+  });
+
+  it("says at once why a new process that refused Network.enable is not armed", async () => {
+    await withService(async (api) => {
+      await expect(api.activateNetworkInspection(APP)).resolves.toBe(false);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const note = api.networkCaptureAfterLaunch(APP);
+      await launchWaitStarted();
+
+      const app = await connectApp(api.socketPath, { refuse: "capture unavailable" });
+
+      // The fake clock never reaches the 5 s, so only the refusal can end the wait.
+      const deadline = performance.now() + 2_000;
+      let settled: unknown = "still waiting";
+      void note.then((value) => (settled = { note: value }));
+      while (settled === "still waiting" && performance.now() < deadline) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(settled).toEqual({
+        note: `native network capture is on for ${APP}, but its process (pid ${PID}) is not armed: the agent did not enable capture (native-devtools ${APP}: Network.enable failed: capture unavailable); the next call asks again`,
       });
       app.close();
     });
