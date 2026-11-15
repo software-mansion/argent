@@ -1064,19 +1064,33 @@ describe("network-capture-start", () => {
       expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
     });
 
-    it("tells to restart an app whose running process cannot be armed", async () => {
+    it("tells to restart an app whose running process cannot be armed, then to start again for the JS layer the relaunch ends", async () => {
       ios.appState = "stale_process";
 
       const result = await start(IOS_UDID, APP);
 
-      expect(layer(result, "ios-native")).toEqual({
-        layer: "ios-native",
-        armed: false,
-        reason:
-          "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now",
-      });
+      expect(result.layers).toEqual([
+        { layer: "js", armed: true },
+        {
+          layer: "ios-native",
+          armed: false,
+          reason:
+            "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture",
+        },
+      ]);
       // Capture is on, so the next launch arms it.
       expect(ios.isNetworkCaptureStarted(APP)).toBe(true);
+
+      // restart-app: a new process, with a new JS runtime that has no interceptor.
+      const relaunched = new FakeRuntime(undefined);
+      await reconnect(PORT, IOS_UDID, relaunched);
+      ios.connected.add(APP);
+      expect((await start(IOS_UDID, APP)).layers).toEqual([
+        { layer: "js", armed: true },
+        { layer: "ios-native", armed: true },
+      ]);
+      relaunched.send("/after-restart");
+      expect(await read(IOS_UDID)).toContain('"GET /after-restart"');
     });
 
     it("reports a service the app no longer dials unavailable and starts nothing", async () => {
