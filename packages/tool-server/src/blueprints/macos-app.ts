@@ -856,7 +856,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         records.connectionClosed(recordedProcess.index, { superseded: true });
       }
       recordedProcess = { pid, index: nextProcessIndex++, channel: ch };
-      captureGap = false;
+      // A process argent did not start just now ran before capture reached it.
+      captureGap = captureStarted && !launched;
       armedSinceLaunch = launched && captureStarted;
     } else if (recordedProcess.channel !== ch) {
       // The open requests of the same process lost their events while argent

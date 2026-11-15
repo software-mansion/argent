@@ -960,6 +960,29 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect((await readLog()).header).toBe(`macos-native: armed, 1 request (pid ${pid}; ${GAP})`);
     });
 
+    it("says the gap when the first start cannot reach the running app and a later start arms it", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // A new tool-server meets the app paused in a debugger.
+      await registry.disposeService(macosAppRef(resolveDevice(DEVICE_ID)).urn);
+      process.kill(pid, "SIGSTOP");
+      let first: Capture;
+      try {
+        first = await start();
+      } finally {
+        process.kill(pid, "SIGCONT");
+      }
+      expect(first.layers).toEqual([
+        expect.objectContaining({
+          layer: "macos-native",
+          armed: false,
+          reason: expect.stringMatching(/^argent cannot reach /),
+        }),
+      ]);
+      await new Promise((r) => setTimeout(r, 300));
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid}; ${GAP})`);
+    }, 20_000);
+
     it("keeps capture off in the new process when network-capture-stop comes during a restart", async () => {
       const { pid } = await run("boot-device", { macosAppPath: appPath });
       await start();
