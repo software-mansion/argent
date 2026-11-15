@@ -70,6 +70,12 @@ const REQUEST_BODY_GONE = "the agent holds no body for this request";
 const RESPONSE_BODY_GONE = "the agent no longer holds this body";
 /** The Mac library keeps no bodies, so its "No ..." answer is not an eviction. */
 export const MACOS_NO_BODIES = "argent does not keep the bodies of a Mac app's requests";
+/**
+ * A Mac app's connection can come back for the same process, and a request
+ * that still runs then completes, so this is true before and after a reconnect.
+ */
+export const MACOS_CONNECTION_DROPPED =
+  "argent's connection to the app dropped while this request ran, so argent can have missed its end; the request completes if its end comes later";
 const NO_RESPONSE_BODY = "the response has no body";
 
 export interface IosNetworkCaptureState {
@@ -504,7 +510,11 @@ export function createIosNetworkRecords(
       const open = records.filter((r) => r.connection === connection && isOpen(r));
       for (const record of open) {
         record.state = "failed";
-        record.errorText = ended ? PROCESS_ENDED : NOT_RECONNECTED;
+        record.errorText = ended
+          ? PROCESS_ENDED
+          : layer === "macos-native"
+            ? MACOS_CONNECTION_DROPPED
+            : NOT_RECONNECTED;
         cleared.delete(record);
       }
       for (const record of open) resize(record);

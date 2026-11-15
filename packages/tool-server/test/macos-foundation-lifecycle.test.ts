@@ -98,8 +98,8 @@ import { createNetworkCaptureStopTool } from "../src/tools/network/network-captu
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { resolveDevice } from "../src/utils/device-info";
-import { NOT_RECONNECTED, PROCESS_ENDED } from "../src/utils/native-network-record";
-import { MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
+import { PROCESS_ENDED } from "../src/utils/native-network-record";
+import { MACOS_CONNECTION_DROPPED, MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
 import {
   chromiumRefusal,
   findRunningCopies,
@@ -780,8 +780,10 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       // The next call reconnects through the listening socket. The request
       // may have ended while argent was not connected, so it fails...
       await app.call("Echo");
-      expect((await readLog()).requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
-        ["https://example.com/first", "failed", NOT_RECONNECTED],
+      const reconnected = await readLog();
+      expect(reconnected.header).toMatch(/^macos-native: armed, 1 request \(pid /);
+      expect(reconnected.requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
+        ["https://example.com/first", "failed", MACOS_CONNECTION_DROPPED],
       ]);
       // ...and argent armed the new connection before the call: an end that
       // comes there completes the request.
@@ -838,10 +840,10 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       const app = await macosApp();
       await app.call("Net.drop");
       await waitUntil(() => !app.isConnected());
-      // argent waits for the process to exit, then fails the request as not reconnected.
+      // argent waits for the process to exit, then fails the request as cut off by the drop.
       const log = await readUntil((l) => l.requests[0]?.state === "failed");
       expect(log.requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
-        ["https://example.com/held", "failed", NOT_RECONNECTED],
+        ["https://example.com/held", "failed", MACOS_CONNECTION_DROPPED],
       ]);
       expect(pidAlive(pid)).toBe(true);
     });
