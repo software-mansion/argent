@@ -1165,6 +1165,22 @@ describe("network-capture-start", () => {
       expect(ios.calls).toEqual([]);
     });
 
+    it("refuses an Apple system app as unavailable while Xcode's first launch is pending, as no layer captures it", async () => {
+      const systemApp = "com.apple.mobilesafari";
+      xcode.pending = true;
+
+      const err = await start(IOS_UDID, systemApp).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect(err?.message).toContain(
+        `ios-native: ${systemApp} is an Apple system app, which native network capture never covers`
+      );
+      expect(nativeUrns()).toEqual([]);
+    });
+
     it.each([
       { app: "a connected app", prepare: () => ios.connected.add(APP) },
       {
