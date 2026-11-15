@@ -292,7 +292,7 @@ A body that Argent cannot read shows `[unavailable: <reason>]`, for example when
 | `[unavailable: the app did not answer within 5 s; read it again later]`          | The request has a response, but the app did not send the request body within about 5 seconds. For example, the app is busy or sends a large body. Call `view-network-request-details` again.                             |
 | `[unavailable: the app process that made the request is gone]`                   | The app process ended, for example after a relaunch or a crash, and Argent has no copy of the body.                                                                                                                      |
 
-Argent keeps a copy of the 64 bodies that the agent read most recently. These copies contain a maximum of approximately 64 MB together. If one body is larger, Argent keeps a copy of only that body until the agent reads the next body. A later read of a body with a copy uses the copy. After the app process ends, a body is available only if Argent has a copy of it.
+Argent keeps a copy of the 64 bodies that the agent read most recently. These copies contain a maximum of 67,108,864 characters together. If one body is longer, Argent keeps a copy of only that body until the agent reads the next body. A later read of a body with a copy uses the copy. After the app process ends, a body is available only if Argent has a copy of it.
 
 When the connection of the app closes, Argent marks each request that still runs as `failed`. The `errorText` field gives one of these errors:
 
