@@ -442,4 +442,41 @@ describe("native-devtools network capture", () => {
     ]);
     expect(outcome).toBe(false);
   });
+
+  it("settles an enable still waiting for its reply as not armed at once when the app's connection closes", async () => {
+    const api = await startService();
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    const arming = api.activateNetworkInspection(BUNDLE);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    app.close();
+
+    // Well inside the 5 s the agent has to answer, so the reply timeout cannot settle it.
+    const outcome = await Promise.race([
+      arming,
+      new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1_000)),
+    ]);
+    expect(outcome).toBe(false);
+  });
+
+  it("settles an enable still waiting for its reply as not armed at once when a new connection of the app replaces it", async () => {
+    const api = await startService();
+    const first = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    const arming = api.activateNetworkInspection(BUNDLE);
+    await vi.waitFor(() => expect(enableRequests(first)).toHaveLength(1));
+    // A relaunch: the new process dials while the old one's enable is unanswered.
+    const second = await connectApp(api.socketPath);
+
+    // Well inside the 5 s the agent has to answer, so the reply timeout cannot settle it.
+    const outcome = await Promise.race([
+      arming,
+      new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1_000)),
+    ]);
+    expect(outcome).toBe(false);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+    second.close();
+  });
 });
