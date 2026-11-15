@@ -1558,6 +1558,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       udid,
       // A lent agent's capture is its provider's, so argent has none on there.
       bundleIds: lentSocketPath ? new Set() : activatedBundleIds,
+      startedBundleIds: activatedBundleIds,
       stoppedBundleIds,
       unconfirmedStopBundleIds,
       stores: networkStores,

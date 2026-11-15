@@ -49,6 +49,7 @@ vi.mock("node:child_process", async () => {
 import { nativeDevtoolsBlueprint, type NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { liveIosNetworkCaptures } from "../src/blueprints/ios-network-records";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { networkRequestTool } from "../src/tools/network/network-request";
 import type { NativeNetworkRecord } from "../src/utils/native-network-record";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { resolveDevice } from "../src/utils/device-info";
@@ -1025,6 +1026,25 @@ describe("native-devtools network capture on a lent agent", () => {
     instance = null;
     // The provider owns the agent's capture setting, so argent only read it.
     expect(cdpMethods(lent)).toEqual(["NativeDevtoolsIos.getConditions"]);
+  });
+
+  it("points view-network-request-details at native-network-logs for an unknown ios- id once capture is started", async () => {
+    const lent = await lendAgent();
+    const api = await startLentService();
+    const unknown = (): Promise<unknown> =>
+      networkRequestTool.execute!(
+        {},
+        { device_id: LENT_DEVICE_ID, requestId: "ios-0000-999999", includeBody: false }
+      );
+    await expect(unknown()).resolves.toMatch(/Native network capture is not started/);
+
+    await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+    for (const frame of requestEvents("open", "https://example.com/open")) lent.send(frame);
+    await recordOf(api, "https://example.com/open", "pending");
+
+    await expect(unknown()).resolves.toBe(
+      "Request ios-0000-999999 not found. Use native-network-logs to list the requests the iOS native layer recorded."
+    );
   });
 
   it("asks the provider again at each read of a started app whether capture is on", async () => {

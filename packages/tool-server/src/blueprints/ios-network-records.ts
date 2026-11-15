@@ -577,6 +577,11 @@ function withinWait(
 interface IosNetworkCaptures {
   readonly udid: string;
   readonly bundleIds: ReadonlySet<string>;
+  /**
+   * The apps network-capture-start started, also on a device whose provider
+   * lent its agent. When absent, `bundleIds`.
+   */
+  readonly startedBundleIds?: ReadonlySet<string>;
   /** The apps whose capture network-capture-stop stopped. */
   readonly stoppedBundleIds: ReadonlySet<string>;
   /**
@@ -617,7 +622,9 @@ export function findIosNativeRecord(
 /** Some app on some simulator has capture started or stopped, so its ids can be listed. */
 export function hasIosNetworkCapture(): boolean {
   return [...liveCaptures].some(
-    (captures) => captures.bundleIds.size > 0 || captures.stoppedBundleIds.size > 0
+    (captures) =>
+      (captures.startedBundleIds ?? captures.bundleIds).size > 0 ||
+      captures.stoppedBundleIds.size > 0
   );
 }
 
