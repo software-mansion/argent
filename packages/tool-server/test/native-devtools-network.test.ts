@@ -6,7 +6,12 @@ import type { DeviceInfo } from "@argent/registry";
 // app's socket and reads the app's pid from the host. These tests drive the
 // real service with a fake app on that socket.
 
-const probe = vi.hoisted(() => ({ launchctlList: "", psOutput: "" }));
+const probe = vi.hoisted(() => ({
+  launchctlList: "",
+  psOutput: "",
+  /** While set, `ps` answers only once it resolves, as a slow read of a process does. */
+  psHeld: null as Promise<void> | null,
+}));
 
 vi.mock("@argent/native-devtools-ios", () => ({
   bootstrapDylibPath: () => "/fake/dylibs/libArgentInjectionBootstrap.dylib",
@@ -27,7 +32,9 @@ vi.mock("node:child_process", async () => {
       const callback = (typeof opts === "function" ? opts : cb!) as ExecCb;
       const argv = args.join(" ");
       if (/\bps$/.test(cmd)) {
-        callback(null, { stdout: probe.psOutput, stderr: "" });
+        const answer = () => callback(null, { stdout: probe.psOutput, stderr: "" });
+        if (probe.psHeld) void probe.psHeld.then(answer);
+        else answer();
         return;
       }
       if (argv.includes("launchctl list")) {
@@ -60,6 +67,7 @@ function appRunsAs(pid: number): void {
 function appGone(): void {
   probe.launchctlList = "";
   probe.psOutput = "";
+  probe.psHeld = null;
 }
 
 interface Frame {
@@ -410,6 +418,52 @@ describe("native-devtools network capture", () => {
       })
     );
     expect(api.isConnected(BUNDLE)).toBe(false);
+  });
+
+  it("fails only the replaced connection's open requests, not one the new process started while the host was checking", async () => {
+    appRunsAs(100);
+    const api = await startService();
+    await api.activateNetworkInspection(BUNDLE);
+    const first = await connectApp(api.socketPath);
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)?.state()).toEqual({ armed: true, pid: 100 })
+    );
+    for (const frame of requestEvents("old", "https://example.com/old")) first.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(1));
+
+    // The host check of the replaced connection answers only once released.
+    let releasePs!: () => void;
+    probe.psHeld = new Promise((resolve) => (releasePs = resolve));
+    appRunsAs(200);
+    const second = await connectApp(api.socketPath);
+    await first.closed;
+    for (const frame of requestEvents("new", "https://example.com/new-launch")) second.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(2));
+    probe.psHeld = null;
+    releasePs();
+
+    const listed = () =>
+      api
+        .networkRecords(BUNDLE)!
+        .records(8081)
+        .map((r) => [r.request.url, r.state, r.errorText]);
+    await vi.waitFor(() =>
+      expect(listed()).toEqual([
+        ["https://example.com/old", "failed", "the app process ended before the request finished"],
+        ["https://example.com/new-launch", "pending", undefined],
+      ])
+    );
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)?.state()).toEqual({ armed: true, pid: 200 })
+    );
+    for (const frame of finishEvents("new")) second.send(frame);
+    await vi.waitFor(() =>
+      expect(listed()).toEqual([
+        ["https://example.com/old", "failed", "the app process ended before the request finished"],
+        ["https://example.com/new-launch", "complete", undefined],
+      ])
+    );
+    second.close();
   });
 
   it("drops the app's captures and records from the lookups on dispose", async () => {
