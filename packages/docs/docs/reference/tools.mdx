@@ -264,14 +264,14 @@ If the capture started while the app was already running, the `header` line of t
 
 Each entry of `requests` contains these fields:
 
-| Field                | Content                                                                                         |
-| -------------------- | ----------------------------------------------------------------------------------------------- |
-| `id`                 | The ID of the request, with the format `ios-<4 hex digits>-<number>`, for example `ios-3f9a-12` |
-| `method`, `url`      | The method and the URL that the app requested                                                   |
-| `state`              | `pending`, `headers`, `complete` or `failed`                                                    |
-| `status`, `mimeType` | The status and the MIME type of the response, after the response headers arrive                 |
-| `durationMs`         | The duration of the request, when Argent knows it                                               |
-| `errorText`          | The error of a failed request                                                                   |
+| Field                | Content                                                                                                                                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                 | The ID of the request, with the format `ios-<4 hex digits>-<number>`, for example `ios-3f9a-12`                                                                                                                                                        |
+| `method`, `url`      | The method and the URL that the app requested                                                                                                                                                                                                          |
+| `state`              | `pending`, `headers`, `complete` or `failed`                                                                                                                                                                                                           |
+| `status`, `mimeType` | The status and the MIME type of the response, after the response headers arrive                                                                                                                                                                        |
+| `durationMs`         | The duration of the request on the network, as the in-app agent measured it, when Argent knows it. On a simulator where Argent uses the socket of a device provider, this duration does not include the delay that the throttling of the provider adds |
+| `errorText`          | The error of a failed request                                                                                                                                                                                                                          |
 
 `view-network-request-details` does not give the details of an `ios-` ID.
 

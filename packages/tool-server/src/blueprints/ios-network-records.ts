@@ -121,7 +121,12 @@ export function createIosNetworkRecords(
     resize(record);
   }
 
-  /** The duration the app measured, else the time between the first and the last event. */
+  /**
+   * The duration of the network request that the in-app agent measured, else
+   * the time between the arrival of the first and the last event. The agent's
+   * duration leaves out the delay that a device provider's throttling adds
+   * before the app gets the response.
+   */
   function setDuration(record: NativeNetworkRecord, p: Record<string, unknown>): void {
     const measured = p.nativeDevtoolsDurationMs;
     if (typeof measured === "number" && Number.isFinite(measured) && measured >= 0) {
