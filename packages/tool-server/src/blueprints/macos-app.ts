@@ -51,7 +51,11 @@ import type { NativeNetworkRecord } from "../utils/native-network-record";
 
 /** The library acknowledges Network.enable and Network.disable within this. */
 const NETWORK_CAPTURE_ACK_TIMEOUT_MS = 5_000;
-/** How long a closed channel's process gets to exit before its open requests stay open. */
+/**
+ * How long a closed channel's process gets to exit. Then its open requests
+ * fail: as ended when the process is gone, else as cut off by the drop while
+ * argent has not reconnected.
+ */
 const PROCESS_EXIT_WAIT_MS = 2_000;
 
 /**
