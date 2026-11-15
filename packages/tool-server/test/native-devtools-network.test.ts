@@ -11,6 +11,8 @@ const probe = vi.hoisted(() => ({
   psOutput: "",
   /** While set, `ps` answers only once it resolves, as a slow read of a process does. */
   psHeld: null as Promise<void> | null,
+  /** `launchctl list` fails, as on a simulator that stopped answering. */
+  launchctlFails: false,
 }));
 
 vi.mock("@argent/native-devtools-ios", () => ({
@@ -38,6 +40,13 @@ vi.mock("node:child_process", async () => {
         return;
       }
       if (argv.includes("launchctl list")) {
+        if (probe.launchctlFails) {
+          callback(new Error("Invalid device: the simulator did not answer"), {
+            stdout: "",
+            stderr: "",
+          });
+          return;
+        }
         callback(null, { stdout: probe.launchctlList, stderr: "" });
         return;
       }
@@ -68,6 +77,7 @@ function appGone(): void {
   probe.launchctlList = "";
   probe.psOutput = "";
   probe.psHeld = null;
+  probe.launchctlFails = false;
 }
 
 interface Frame {
@@ -378,6 +388,27 @@ describe("native-devtools network capture", () => {
       armed: false,
       note: "the app is not connected; its next process is armed when it connects",
     });
+  });
+
+  it("fails open requests as not reconnected when the host cannot list the running apps after the connection closed", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    await api.activateNetworkInspection(BUNDLE);
+    const app = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
+    for (const frame of requestEvents("open", "https://example.com/slow")) app.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(1));
+
+    // As when the simulator shuts down under an open request.
+    probe.launchctlFails = true;
+    app.close();
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)!.records(8081)[0]).toMatchObject({
+        state: "failed",
+        errorText:
+          "the agent did not reconnect after its connection dropped, so this request's final events never arrived",
+      })
+    );
   });
 
   it("fails open requests as ended when the process is gone after its connection closed", async () => {
