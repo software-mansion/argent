@@ -706,9 +706,9 @@ if (fs.existsSync(apkSrc)) {
 }
 
 // The network inspector agent is optional at runtime: without it,
-// native-network-logs reports the Android app as not attachable and points to
-// the JS layer. So a local build without it only warns; publish-npm.yml fails a
-// release that lacks it.
+// network-capture-start reports the Android native layer as unavailable. So a
+// local build without it only warns; publish-npm.yml fails a release that
+// lacks it.
 const NETWORK_INSPECTOR_SRC = path.join(ANDROID_APK_SRC_DIR, "network-inspector");
 if (fs.existsSync(NETWORK_INSPECTOR_SRC)) {
   fs.cpSync(NETWORK_INSPECTOR_SRC, path.join(BIN_DIR, "network-inspector"), { recursive: true });
