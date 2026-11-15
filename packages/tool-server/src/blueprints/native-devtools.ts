@@ -1571,10 +1571,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         unregisterCaptures();
         wakeConnectionWaiters();
         /**
-         * Closing the socket leaves the agent's setting as it is, so a process
-         * argent armed would keep capturing until it relaunches. A stopped app
-         * is asked again: its stop may have gone unanswered. A lent agent's
-         * setting is its provider's.
+         * Each app argent started or stopped is asked to turn capture off
+         * before its socket closes, so capture ends whatever the agent does
+         * when its connection closes. A stopped app is asked again: its stop
+         * may have gone unanswered. A lent agent's setting is its provider's.
          */
         if (!lentSocketPath) {
           await Promise.all(
