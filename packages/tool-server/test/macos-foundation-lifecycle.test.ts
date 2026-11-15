@@ -1014,6 +1014,33 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(await readLog()).toMatchObject({ started: false });
     }, 15_000);
 
+    it("sends Network.enable again at a start after a stop on the same process", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await stop();
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect(await request("https://example.com/again")).toEqual({ active: true, activations: 2 });
+      expect(urls(await readLog())).toEqual(["https://example.com/again"]);
+    });
+
+    it("keeps the channel unarmed when network-capture-stop comes before a restarted process acknowledges Network.enable", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await run("restart-app", {
+        udid: DEVICE_ID,
+        bundleId: BUNDLE_ID,
+        launchArgs: ["--cdp-delay=1500"],
+      });
+      // The new process has not acknowledged its Network.enable yet.
+      expect((await readLog()).header).toContain(
+        "waiting for the app to acknowledge Network.enable"
+      );
+      await stop();
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect(await request("https://example.com/x")).toEqual({ active: true, activations: 2 });
+      expect(urls(await readLog())).toEqual(["https://example.com/x"]);
+    }, 20_000);
+
     it("keeps capture off in the new process when network-capture-stop comes during a restart", async () => {
       const { pid } = await run("boot-device", { macosAppPath: appPath });
       await start();
