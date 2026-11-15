@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 // Every adb call answers like a successful `am start -W`, and each is logged so
 // a test can tell whether the attach ran after the app started.
@@ -631,6 +633,49 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
 
       await expect(note).resolves.toBe(ARMED_NOTE);
       expect(askedToEnable(app)).toBe(true);
+      app.close();
+    });
+  });
+
+  /**
+   * Every arm, pid read and close of the service wakes the waits still
+   * registered with it, so a wait kept after it ended would be held and run
+   * again for the life of the service, one more for each launch.
+   */
+  it("keeps nothing of its wait once the launched process is armed", async () => {
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    await withService(async (api) => {
+      await expect(api.activateNetworkInspection(APP)).resolves.toBe(false);
+
+      // The wait's timer, held weakly, tells whether anything still holds the wait.
+      const waitTimers: Array<WeakRef<object>> = [];
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((...args: Parameters<typeof realSetTimeout>) => {
+        const timer = realSetTimeout(...args);
+        if (args[1] === LAUNCH_ARM_WAIT_MS) waitTimers.push(new WeakRef(timer));
+        return timer;
+      }) as typeof setTimeout;
+      let note: Promise<string | undefined>;
+      try {
+        note = api.networkCaptureAfterLaunch(APP);
+        // Only the wait starts a timer before the app dials.
+        const deadline = performance.now() + 2_000;
+        while (waitTimers.length === 0 && performance.now() < deadline) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+      expect(waitTimers).toHaveLength(1);
+
+      const app = await connectApp(api.socketPath);
+      await expect(note).resolves.toBe(ARMED_NOTE);
+
+      // A WeakRef keeps its target alive until the current job ends.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      gc();
+      expect(waitTimers[0]!.deref()).toBeUndefined();
       app.close();
     });
   });
