@@ -104,7 +104,7 @@ The capture follows the app until the agent stops it. Argent starts the capture 
 
 The network log of this layer keeps the requests of the earlier processes of the app. A request that runs when its process ends shows as failed. A request that runs when the connection to the app drops also shows as failed. If this request ends after Argent connects to the app again, it shows as complete. A read does not connect to the app. `network-capture-start` connects to it.
 
-Each request has an ID such as `macos-3f9a-12`. The agent uses this ID to read the headers. The details do not contain the bodies of the request and of the response. An ID is valid only in the tool-server that listed it. An ID stays valid after the capture stops. An ID is not valid after `stop-simulator-server` or `stop-all-simulator-servers` stops the services of the app, or after the tool-server stops.
+Each request has an ID such as `macos-3f9a-12`. The agent uses this ID to read the headers. The details contain a request body only when the app gives the body with the request, for example through `NSURLConnection`. The details contain no response body, and no other request body, for example the body of a `URLSession` request. An ID is valid only in the tool-server that listed it. An ID stays valid after the capture stops. An ID is not valid after `stop-simulator-server` or `stop-all-simulator-servers` stops the services of the app, or after the tool-server stops.
 
 The capture stays on until the agent stops it. `stop-simulator-server` and `stop-all-simulator-servers` for the app also stop it.
 
