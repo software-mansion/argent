@@ -1448,6 +1448,31 @@ describe("iOS native network records: request body still being sent", () => {
     lastSent().reply({ body: "body 0", base64Encoded: false, wasTruncated: false });
     expect(await r0).toEqual(body("body 0"));
   });
+
+  it(`keeps a request body read open, the oldest of all, once ${MAX_CACHED_BODIES + 1} newer bodies are read`, async () => {
+    const { app, store, agent, id } = uploading();
+    const first = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(first.value).toEqual(refused(STILL_SENDING));
+
+    const lastSent = (): SentRead => app.sent[app.sent.length - 1]!;
+    for (let i = 0; i <= MAX_CACHED_BODIES; i++) {
+      agent.complete(`r${i}`, `https://e.com/${i}`);
+      const read = store.responseBody(idOf(store, `r${i}`));
+      await settle();
+      lastSent().reply({ body: `body ${i}`, base64Encoded: false, wasTruncated: false });
+      expect(await read).toEqual(body(`body ${i}`));
+    }
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+
+    // The bodies went past the bound with the open read oldest: r0 made room, not the read.
+    const again = store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+    app.sent[0]!.reply({ postData: "done", base64Encoded: false });
+    expect(await again).toEqual(body("done"));
+  });
 });
 
 describe("iOS native network records: one body read at a time", () => {
