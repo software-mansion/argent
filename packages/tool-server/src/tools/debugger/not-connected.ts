@@ -41,10 +41,10 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     "(else `npx react-native start` or `npx expo start`) or ask the user, wait for it to " +
     "report ready, then retry once.",
   no_app_connected:
-    "Metro is running but no app is attached. Do not retry immediately — launch or restart " +
-    "the RN app on the target device (launch-app / restart-app), wait a few seconds for the " +
-    "bundle to load, then retry once. On Android, if the app cannot reach Metro, first run " +
-    "`adb reverse tcp:<port> tcp:<port>`.",
+    "Metro is running, but no app on the target device is attached to it. Do not retry " +
+    "immediately — launch or restart the RN app on the target device (launch-app / " +
+    "restart-app), wait a few seconds for the bundle to load, then retry once. On Android, if " +
+    "the app cannot reach Metro, first run `adb reverse tcp:<port> tcp:<port>`.",
   device_mismatch:
     "The device_id does not match any debugger target on this Metro. Re-target with the " +
     "logicalDeviceId listed in the detail message, or give the device its own Metro port.",
