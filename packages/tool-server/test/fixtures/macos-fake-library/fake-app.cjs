@@ -5,7 +5,7 @@
 // ignore-terminate, ask-save (answers quit with an alert; asked to quit again
 // while it shows it, it quits without saving, as AppKit does; `Prompt.cancel`
 // answers it), windowless, minimized, panel-only, network-silent (answers no
-// CDP request). `--alert` shows an alert of
+// CDP request), disable-silent (answers no Network.disable and keeps capturing). `--alert` shows an alert of
 // the app's own from the start. `--handshake-delay=<ms>` sends the handshake
 // that much later, as a slow launch does. `--cdp-delay=<ms>` handles each CDP
 // request that much after the one before it, in order, as a busy app does. Its one window appears
@@ -98,6 +98,7 @@ function cdp(socket, { id, method }) {
       network.activations++;
       return answer({ result: {} });
     case "Network.disable":
+      if (mode === "disable-silent") return;
       network.active = false;
       return answer({ result: {} });
     case "Network.getResponseBody":

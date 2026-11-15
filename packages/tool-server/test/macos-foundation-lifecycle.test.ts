@@ -1114,6 +1114,72 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
     }, 20_000);
 
+    it("records no new request after a stop that the app did not acknowledge", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=disable-silent"] });
+      await start();
+      await request("https://example.com/before");
+      expect((await stop()).layers).toEqual([
+        expect.objectContaining({ layer: "macos-native", armed: true, total: 1 }),
+      ]);
+      // The app still intercepts, but argent records none of its new requests.
+      expect(await request("https://example.com/after")).toMatchObject({ active: true });
+      expect(urls(await readLog())).toEqual(["https://example.com/before"]);
+    }, 20_000);
+
+    it("confirms a stop when the app quits before it acknowledges Network.disable", async () => {
+      const { pid } = await run("boot-device", {
+        macosAppPath: appPath,
+        macosAppArgs: ["--mode=disable-silent"],
+      });
+      await start();
+      const stopping = stop();
+      await new Promise((r) => setTimeout(r, 300));
+      process.kill(pid, "SIGKILL");
+      expect((await stopping).layers).toEqual([{ layer: "macos-native", armed: false, total: 0 }]);
+    });
+
+    it("says no gap for the process that restart-app starts after a start that found the app running", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      // The gap of this start is not read before the restart.
+      await start();
+      await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      const app = await macosApp();
+      // Waits without a read, which would take the gap.
+      await waitUntil(() => app.networkRecords().state().armed);
+      expect((await readLog()).header).toBe(
+        `macos-native: armed, 0 requests (pid ${app.handshake()!.pid})`
+      );
+    });
+
+    it("says that it waits for the app to acknowledge Network.enable", async () => {
+      const { pid } = await run("boot-device", {
+        macosAppPath: appPath,
+        macosAppArgs: ["--cdp-delay=1500"],
+      });
+      const starting = start();
+      const waiting = await readUntil((l) => l.header.includes("waiting"));
+      expect(waiting.header).toContain(
+        `not armed, 0 requests (pid ${pid}; waiting for the app to acknowledge Network.enable`
+      );
+      expect((await starting).layers).toEqual([{ layer: "macos-native", armed: true }]);
+    }, 15_000);
+
+    it("fails an open request as ended when the process exits soon after its connection drops", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/held", { hold: true });
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      // The app quits half a second after the drop, as an app that crashes does.
+      await new Promise((r) => setTimeout(r, 500));
+      process.kill(pid, "SIGKILL");
+      const log = await readUntil((l) => l.requests[0]?.state === "failed");
+      expect(log.requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
+        ["https://example.com/held", "failed", PROCESS_ENDED],
+      ]);
+    });
+
     it("refuses another app's bundle id", async () => {
       const refusal = async (tool: string) =>
         codeOf(
