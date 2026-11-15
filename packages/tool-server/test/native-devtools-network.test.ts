@@ -60,7 +60,10 @@ vi.mock("node:child_process", async () => {
 });
 
 import { nativeDevtoolsBlueprint, type NativeDevtoolsApi } from "../src/blueprints/native-devtools";
-import { liveIosNetworkCaptures } from "../src/blueprints/ios-network-records";
+import {
+  liveIosNetworkCaptureDevices,
+  liveIosNetworkCaptures,
+} from "../src/blueprints/ios-network-records";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 
 const UDID = processScopedUdid("-9999-8888-7777-666666666666");
@@ -530,6 +533,27 @@ describe("native-devtools network capture", () => {
     instance = null;
     expect(liveIosNetworkCaptures(UDID)).toEqual([]);
     expect(api.networkRecords(BUNDLE)).toBeUndefined();
+  });
+
+  it("keeps a disposed service out of the lookups even when a call and a handshake reach it after the dispose", async () => {
+    const api = await startService();
+    // A process that dialed just before the dispose and sends its handshake after it.
+    const sock = net.createConnection(api.socketPath);
+    await new Promise<void>((resolve) => sock.once("connect", () => resolve()));
+    let closed = false;
+    sock.once("close", () => (closed = true));
+    // Long enough for the service to take the connection before the dispose.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await instance!.dispose();
+    instance = null;
+
+    await api.activateNetworkInspection(BUNDLE);
+    sock.write(JSON.stringify({ type: "Control", payload: { bundleId: BUNDLE } }) + "\n");
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE) || closed).toBe(true));
+
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
+    expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([]);
+    sock.destroy();
   });
 
   it("settles an enable still waiting for its reply as not armed at once on dispose", async () => {
