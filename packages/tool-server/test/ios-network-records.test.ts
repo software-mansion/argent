@@ -1654,6 +1654,11 @@ describe("iOS native network records: bodies kept", () => {
     return { app, store, agent };
   }
 
+  it("keeps the bounds the docs give: 64 bodies, and 67,108,864 chars together", () => {
+    expect(MAX_CACHED_BODIES).toBe(64);
+    expect(KEPT_BODY_CHARS_BUDGET).toBe(67_108_864);
+  });
+
   it(`keeps the ${MAX_CACHED_BODIES} bodies read most recently`, async () => {
     const { app, store, agent } = answering();
     const ids: string[] = [];
