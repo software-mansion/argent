@@ -2745,6 +2745,28 @@ describe("attaching and the app's lifecycle", () => {
     expect(api.isStarted()).toBe(true);
   });
 
+  it("keeps why a start did not reach adb for later reads, which run no adb, until a later start says why it found the layer unavailable", async () => {
+    device.adbDown = true;
+    const api = await createInspector();
+    const offline =
+      "adb did not answer (device offline); the next launch or network-capture-start tries again";
+    expect(await api.startCapture(8081)).toEqual({ armed: false, reason: offline });
+    device.adbDown = false;
+    const before = device.commands.length;
+
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      `android-native: not armed, 0 requests (${offline})`
+    );
+    expect(device.commands).toHaveLength(before);
+
+    device.runAsError = `run-as: package not debuggable: ${PKG}`;
+    const refused = await api.startCapture(8081);
+    expect(refused).toMatchObject({ armed: false, unavailable: true });
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      `android-native: not armed, 0 requests (${refused.reason})`
+    );
+  });
+
   it("gives each of two concurrent starts its own reason that adb did not answer", async () => {
     const api = await armedInspector();
     device.adbDown = true;

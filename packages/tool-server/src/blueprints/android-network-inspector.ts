@@ -1854,6 +1854,8 @@ function createInspector(
       if (!found.live) live = false;
       mark = found.mark;
       unavailableReason = reason;
+      // For the reads of a capture an earlier start left started.
+      note = reason;
       return { result: { armed: false, unavailable: true, reason } };
     };
     const attached = await withKeyedLock(
@@ -1891,6 +1893,8 @@ function createInspector(
             ? errorMessage(err)
             : `adb did not answer (${firstLine(adbFailureDetail(err))}); the next launch or network-capture-start tries again`;
           log(reason);
+          // Reads run no adb, so they say why from this note.
+          note = reason;
           return { result: { armed: false, reason } };
         }
       }
