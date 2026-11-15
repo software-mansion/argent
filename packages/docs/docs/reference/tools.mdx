@@ -314,6 +314,8 @@ On a Mac app, these tools read the app through the Argent library:
   - SwiftUI puts the identifier and the label of a control on an accessibility element, not on a view. Thus a `native-find-views` search by `identifier` or `label` does not find SwiftUI controls. `describe` shows them.
   - When a search by `identifier` or `label` finds no view, its result has a `note` that refers to `describe`.
 - `native-network-logs` reads the requests that the app sends through `NSURLSession`. As on iOS, a read never starts the capture: `network-capture-start` starts it, and `network-capture-stop` stops it. `view-network-request-details` reads the headers and the bodies of a request by its `macos-` ID.
+  - The bodies have the same answers and limits as on iOS. See [Native `NSURLProtocol` layer on iOS](#native-nsurlprotocol-layer-on-ios). For example, if the app still sends a request body, the details tell the agent to read the body again later. Argent keeps a copy of the 64 bodies that the agent read most recently, with a maximum of approximately 64 MB together.
+  - If the connection to the app closes before Argent reads a body, the details tell the agent to read the body again after Argent connects to the app again. `network-capture-start` connects to the app.
 
 The [Mac apps](#mac-apps) section contains the details.
 
