@@ -86,7 +86,6 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
       // Present-but-empty scopes to nothing rather than falling back to the
       // machine-wide sweep, which would tear down other agents' services.
       const scoped = devices !== undefined;
-      const snapshot = registry.getSnapshot();
       const stopped: string[] = [];
       const matchedIds = new Set<string>();
       // Live port-keyed services this scope did NOT claim; unclaimed services
@@ -95,6 +94,8 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
       let aborted = false;
       // Before the sweep closes the debuggers it would go through.
       const paused = await pauseJsCapturesOf(registry, scoped ? devices : undefined);
+      // After the pause, so the sweep also reaches what another call created meanwhile.
+      const snapshot = registry.getSnapshot();
       for (const [urn, entry] of snapshot.services) {
         // Checked between disposals rather than inside one: a dispose already
         // under way finishes, since abandoning a blueprint mid-teardown leaks

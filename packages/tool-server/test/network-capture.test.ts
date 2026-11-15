@@ -24,9 +24,10 @@ import type {
   NativeDevtoolsAppState,
   NativeDevtoolsInitFailure,
 } from "../src/blueprints/native-devtools";
-import type {
-  AndroidCaptureStart,
-  AndroidNetworkInspectorApi,
+import {
+  androidNetworkInspectorRef,
+  type AndroidCaptureStart,
+  type AndroidNetworkInspectorApi,
 } from "../src/blueprints/android-network-inspector";
 import type { IosNetworkRecords } from "../src/blueprints/ios-network-records";
 import type { NativeNetworkRecord } from "../src/utils/native-network-record";
@@ -189,11 +190,15 @@ function notReached(code: FailureCode, message: string): FailureError {
   });
 }
 
+/** How long a debugger connect takes, as on a busy runtime. */
+let connectDelayMs = 0;
+
 /** The JS runtime debugger, reaching whatever {@link metro} serves for its payload. */
 const fakeDebuggerBlueprint: ServiceBlueprint<unknown, string> = {
   namespace: "JsRuntimeDebugger",
   getURN: (payload) => `JsRuntimeDebugger:${payload}`,
   async factory(_deps, payload) {
+    if (connectDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, connectDelayMs));
     const port = Number(payload.slice(0, payload.indexOf(":")));
     const answer = metro.get(payload);
     if (answer === undefined) {
@@ -444,6 +449,7 @@ beforeEach(() => {
   registry.registerTool(networkRequestTool);
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   metro.clear();
+  connectDelayMs = 0;
   forgetJsCapturesOf();
   ios = new FakeIos();
   android.clear();
@@ -1622,6 +1628,66 @@ describe("stop-all-simulator-servers", () => {
       "Request not found. Use view-network-logs to list available requests."
     );
     expect(await details(IOS_UDID, "rn-net-2")).toMatchObject({ requestId: "rn-net-2" });
+  });
+
+  it("waits at most 1 s for a JS runtime whose debugger another call is still connecting, then disposes that debugger", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    const { mark } = findJsCapture(IOS_UDID, APP)!;
+    // The debugger dropped, and another call connects it again, slowly.
+    await reconnect(PORT, IOS_UDID, rt);
+    const urn = `JsRuntimeDebugger:${jsCapturePayload(PORT, IOS_UDID)}`;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      connectDelayMs = 3_000;
+      const connecting = registry.resolveService(urn).then(
+        () => "connected",
+        () => "gave up"
+      );
+      expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.STARTING);
+      let settled = false;
+      const pending = stopAll([IOS_UDID]).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(settled).toBe(true);
+      expect((await pending).stopped).toContain(urn);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await connecting).toBe("gave up");
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+    // The pause did not reach the runtime, so its capture stays, stopped.
+    expect(jsCapture(jsCapturePayload(PORT, IOS_UDID))).toEqual({
+      bundleId: APP,
+      intent: "stopped",
+      mark,
+      installed: true,
+    });
+    expect(rt.paused).toBe(false);
+  });
+
+  it("disposes a service of the device that another call creates while the pause runs", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    await start(SERIAL, APP);
+    // Another app's inspector, as a start of that app creates it.
+    const created = androidNetworkInspectorRef(resolveDevice(SERIAL), OTHER, PORT);
+    const evaluate = rt.evaluate.bind(rt);
+    rt.evaluate = async (expr: string) => {
+      if (scriptName(expr) === "end") await registry.resolveService(created.urn, created.options);
+      return evaluate(expr);
+    };
+
+    const result = await stopAll([SERIAL]);
+
+    expect(result.stopped).toContain(created.urn);
+    expect(registry.getSnapshot().services.get(created.urn)?.state).toBe(ServiceState.IDLE);
   });
 
   it.each([
