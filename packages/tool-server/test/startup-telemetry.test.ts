@@ -80,8 +80,13 @@ vi.mock("../src/utils/simulator-watcher", () => ({
 vi.mock("../src/utils/device-shutdown", () => ({
   shutdownOwnedDevices: vi.fn(async () => {}),
 }));
+vi.mock("../src/blueprints/network-inspector", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/blueprints/network-inspector")>()),
+  pauseJsCapturesOf: vi.fn(async () => new Set<string>()),
+}));
 
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { pauseJsCapturesOf } from "../src/blueprints/network-inspector";
 import { shutdownOwnedDevices } from "../src/utils/device-shutdown";
 import { variantProposalStore } from "../src/utils/variant-proposals";
 
@@ -160,6 +165,32 @@ describe("tool-server startup telemetry", () => {
     settleReady();
     await new Promise((r) => setTimeout(r, 0));
     expect(httpHandleMock.app.listen).not.toHaveBeenCalled();
+  });
+
+  it("pauses network capture in the apps' JS runtimes before it disposes the registry", async () => {
+    // The interceptor lives in the app, so the registry's dispose alone leaves it recording.
+    vi.mocked(startSimulatorWatcher).mockReturnValueOnce({
+      stop: watcherMock.stop,
+      ready: new Promise<void>(() => {}),
+    });
+    const order: string[] = [];
+    vi.mocked(pauseJsCapturesOf).mockImplementationOnce(async () => {
+      order.push("pause");
+      return new Set<string>();
+    });
+    registryMock.dispose.mockImplementationOnce(async () => {
+      order.push("dispose");
+    });
+    const { start } = await import("../src/index");
+
+    start();
+    process.emit("SIGTERM");
+
+    await vi.waitFor(() => {
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    });
+    expect(pauseJsCapturesOf).toHaveBeenCalledWith(registryMock);
+    expect(order).toEqual(["pause", "dispose"]);
   });
 
   it("stops the watcher before it waits for the owned devices to shut down", async () => {

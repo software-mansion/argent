@@ -267,6 +267,8 @@ The capture stays stopped, also across reloads and relaunches. A read, `launch-a
 
 `stop-all-simulator-servers` ends the capture of all apps on the device. Argent removes the requests of the native layers and of the JS runtime layer, and their IDs are not valid after it. The JS runtime layer stops recording. After it, a read gives the result from before a start. If `stop-all-simulator-servers` cannot reach the JS runtime of the app, the capture there can still record, and its requests stay. Then the capture of the JS runtime layer stays stopped, and a read gives the result after a stop. A later `network-capture-stop` that reaches the JS runtime stops the recording. For the files on Android, see [Native network capture on Android](#native-network-capture-on-android).
 
+A stop of the tool-server, for example at the idle timeout, also stops the recording of the JS runtime layer and removes its requests. This applies to each JS runtime that the tool-server reaches within 1 second.
+
 #### Results before a start
 
 Before `network-capture-start`, a read does no work in the app. It does not connect to the app, runs no adb command and sends no `Network.enable`. For an Apple system app, `native-network-logs` fails with the error `NATIVE_DEVTOOLS_NOT_INJECTABLE`. Otherwise, a read gives these results:
