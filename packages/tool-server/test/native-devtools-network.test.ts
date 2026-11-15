@@ -271,6 +271,28 @@ describe("native-devtools network capture", () => {
     expect(api.isConnected(BUNDLE)).toBe(true);
   });
 
+  it("sends one Network.enable for calls that overlap while it waits for the reply, and settles them together", async () => {
+    const api = await startService();
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const first = api.activateNetworkInspection(BUNDLE);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(1_500);
+    let secondSettled = false;
+    const second = api.activateNetworkInspection(BUNDLE).finally(() => (secondSettled = true));
+    // 5 s after the first call, when its reply timeout ends.
+    await vi.advanceTimersByTimeAsync(3_500);
+    await expect(first).resolves.toBe(false);
+    expect(secondSettled).toBe(true);
+    await expect(second).resolves.toBe(false);
+    vi.useRealTimers();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(enableRequests(app)).toHaveLength(1);
+  });
+
   it("keeps an app that answers Network.enable with an error connected and unarmed, and asks again on the next call", async () => {
     const api = await startService();
     const app = await connectApp(api.socketPath, { acknowledge: false });
