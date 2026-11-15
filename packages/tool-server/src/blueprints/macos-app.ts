@@ -1427,12 +1427,21 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       captureStopped = false;
       const startedNow = !captureStarted;
       captureStarted = true;
+      // A stop of the app's services during this start ends the capture: the
+      // next service starts with capture off.
+      const servicesStopped = {
+        armed: false,
+        reason:
+          "the app's services stopped during this start, which ended the capture; call network-capture-start again",
+      };
       // A launch in flight adopts its channel, which arms it.
       await lifecycles.get(bundleId)?.settled;
+      if (disposed) return servicesStopped;
       let ch: LibraryChannel;
       try {
         ch = await ensureChannel();
       } catch (err) {
+        if (disposed) return servicesStopped;
         return {
           armed: false,
           reason:
@@ -1444,6 +1453,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       // A launch this start waited for armed its process from the start.
       if (startedNow && !armedSinceLaunch) captureGap = true;
       const armed = await enableOn(ch);
+      if (disposed) return servicesStopped;
       if (armed) return { armed };
       return { armed, reason: captureState().note ?? "the app did not acknowledge Network.enable" };
     },

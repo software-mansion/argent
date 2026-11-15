@@ -7,7 +7,8 @@
 // answers it), windowless, minimized, panel-only, network-silent (answers no
 // CDP request). `--alert` shows an alert of
 // the app's own from the start. `--handshake-delay=<ms>` sends the handshake
-// that much later, as a slow launch does. Its one window appears
+// that much later, as a slow launch does. `--cdp-delay=<ms>` handles each CDP
+// request that much after the one before it, in order, as a busy app does. Its one window appears
 // 200 ms after the handshake, as a real app's first window comes after its launch.
 //
 // Network capture: like the real library, it reports requests as CDP events
@@ -23,6 +24,9 @@ const net = require("node:net");
 const mode = (process.argv.find((a) => a.startsWith("--mode=")) ?? "--mode=ok").slice(7);
 const handshakeDelayMs = Number(
   (process.argv.find((a) => a.startsWith("--handshake-delay=")) ?? "=0").split("=")[1]
+);
+const cdpDelayMs = Number(
+  (process.argv.find((a) => a.startsWith("--cdp-delay=")) ?? "=0").split("=")[1]
 );
 const startedAt = Date.now();
 const network = { active: false, activations: 0 };
@@ -65,6 +69,7 @@ function serve(socket) {
   if (handshakeDelayMs > 0) setTimeout(hello, handshakeDelayMs);
   else hello();
   let buf = "";
+  let cdpQueue = Promise.resolve();
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
     buf += chunk;
@@ -73,7 +78,11 @@ function serve(socket) {
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
       const msg = JSON.parse(line);
-      if (msg.type === "CDP") cdp(socket, msg.payload);
+      if (msg.type === "CDP" && cdpDelayMs > 0) {
+        cdpQueue = cdpQueue
+          .then(() => new Promise((r) => setTimeout(r, cdpDelayMs)))
+          .then(() => cdp(socket, msg.payload));
+      } else if (msg.type === "CDP") cdp(socket, msg.payload);
       else if (msg.type === "ViewInspector") handle(socket, msg);
     }
   });

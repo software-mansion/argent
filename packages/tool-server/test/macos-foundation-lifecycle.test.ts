@@ -668,6 +668,8 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     };
     const GAP =
       "capture started while the app was already running, so the requests before that were not recorded";
+    const SERVICES_STOPPED =
+      "the app's services stopped during this start, which ended the capture; call network-capture-start again";
     const NOT_RUNNING = `${BUNDLE_ID} is not running; capture arms when boot-device, launch-app or restart-app starts it`;
 
     it("starts nothing on a read, and lists records with ids once network-capture-start armed the app", async () => {
@@ -982,6 +984,35 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
       expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid}; ${GAP})`);
     }, 20_000);
+
+    it("says that capture is off when stop-simulator-server comes while a start waits for a launch", async () => {
+      const booting = run("boot-device", {
+        macosAppPath: appPath,
+        macosAppArgs: ["--handshake-delay=1000"],
+      });
+      await waitUntil(() => fakeAppPids().length > 0);
+      const starting = start();
+      await new Promise((r) => setTimeout(r, 200));
+      await run("stop-simulator-server", { udid: DEVICE_ID });
+      await booting;
+      expect((await starting).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED },
+      ]);
+      expect(await readLog()).toMatchObject({ started: false });
+      // The next service starts with capture off.
+      expect((await request("https://example.com/x")).active).toBe(false);
+    });
+
+    it("says that capture is off when stop-simulator-server comes while a start waits for Network.enable", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--cdp-delay=1500"] });
+      const starting = start();
+      await new Promise((r) => setTimeout(r, 300));
+      await run("stop-simulator-server", { udid: DEVICE_ID });
+      expect((await starting).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED },
+      ]);
+      expect(await readLog()).toMatchObject({ started: false });
+    }, 15_000);
 
     it("keeps capture off in the new process when network-capture-stop comes during a restart", async () => {
       const { pid } = await run("boot-device", { macosAppPath: appPath });
