@@ -263,6 +263,8 @@ export function createIosNetworkRecords(
 
   /** Why a body of a connection that is no longer live cannot be read. */
   function closedReason(connection: number): string {
+    // No body of a Mac app's request is kept, so a read sooner would not find it either.
+    if (layer === "macos-native") return MACOS_NO_BODIES;
     // A connection does not come back for the same process, so a newer one,
     // even one that closed since, is a new process.
     const live = link.liveConnection();

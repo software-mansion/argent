@@ -747,6 +747,19 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       );
     });
 
+    it("says that argent keeps no bodies also after the connection drops and after a restart", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/old");
+      const [old] = (await readLog()).requests;
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      expect((await details(old!.id)).response.body).toBe(`[unavailable: ${MACOS_NO_BODIES}]`);
+      await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      expect((await details(old!.id)).response.body).toBe(`[unavailable: ${MACOS_NO_BODIES}]`);
+    });
+
     it("arms the new process at restart-app, keeps the history and fails the old process's open request", async () => {
       // The fake app sends a request 150 ms after each start.
       await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--launch-request"] });
