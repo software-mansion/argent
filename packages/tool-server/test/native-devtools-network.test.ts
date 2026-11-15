@@ -6,7 +6,7 @@ import type { DeviceInfo } from "@argent/registry";
 // app's socket and reads the app's pid from the host. These tests drive the
 // real service with a fake app on that socket.
 
-const probe = vi.hoisted(() => ({ launchctlList: "", psOutput: "" }));
+const probe = vi.hoisted(() => ({ launchctlList: "", psOutput: "", launchctlCalls: 0 }));
 
 vi.mock("@argent/native-devtools-ios", () => ({
   bootstrapDylibPath: () => "/fake/dylibs/libArgentInjectionBootstrap.dylib",
@@ -31,6 +31,7 @@ vi.mock("node:child_process", async () => {
         return;
       }
       if (argv.includes("launchctl list")) {
+        probe.launchctlCalls++;
         callback(null, { stdout: probe.launchctlList, stderr: "" });
         return;
       }
@@ -464,6 +465,31 @@ describe("native-devtools network capture", () => {
       })
     );
     expect(api.isConnected(BUNDLE)).toBe(false);
+  });
+
+  it("probes the host at a connection close only when the store holds a record of that connection", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    await api.activateNetworkInspection(BUNDLE);
+    const first = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
+    const probesBefore = probe.launchctlCalls;
+
+    // No request came in on this connection, so its close probes nothing.
+    first.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+
+    const second = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
+    for (const frame of requestEvents("open", "https://example.com/slow")) second.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(1));
+    second.close();
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)!.records(8081)[0]?.state).toBe("failed")
+    );
+
+    // One probe read the second process's pid, and one checked its close.
+    expect(probe.launchctlCalls - probesBefore).toBe(2);
   });
 
   it("drops the app's captures and records from the lookups on dispose", async () => {
