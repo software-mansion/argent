@@ -196,6 +196,33 @@ describe("native network capture started through the blueprint", () => {
     });
   });
 
+  it("does not say the launch was missed at a start after a stop, when capture recorded the process from its launch", async () => {
+    await withService(async (api) => {
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(false);
+      // The launch: capture is on from the handshake.
+      const app = await connectApp(api.socketPath, BUNDLE);
+      await vi.waitFor(() => expect(app.enables()).toBe(1));
+      app.sendEvent("Network.requestWillBeSent", {
+        requestId: "r1",
+        request: { url: "https://example.com/launch", method: "GET", headers: {} },
+      });
+      await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.records(8081)).toHaveLength(1));
+      expect(headerOf(await callTool(api))).not.toMatch(/were not recorded/);
+
+      await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({ confirmed: true });
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+
+      const next = await callTool(api);
+      expect(next).toMatchObject({
+        status: "ok",
+        armed: true,
+        requests: [expect.objectContaining({ url: "https://example.com/launch" })],
+      });
+      expect(headerOf(next)).not.toMatch(/were not recorded/);
+      app.close();
+    });
+  });
+
   it("arms a started app again when it reconnects after restart-app", async () => {
     await withService(async (api) => {
       const before = await connectApp(api.socketPath, BUNDLE);

@@ -603,6 +603,8 @@ interface AppConnection {
   enableFailure?: string;
   /** The app process behind the connection, once the host read it. */
   pid?: number;
+  /** Capture was on at the handshake, so the requests of the process's launch were recorded. */
+  launchRecorded?: boolean;
 }
 
 function getNativeDevtoolsSocketPath(udid: string): string {
@@ -1117,7 +1119,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             }
             if (activatedBundleIds.has(bundleId)) {
               // Our own listener hears an app at its launch, so nothing was missed.
-              if (!lentSocketPath) captureGaps.delete(bundleId);
+              if (!lentSocketPath) {
+                captureGaps.delete(bundleId);
+                conn.launchRecorded = true;
+              }
               void enableOn(bundleId, conn);
             }
             void readConnectionPid(bundleId, conn);
@@ -1380,7 +1385,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             waitForConnectionMs
           );
         }
-        if (startedNow && !lentSocketPath) captureGaps.add(bundleId);
+        // No gap for a process recorded from its launch: a stop before this start keeps that launch.
+        if (startedNow && !lentSocketPath && !conn.launchRecorded) captureGaps.add(bundleId);
         return enableOn(bundleId, conn);
       },
 
