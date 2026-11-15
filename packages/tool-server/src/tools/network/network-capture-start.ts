@@ -87,6 +87,15 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
           "network-capture-start",
           params.bundleId
         );
+        // No launch of an Apple app loads argent's library, so nothing arms it.
+        if (!isInjectableBundleId(params.bundleId)) {
+          throw unavailableError(params, [
+            unavailable(
+              "macos-native",
+              `${params.bundleId} is an Apple app; argent captures only apps it can load its library into, such as your own builds`
+            ),
+          ]);
+        }
         const layer = await withCaptureLock(params.udid, params.bundleId, async () => {
           const { armed, reason } = await app.startNetworkCapture();
           return { layer: "macos-native" as const, armed, ...(reason ? { reason } : {}) };
@@ -119,21 +128,23 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
             : startIosLayer(registry, device, params.bundleId, port),
         ])
       );
-      if (layers.every((layer) => layer.unavailable)) {
-        throw new FailureError(
-          `Network capture cannot start for ${params.bundleId} on ${params.udid}: ` +
-            layers.map((layer) => `${layer.layer}: ${layer.reason}`).join("; "),
-          {
-            error_code: FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE,
-            failure_stage: "network_capture_start",
-            failure_area: "tool_server",
-            error_kind: "unsupported",
-          }
-        );
-      }
+      if (layers.every((layer) => layer.unavailable)) throw unavailableError(params, layers);
       return { status: "ok", layers };
     },
   };
+}
+
+function unavailableError(params: CaptureParams, layers: StartedLayer[]): FailureError {
+  return new FailureError(
+    `Network capture cannot start for ${params.bundleId} on ${params.udid}: ` +
+      layers.map((layer) => `${layer.layer}: ${layer.reason}`).join("; "),
+    {
+      error_code: FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE,
+      failure_stage: "network_capture_start",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    }
+  );
 }
 
 function unavailable(layer: StartedLayer["layer"], reason: string): StartedLayer {

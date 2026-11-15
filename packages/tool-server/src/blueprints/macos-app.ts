@@ -1436,7 +1436,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           armed: false,
           reason:
             errorCode(err) === FAILURE_CODES.MACOS_APP_NOT_RUNNING
-              ? `${bundleId} is not running; capture arms when boot-device or launch-app starts it`
+              ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
               : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
         };
       }

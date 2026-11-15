@@ -668,6 +668,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     };
     const GAP =
       "capture started while the app was already running, so the requests before that were not recorded";
+    const NOT_RUNNING = `${BUNDLE_ID} is not running; capture arms when boot-device, launch-app or restart-app starts it`;
 
     it("starts nothing on a read, and lists records with ids once network-capture-start armed the app", async () => {
       const { pid } = await run("boot-device", { macosAppPath: appPath });
@@ -980,7 +981,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         {
           layer: "macos-native",
           armed: false,
-          reason: `${BUNDLE_ID} is not running; capture arms when boot-device or launch-app starts it`,
+          reason: NOT_RUNNING,
         },
       ]);
       expect((await readLog()).header).toBe(
@@ -993,6 +994,25 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         armed: true,
         header: `macos-native: armed, 1 request (pid ${pid})`,
       });
+    });
+
+    it("arms the app when restart-app starts it after a start that found it not running", async () => {
+      await quit((await run("boot-device", { macosAppPath: appPath })).pid);
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      expect(await request("https://example.com/x")).toEqual({ active: true, activations: 1 });
+      expect(await readLog()).toMatchObject({ armed: true, total: 1 });
+    });
+
+    it("fails with NETWORK_CAPTURE_UNAVAILABLE for an Apple app, which no launch arms", async () => {
+      const err = await run("network-capture-start", {
+        udid: "macos-app-com.apple.TextEdit",
+        bundleId: "com.apple.TextEdit",
+      }).catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect((err as Error).message).toContain("macos-native: com.apple.TextEdit is an Apple app");
     });
 
     it("says so when the app does not acknowledge Network.enable or Network.disable", async () => {
