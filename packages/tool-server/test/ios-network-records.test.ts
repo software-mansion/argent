@@ -1092,9 +1092,15 @@ describe("iOS native network records: body reads", () => {
       "the agent no longer holds this body",
     ],
     [
-      "the agent holding no request body",
+      "the agent no longer holding a request body",
       "post",
       (read) => read.fail(agentError(read.method, "No request stored for requestId")),
+      "the agent no longer holds this body",
+    ],
+    [
+      "the agent holding no request body",
+      "post",
+      (read) => read.fail(agentError(read.method, "No request post data available for requestId")),
       "the agent holds no body for this request",
     ],
     [
@@ -1244,6 +1250,23 @@ describe("iOS native network records: request body still being sent", () => {
 
     expect(await store.requestPostData(id)).toEqual(body("x".repeat(300)));
     expect(app.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the app is still sending, not that the agent holds no body, when the agent holds no request still uploading", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = store.requestPostData(id);
+    await settle();
+    app.sent[0]!.fail(agentError("Network.getRequestPostData", "No request stored for requestId"));
+    expect(await during).toEqual(refused(STILL_SENDING));
+
+    // The reason is not kept, so a read after the upload asks again and gets the body.
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    const after = store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    app.sent[1]!.reply({ postData: "done", base64Encoded: false });
+    expect(await after).toEqual(body("done"));
   });
 
   it("says the app did not answer, not that it is still sending, once the request has a response", async () => {

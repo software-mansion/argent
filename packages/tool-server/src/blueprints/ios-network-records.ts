@@ -58,7 +58,7 @@ const STILL_SENDING = "the app is still sending this request body; read it again
 const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; read it again later`;
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
 const REQUEST_BODY_GONE = "the agent holds no body for this request";
-const RESPONSE_BODY_GONE = "the agent no longer holds this body";
+const BODY_NO_LONGER_HELD = "the agent no longer holds this body";
 const NO_RESPONSE_BODY = "the response has no body";
 
 export interface IosNetworkCaptureState {
@@ -408,7 +408,13 @@ export function createIosNetworkRecords(
         const detail = at === -1 ? message : message.slice(at + marker.length);
         // The agent answers a body it does not hold with an error that says so.
         if (/^no /i.test(detail)) {
-          return kind === "post" ? REQUEST_BODY_GONE : RESPONSE_BODY_GONE;
+          if (kind === "response") return BODY_NO_LONGER_HELD;
+          // No request held at all is not final while the upload runs: a read
+          // after it can still bring the body.
+          if (/^no request stored\b/i.test(detail)) {
+            return record.state === "pending" ? STILL_SENDING : BODY_NO_LONGER_HELD;
+          }
+          return REQUEST_BODY_GONE;
         }
         return `the agent did not return the body: ${detail}`;
       }
