@@ -144,7 +144,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - The JS runtime layer keeps 2000 records.
   - Native network capture keeps 2000 records. It keeps fewer records when the requests have very large headers or URLs.
   - The Chrome DevTools Protocol layer keeps 1000 records.
-  - The native `NSURLProtocol` layer keeps 2000 records for each app on iOS. It keeps fewer records when the requests have very large headers or URLs. On a Mac app, it keeps 1000 protocol events. A request produces several events, so a Mac app keeps fewer than 1000 requests.
+  - The native `NSURLProtocol` layer keeps 2000 records for each app on iOS. It keeps fewer records when the requests have very large headers or URLs. Large request bodies that the app sends with `NSURLConnection` also make it keep fewer records. On a Mac app, it keeps 1000 protocol events. A request produces several events, so a Mac app keeps fewer than 1000 requests.
 - The JS runtime layer does not read a binary response body, for example an image, a font, a PDF file or an `application/octet-stream` body. The record gives the type and the size of the body only. For Chromium, Argent does not show a response body that is not UTF-8 text. The details give the type and the size of this body only.
 - The JS runtime layer keeps approximately the first 1 MB of each body. The JS runtime layer also removes the oldest records when their bodies contain more than 50 MB of text.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
