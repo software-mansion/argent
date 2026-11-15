@@ -67,7 +67,7 @@ const STILL_SENDING = "the app is still sending this request body; read it again
 const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; read it again later`;
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
 const REQUEST_BODY_GONE = "the agent holds no body for this request";
-const RESPONSE_BODY_GONE = "the agent no longer holds this body";
+const BODY_NO_LONGER_HELD = "the agent no longer holds this body";
 /** The Mac library keeps no bodies, so its "No ..." answer is not an eviction. */
 export const MACOS_NO_BODIES = "argent does not keep the bodies of a Mac app's requests";
 /**
@@ -226,7 +226,12 @@ export function createIosNetworkRecords(
     resize(record);
   }
 
-  /** The duration the app measured, else the time between the first and the last event. */
+  /**
+   * The duration of the network request that the in-app agent measured, else
+   * the time between the arrival of the first and the last event. The agent's
+   * duration leaves out the delay that a device provider's throttling adds
+   * before the app gets the response.
+   */
   function setDuration(record: NativeNetworkRecord, p: Record<string, unknown>): void {
     const measured = p.nativeDevtoolsDurationMs;
     if (typeof measured === "number" && Number.isFinite(measured) && measured >= 0) {
@@ -319,7 +324,7 @@ export function createIosNetworkRecords(
       return Promise.resolve(unavailable(closedReason(record.connection)));
     }
 
-    let adoptAnswer!: (answer: Promise<NativeNetworkBody>) => void;
+    let adoptAnswer!: (body: NativeNetworkBody) => void;
     const answer = new Promise<NativeNetworkBody>((resolve) => {
       adoptAnswer = resolve;
     });
@@ -331,6 +336,13 @@ export function createIosNetworkRecords(
     // A read that replaces a lost one also takes the newest place.
     bodies.delete(cacheKey);
     bodies.set(cacheKey, read);
+    // The lost read can still bring the body, as when the app answers it after
+    // the request's end: its body answers this read too, if it comes first.
+    if (cached) {
+      void cached.answer.then((body) => {
+        if (body.available) adoptAnswer(body);
+      });
+    }
     // Only a body is kept: every reason may change at the next read.
     void answer.then((body) => {
       read.settled = true;
@@ -340,7 +352,7 @@ export function createIosNetworkRecords(
     });
     void withKeyedLock(bodyReads, String(record.connection), () => {
       read.heldOpen = kind === "post" && record.state === "pending";
-      adoptAnswer(sendBodyRead(record, kind));
+      void sendBodyRead(record, kind).then(adoptAnswer);
       markSent();
       // The lock is held until this read answers, or for a request body until
       // its wait ends: the next read goes out while this one may stay open.
@@ -352,7 +364,8 @@ export function createIosNetworkRecords(
   /**
    * A request body read that went out while the app was still sending the body
    * and is still unanswered 5 s after the upload ended. The app answers such a
-   * read when it has sent the whole body, so this one it no longer holds.
+   * read when it has sent the whole body, mostly before the upload ends, so
+   * this one it likely no longer holds. Its late answer still counts.
    */
   function lostRead(read: BodyRead, record: NativeNetworkRecord): boolean {
     const ended = uploadEnds.get(record);
@@ -427,7 +440,13 @@ export function createIosNetworkRecords(
         // The agent answers a body it does not hold with an error that says so.
         if (/^no /i.test(detail)) {
           if (layer === "macos-native") return MACOS_NO_BODIES;
-          return kind === "post" ? REQUEST_BODY_GONE : RESPONSE_BODY_GONE;
+          if (kind === "response") return BODY_NO_LONGER_HELD;
+          // No request held at all is not final while the upload runs: a read
+          // after it can still bring the body.
+          if (/^no request stored\b/i.test(detail)) {
+            return record.state === "pending" ? STILL_SENDING : BODY_NO_LONGER_HELD;
+          }
+          return REQUEST_BODY_GONE;
         }
         return `the agent did not return the body: ${detail}`;
       }
@@ -604,6 +623,11 @@ function withinWait(
 interface IosNetworkCaptures {
   readonly udid: string;
   readonly bundleIds: ReadonlySet<string>;
+  /**
+   * The apps network-capture-start started, also on a device whose provider
+   * lent its agent. When absent, `bundleIds`.
+   */
+  readonly startedBundleIds?: ReadonlySet<string>;
   /** The apps whose capture network-capture-stop stopped. */
   readonly stoppedBundleIds: ReadonlySet<string>;
   /**
@@ -644,7 +668,9 @@ export function findIosNativeRecord(
 /** Some app on some simulator has capture started or stopped, so its ids can be listed. */
 export function hasIosNetworkCapture(): boolean {
   return [...liveCaptures].some(
-    (captures) => captures.bundleIds.size > 0 || captures.stoppedBundleIds.size > 0
+    (captures) =>
+      (captures.startedBundleIds ?? captures.bundleIds).size > 0 ||
+      captures.stoppedBundleIds.size > 0
   );
 }
 

@@ -9,6 +9,7 @@ import {
   isInjectableBundleId,
   nativeDevtoolsRef,
   precheckNativeDevtools,
+  PROVIDER_CAPTURE_OFF,
   type NativeDevtoolsApi,
   type NativeDevtoolsPrecheckBlock,
 } from "../../blueprints/native-devtools";
@@ -341,12 +342,13 @@ async function startIosLayer(
   );
   if (armed) return { layer: "ios-native", armed: true };
   if (api.isConnected(bundleId)) {
+    const note = api.networkRecords(bundleId)?.state().note;
+    // Only the provider turns its capture on.
+    if (note === PROVIDER_CAPTURE_OFF) return unavailable("ios-native", note);
     return {
       layer: "ios-native",
       armed: false,
-      reason:
-        api.networkRecords(bundleId)?.state().note ??
-        "waiting for the agent to acknowledge Network.enable",
+      reason: note ?? "waiting for the agent to acknowledge Network.enable",
     };
   }
   if (!api.armsEnv) {
@@ -361,7 +363,7 @@ async function startIosLayer(
     armed: false,
     reason:
       block?.status === "restart_required"
-        ? "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now"
+        ? "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture"
         : "the app has not connected yet; capture arms when it does",
   };
 }

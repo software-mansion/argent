@@ -24,9 +24,10 @@ import type {
   NativeDevtoolsAppState,
   NativeDevtoolsInitFailure,
 } from "../src/blueprints/native-devtools";
-import type {
-  AndroidCaptureStart,
-  AndroidNetworkInspectorApi,
+import {
+  androidNetworkInspectorRef,
+  type AndroidCaptureStart,
+  type AndroidNetworkInspectorApi,
 } from "../src/blueprints/android-network-inspector";
 import type { IosNetworkRecords } from "../src/blueprints/ios-network-records";
 import type { NativeNetworkRecord } from "../src/utils/native-network-record";
@@ -51,7 +52,7 @@ import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/c
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import { readAppProcesses } from "../src/blueprints/android-network-inspector-device";
-import { localIosHost } from "../src/utils/ios-host";
+import { localIosHost, remoteIosHost } from "../src/utils/ios-host";
 
 // The device's process table, which a stop reads when it cannot reach the app's JS runtime.
 vi.mock("../src/blueprints/android-network-inspector-device", async (importOriginal) => ({
@@ -60,7 +61,11 @@ vi.mock("../src/blueprints/android-network-inspector-device", async (importOrigi
 }));
 vi.mock("../src/utils/ios-host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/ios-host")>();
-  return { ...actual, localIosHost: { ...actual.localIosHost, listRunningBundleIds: vi.fn() } };
+  return {
+    ...actual,
+    localIosHost: { ...actual.localIosHost, listRunningBundleIds: vi.fn() },
+    remoteIosHost: { ...actual.remoteIosHost, listRunningBundleIds: vi.fn() },
+  };
 });
 
 // Whether Xcode's component install is pending. The suite-wide setup answers no.
@@ -71,6 +76,7 @@ vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
 }));
 
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
+const REMOTE_UDID = "remote:66666666-7777-8888-9999-000000000000";
 const SERIAL = "emulator-5554";
 const APP = "com.example.shop";
 const OTHER = "com.example.other";
@@ -184,11 +190,15 @@ function notReached(code: FailureCode, message: string): FailureError {
   });
 }
 
+/** How long a debugger connect takes, as on a busy runtime. */
+let connectDelayMs = 0;
+
 /** The JS runtime debugger, reaching whatever {@link metro} serves for its payload. */
 const fakeDebuggerBlueprint: ServiceBlueprint<unknown, string> = {
   namespace: "JsRuntimeDebugger",
   getURN: (payload) => `JsRuntimeDebugger:${payload}`,
   async factory(_deps, payload) {
+    if (connectDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, connectDelayMs));
     const port = Number(payload.slice(0, payload.indexOf(":")));
     const answer = metro.get(payload);
     if (answer === undefined) {
@@ -424,6 +434,10 @@ beforeEach(() => {
     if (!running) throw new Error("simctl spawn timed out");
     return new Set(running);
   });
+  vi.mocked(remoteIosHost.listRunningBundleIds).mockImplementation(async () => {
+    if (!running) throw new Error("sim-remote spawn timed out");
+    return new Set(running);
+  });
   registry = new Registry();
   registry.registerBlueprint(fakeDebuggerBlueprint);
   registry.registerBlueprint(networkInspectorBlueprint);
@@ -435,12 +449,13 @@ beforeEach(() => {
   registry.registerTool(networkRequestTool);
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   metro.clear();
+  connectDelayMs = 0;
   forgetJsCapturesOf();
   ios = new FakeIos();
   android.clear();
   androidFactoryCalls = 0;
   xcode.pending = false;
-  __primeDepCacheForTests(["xcrun", "adb"]);
+  __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
 });
 
 afterEach(async () => {
@@ -522,6 +537,12 @@ const PLATFORMS = [
     nativeMark: () => androidFor(APP).captureMark(),
     nativeCalls: () => androidFor(APP).calls,
   },
+] as const;
+
+/** The platforms on which a stop reads the device's processes. */
+const PROCESS_PLATFORMS = [
+  ...PLATFORMS,
+  { platform: "a remote iOS simulator", udid: REMOTE_UDID },
 ] as const;
 
 describe("network-capture-start", () => {
@@ -1049,19 +1070,33 @@ describe("network-capture-start", () => {
       expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
     });
 
-    it("tells to restart an app whose running process cannot be armed", async () => {
+    it("tells to restart an app whose running process cannot be armed, then to start again for the JS layer the relaunch ends", async () => {
       ios.appState = "stale_process";
 
       const result = await start(IOS_UDID, APP);
 
-      expect(layer(result, "ios-native")).toEqual({
-        layer: "ios-native",
-        armed: false,
-        reason:
-          "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now",
-      });
+      expect(result.layers).toEqual([
+        { layer: "js", armed: true },
+        {
+          layer: "ios-native",
+          armed: false,
+          reason:
+            "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture",
+        },
+      ]);
       // Capture is on, so the next launch arms it.
       expect(ios.isNetworkCaptureStarted(APP)).toBe(true);
+
+      // restart-app: a new process, with a new JS runtime that has no interceptor.
+      const relaunched = new FakeRuntime(undefined);
+      await reconnect(PORT, IOS_UDID, relaunched);
+      ios.connected.add(APP);
+      expect((await start(IOS_UDID, APP)).layers).toEqual([
+        { layer: "js", armed: true },
+        { layer: "ios-native", armed: true },
+      ]);
+      relaunched.send("/after-restart");
+      expect(await read(IOS_UDID)).toContain('"GET /after-restart"');
     });
 
     it("reports a service the app no longer dials unavailable and starts nothing", async () => {
@@ -1128,6 +1163,22 @@ describe("network-capture-start", () => {
       expect(rt.evaluated).toEqual([]);
       expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
       expect(ios.calls).toEqual([]);
+    });
+
+    it("refuses an Apple system app as unavailable while Xcode's first launch is pending, as no layer captures it", async () => {
+      const systemApp = "com.apple.mobilesafari";
+      xcode.pending = true;
+
+      const err = await start(IOS_UDID, systemApp).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect(err?.message).toContain(
+        `ios-native: ${systemApp} is an Apple system app, which native network capture never covers`
+      );
+      expect(nativeUrns()).toEqual([]);
     });
 
     it.each([
@@ -1240,7 +1291,7 @@ describe("network-capture-stop", () => {
     expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", port: PORT });
   });
 
-  it.each(PLATFORMS)(
+  it.each(PROCESS_PLATFORMS)(
     "on $platform, says nothing records, and stores no interceptor, when the app is not running and its runtime cannot be reached",
     async ({ udid }) => {
       serve(PORT, udid, new FakeRuntime(APP));
@@ -1267,7 +1318,7 @@ describe("network-capture-stop", () => {
   );
 
   it.each(
-    PLATFORMS.flatMap((platform) => [
+    PROCESS_PLATFORMS.flatMap((platform) => [
       { ...platform, device: "lists a process of the app", answers: true },
       { ...platform, device: "does not answer", answers: false },
     ])
@@ -1593,6 +1644,170 @@ describe("stop-all-simulator-servers", () => {
       "Request not found. Use view-network-logs to list available requests."
     );
     expect(await details(IOS_UDID, "rn-net-2")).toMatchObject({ requestId: "rn-net-2" });
+  });
+
+  it("waits at most 1 s for a JS runtime whose debugger another call is still connecting, then disposes that debugger", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    const { mark } = findJsCapture(IOS_UDID, APP)!;
+    // The debugger dropped, and another call connects it again, slowly.
+    await reconnect(PORT, IOS_UDID, rt);
+    const urn = `JsRuntimeDebugger:${jsCapturePayload(PORT, IOS_UDID)}`;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      connectDelayMs = 3_000;
+      const connecting = registry.resolveService(urn).then(
+        () => "connected",
+        () => "gave up"
+      );
+      expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.STARTING);
+      let settled = false;
+      const pending = stopAll([IOS_UDID]).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(settled).toBe(true);
+      expect((await pending).stopped).toContain(urn);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await connecting).toBe("gave up");
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+    // The pause did not reach the runtime, so its capture stays, stopped.
+    expect(jsCapture(jsCapturePayload(PORT, IOS_UDID))).toEqual({
+      bundleId: APP,
+      intent: "stopped",
+      mark,
+      installed: true,
+    });
+    expect(rt.paused).toBe(false);
+  });
+
+  it("waits for a start under way before it pauses or disposes anything, so the start's answer holds until the teardown ends it", async () => {
+    // A device service the sweep reaches first, whose dispose takes a while.
+    let releaseServer!: () => void;
+    const serverDisposed = new Promise<void>((resolve) => (releaseServer = resolve));
+    registry.registerBlueprint({
+      namespace: "SimulatorServer",
+      getURN: (payload: string) => `SimulatorServer:${payload}`,
+      async factory() {
+        return {
+          api: {},
+          dispose: () => serverDisposed,
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+    });
+    await registry.resolveService(`SimulatorServer:${IOS_UDID}`);
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    // The app acknowledges Network.enable a moment later. A dispose of the service
+    // before that drops the app's connection and ends the wait unarmed.
+    let acknowledge!: () => void;
+    const acknowledged = new Promise<void>((resolve) => (acknowledge = resolve));
+    let nativeDisposed = false;
+    registry.events.on("serviceStateChange", (urn, _from, to) => {
+      if (urn !== `NativeDevtools:${IOS_UDID}` || to !== ServiceState.TERMINATING) return;
+      nativeDisposed = true;
+      ios.connected.clear();
+    });
+    const startNative = ios.startNetworkCapture.bind(ios);
+    ios.startNetworkCapture = async (...args) => {
+      const armed = await startNative(...args);
+      await acknowledged;
+      return armed && !nativeDisposed;
+    };
+    // stop-all-simulator-servers comes in while the start reads the JS mark.
+    let sweep: Promise<unknown> | undefined;
+    const evaluate = rt.evaluate.bind(rt);
+    rt.evaluate = async (expr: string) => {
+      if (scriptName(expr) === "mark" && !sweep) {
+        sweep = stopAll([IOS_UDID]);
+        await settle();
+      }
+      return evaluate(expr);
+    };
+
+    const started = start(IOS_UDID, APP);
+    // The JS layer installs, then the sweep goes on, then the app acknowledges.
+    for (let i = 0; i < 50 && !rt.evaluated.includes("install"); i++) await settle();
+    releaseServer();
+    await settle();
+    acknowledge();
+    const result = await started;
+    await sweep;
+
+    expect(result.layers).toEqual([
+      { layer: "js", armed: true },
+      { layer: "ios-native", armed: true },
+    ]);
+    // The teardown ran after the start, so it ended the capture the start armed.
+    expect(rt.evaluated.indexOf("end")).toBeGreaterThan(rt.evaluated.indexOf("install"));
+    expect(rt.paused).toBe(true);
+    expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
+  });
+
+  it("holds a start called during its teardown until the teardown ends, so the start's capture stays", async () => {
+    let releaseServer!: () => void;
+    const serverDisposed = new Promise<void>((resolve) => (releaseServer = resolve));
+    registry.registerBlueprint({
+      namespace: "SimulatorServer",
+      getURN: (payload: string) => `SimulatorServer:${payload}`,
+      async factory() {
+        return {
+          api: {},
+          dispose: () => serverDisposed,
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+    });
+    await registry.resolveService(`SimulatorServer:${IOS_UDID}`);
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+
+    const sweep = stopAll([IOS_UDID]);
+    await settle();
+    expect(rt.paused).toBe(true);
+    const started = start(IOS_UDID, APP);
+    await settle();
+    releaseServer();
+    await sweep;
+    const result = await started;
+
+    expect(result.layers).toEqual([
+      { layer: "js", armed: true },
+      { layer: "ios-native", armed: true },
+    ]);
+    expect(rt.paused).toBe(false);
+    expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "started", installed: true });
+    rt.send("/after-start");
+    expect(await read(IOS_UDID)).toContain('"GET /after-start"');
+  });
+
+  it("disposes a service of the device that another call creates while the pause runs", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    await start(SERIAL, APP);
+    // Another app's inspector, as a start of that app creates it.
+    const created = androidNetworkInspectorRef(resolveDevice(SERIAL), OTHER, PORT);
+    const evaluate = rt.evaluate.bind(rt);
+    rt.evaluate = async (expr: string) => {
+      if (scriptName(expr) === "end") await registry.resolveService(created.urn, created.options);
+      return evaluate(expr);
+    };
+
+    const result = await stopAll([SERIAL]);
+
+    expect(result.stopped).toContain(created.urn);
+    expect(registry.getSnapshot().services.get(created.urn)?.state).toBe(ServiceState.IDLE);
   });
 
   it.each([

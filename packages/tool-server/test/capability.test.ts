@@ -5,6 +5,7 @@ import {
   UnsupportedOperationError,
 } from "../src/utils/capability";
 import type { DeviceInfo, ToolCapability } from "@argent/registry";
+import { CAPTURE_CAPABILITY } from "../src/tools/network/network-capture";
 
 const iosSim: DeviceInfo = { id: "x", platform: "ios", kind: "simulator" };
 const androidEmu: DeviceInfo = { id: "y", platform: "android", kind: "emulator" };
@@ -42,6 +43,21 @@ describe("assertSupported", () => {
     expect(() => assertSupported("t", cap, iosSim)).not.toThrow();
     expect(() => assertSupported("t", cap, androidEmu)).not.toThrow();
   });
+
+  it.each(["network-capture-start", "network-capture-stop"])(
+    "says that %s is not needed on Vega and Chromium, and names view-network-logs",
+    (id) => {
+      const vega: DeviceInfo = { id: "amazon-1", platform: "vega", kind: "vvd" };
+      const chromium: DeviceInfo = { id: "chromium-cdp-9222", platform: "chromium", kind: "app" };
+
+      expect(() => assertSupported(id, CAPTURE_CAPABILITY, vega)).toThrow(
+        `Tool '${id}' is not supported on vega vvd (a Vega app's network capture has no start or stop: view-network-logs turns it on at its first call).`
+      );
+      expect(() => assertSupported(id, CAPTURE_CAPABILITY, chromium)).toThrow(
+        `Tool '${id}' is not supported on chromium app (a Chromium app's network capture has no start or stop: argent turns it on at the first tool call on the app; read the requests with view-network-logs).`
+      );
+    }
+  );
 });
 
 describe("NotImplementedOnPlatformError", () => {

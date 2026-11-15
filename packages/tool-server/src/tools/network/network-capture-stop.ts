@@ -24,7 +24,7 @@ import {
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { metroPort } from "../../utils/debugger/metro-port";
 import { resolveDevice } from "../../utils/device-info";
-import { localIosHost } from "../../utils/ios-host";
+import { localIosHost, remoteIosHost } from "../../utils/ios-host";
 import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
 import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
@@ -230,10 +230,7 @@ async function stopJsLayer(
   }
 }
 
-/**
- * Whether the app has a process on the device, or undefined when the device
- * does not answer or has no fast check (a remote simulator).
- */
+/** Whether the app has a process on the device, or undefined when the device does not answer. */
 async function appRuns(udid: string, bundleId: string): Promise<boolean | undefined> {
   const { platform } = resolveDevice(udid);
   try {
@@ -241,6 +238,9 @@ async function appRuns(udid: string, bundleId: string): Promise<boolean | undefi
       return (await readAppProcesses(udid, bundleId)).processes.length > 0;
     }
     if (platform === "ios") return (await localIosHost.listRunningBundleIds(udid)).has(bundleId);
+    if (platform === "ios-remote") {
+      return (await remoteIosHost.listRunningBundleIds(udid)).has(bundleId);
+    }
   } catch {
     // A device that does not answer tells nothing about the app.
   }

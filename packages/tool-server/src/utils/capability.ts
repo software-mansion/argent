@@ -175,6 +175,17 @@ const MACOS_REFUSAL_REASONS: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Why network-capture-start and network-capture-stop refuse a platform whose
+ * capture has no start, where the stock text would not name the read to call.
+ */
+const NO_CAPTURE_START_STOP_REASONS: Partial<Record<Platform, string>> = {
+  vega: "a Vega app's network capture has no start or stop: view-network-logs turns it on at its first call",
+  chromium:
+    "a Chromium app's network capture has no start or stop: argent turns it on at the first tool call " +
+    "on the app; read the requests with view-network-logs",
+};
+
+/**
  * Throws if the tool's `capability` declaration doesn't include the given
  * device. No `capability` means universally supported — for system / workspace
  * tools that don't touch a device.
@@ -195,6 +206,9 @@ export function assertSupported(
   if (!matrix) {
     const reason =
       (device.platform === "macos" ? MACOS_REFUSAL_REASONS[toolId] : undefined) ??
+      (toolId === "network-capture-start" || toolId === "network-capture-stop"
+        ? NO_CAPTURE_START_STOP_REASONS[device.platform]
+        : undefined) ??
       `no ${device.platform} support declared`;
     throw new UnsupportedOperationError(toolId, device, reason);
   }

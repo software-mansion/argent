@@ -61,9 +61,8 @@ An e2e test can contain more than taps and text. A step can wait for an element,
 
 A step can also start or stop the [network capture](/docs/features/network) of the app on iOS, Android and Mac apps. Put the steps in this order:
 
-1. Start the capture before the launch step. Then native network capture on Android and the native `NSURLProtocol` layer on iOS and on a Mac app follow the app into its new process.
-2. After the launch step, wait for the first screen of the app, then start the capture again. A launch restarts the app, and a restart ends the capture of the JS runtime layer.
-3. Before the step that stops the capture, wait until the screen shows the result of the request. Argent records no request that the app sends after the stop.
+1. After the launch step, wait for the first screen of the app, then start the capture. A launch restarts the app, and a restart ends the capture of the JS runtime layer. A start before the launch step makes the e2e test a fragment.
+2. Before the step that stops the capture, wait until the screen shows the result of the request. Argent records no request that the app sends after the stop.
 
 Use a local script for setup or cleanup that device steps cannot do. Ask the agent to add the script at the required point in the e2e test.
 

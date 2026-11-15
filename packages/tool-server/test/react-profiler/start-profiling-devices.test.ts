@@ -7,6 +7,7 @@ import {
   resetDeviceAliases,
 } from "../../src/utils/debugger/device-alias";
 import { __resetProfilingDevicesForTesting, isProfiling } from "../../src/utils/profiling-devices";
+import { registerIosNetworkCaptures } from "../../src/blueprints/ios-network-records";
 
 import { createReactProfilerStartTool } from "../../src/tools/profiler/react/react-profiler-start";
 
@@ -137,5 +138,55 @@ describe("react-profiler-start registers the run where the device's calls look",
 
     expect(findRuntimeDeviceMock).not.toHaveBeenCalled();
     expect(isProfiling("emulator-5554")).toBe(true);
+  });
+});
+
+describe("react-profiler-start looks up native network capture on the device it found", () => {
+  const SIM_A = "AAAAAAAA-1111-2222-3333-444444444444";
+  const SIM_B = "BBBBBBBB-1111-2222-3333-444444444444";
+  const APP = "com.example.networktest";
+
+  /** Capture is on for APP on `udid`, and APP connected there once. */
+  function captureOn(udid: string): () => void {
+    return registerIosNetworkCaptures({
+      udid,
+      bundleIds: new Set([APP]),
+      stoppedBundleIds: new Set(),
+      stores: new Map([[APP, {} as never]]),
+    });
+  }
+
+  async function startOnSimA(runtimeApp?: { appId: string; platform: "ios" }) {
+    rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
+    findRuntimeDeviceMock.mockResolvedValue(SIM_A);
+    const { api, registry } = fakeSession(LOGICAL_ID);
+    Object.assign(api, { runtimeApp });
+    return createReactProfilerStartTool(registry).execute(
+      {},
+      { device_id: LOGICAL_ID, port: 8081, sample_interval_us: 100, force: false }
+    );
+  }
+
+  it("does not name another simulator that captures the same app", async () => {
+    const unregister = captureOn(SIM_B);
+    try {
+      const result = await startOnSimA({ appId: APP, platform: "ios" });
+
+      expect(isProfiling(SIM_A)).toBe(true);
+      expect(result.warning).toBeUndefined();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("warns about capture on that device, even when the runtime did not say its app", async () => {
+    const unregister = captureOn(SIM_A);
+    try {
+      const result = await startOnSimA();
+
+      expect(result.warning).toContain(`Native network capture is on for ${APP} on this device`);
+    } finally {
+      unregister();
+    }
   });
 });
