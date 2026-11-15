@@ -457,7 +457,7 @@ const LAUNCH_ARM_WAIT_MS = 5_000;
 const LENT_HANDSHAKE_PROMPT_MS = 1_000;
 const WAITING_FOR_ENABLE = "waiting for the agent to acknowledge Network.enable";
 const WAITING_FOR_CAPTURE_STATE = "waiting for the agent to say whether capture is on";
-const PROVIDER_CAPTURE_OFF =
+export const PROVIDER_CAPTURE_OFF =
   "the device provider has capture off for the app; argent does not turn it on, because that resets the provider's network settings: turn capture on in the provider";
 
 /** How the requester rejects a request on a connection that closed. */

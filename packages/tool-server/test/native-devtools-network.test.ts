@@ -3,7 +3,14 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Registry, type DeviceInfo } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  Registry,
+  getFailureSignal,
+  type DeviceInfo,
+  type ServiceBlueprint,
+} from "@argent/registry";
 
 // The native-devtools service starts and stops network capture with CDP
 // requests on the app's socket and reads the app's pid from the host. These tests drive the
@@ -46,10 +53,15 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { nativeDevtoolsBlueprint, type NativeDevtoolsApi } from "../src/blueprints/native-devtools";
+import {
+  nativeDevtoolsBlueprint,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+} from "../src/blueprints/native-devtools";
 import { liveIosNetworkCaptures } from "../src/blueprints/ios-network-records";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { networkRequestTool } from "../src/tools/network/network-request";
+import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
 import type { NativeNetworkRecord } from "../src/utils/native-network-record";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { resolveDevice } from "../src/utils/device-info";
@@ -1062,6 +1074,45 @@ describe("native-devtools network capture on a lent agent", () => {
     await expect(unknown()).resolves.toBe(
       "Request ios-0000-999999 not found. Use native-network-logs to list the requests the iOS native layer recorded."
     );
+  });
+
+  it("fails a start with NETWORK_CAPTURE_UNAVAILABLE when the provider has capture off and Metro is not running", async () => {
+    const lent = await lendAgent();
+    lent.captureOn = false;
+    /** The JS layer's debugger, with nothing answering on the Metro port. */
+    const metroDown: ServiceBlueprint<unknown, string> = {
+      namespace: "JsRuntimeDebugger",
+      getURN: (payload) => `JsRuntimeDebugger:${payload}`,
+      factory: () =>
+        Promise.reject(
+          new FailureError("nothing answers on port 8081", {
+            error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
+            failure_stage: "test_metro",
+            failure_area: "tool_server",
+            error_kind: "network",
+          })
+        ),
+    };
+    const registry = new Registry();
+    registry.registerBlueprint(nativeDevtoolsBlueprint);
+    registry.registerBlueprint(metroDown);
+    registry.registerTool(createNetworkCaptureStartTool(registry));
+    try {
+      const ref = nativeDevtoolsRef(resolveDevice(LENT_DEVICE_ID));
+      const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+      await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+      const err = await registry
+        .invokeTool("network-capture-start", { udid: LENT_DEVICE_ID, bundleId: BUNDLE })
+        .catch((e: unknown) => e);
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect((err as Error).message).toMatch(
+        /; ios-native: the device provider has capture off for the app; .*turn capture on in the provider$/
+      );
+    } finally {
+      await registry.dispose();
+    }
   });
 
   it("asks the provider again at each read of a started app whether capture is on", async () => {

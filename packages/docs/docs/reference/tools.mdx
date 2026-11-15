@@ -204,6 +204,7 @@ A native layer that is not armed often arms later without a new start. For examp
 | `js`             | No app is connected to Metro yet, or the JS runtime did not answer.                                                                                | absent        |
 | `js`             | The JavaScript of the app did not load yet.                                                                                                        | absent        |
 | `ios-native`     | The app is an Apple system app.                                                                                                                    | `true`        |
+| `ios-native`     | The device provider has the capture off. Turn the capture on in the provider.                                                                      | `true`        |
 | `ios-native`     | Argent cannot arm the running process. Argent arms the next process. To capture now, call `restart-app`, then `network-capture-start` again.       | absent        |
 | `android-native` | Argent cannot attach the in-app agent to the app, for example because the app is not debuggable.                                                   | `true`        |
 | `android-native` | The app did not run at the start. `launch-app` or `restart-app` attaches the in-app agent to its next process.                                     | absent        |
