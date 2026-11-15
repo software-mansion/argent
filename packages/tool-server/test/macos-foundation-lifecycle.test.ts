@@ -864,6 +864,10 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       const app = await macosApp();
       await app.call("Net.drop");
       await waitUntil(() => !app.isConnected());
+      // A read does not reconnect, and says that the body can come back.
+      expect((await details(id)).response.body).toBe(
+        "[unavailable: the agent's connection closed before this body was read; read it again after argent reconnects to the app, as network-capture-start does]"
+      );
       // The record keeps its process, so the read goes to the new connection.
       await start();
       expect(await details(id)).toMatchObject({

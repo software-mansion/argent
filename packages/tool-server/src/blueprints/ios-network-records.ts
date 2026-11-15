@@ -66,6 +66,8 @@ const STILL_SENDING = "the app is still sending this request body; read it again
 /** A request body read of a request that has ended, which the app did not answer in time. */
 const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; read it again later`;
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
+/** argent can connect to a Mac app's process again, and then read the body. */
+const MACOS_CONNECTION_CLOSED = `${CONNECTION_CLOSED}; read it again after argent reconnects to the app, as network-capture-start does`;
 const REQUEST_BODY_GONE = "the agent holds no body for this request";
 const RESPONSE_BODY_GONE = "the agent no longer holds this body";
 const NO_RESPONSE_BODY = "the response has no body";
@@ -255,13 +257,13 @@ export function createIosNetworkRecords(
 
   /** Why a body of a connection that is no longer live cannot be read. */
   function closedReason(connection: number): string {
-    // A connection does not come back for the same process, so a newer one,
-    // even one that closed since, is a new process.
+    // A newer connection, even one that closed since, is a new process: an iOS
+    // connection does not come back for the same process, and a Mac app's
+    // records number its processes. A Mac app's process can connect again.
     const live = link.liveConnection();
     if (live !== undefined) sawConnection(live);
-    return endedConnections.has(connection) || newestConnection > connection
-      ? PROCESS_GONE
-      : CONNECTION_CLOSED;
+    if (endedConnections.has(connection) || newestConnection > connection) return PROCESS_GONE;
+    return layer === "macos-native" ? MACOS_CONNECTION_CLOSED : CONNECTION_CLOSED;
   }
 
   function readBody(id: string, kind: "response" | "post"): Promise<NativeNetworkBody> {
