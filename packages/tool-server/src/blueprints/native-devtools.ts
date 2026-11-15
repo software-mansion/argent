@@ -741,6 +741,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const events = new TypedEventEmitter<ServiceEvents>();
     /** Woken whenever a connection is armed, learns its pid or closes. */
     const connectionWaiters = new Set<() => void>();
+    /** Counts the closed connections, so a waiter can tell that one closed. */
+    let connectionCloses = 0;
     const wakeConnectionWaiters = (): void => {
       for (const wake of [...connectionWaiters]) wake();
     };
@@ -922,6 +924,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
                 ? `the agent did not acknowledge Network.enable within ${NETWORK_ENABLE_TIMEOUT_MS / 1000} s; the next call asks again`
                 : `the agent did not enable capture (${detail}); the next call asks again`;
             process.stderr.write(`[native-devtools ${udid.slice(0, 8)}] ${conn.enableFailure}\n`);
+            wakeConnectionWaiters();
             return false;
           }
         )
@@ -993,6 +996,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       conn.cdp.close();
       conn.armed = false;
       if (connections.get(bundleId) === conn) connections.delete(bundleId);
+      connectionCloses += 1;
       wakeConnectionWaiters();
       void settleClosedConnection(bundleId, conn);
     };
@@ -1327,9 +1331,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
       async networkCaptureAfterLaunch(bundleId) {
         if (!activatedBundleIds.has(bundleId) || lentSocketPath) return undefined;
+        let closes = connectionCloses;
         // Without a pid, as when the probe failed, any armed connection of
         // the app counts.
         const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
+        const gone = `native network capture is on for ${bundleId}, but no process of it is running after the launch; its next process is armed when it connects`;
+        // A launched process that already exited, as after a crash at start,
+        // never connects.
+        if (inspection?.running === false && !disposed) return gone;
         const pid = inspection?.process?.pid;
         const ofLaunch = (): AppConnection | undefined => {
           const conn = connections.get(bundleId);
@@ -1348,14 +1357,50 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed`;
           }
         }
-        const armed = await waitForConnection(() => ofLaunch()?.armed === true, LAUNCH_ARM_WAIT_MS);
+        // A launch is a next call too, so it asks again after a failed ask.
+        const asked = ofLaunch();
+        if (asked && !asked.armed && !asked.enabling) void enableOn(asked);
+        // When the app's connection closes and none takes its place, the host
+        // tells whether its process exited, as in a crash early in the launch.
+        // A close during the probe above counts too.
+        let exited = false;
+        const watchExit = (): void => {
+          if (closes === connectionCloses) return;
+          closes = connectionCloses;
+          if (connections.has(bundleId)) return;
+          void host
+            .inspectRunningApp(udid, bundleId)
+            .catch(() => null)
+            .then((now) => {
+              if (now?.running !== false) return;
+              exited = true;
+              wakeConnectionWaiters();
+            });
+        };
+        connectionWaiters.add(watchExit);
+        watchExit();
+        try {
+          await waitForConnection(() => {
+            const conn = ofLaunch();
+            return (
+              exited || (conn !== undefined && (conn.armed || conn.enableFailure !== undefined))
+            );
+          }, LAUNCH_ARM_WAIT_MS);
+        } finally {
+          connectionWaiters.delete(watchExit);
+        }
         if (disposed) return undefined;
-        const shownPid = pid ?? ofLaunch()?.pid;
+        if (exited) return gone;
+        const launched = ofLaunch();
+        const shownPid = pid ?? launched?.pid;
         const pidText = shownPid !== undefined ? ` (pid ${shownPid})` : "";
-        if (armed) {
+        if (launched?.armed) {
           return `native network capture is armed for ${bundleId}${pidText}; stop-all-simulator-servers for this device, then restart-app, ends it`;
         }
-        return ofLaunch()
+        if (launched?.enableFailure !== undefined) {
+          return `native network capture is on for ${bundleId}, but its process${pidText} is not armed: ${launched.enableFailure}`;
+        }
+        return launched
           ? `native network capture is on for ${bundleId}, and its new process${pidText} has not acknowledged Network.enable yet; native-network-logs shows when it is armed`
           : `native network capture is on for ${bundleId}, and its new process has not connected yet; native-network-logs shows when it is armed`;
       },

@@ -387,6 +387,31 @@ describe("iOS native network records: folding", () => {
     expect(silent).toMatchObject({ state: "failed", errorText: "Unknown error" });
   });
 
+  it("keeps the start of a url, header value, mime type or error text past 64 KiB, and says how much it left out", () => {
+    const store = newStore();
+    const agent = agentOn(store);
+    const long = "v".repeat(70_000);
+    const url = `https://api.example.com/${long}`;
+    const mimeType = `text/${long}`;
+    const cut = (value: string): string =>
+      `${value.slice(0, 65_536)}…[${value.length - 65_536} more chars]`;
+
+    agent.requestWillBeSent("big", url, { headers: { "X-Big": long } });
+    agent.responseReceived("big", url, { headers: { "X-Big": long }, mimeType });
+    agent.requestWillBeSent("failed", "https://api.example.com/failed");
+    agent.loadingFailed("failed", long);
+
+    const [big, failed] = store.records(8081);
+    expect(big!.request.url).toBe(cut(url));
+    expect(big!.request.headers).toEqual({ "X-Big": cut(long) });
+    expect(big!.response).toMatchObject({
+      url: cut(url),
+      headers: { "X-Big": cut(long) },
+      mimeType: cut(mimeType),
+    });
+    expect(failed!.errorText).toBe(cut(long));
+  });
+
   it("times a request from the arrival of its events when the app measured no duration", () => {
     const store = newStore();
     const agent = agentOn(store);
