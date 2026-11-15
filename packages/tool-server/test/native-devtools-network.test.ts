@@ -16,7 +16,15 @@ import {
 // requests on the app's socket and reads the app's pid from the host. These tests drive the
 // real service with a fake app on that socket.
 
-const probe = vi.hoisted(() => ({ launchctlList: "", psOutput: "" }));
+const probe = vi.hoisted(() => ({
+  launchctlList: "",
+  psOutput: "",
+  launchctlCalls: 0,
+  /** While set, `ps` answers only once it resolves, as a slow read of a process does. */
+  psHeld: null as Promise<void> | null,
+  /** `launchctl list` fails, as on a simulator that stopped answering. */
+  launchctlFails: false,
+}));
 
 vi.mock("@argent/native-devtools-ios", () => ({
   bootstrapDylibPath: () => "/fake/dylibs/libArgentInjectionBootstrap.dylib",
@@ -37,10 +45,20 @@ vi.mock("node:child_process", async () => {
       const callback = (typeof opts === "function" ? opts : cb!) as ExecCb;
       const argv = args.join(" ");
       if (/\bps$/.test(cmd)) {
-        callback(null, { stdout: probe.psOutput, stderr: "" });
+        const answer = () => callback(null, { stdout: probe.psOutput, stderr: "" });
+        if (probe.psHeld) void probe.psHeld.then(answer);
+        else answer();
         return;
       }
       if (argv.includes("launchctl list")) {
+        probe.launchctlCalls++;
+        if (probe.launchctlFails) {
+          callback(new Error("Invalid device: the simulator did not answer"), {
+            stdout: "",
+            stderr: "",
+          });
+          return;
+        }
         callback(null, { stdout: probe.launchctlList, stderr: "" });
         return;
       }
@@ -58,7 +76,10 @@ import {
   nativeDevtoolsRef,
   type NativeDevtoolsApi,
 } from "../src/blueprints/native-devtools";
-import { liveIosNetworkCaptures } from "../src/blueprints/ios-network-records";
+import {
+  liveIosNetworkCaptureDevices,
+  liveIosNetworkCaptures,
+} from "../src/blueprints/ios-network-records";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
@@ -85,6 +106,8 @@ function appRunsAs(pid: number): void {
 function appGone(): void {
   probe.launchctlList = "";
   probe.psOutput = "";
+  probe.psHeld = null;
+  probe.launchctlFails = false;
 }
 
 interface Frame {
@@ -363,6 +386,28 @@ describe("native-devtools network capture", () => {
     expect(api.isConnected(BUNDLE)).toBe(true);
   });
 
+  it("sends one Network.enable for calls that overlap while it waits for the reply, and settles them together", async () => {
+    const api = await startService();
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const first = api.startNetworkCapture(BUNDLE, 8081);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(1_500);
+    let secondSettled = false;
+    const second = api.startNetworkCapture(BUNDLE, 8081).finally(() => (secondSettled = true));
+    // 5 s after the first call, when its reply timeout ends.
+    await vi.advanceTimersByTimeAsync(3_500);
+    await expect(first).resolves.toBe(false);
+    expect(secondSettled).toBe(true);
+    await expect(second).resolves.toBe(false);
+    vi.useRealTimers();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(enableRequests(app)).toHaveLength(1);
+  });
+
   it("keeps an app that answers Network.enable with an error connected and unarmed, and asks again at the next start", async () => {
     const api = await startService();
     const app = await connectApp(api.socketPath, { acknowledge: false });
@@ -482,6 +527,27 @@ describe("native-devtools network capture", () => {
     });
   });
 
+  it("fails open requests as not reconnected when the host cannot list the running apps after the connection closed", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const app = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
+    for (const frame of requestEvents("open", "https://example.com/slow")) app.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(1));
+
+    // As when the simulator shuts down under an open request.
+    probe.launchctlFails = true;
+    app.close();
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)!.records(8081)[0]).toMatchObject({
+        state: "failed",
+        errorText:
+          "the agent did not reconnect after its connection dropped, so this request's final events never arrived",
+      })
+    );
+  });
+
   it("fails open requests as ended when the process is gone after its connection closed", async () => {
     appRunsAs(4711);
     const api = await startService();
@@ -522,6 +588,77 @@ describe("native-devtools network capture", () => {
     expect(api.isConnected(BUNDLE)).toBe(false);
   });
 
+  it("probes the host at a connection close only when the store holds a record of that connection", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const first = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
+    const probesBefore = probe.launchctlCalls;
+
+    // No request came in on this connection, so its close probes nothing.
+    first.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+
+    const second = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
+    for (const frame of requestEvents("open", "https://example.com/slow")) second.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(1));
+    second.close();
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)!.records(8081)[0]?.state).toBe("failed")
+    );
+
+    // One probe read the second process's pid, and one checked its close.
+    expect(probe.launchctlCalls - probesBefore).toBe(2);
+  });
+
+  it("fails only the replaced connection's open requests, not one the new process started while the host was checking", async () => {
+    appRunsAs(100);
+    const api = await startService();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const first = await connectApp(api.socketPath);
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)?.state()).toEqual({ armed: true, pid: 100 })
+    );
+    for (const frame of requestEvents("old", "https://example.com/old")) first.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(1));
+
+    // The host check of the replaced connection answers only once released.
+    let releasePs!: () => void;
+    probe.psHeld = new Promise((resolve) => (releasePs = resolve));
+    appRunsAs(200);
+    const second = await connectApp(api.socketPath);
+    await first.closed;
+    for (const frame of requestEvents("new", "https://example.com/new-launch")) second.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(2));
+    probe.psHeld = null;
+    releasePs();
+
+    const listed = () =>
+      api
+        .networkRecords(BUNDLE)!
+        .records(8081)
+        .map((r) => [r.request.url, r.state, r.errorText]);
+    await vi.waitFor(() =>
+      expect(listed()).toEqual([
+        ["https://example.com/old", "failed", "the app process ended before the request finished"],
+        ["https://example.com/new-launch", "pending", undefined],
+      ])
+    );
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)?.state()).toEqual({ armed: true, pid: 200 })
+    );
+    for (const frame of finishEvents("new")) second.send(frame);
+    await vi.waitFor(() =>
+      expect(listed()).toEqual([
+        ["https://example.com/old", "failed", "the app process ended before the request finished"],
+        ["https://example.com/new-launch", "complete", undefined],
+      ])
+    );
+    second.close();
+  });
+
   it("drops the app's captures and records from the lookups on dispose", async () => {
     const api = await startService();
     await api.startNetworkCapture(BUNDLE, 8081);
@@ -533,6 +670,27 @@ describe("native-devtools network capture", () => {
     instance = null;
     expect(liveIosNetworkCaptures(UDID)).toEqual([]);
     expect(api.networkRecords(BUNDLE)).toBeUndefined();
+  });
+
+  it("keeps a disposed service out of the lookups even when a call and a handshake reach it after the dispose", async () => {
+    const api = await startService();
+    // A process that dialed just before the dispose and sends its handshake after it.
+    const sock = net.createConnection(api.socketPath);
+    await new Promise<void>((resolve) => sock.once("connect", () => resolve()));
+    let closed = false;
+    sock.once("close", () => (closed = true));
+    // Long enough for the service to take the connection before the dispose.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await instance!.dispose();
+    instance = null;
+
+    await api.startNetworkCapture(BUNDLE, 8081);
+    sock.write(JSON.stringify({ type: "Control", payload: { bundleId: BUNDLE } }) + "\n");
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE) || closed).toBe(true));
+
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
+    expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([]);
+    sock.destroy();
   });
 
   it("settles an enable still waiting for its reply as not armed at once on dispose", async () => {
@@ -551,6 +709,43 @@ describe("native-devtools network capture", () => {
       new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1_000)),
     ]);
     expect(outcome).toBe(false);
+  });
+
+  it("settles an enable still waiting for its reply as not armed at once when the app's connection closes", async () => {
+    const api = await startService();
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    const arming = api.startNetworkCapture(BUNDLE, 8081);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    app.close();
+
+    // Well inside the 5 s the agent has to answer, so the reply timeout cannot settle it.
+    const outcome = await Promise.race([
+      arming,
+      new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1_000)),
+    ]);
+    expect(outcome).toBe(false);
+  });
+
+  it("settles an enable still waiting for its reply as not armed at once when a new connection of the app replaces it", async () => {
+    const api = await startService();
+    const first = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    const arming = api.startNetworkCapture(BUNDLE, 8081);
+    await vi.waitFor(() => expect(enableRequests(first)).toHaveLength(1));
+    // A relaunch: the new process dials while the old one's enable is unanswered.
+    const second = await connectApp(api.socketPath);
+
+    // Well inside the 5 s the agent has to answer, so the reply timeout cannot settle it.
+    const outcome = await Promise.race([
+      arming,
+      new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1_000)),
+    ]);
+    expect(outcome).toBe(false);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+    second.close();
   });
 });
 

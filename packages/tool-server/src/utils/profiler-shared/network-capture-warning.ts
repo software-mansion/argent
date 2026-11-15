@@ -68,8 +68,9 @@ export function nativeNetworkCaptureWarning(
 
 /**
  * With two or more devices on one Metro, the debugger is connected with a Metro
- * logicalDeviceId, which no device id can be derived from, so the lookup by
- * device finds nothing. The runtime still says which app it is and on which
+ * logicalDeviceId. A caller that found the device the runtime runs on passes
+ * that device's id instead. Otherwise the lookup by device finds nothing for
+ * the logicalDeviceId. The runtime still says which app it is and on which
  * platform, so it is warned when capture is on for its app on any device of
  * that platform, naming them: the id cannot say which one is profiled. A
  * runtime that did not say is never warned. A `deviceId` that names a device

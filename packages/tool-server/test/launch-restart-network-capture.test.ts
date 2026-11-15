@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 // Every adb call answers like a successful `am start -W`, and each is logged so
 // a test can tell whether the attach ran after the app started.
@@ -272,10 +274,11 @@ interface FakeApp {
 /**
  * Dials the service as the app's in-app agent does. It acknowledges each CDP
  * request unless `acknowledge` is false, which leaves Network.enable unanswered.
+ * With `refuse`, it answers each CDP request with that error message.
  */
 function connectApp(
   socketPath: string,
-  { acknowledge = true }: { acknowledge?: boolean } = {}
+  { acknowledge = true, refuse }: { acknowledge?: boolean; refuse?: string } = {}
 ): Promise<FakeApp> {
   return new Promise((resolve, reject) => {
     const received: FakeApp["received"] = [];
@@ -293,8 +296,9 @@ function connectApp(
         const frame = JSON.parse(line) as FakeApp["received"][number];
         received.push(frame);
         if (acknowledge && frame.type === "CDP" && frame.payload?.id !== undefined) {
+          const reply = refuse ? { error: { message: refuse } } : { result: {} };
           sock.write(
-            JSON.stringify({ type: "CDP", payload: { id: frame.payload.id, result: {} } }) + "\n"
+            JSON.stringify({ type: "CDP", payload: { id: frame.payload.id, ...reply } }) + "\n"
           );
         }
       }
@@ -303,7 +307,7 @@ function connectApp(
 }
 
 /** Connects the fake app and waits until the service has taken its handshake. */
-async function dial(api: NativeDevtoolsApi, options?: { acknowledge?: boolean }) {
+async function dial(api: NativeDevtoolsApi, options?: { acknowledge?: boolean; refuse?: string }) {
   const app = await connectApp(api.socketPath, options);
   await vi.waitFor(() => expect(api.isConnected(APP)).toBe(true));
   return app;
@@ -311,6 +315,10 @@ async function dial(api: NativeDevtoolsApi, options?: { acknowledge?: boolean })
 
 const askedToEnable = (app: FakeApp): boolean =>
   app.received.some((frame) => frame.type === "CDP" && frame.payload?.method === "Network.enable");
+
+const enableRequests = (app: FakeApp): number =>
+  app.received.filter((frame) => frame.type === "CDP" && frame.payload?.method === "Network.enable")
+    .length;
 
 /**
  * Runs `run` against the real native-devtools service for IOS_UDID, then
@@ -730,6 +738,49 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
     });
   });
 
+  /**
+   * Every arm, pid read and close of the service wakes the waits still
+   * registered with it, so a wait kept after it ended would be held and run
+   * again for the life of the service, one more for each launch.
+   */
+  it("keeps nothing of its wait once the launched process is armed", async () => {
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    await withService(async (api) => {
+      await expect(api.startNetworkCapture(APP, METRO_PORT)).resolves.toBe(false);
+
+      // The wait's timer, held weakly, tells whether anything still holds the wait.
+      const waitTimers: Array<WeakRef<object>> = [];
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((...args: Parameters<typeof realSetTimeout>) => {
+        const timer = realSetTimeout(...args);
+        if (args[1] === LAUNCH_ARM_WAIT_MS) waitTimers.push(new WeakRef(timer));
+        return timer;
+      }) as typeof setTimeout;
+      let note: Promise<string | undefined>;
+      try {
+        note = api.networkCaptureAfterLaunch(APP);
+        // Only the wait starts a timer before the app dials.
+        const deadline = performance.now() + 2_000;
+        while (waitTimers.length === 0 && performance.now() < deadline) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+      expect(waitTimers).toHaveLength(1);
+
+      const app = await connectApp(api.socketPath);
+      await expect(note).resolves.toBe(ARMED_NOTE);
+
+      // A WeakRef keeps its target alive until the current job ends.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      gc();
+      expect(waitTimers[0]!.deref()).toBeUndefined();
+      app.close();
+    });
+  });
+
   it("says the new process has not connected yet after waiting 5 s for it", async () => {
     await withService(async (api) => {
       await api.startNetworkCapture(APP, METRO_PORT);
@@ -872,6 +923,157 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
         note: ARMED_NOTE,
       });
       app.close();
+    });
+  });
+
+  it("asks a connected process again whose Network.enable got no answer, and says why it is not armed", async () => {
+    await withService(async (api) => {
+      const app = await dial(api, { acknowledge: false });
+      await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const first = api.startNetworkCapture(APP, METRO_PORT);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(first).resolves.toBe(false);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(enableRequests(app)).toBe(1));
+
+      const note = await afterTheLaunchWait(() => api.networkCaptureAfterLaunch(APP));
+
+      expect(note).toBe(
+        `native network capture is on for ${APP}, but its process (pid ${PID}) is not armed: the agent did not acknowledge Network.enable within 5 s; network-capture-start asks again`
+      );
+      expect(enableRequests(app)).toBe(2);
+      app.close();
+    });
+  });
+
+  it("says at once why a new process that refused Network.enable is not armed", async () => {
+    await withService(async (api) => {
+      await expect(api.startNetworkCapture(APP, METRO_PORT)).resolves.toBe(false);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const note = api.networkCaptureAfterLaunch(APP);
+      await launchWaitStarted();
+
+      const app = await connectApp(api.socketPath, { refuse: "capture unavailable" });
+
+      // The fake clock never reaches the 5 s, so only the refusal can end the wait.
+      const deadline = performance.now() + 2_000;
+      let settled: unknown = "still waiting";
+      void note.then((value) => (settled = { note: value }));
+      while (settled === "still waiting" && performance.now() < deadline) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(settled).toEqual({
+        note: `native network capture is on for ${APP}, but its process (pid ${PID}) is not armed: the agent did not enable capture (native-devtools ${APP}: Network.enable failed: capture unavailable); network-capture-start asks again`,
+      });
+      app.close();
+    });
+  });
+
+  describe("when no process of the app runs after the launch", () => {
+    const GONE_NOTE = `native network capture is on for ${APP}, but no process of it is running after the launch; its next process is armed when it connects`;
+
+    /** Resolves to the note once it settles, or to "still waiting" after `ms` of real time. */
+    async function settledWithin(note: Promise<string | undefined>, ms: number) {
+      const deadline = performance.now() + ms;
+      let settled: unknown = "still waiting";
+      void note.then((value) => (settled = { note: value }));
+      while (settled === "still waiting" && performance.now() < deadline) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      return settled;
+    }
+
+    it("says so at once when the launched process already exited", async () => {
+      await withService(async (api) => {
+        await api.startNetworkCapture(APP, METRO_PORT);
+        // The app crashed at start: the simulator lists no process of it.
+        sim.launchctlList = "";
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        // The fake clock never reaches the 5 s, so only the probe can end the wait.
+        expect(await settledWithin(api.networkCaptureAfterLaunch(APP), 2_000)).toEqual({
+          note: GONE_NOTE,
+        });
+      });
+    });
+
+    it("says so once the launched process closes its connection and exits before it is armed", async () => {
+      await withService(async (api) => {
+        await expect(api.startNetworkCapture(APP, METRO_PORT)).resolves.toBe(false);
+        const app = await dial(api, { acknowledge: false });
+        await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const note = api.networkCaptureAfterLaunch(APP);
+        await launchWaitStarted();
+        expect(await settledWithin(note, 50)).toBe("still waiting");
+
+        // The app crashes: its connection closes and the simulator lists no process of it.
+        sim.launchctlList = "";
+        app.close();
+
+        expect(await settledWithin(note, 2_000)).toEqual({ note: GONE_NOTE });
+      });
+    });
+
+    it("says so when the launched process exits while the host reads its pid", async () => {
+      await withService(async (api) => {
+        await expect(api.startNetworkCapture(APP, METRO_PORT)).resolves.toBe(false);
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const note = api.networkCaptureAfterLaunch(APP);
+        await launchWaitStarted();
+        let readPid!: () => void;
+        sim.psHeld = new Promise((resolve) => (readPid = resolve));
+
+        // The new process connects and acknowledges, then crashes before the pid read ends.
+        const app = await connectApp(api.socketPath);
+        await vi.waitFor(() => expect(api.networkRecords(APP)?.state()).toEqual({ armed: true }));
+        sim.launchctlList = "";
+        app.close();
+        await vi.waitFor(() => expect(api.isConnected(APP)).toBe(false));
+        readPid();
+
+        expect(await settledWithin(note, 2_000)).toEqual({ note: GONE_NOTE });
+      });
+    });
+
+    it("says so when the launched process exits while the host reads the launch", async () => {
+      await withService(async (api) => {
+        await expect(api.startNetworkCapture(APP, METRO_PORT)).resolves.toBe(false);
+        const app = await dial(api, { acknowledge: false });
+        await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+        let readLaunch!: () => void;
+        sim.psHeld = new Promise((resolve) => (readLaunch = resolve));
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const probes = probeCalls().length;
+        const note = api.networkCaptureAfterLaunch(APP);
+        await vi.waitFor(() => expect(probeCalls().length).toBeGreaterThan(probes));
+
+        // The app crashes while the host reads the launched process.
+        sim.launchctlList = "";
+        app.close();
+        await vi.waitFor(() => expect(api.isConnected(APP)).toBe(false));
+        readLaunch();
+
+        expect(await settledWithin(note, 2_000)).toEqual({ note: GONE_NOTE });
+      });
+    });
+
+    it("keeps waiting when a connection closes but the launched process still runs", async () => {
+      await withService(async (api) => {
+        await expect(api.startNetworkCapture(APP, METRO_PORT)).resolves.toBe(false);
+        const app = await dial(api, { acknowledge: false });
+        await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+
+        const pending = afterTheLaunchWait(async () => {
+          const result = api.networkCaptureAfterLaunch(APP);
+          await launchWaitStarted();
+          app.close();
+          return result;
+        });
+
+        await expect(pending).resolves.toBe(NOT_CONNECTED_NOTE);
+      });
     });
   });
 });

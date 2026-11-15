@@ -64,6 +64,11 @@ vi.mock("../src/utils/ios-devices", async (importActual) => ({
   ...(await importActual<typeof import("../src/utils/ios-devices")>()),
   isTvOsSimulator: vi.fn(async () => false),
 }));
+// The device the profiled runtime is found on, for a session keyed by a logicalDeviceId.
+const findRuntimeDevice = vi.hoisted(() => vi.fn<() => Promise<string | undefined>>());
+vi.mock("../src/utils/debugger/runtime-device", () => ({
+  findRuntimeDevice: () => findRuntimeDevice(),
+}));
 
 vi.mock("../src/utils/check-deps", () => ({
   ensureDeps: vi.fn(async () => {}),
@@ -120,6 +125,8 @@ beforeEach(() => {
   liveIos.mockReturnValue([]);
   liveIosDevices.mockReset();
   liveIosDevices.mockReturnValue([]);
+  findRuntimeDevice.mockReset();
+  findRuntimeDevice.mockResolvedValue(undefined);
   resetDeviceAliases();
 });
 
@@ -527,12 +534,26 @@ describe("react-profiler-start", () => {
       expect(result).not.toHaveProperty("warning");
     });
 
-    it("adds no warning when the profiled runtime is on iOS", async () => {
+    it("adds no warning for an iOS runtime when only an Android device captures the app id", async () => {
       captureOnSerial(PKG);
 
       const result = await start({ appId: PKG, platform: "ios" });
 
       expect(result).not.toHaveProperty("warning");
+    });
+
+    it("warns an iOS runtime when capture is on for its app on the simulator it runs on", async () => {
+      findRuntimeDevice.mockResolvedValue(IOS_UDID);
+      liveIos.mockImplementation((deviceId) => (deviceId === IOS_UDID ? [PKG] : []));
+      liveIosDevices.mockImplementation((bundleId) => (bundleId === PKG ? [IOS_UDID] : []));
+
+      const result = await start({ appId: PKG, platform: "ios" });
+
+      expect(result.started_at).toBe(new Date(1_000).toISOString());
+      expect(result.warning).toContain(`Native network capture is on for ${PKG}`);
+      expect(result.warning).toContain("captures the requests of that app's processes");
+      expect(result.warning).toContain("network-capture-stop");
+      expect(result.warning).not.toContain("stop: true");
     });
   });
 });
