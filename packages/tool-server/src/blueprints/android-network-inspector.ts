@@ -1818,20 +1818,23 @@ function createInspector(
 
   async function startCapture(port: number): Promise<AndroidCaptureStart> {
     setMetroPort(port);
+    // A start that finds the layer unavailable leaves capture as it found it:
+    // a stop before it stays, and so do the mark and whether capture was
+    // started. A stop during it stays too.
+    let found = { stopped, mark, live };
+    const unavailableStart = (reason: string): { result: AndroidCaptureStart } => {
+      if (found.stopped) stopped = true;
+      if (!found.live) live = false;
+      mark = found.mark;
+      unavailableReason = reason;
+      return { result: { armed: false, unavailable: true, reason } };
+    };
     const attached = await withKeyedLock(
       attachLock,
       "attach",
       async (): Promise<{ result: AndroidCaptureStart } | { current: AppProcess | null }> => {
         if (disposed) return { result: { armed: false, reason: "capture was disposed" } };
-        // A start that finds the layer unavailable attaches nothing, so a stop
-        // before it stays, and so does the mark. A stop during it stays too.
-        const found = { stopped, mark };
-        const unavailableStart = (reason: string): { result: AndroidCaptureStart } => {
-          if (found.stopped) stopped = true;
-          mark = found.mark;
-          unavailableReason = reason;
-          return { result: { armed: false, unavailable: true, reason } };
-        };
+        found = { stopped, mark, live };
         // Before the attach, so a request during the arming counts.
         mark = { lastRecord: nextRecordNumber - 1, metroPort: port };
         stopped = false;
@@ -1889,12 +1892,16 @@ function createInspector(
           `waiting for the agent in pid ${attached.current.pid}${reason ? `: ${reason}` : ""}`,
       };
     }
-    // The agent reports that it captures nothing in this process.
+    // The agent reports that it captures nothing in this process, and no retry
+    // changes that. The start's js layer tells whether JavaScript requests are
+    // still recorded.
     if (conn.capture?.state === "unavailable") {
-      return {
-        armed: false,
-        reason: `capture unavailable${conn.capture.detail ? `: ${conn.capture.detail}` : ""}; use view-network-logs`,
-      };
+      const { result } = unavailableStart(
+        `capture unavailable${conn.capture.detail ? `: ${conn.capture.detail}` : ""}`
+      );
+      // A stop the start found stays: the connections it enabled are disabled again.
+      if (stopped) void stopCapture();
+      return result;
     }
     return { armed: true };
   }

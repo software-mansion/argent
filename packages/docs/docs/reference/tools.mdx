@@ -197,18 +197,18 @@ The result contains `status` and `layers`. Each entry of `layers` contains these
 
 A native layer that is not armed often arms later without a new start. For example, Argent arms it when the app connects, or when `launch-app` or `restart-app` starts the app. The `reason` tells what to do. These are frequent reasons:
 
-| Layer            | Reason                                                                                                                                             | `unavailable` |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `js`             | Metro does not run on the port.                                                                                                                    | `true`        |
-| `js`             | The JS runtime on the port belongs to a different app.                                                                                             | `true`        |
-| `js`             | No app is connected to Metro yet, or the JS runtime did not answer.                                                                                | absent        |
-| `js`             | The JavaScript of the app did not load yet.                                                                                                        | absent        |
-| `ios-native`     | The app is an Apple system app.                                                                                                                    | `true`        |
-| `ios-native`     | The device provider has the capture off. Turn the capture on in the provider.                                                                      | `true`        |
-| `ios-native`     | Argent cannot arm the running process. Argent arms the next process. To capture now, call `restart-app`, then `network-capture-start` again.       | absent        |
-| `android-native` | Argent cannot attach the in-app agent to the app, for example because the app is not debuggable.                                                   | `true`        |
-| `android-native` | The app did not run at the start. `launch-app` or `restart-app` attaches the in-app agent to its next process.                                     | absent        |
-| `android-native` | The in-app agent captures no requests in this process, for example because R8 fully minified OkHttp. The reason ends with `use view-network-logs`. | absent        |
+| Layer            | Reason                                                                                                                                       | `unavailable` |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `js`             | Metro does not run on the port.                                                                                                              | `true`        |
+| `js`             | The JS runtime on the port belongs to a different app.                                                                                       | `true`        |
+| `js`             | No app is connected to Metro yet, or the JS runtime did not answer.                                                                          | absent        |
+| `js`             | The JavaScript of the app did not load yet.                                                                                                  | absent        |
+| `ios-native`     | The app is an Apple system app.                                                                                                              | `true`        |
+| `ios-native`     | The device provider has the capture off. Turn the capture on in the provider.                                                                | `true`        |
+| `ios-native`     | Argent cannot arm the running process. Argent arms the next process. To capture now, call `restart-app`, then `network-capture-start` again. | absent        |
+| `android-native` | Argent cannot attach the in-app agent to the app, for example because the app is not debuggable.                                             | `true`        |
+| `android-native` | The app did not run at the start. `launch-app` or `restart-app` attaches the in-app agent to its next process.                               | absent        |
+| `android-native` | The in-app agent captures no requests in this process, for example because R8 fully minified OkHttp.                                         | `true`        |
 
 When all layers are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each layer. An Apple system app runs no React Native JS, so both of its layers are unavailable, and a start for it always fails.
 

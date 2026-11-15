@@ -3629,25 +3629,54 @@ describe("the tools on the Android native layer", () => {
     });
   });
 
-  it("network-capture-start is not armed when the agent reports capture unavailable, and native-network-logs shows it in its header", async () => {
+  it("network-capture-start reports the layer unavailable when the agent reports capture unavailable, and leaves capture not started", async () => {
     device.agentOptions = {
       capture: { state: "unavailable", detail: "no OkHttp in this process" },
     };
     const api = await createInspector();
-    // The agent is connected and enabled, but reports capture unavailable.
+    // The agent is connected and enabled, but reports capture unavailable. No
+    // retry changes that, and view-network-logs only reads.
     expect(await api.startCapture(8081)).toEqual({
       armed: false,
-      reason: "capture unavailable: no OkHttp in this process; use view-network-logs",
+      unavailable: true,
+      reason: "capture unavailable: no OkHttp in this process",
     });
-    const result = (await nativeNetworkLogsTool.execute!(
-      { androidNetwork: api },
-      { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
-    )) as { header: string; capture: string; captureDetail?: string };
-    expect(result.capture).toBe("unavailable");
-    expect(result.captureDetail).toBe("no OkHttp in this process");
-    expect(result.header).toBe(
-      "android-native: armed, 0 requests (pid 4722; capture unavailable: no OkHttp in this process; use view-network-logs)"
+    // As any start that finds the layer unavailable: capture is not started.
+    expect([api.isStarted(), api.isStopped(), api.captureMark()]).toEqual([
+      false,
+      false,
+      undefined,
+    ]);
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+    expect(await listNative(api)).toMatchObject({
+      header:
+        "android-native: unavailable, 0 requests (capture unavailable: no OkHttp in this process)",
+      started: false,
+      capture: "unavailable",
+      captureDetail: "capture unavailable: no OkHttp in this process",
+    });
+    device.process = { pid: 5100, startTime: 99_000 };
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBeUndefined();
+    expect(attachCommands()).toHaveLength(1);
+  });
+
+  it("a start after a stop that finds the agent of the app's new process unavailable keeps the stop, and disables that agent", async () => {
+    const api = await armedInspector();
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    // The app started again outside argent, as a build without OkHttp.
+    device.process = { pid: 5100, startTime: 99_000 };
+    device.agentOptions = {
+      capture: { state: "unavailable", detail: "no OkHttp in this process" },
+    };
+
+    expect(await api.startCapture(8081)).toMatchObject({ armed: false, unavailable: true });
+
+    expect([api.isStarted(), api.isStopped()]).toEqual([false, true]);
+    const next = agents.at(-1)!;
+    await vi.waitFor(() =>
+      expect(next.received).toEqual(["Control", "Network.enable", "Network.disable"])
     );
+    expect(api.state()).toEqual({ armed: false, stopped: true });
   });
 
   it("native-network-logs keeps its default text for a waiting capture without a detail", async () => {
