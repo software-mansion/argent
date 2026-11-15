@@ -293,7 +293,7 @@ export function createIosNetworkRecords(
       return Promise.resolve(unavailable(closedReason(record.connection)));
     }
 
-    let adoptAnswer!: (answer: Promise<NativeNetworkBody>) => void;
+    let adoptAnswer!: (body: NativeNetworkBody) => void;
     const answer = new Promise<NativeNetworkBody>((resolve) => {
       adoptAnswer = resolve;
     });
@@ -305,6 +305,13 @@ export function createIosNetworkRecords(
     // A read that replaces a lost one also takes the newest place.
     bodies.delete(cacheKey);
     bodies.set(cacheKey, read);
+    // The lost read can still bring the body, as when the app answers it after
+    // the request's end: its body answers this read too, if it comes first.
+    if (cached) {
+      void cached.answer.then((body) => {
+        if (body.available) adoptAnswer(body);
+      });
+    }
     // Only a body is kept: every reason may change at the next read.
     void answer.then((body) => {
       read.settled = true;
@@ -314,7 +321,7 @@ export function createIosNetworkRecords(
     });
     void withKeyedLock(bodyReads, String(record.connection), () => {
       read.heldOpen = kind === "post" && record.state === "pending";
-      adoptAnswer(sendBodyRead(record, kind));
+      void sendBodyRead(record, kind).then(adoptAnswer);
       markSent();
       // The lock is held until this read answers, or for a request body until
       // its wait ends: the next read goes out while this one may stay open.
@@ -326,7 +333,8 @@ export function createIosNetworkRecords(
   /**
    * A request body read that went out while the app was still sending the body
    * and is still unanswered 5 s after the upload ended. The app answers such a
-   * read when it has sent the whole body, so this one it no longer holds.
+   * read when it has sent the whole body, mostly before the upload ends, so
+   * this one it likely no longer holds. Its late answer still counts.
    */
   function lostRead(read: BodyRead, record: NativeNetworkRecord): boolean {
     const ended = uploadEnds.get(record);
