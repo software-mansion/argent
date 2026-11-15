@@ -823,4 +823,111 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
       app.close();
     });
   });
+
+  describe("when no process of the app runs after the launch", () => {
+    const GONE_NOTE = `native network capture is on for ${APP}, but no process of it is running after the launch; its next process is armed when it connects`;
+
+    /** Resolves to the note once it settles, or to "still waiting" after `ms` of real time. */
+    async function settledWithin(note: Promise<string | undefined>, ms: number) {
+      const deadline = performance.now() + ms;
+      let settled: unknown = "still waiting";
+      void note.then((value) => (settled = { note: value }));
+      while (settled === "still waiting" && performance.now() < deadline) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      return settled;
+    }
+
+    it("says so at once when the launched process already exited", async () => {
+      await withService(async (api) => {
+        await api.activateNetworkInspection(APP);
+        // The app crashed at start: the simulator lists no process of it.
+        sim.launchctlList = "";
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        // The fake clock never reaches the 5 s, so only the probe can end the wait.
+        expect(await settledWithin(api.networkCaptureAfterLaunch(APP), 2_000)).toEqual({
+          note: GONE_NOTE,
+        });
+      });
+    });
+
+    it("says so once the launched process closes its connection and exits before it is armed", async () => {
+      await withService(async (api) => {
+        await expect(api.activateNetworkInspection(APP)).resolves.toBe(false);
+        const app = await dial(api, { acknowledge: false });
+        await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const note = api.networkCaptureAfterLaunch(APP);
+        await launchWaitStarted();
+        expect(await settledWithin(note, 50)).toBe("still waiting");
+
+        // The app crashes: its connection closes and the simulator lists no process of it.
+        sim.launchctlList = "";
+        app.close();
+
+        expect(await settledWithin(note, 2_000)).toEqual({ note: GONE_NOTE });
+      });
+    });
+
+    it("says so when the launched process exits while the host reads its pid", async () => {
+      await withService(async (api) => {
+        await expect(api.activateNetworkInspection(APP)).resolves.toBe(false);
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const note = api.networkCaptureAfterLaunch(APP);
+        await launchWaitStarted();
+        let readPid!: () => void;
+        sim.psHeld = new Promise((resolve) => (readPid = resolve));
+
+        // The new process connects and acknowledges, then crashes before the pid read ends.
+        const app = await connectApp(api.socketPath);
+        await vi.waitFor(() => expect(api.networkRecords(APP)?.state()).toEqual({ armed: true }));
+        sim.launchctlList = "";
+        app.close();
+        await vi.waitFor(() => expect(api.isConnected(APP)).toBe(false));
+        readPid();
+
+        expect(await settledWithin(note, 2_000)).toEqual({ note: GONE_NOTE });
+      });
+    });
+
+    it("says so when the launched process exits while the host reads the launch", async () => {
+      await withService(async (api) => {
+        await expect(api.activateNetworkInspection(APP)).resolves.toBe(false);
+        const app = await dial(api, { acknowledge: false });
+        await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+        let readLaunch!: () => void;
+        sim.psHeld = new Promise((resolve) => (readLaunch = resolve));
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const probes = probeCalls().length;
+        const note = api.networkCaptureAfterLaunch(APP);
+        await vi.waitFor(() => expect(probeCalls().length).toBeGreaterThan(probes));
+
+        // The app crashes while the host reads the launched process.
+        sim.launchctlList = "";
+        app.close();
+        await vi.waitFor(() => expect(api.isConnected(APP)).toBe(false));
+        readLaunch();
+
+        expect(await settledWithin(note, 2_000)).toEqual({ note: GONE_NOTE });
+      });
+    });
+
+    it("keeps waiting when a connection closes but the launched process still runs", async () => {
+      await withService(async (api) => {
+        await expect(api.activateNetworkInspection(APP)).resolves.toBe(false);
+        const app = await dial(api, { acknowledge: false });
+        await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+
+        const pending = afterTheLaunchWait(async () => {
+          const result = api.networkCaptureAfterLaunch(APP);
+          await launchWaitStarted();
+          app.close();
+          return result;
+        });
+
+        await expect(pending).resolves.toBe(NOT_CONNECTED_NOTE);
+      });
+    });
+  });
 });
