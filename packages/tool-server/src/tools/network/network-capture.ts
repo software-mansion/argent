@@ -51,13 +51,56 @@ export interface CaptureResult<L> {
 /** One start or stop at a time per device and app; their layers run in parallel. */
 const captureLocks = new Map<string, Promise<unknown>>();
 
+/**
+ * The stop-all-simulator-servers teardowns under way: the devices each covers,
+ * or undefined for every device, and when it ends.
+ */
+const captureSweeps = new Set<{ devices?: ReadonlySet<string>; done: Promise<void> }>();
+
+function lockDevice(udid: string): string {
+  return (canonicalDeviceId(udid) ?? udid).toLowerCase();
+}
+
 export function withCaptureLock<T>(
   udid: string,
   bundleId: string,
   fn: () => Promise<T>
 ): Promise<T> {
-  const device = (canonicalDeviceId(udid) ?? udid).toLowerCase();
-  return withKeyedLock(captureLocks, `${device}:${bundleId}`, fn);
+  const device = lockDevice(udid);
+  // A teardown of the device that began before this call ends first.
+  const sweeps = [...captureSweeps]
+    .filter((sweep) => !sweep.devices || sweep.devices.has(device))
+    .map((sweep) => sweep.done);
+  return withKeyedLock(captureLocks, `${device}:${bundleId}`, async () => {
+    await Promise.all(sweeps);
+    return fn();
+  });
+}
+
+/**
+ * Runs `fn`, a teardown of the devices (every device without them), once each
+ * start and stop of their apps under way has ended. A start or stop of their
+ * apps called meanwhile waits until `fn` ends.
+ */
+export async function withCaptureSweep<T>(
+  devices: readonly string[] | undefined,
+  fn: () => Promise<T>
+): Promise<T> {
+  const covered = devices && new Set(devices.map(lockDevice));
+  // A key is `<device>:<bundleId>`, and a bundle id has no colon.
+  const underWay = [...captureLocks]
+    .filter(([key]) => !covered || covered.has(key.slice(0, key.lastIndexOf(":"))))
+    .map(([, held]) => held);
+  let end!: () => void;
+  const sweep = { devices: covered, done: new Promise<void>((resolve) => (end = resolve)) };
+  captureSweeps.add(sweep);
+  try {
+    await Promise.all(underWay);
+    return await fn();
+  } finally {
+    captureSweeps.delete(sweep);
+    end();
+  }
 }
 
 /**

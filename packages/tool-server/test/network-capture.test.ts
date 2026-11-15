@@ -1672,6 +1672,110 @@ describe("stop-all-simulator-servers", () => {
     expect(rt.paused).toBe(false);
   });
 
+  it("waits for a start under way before it pauses or disposes anything, so the start's answer holds until the teardown ends it", async () => {
+    // A device service the sweep reaches first, whose dispose takes a while.
+    let releaseServer!: () => void;
+    const serverDisposed = new Promise<void>((resolve) => (releaseServer = resolve));
+    registry.registerBlueprint({
+      namespace: "SimulatorServer",
+      getURN: (payload: string) => `SimulatorServer:${payload}`,
+      async factory() {
+        return {
+          api: {},
+          dispose: () => serverDisposed,
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+    });
+    await registry.resolveService(`SimulatorServer:${IOS_UDID}`);
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    // The app acknowledges Network.enable a moment later. A dispose of the service
+    // before that drops the app's connection and ends the wait unarmed.
+    let acknowledge!: () => void;
+    const acknowledged = new Promise<void>((resolve) => (acknowledge = resolve));
+    let nativeDisposed = false;
+    registry.events.on("serviceStateChange", (urn, _from, to) => {
+      if (urn !== `NativeDevtools:${IOS_UDID}` || to !== ServiceState.TERMINATING) return;
+      nativeDisposed = true;
+      ios.connected.clear();
+    });
+    const startNative = ios.startNetworkCapture.bind(ios);
+    ios.startNetworkCapture = async (...args) => {
+      const armed = await startNative(...args);
+      await acknowledged;
+      return armed && !nativeDisposed;
+    };
+    // stop-all-simulator-servers comes in while the start reads the JS mark.
+    let sweep: Promise<unknown> | undefined;
+    const evaluate = rt.evaluate.bind(rt);
+    rt.evaluate = async (expr: string) => {
+      if (scriptName(expr) === "mark" && !sweep) {
+        sweep = stopAll([IOS_UDID]);
+        await settle();
+      }
+      return evaluate(expr);
+    };
+
+    const started = start(IOS_UDID, APP);
+    // The JS layer installs, then the sweep goes on, then the app acknowledges.
+    for (let i = 0; i < 50 && !rt.evaluated.includes("install"); i++) await settle();
+    releaseServer();
+    await settle();
+    acknowledge();
+    const result = await started;
+    await sweep;
+
+    expect(result.layers).toEqual([
+      { layer: "js", armed: true },
+      { layer: "ios-native", armed: true },
+    ]);
+    // The teardown ran after the start, so it ended the capture the start armed.
+    expect(rt.evaluated.indexOf("end")).toBeGreaterThan(rt.evaluated.indexOf("install"));
+    expect(rt.paused).toBe(true);
+    expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
+  });
+
+  it("holds a start called during its teardown until the teardown ends, so the start's capture stays", async () => {
+    let releaseServer!: () => void;
+    const serverDisposed = new Promise<void>((resolve) => (releaseServer = resolve));
+    registry.registerBlueprint({
+      namespace: "SimulatorServer",
+      getURN: (payload: string) => `SimulatorServer:${payload}`,
+      async factory() {
+        return {
+          api: {},
+          dispose: () => serverDisposed,
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+    });
+    await registry.resolveService(`SimulatorServer:${IOS_UDID}`);
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+
+    const sweep = stopAll([IOS_UDID]);
+    await settle();
+    expect(rt.paused).toBe(true);
+    const started = start(IOS_UDID, APP);
+    await settle();
+    releaseServer();
+    await sweep;
+    const result = await started;
+
+    expect(result.layers).toEqual([
+      { layer: "js", armed: true },
+      { layer: "ios-native", armed: true },
+    ]);
+    expect(rt.paused).toBe(false);
+    expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "started", installed: true });
+    rt.send("/after-start");
+    expect(await read(IOS_UDID)).toContain('"GET /after-start"');
+  });
+
   it("disposes a service of the device that another call creates while the pause runs", async () => {
     const rt = new FakeRuntime(APP);
     serve(PORT, SERIAL, rt);
