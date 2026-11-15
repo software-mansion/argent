@@ -71,6 +71,8 @@ const STOPPED_REASON =
   "capture stopped by network-capture-stop; network-capture-start turns it on again";
 const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
 const STOPPED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop); this process runs without it until network-capture-start`;
+const AWAY_AT_STOP =
+  "the agent's connection was down at the stop, so it did not get Network.disable; it gets it when it connects again, and argent records none of the app's new requests meanwhile";
 const UNCONFIRMED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop), but its running process (pid 4722) has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`;
 
 function dirFor(packageName = PKG, user = 0): string {
@@ -4480,7 +4482,8 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     const api = await armedInspector();
     await agents[0]!.close();
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
-    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    // The app still runs, so its agent connects again.
+    expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const again = (await FakeAgent.fromSession(dirFor(), proc(), {
       unanswered: ["Network.disable"],
@@ -4506,6 +4509,7 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     const stopping = api.stopCapture();
     await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
     // The app exits: its agent sends nothing more.
+    device.process = null;
     await agent.close();
 
     expect(await stopping).toEqual({ confirmed: true });
@@ -4520,7 +4524,7 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     await first.close();
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
     // No connection is open, so the stop has nothing to disable yet.
-    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
     expect(api.records(8081)[0]!.state).toBe("pending");
 
     const again = (await FakeAgent.fromSession(dirFor(), proc(), {
@@ -4545,6 +4549,100 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     again.send({ type: "Status", payload: { event: "capture", state: "waiting" } });
     await vi.waitFor(() => expect(stderrText()).toContain("] capture waiting"));
     expect(api.records(8081)).toHaveLength(1);
+  });
+
+  describe("a stop while an adb outage has the agent away", () => {
+    const SENT_WHILE_STOPPED = "https://example.com/sent-while-stopped";
+
+    /**
+     * Arms the app, then takes adb away with the reverse, which drops the
+     * agent's connection, and stops capture meanwhile.
+     */
+    async function stopWhileAway(): Promise<{
+      api: AndroidNetworkInspectorApi;
+      first: FakeAgent;
+      stop: { confirmed: boolean; reason?: string };
+    }> {
+      const api = await armedInspector();
+      const first = agents[0]!;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      device.adbDown = true;
+      device.reverses.clear();
+      await first.close();
+      await vi.waitFor(() => expect(api.state().armed).toBe(false));
+      const stop = await api.stopCapture();
+      return { api, first, stop };
+    }
+
+    /** As the agent does: what it buffered while away is gone once it got Network.disable. */
+    function flushUnlessDisabled(agent: FakeAgent): void {
+      if (!agent.received.includes("Network.disable"))
+        agent.request(agent.rid(1), SENT_WHILE_STOPPED);
+    }
+
+    it("is not confirmed, puts the reverse back once adb answers, and the agent that connects gets Network.disable and records nothing", async () => {
+      const { api, first, stop } = await stopWhileAway();
+      expect(stop).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      device.adbDown = false;
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort);
+      vi.useRealTimers();
+
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+        instance: first.instance,
+        beforeEnable: flushUnlessDisabled,
+      }))!;
+      await vi.waitFor(() =>
+        expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"])
+      );
+      expect(await api.startCapture(8081)).toEqual({ armed: true });
+      expect(api.records(8081)).toEqual([]);
+    });
+
+    it("puts the reverse back at a stop that comes once adb answers again after the checks after the drop ended", async () => {
+      const api = await armedInspector();
+      const first = agents[0]!;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      device.adbDown = true;
+      device.reverses.clear();
+      await first.close();
+      await vi.waitFor(() => expect(api.state().armed).toBe(false));
+      await vi.advanceTimersByTimeAsync(16_000);
+      device.adbDown = false;
+      vi.useRealTimers();
+
+      expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
+      expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort);
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+        instance: first.instance,
+        beforeEnable: flushUnlessDisabled,
+      }))!;
+      await vi.waitFor(() =>
+        expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"])
+      );
+      expect(api.records(8081)).toEqual([]);
+    });
+
+    it("sends Network.disable before Network.enable to the agent that connects only after the next start, so nothing sent while stopped is listed", async () => {
+      const { api, first } = await stopWhileAway();
+      // Longer than the checks after the drop.
+      await vi.advanceTimersByTimeAsync(16_000);
+      device.adbDown = false;
+      vi.useRealTimers();
+
+      const start = api.startCapture(8081);
+      await vi.waitFor(() => expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort));
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+        instance: first.instance,
+        beforeEnable: flushUnlessDisabled,
+      }))!;
+
+      expect(await start).toEqual({ armed: true });
+      expect(again.received).toEqual(["Control", "Network.disable", "Network.enable"]);
+      expect(api.records(8081)).toEqual([]);
+    });
   });
 
   it("a stop fails with the stop reason a request whose final events the agent lost while it was disconnected", async () => {

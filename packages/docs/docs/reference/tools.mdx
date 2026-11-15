@@ -253,6 +253,7 @@ At the stop:
 - A request that runs at the stop completes in the list on iOS and in the JS runtime layer. On Android, Argent marks the request as `failed` with the error `capture stopped before the request finished`. The request in the app continues.
 - On Android, a body is available after the stop only if `view-network-request-details` read it before the stop. Argent keeps a copy of the 64 bodies that it read most recently.
 - On Android, Argent keeps the files and the `adb reverse` of the capture. See [Native network capture on Android](#native-network-capture-on-android).
+- On Android, the connection of the in-app agent can be down at the stop, for example while adb does not answer. Then `armed` is `true` for the `android-native` layer, unless Argent finds that the process of the app ended. The in-app agent gets the stop when it connects again. Argent records no request that the app sends after the stop.
 - On a simulator where Argent uses the socket of a device provider, Argent sends no command to the agent of the app. The provider keeps its own capture setting. Argent records no new request of the app. When the app is connected, the `reason` of the `ios-native` entry says so.
 
 The capture stays stopped, also across reloads and relaunches. A read, `launch-app` and `restart-app` do not start it again. Only `network-capture-start` starts it again. After a stop, the tools give these results:

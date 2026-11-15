@@ -150,6 +150,8 @@ const NOT_RECONNECTED_NOTE =
   "the agent's connection dropped, and it did not reconnect; network-capture-start connects it again";
 const STOPPED_NOTE =
   "capture stopped by network-capture-stop; network-capture-start turns it on again";
+const AWAY_AT_STOP =
+  "the agent's connection was down at the stop, so it did not get Network.disable; it gets it when it connects again, and argent records none of the app's new requests meanwhile";
 
 /**
  * The status events whose detail goes into the log with the event. The
@@ -410,6 +412,8 @@ interface AgentConnection {
   enabling: boolean;
   /** The Network.disable of the last stop went unanswered, so the agent may still intercept. */
   stopUnconfirmed?: boolean;
+  /** A process read found its process gone. */
+  ended?: boolean;
   byLayerId: Map<string, NativeNetworkRecord>;
   resumes?: AgentConnection;
   resumedBy?: AgentConnection;
@@ -518,6 +522,8 @@ function createInspector(
   const tunnelLock = new Map<string, Promise<unknown>>();
   /** One recheck per process; a drop while one runs restarts its delays. */
   const rechecks = new Map<string, { restart: boolean }>();
+  /** Agents, by instance, that were away at a stop: each gets Network.disable first when it connects. */
+  const missedStop = new Set<string>();
 
   const user = (): number => appUser;
   /** Ends a step that runs on after a dispose or a stop. */
@@ -741,7 +747,9 @@ function createInspector(
    */
   async function assertReverse(): Promise<void> {
     await withKeyedLock(tunnelLock, "tunnel", async () => {
-      checkpoint();
+      // Not a stop: it keeps the tunnel, and an agent that connects while
+      // stopped gets Network.disable through it.
+      if (disposed) throw new InspectorStopped();
       if (devicePort !== 0) {
         try {
           await adbReverse(serial, devicePort, hostPort, { timeoutMs: 10_000 });
@@ -771,7 +779,7 @@ function createInspector(
       } catch (err) {
         if (!isPortTaken(err)) throw err;
         log(`device port ${port} is taken; trying another`);
-        checkpoint();
+        if (disposed) throw new InspectorStopped();
         continue;
       }
       devicePort = port;
@@ -1144,6 +1152,11 @@ function createInspector(
             phase = "ready";
             conn = openConnection(socket, cdp, send, handshake);
             sendMetroPort(conn);
+            // After a start, so what it captured while stopped is not flushed.
+            // While stopped, the enable's reply sends Network.disable.
+            if (missedStop.delete(handshake.instance) && !stopped) {
+              void disableOn(conn, STOP_DISABLE_TIMEOUT_MS);
+            }
             enableNetwork(conn);
             return;
           }
@@ -1795,8 +1808,12 @@ function createInspector(
     return fetched;
   }
 
-  /** Open requests of a process that no longer runs, which no connection carries on. */
+  /**
+   * Open requests of a process that no longer runs, which no connection
+   * carries on, fail. The connections of such a process are marked ended.
+   */
   function failOrphans(running: ReadonlySet<string>): void {
+    for (const c of connections) if (!running.has(c.processKey)) c.ended = true;
     for (const record of records) {
       if (!isOpen(record) && !lostOnly.has(record)) continue;
       const conn = byId.get(record.id)?.conn;
@@ -1967,14 +1984,40 @@ function createInspector(
       const answers = await Promise.all(
         connections.filter((c) => !c.closed).map((c) => disableOn(c, STOP_DISABLE_TIMEOUT_MS))
       );
-      const unanswered = answers.filter((answered) => !answered).length;
-      return unanswered === 0
+      const reasons: string[] = [];
+      if (answers.some((answered) => !answered)) {
+        reasons.push(
+          `the agent did not acknowledge Network.disable within ${STOP_DISABLE_TIMEOUT_MS / 1000} s; argent records none of the app's new requests, and launches do not attach it`
+        );
+      }
+      if (await awayAtStop()) reasons.push(AWAY_AT_STOP);
+      return reasons.length === 0
         ? { confirmed: true }
-        : {
-            confirmed: false,
-            reason: `the agent did not acknowledge Network.disable within ${STOP_DISABLE_TIMEOUT_MS / 1000} s; argent records none of the app's new requests, and launches do not attach it`,
-          };
+        : { confirmed: false, reason: reasons.join("; ") };
     });
+  }
+
+  /**
+   * An agent whose connection dropped captures on in the app until it
+   * connects again, so the stop's Network.disable did not reach it. It gets
+   * that Network.disable when it connects. An agent whose process ended
+   * captures nothing, so the process read leaves it out.
+   */
+  async function awayAtStop(): Promise<boolean> {
+    const away = (): AgentConnection[] =>
+      connections.filter((c) => c.closed && !c.resumedBy && !c.agentGone && !c.ended);
+    if (away().length === 0) return false;
+    try {
+      const read = await readAppProcesses(serial, packageName, STOP_DISABLE_TIMEOUT_MS);
+      failOrphans(runningKeys(read));
+      // An outage longer than the checks after the drop removed the reverse
+      // the agent connects through.
+      if (away().length > 0) await assertReverse();
+    } catch {
+      // adb did not answer, as in an outage: the app may still run.
+    }
+    for (const c of away()) missedStop.add(c.instance);
+    return away().length > 0;
   }
 
   async function attachLaunch(): Promise<string | undefined> {
