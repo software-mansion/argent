@@ -876,6 +876,29 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       });
     });
 
+    it("does not answer a body read with the answer to a read of an earlier connection", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      const sending =
+        "[unavailable: the app is still sending this request body; read it again later]";
+      await request("https://example.com/r1", { method: "POST", postData: "BODY-1", hold: true });
+      const [r1] = (await readLog()).requests;
+      // The app holds the read until the upload ends, and answers it then on
+      // the connection of that time.
+      expect((await details(r1!.id)).request.postData).toBe(sending);
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+
+      await start();
+      await request("https://example.com/r2", { method: "POST", postData: "BODY-2", hold: true });
+      const r2 = (await readLog()).requests.find((r) => r.url === "https://example.com/r2")!;
+      expect((await details(r2.id)).request.postData).toBe(sending);
+      await app.call("Net.finish");
+      expect((await details(r2.id)).request.postData).toBe("BODY-2");
+      expect((await details(r1!.id)).request.postData).toBe("BODY-1");
+    }, 25_000);
+
     it("gives a body read before restart-app from argent's copy, and says that the process is gone for one not read", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();

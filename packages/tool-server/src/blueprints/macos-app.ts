@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomInt } from "node:crypto";
 import { once } from "node:events";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -19,6 +20,7 @@ import {
   attachNdjsonReader,
   createNdjsonCdpRequester,
   reportDroppedFrameToStderr,
+  writeNdjsonFrame,
   type NdjsonCdpRequester,
 } from "../utils/ndjson-socket";
 import { macosAppIdFromBundleId, parseMacosAppBundleId } from "../utils/device-info";
@@ -378,6 +380,16 @@ interface PendingCall {
   timer: NodeJS.Timeout;
 }
 
+/**
+ * The next id of a CDP request on the wire. The channels share it, so no two
+ * of them send the same id. The app answers a request body read that it holds
+ * until the upload ends on its connection of that time, so a reply can come
+ * on a later channel than its request, also on one of a later tool-server.
+ * There it must answer no request. The random start keeps the ids of two
+ * tool-servers apart.
+ */
+let nextCdpWireId = randomInt(2 ** 47);
+
 /** What a channel hands its app's service about the network capture. */
 interface ChannelNetworkSink {
   /** One network event, with the pid of the process that sent it. */
@@ -402,6 +414,8 @@ class LibraryChannel {
   /** Why the last Network.enable did not arm this channel. */
   enableFailure?: string;
   private readonly pending = new Map<number, PendingCall>();
+  /** The requester's id of each CDP request this channel sent, by its id on the wire. */
+  private readonly cdpIds = new Map<number, number>();
   private nextId = 1;
   private hello: MacosLibraryHandshake | null = null;
   private closeError: FailureError | null = null;
@@ -424,7 +438,10 @@ class LibraryChannel {
     private readonly expectedPid: number | null,
     private readonly network: ChannelNetworkSink
   ) {
-    this.cdp = createNdjsonCdpRequester(socket, { label: `macos-app ${bundleId}` });
+    this.cdp = createNdjsonCdpRequester(socket, {
+      label: `macos-app ${bundleId}`,
+      send: (frame) => this.sendCdp(frame as { type: string; payload: { id: number } }),
+    });
     this.ready.catch(() => undefined);
     attachNdjsonReader(socket, {
       onDropped: reportDroppedFrameToStderr(`macos-app ${bundleId}`),
@@ -489,6 +506,16 @@ class LibraryChannel {
     this.socket.destroy();
   }
 
+  /** Sends a CDP request under a wire id that no other channel uses. */
+  private sendCdp(frame: { type: string; payload: { id: number } }): boolean {
+    const wireId = nextCdpWireId++;
+    if (!writeNdjsonFrame(this.socket, { ...frame, payload: { ...frame.payload, id: wireId } })) {
+      return false;
+    }
+    this.cdpIds.set(wireId, frame.payload.id);
+    return true;
+  }
+
   private onMessage(raw: unknown): void {
     if (!raw || typeof raw !== "object") return;
     const msg = raw as { type?: unknown; payload?: Record<string, unknown> };
@@ -505,11 +532,19 @@ class LibraryChannel {
       return;
     }
     if (msg.type === "CDP") {
-      // A frame with an id answers a CDP request of this channel, before the
-      // events after it are read. A network event has a method and no id.
+      // A frame with an id answers a CDP request, before the events after it
+      // are read. An id that this channel did not send answers a request of
+      // an earlier channel, so it answers nothing here. A network event has a
+      // method and no id.
       const p = msg.payload;
-      if (this.cdp.handleResponse(p)) return;
-      if (p && typeof p.method === "string" && p.id === undefined) {
+      if (p?.id !== undefined) {
+        const id = typeof p.id === "number" ? this.cdpIds.get(p.id) : undefined;
+        if (id !== undefined && this.cdp.handleResponse({ ...p, id })) {
+          this.cdpIds.delete(p.id as number);
+        }
+        return;
+      }
+      if (p && typeof p.method === "string") {
         this.network.event(p.method, p.params, this.hello.pid);
       }
       return;
