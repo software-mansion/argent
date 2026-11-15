@@ -51,7 +51,7 @@ import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/c
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import { readAppProcesses } from "../src/blueprints/android-network-inspector-device";
-import { localIosHost } from "../src/utils/ios-host";
+import { localIosHost, remoteIosHost } from "../src/utils/ios-host";
 
 // The device's process table, which a stop reads when it cannot reach the app's JS runtime.
 vi.mock("../src/blueprints/android-network-inspector-device", async (importOriginal) => ({
@@ -60,7 +60,11 @@ vi.mock("../src/blueprints/android-network-inspector-device", async (importOrigi
 }));
 vi.mock("../src/utils/ios-host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/ios-host")>();
-  return { ...actual, localIosHost: { ...actual.localIosHost, listRunningBundleIds: vi.fn() } };
+  return {
+    ...actual,
+    localIosHost: { ...actual.localIosHost, listRunningBundleIds: vi.fn() },
+    remoteIosHost: { ...actual.remoteIosHost, listRunningBundleIds: vi.fn() },
+  };
 });
 
 // Whether Xcode's component install is pending. The suite-wide setup answers no.
@@ -71,6 +75,7 @@ vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
 }));
 
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
+const REMOTE_UDID = "remote:66666666-7777-8888-9999-000000000000";
 const SERIAL = "emulator-5554";
 const APP = "com.example.shop";
 const OTHER = "com.example.other";
@@ -424,6 +429,10 @@ beforeEach(() => {
     if (!running) throw new Error("simctl spawn timed out");
     return new Set(running);
   });
+  vi.mocked(remoteIosHost.listRunningBundleIds).mockImplementation(async () => {
+    if (!running) throw new Error("sim-remote spawn timed out");
+    return new Set(running);
+  });
   registry = new Registry();
   registry.registerBlueprint(fakeDebuggerBlueprint);
   registry.registerBlueprint(networkInspectorBlueprint);
@@ -440,7 +449,7 @@ beforeEach(() => {
   android.clear();
   androidFactoryCalls = 0;
   xcode.pending = false;
-  __primeDepCacheForTests(["xcrun", "adb"]);
+  __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
 });
 
 afterEach(async () => {
@@ -522,6 +531,12 @@ const PLATFORMS = [
     nativeMark: () => androidFor(APP).captureMark(),
     nativeCalls: () => androidFor(APP).calls,
   },
+] as const;
+
+/** The platforms on which a stop reads the device's processes. */
+const PROCESS_PLATFORMS = [
+  ...PLATFORMS,
+  { platform: "a remote iOS simulator", udid: REMOTE_UDID },
 ] as const;
 
 describe("network-capture-start", () => {
@@ -1240,7 +1255,7 @@ describe("network-capture-stop", () => {
     expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", port: PORT });
   });
 
-  it.each(PLATFORMS)(
+  it.each(PROCESS_PLATFORMS)(
     "on $platform, says nothing records, and stores no interceptor, when the app is not running and its runtime cannot be reached",
     async ({ udid }) => {
       serve(PORT, udid, new FakeRuntime(APP));
@@ -1267,7 +1282,7 @@ describe("network-capture-stop", () => {
   );
 
   it.each(
-    PLATFORMS.flatMap((platform) => [
+    PROCESS_PLATFORMS.flatMap((platform) => [
       { ...platform, device: "lists a process of the app", answers: true },
       { ...platform, device: "does not answer", answers: false },
     ])
