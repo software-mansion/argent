@@ -153,7 +153,7 @@ describe("nativeNetworkCaptureWarning", () => {
     const warning = nativeNetworkCaptureWarning(SERIAL);
 
     expect(warning).toContain(`Native network capture is on for ${PKG} on this device`);
-    expect(warning).toContain("Argent attaches its in-app agent to the processes of that app");
+    expect(warning).toContain("Argent's in-app agent can run in the processes of that app");
     expect(warning).toContain("can slow the app");
     expect(warning).toContain("timings");
     expect(warning).toContain(
@@ -167,7 +167,7 @@ describe("nativeNetworkCaptureWarning", () => {
     const warning = nativeNetworkCaptureWarning(SERIAL);
 
     expect(warning).toContain(`on for ${PKG}, com.example.other on this device`);
-    expect(warning).toContain("to the processes of these apps");
+    expect(warning).toContain("in the processes of these apps");
     expect(warning).toContain("call network-capture-stop for each of these apps");
   });
 

@@ -71,6 +71,7 @@ const STOPPED_REASON =
   "capture stopped by network-capture-stop; network-capture-start turns it on again";
 const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
 const STOPPED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop); this process runs without it until network-capture-start`;
+const UNCONFIRMED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop), but its running process (pid 4722) has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`;
 
 function dirFor(packageName = PKG, user = 0): string {
   return `/data/user/${user}/${packageName}/code_cache/.argent-inspector`;
@@ -4277,6 +4278,53 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
         "the agent did not acknowledge Network.disable within 5 s; argent records none of the app's new requests, and launches do not attach it",
     });
     expect(api.state()).toEqual({ armed: false, stopped: true });
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(UNCONFIRMED_LAUNCH_NOTE);
+    expect(attachCommands()).toHaveLength(1);
+  });
+
+  /** Arms the app as pid 4722, then stops its capture with a Network.disable the agent does not answer. */
+  async function stopUnacknowledged(): Promise<{
+    api: AndroidNetworkInspectorApi;
+    agent: FakeAgent;
+  }> {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+    vi.useRealTimers();
+    return { api, agent };
+  }
+
+  it("says at a launch that the process which did not acknowledge the stop may still intercept, and names the app to profiles until its connection closes", async () => {
+    const { agent } = await stopUnacknowledged();
+
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(UNCONFIRMED_LAUNCH_NOTE);
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
+    expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([SERIAL]);
+    // A launch that started a new process before the old connection closed.
+    device.process = { pid: 5100, startTime: 99_000 };
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+    expect(attachCommands()).toHaveLength(1);
+
+    await agent.close();
+    await vi.waitFor(() => expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]));
+    expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([]);
+    device.process = { pid: 4722, startTime: 91_000 };
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+  });
+
+  it("forgets a stop the agent did not acknowledge once it acknowledges a later Network.disable", async () => {
+    const { api, agent } = await stopUnacknowledged();
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
+
+    agent.options.unanswered!.length = 0;
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
   });
 

@@ -238,7 +238,11 @@ interface InspectorHandle {
   /** Capture is live from network-capture-start until network-capture-stop or a dispose. */
   isLive(): boolean;
   isStopped(): boolean;
+  /** Live, or stopped while a connected agent has not acknowledged the stop and may still intercept. */
+  mayIntercept(): boolean;
   attachLaunch(): Promise<string | undefined>;
+  /** The launch note while stopped. */
+  stoppedLaunch(): Promise<string>;
 }
 
 /**
@@ -273,18 +277,24 @@ function stoppedLaunchNote(packageName: string): string {
   return `native network capture is stopped for ${packageName} (network-capture-stop); this process runs without it until network-capture-start`;
 }
 
-/** Package names with live native network capture on the device. */
+/**
+ * Package names with live native network capture on the device, and those
+ * whose connected agent has not acknowledged the stop.
+ */
 export function liveAndroidNetworkCaptures(deviceId: string): string[] {
   return [...(liveInspectors.get(deviceKeyOf(deviceId)) ?? [])]
-    .filter((handle) => handle.isLive())
+    .filter((handle) => handle.mayIntercept())
     .map((handle) => handle.packageName)
     .sort();
 }
 
-/** Adb serials of the devices with live native network capture for the app. */
+/**
+ * Adb serials of the devices with live native network capture for the app, or
+ * whose connected agent has not acknowledged the stop.
+ */
 export function liveAndroidNetworkCaptureDevices(packageName: string): string[] {
   const serials = allHandles()
-    .filter((handle) => handle.packageName === packageName && handle.isLive())
+    .filter((handle) => handle.packageName === packageName && handle.mayIntercept())
     .map((handle) => handle.serial);
   return [...new Set(serials)].sort();
 }
@@ -303,7 +313,7 @@ export async function attachAndroidNetworkInspectorToLaunch(
   try {
     for (const handle of liveInspectors.get(deviceKeyOf(deviceId)) ?? []) {
       if (handle.packageName !== packageName) continue;
-      if (handle.isStopped()) return stoppedLaunchNote(packageName);
+      if (handle.isStopped()) return await handle.stoppedLaunch();
       if (!handle.isLive()) continue;
       return await handle.attachLaunch();
     }
@@ -395,6 +405,8 @@ interface AgentConnection {
   droppedEvents: number;
   /** A Network.enable sent since the last stop is on its way on this connection. */
   enabling: boolean;
+  /** The Network.disable of the last stop went unanswered, so the agent may still intercept. */
+  stopUnconfirmed?: boolean;
   byLayerId: Map<string, NativeNetworkRecord>;
   resumes?: AgentConnection;
   resumedBy?: AgentConnection;
@@ -1334,10 +1346,14 @@ function createInspector(
     return conn.cdp
       .request("Network.disable", {}, { timeoutMs, onResult: () => failStopped(conn) })
       .then(
-        () => true,
+        () => {
+          conn.stopUnconfirmed = false;
+          return true;
+        },
         (err: unknown) => {
           if (conn.closed || disposed) return true;
           log(`Network.disable on connection ${conn.index} failed: ${errorMessage(err)}`);
+          if (stopped) conn.stopUnconfirmed = true;
           // While stopped, no request opens, so the open ones are from before
           // the stop. The requester drops a reply that comes after the timeout.
           // An agent that was only slow can still send their final events.
@@ -1931,6 +1947,7 @@ function createInspector(
     for (const conn of connections) {
       conn.armed = false;
       conn.enabling = false;
+      conn.stopUnconfirmed = false;
     }
     for (const wake of armWaiters) wake();
     return withKeyedLock(attachLock, "attach", async () => {
@@ -1984,6 +2001,29 @@ function createInspector(
     if (disposed) return undefined;
     if (stopped) return stoppedLaunchNote(packageName);
     return launchNote(outcome, reason);
+  }
+
+  /** The open connection whose agent did not acknowledge the stop. */
+  function unconfirmedStop(): AgentConnection | undefined {
+    return stopped ? connections.find((c) => !c.closed && c.stopUnconfirmed) : undefined;
+  }
+
+  /**
+   * A launch of an app that already runs only brings its process to the
+   * front, so a process that did not acknowledge the stop keeps its agent on.
+   */
+  async function stoppedLaunch(): Promise<string> {
+    const conn = unconfirmedStop();
+    if (!conn) return stoppedLaunchNote(packageName);
+    // Without a process read, as when adb does not answer, the connection counts.
+    const read = await readAppProcesses(serial, packageName).catch(() => null);
+    const current = read ? processOfUser(read, user()) : null;
+    // A start, an acknowledgement or a closed connection while adb answered.
+    if (unconfirmedStop() !== conn) return stoppedLaunchNote(packageName);
+    if (read && (!current || processKey(current) !== conn.processKey)) {
+      return stoppedLaunchNote(packageName);
+    }
+    return `native network capture is stopped for ${packageName} (network-capture-stop), but its running process (pid ${conn.pid}) has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`;
   }
 
   function launchNote(outcome: LaunchOutcome, reason?: string): string {
@@ -2080,7 +2120,9 @@ function createInspector(
     hardwareKey: null,
     isLive: () => live && !disposed,
     isStopped: () => stopped && !disposed,
+    mayIntercept: () => !disposed && (live || unconfirmedStop() !== undefined),
     attachLaunch,
+    stoppedLaunch,
   };
 
   return {
