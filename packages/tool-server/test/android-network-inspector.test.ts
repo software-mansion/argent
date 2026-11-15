@@ -3344,6 +3344,34 @@ describe("after a drop, with the clock under test control", () => {
     expect(api.records(8081)[0]!.errorText).toBeUndefined();
   });
 
+  it("says the agent did not reconnect once an adb outage outlasts the recheck window, and network-capture-start connects it again", async () => {
+    const api = await armedInspector();
+    const first = agents[0]!;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // The cable is out: adb does not answer, and the reverse is gone.
+    device.adbDown = true;
+    device.reverses.clear();
+    await first.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    await vi.advanceTimersByTimeAsync(16_000);
+    device.adbDown = false;
+    const before = device.commands.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    // Reads run no adb, so nothing puts the reverse back while the app runs.
+    expect(device.commands).toHaveLength(before);
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      "android-native: not armed, 0 requests (the agent's connection dropped, and it did not reconnect; network-capture-start connects it again)"
+    );
+    vi.useRealTimers();
+
+    const start = api.startCapture(8081);
+    await vi.waitFor(() => expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort));
+    await FakeAgent.fromSession(dirFor(), proc(), { instance: first.instance });
+    expect(await start).toEqual({ armed: true });
+    expect(attachCommands()).toHaveLength(1);
+  });
+
   it("restarts a process's recheck when its connection drops again during it", async () => {
     const api = await armedInspector();
     const first = agents[0]!;

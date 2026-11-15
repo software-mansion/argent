@@ -145,6 +145,9 @@ const AGENT_GONE_REASON =
 const LOST_WHILE_DISCONNECTED =
   "the agent lost this request's final events while it was disconnected";
 const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
+const DROPPED_NOTE = "the agent's connection dropped; it reconnects by itself while the app runs";
+const NOT_RECONNECTED_NOTE =
+  "the agent's connection dropped, and it did not reconnect; network-capture-start connects it again";
 const STOPPED_NOTE =
   "capture stopped by network-capture-stop; network-capture-start turns it on again";
 
@@ -1405,7 +1408,7 @@ function createInspector(
     if (disposed) return;
     log(`agent connection ${conn.index} closed${why ? `: ${why}` : ""}`);
     if (!connections.some((c) => !c.closed)) {
-      note = "the agent's connection dropped; it reconnects by itself while the app runs";
+      note = DROPPED_NOTE;
     }
     const running = rechecks.get(conn.processKey);
     if (running) {
@@ -1470,6 +1473,11 @@ function createInspector(
         for (const record of c.byLayerId.values()) {
           if (isOpen(record)) markLost(record, NOT_RECONNECTED);
         }
+      }
+      // Reads run no adb, so after this window nothing puts back a reverse
+      // that adb dropped while the app runs; a start does.
+      if (note === DROPPED_NOTE && !connections.some((c) => !c.closed)) {
+        note = NOT_RECONNECTED_NOTE;
       }
     } finally {
       if (rechecks.get(key) === recheck) rechecks.delete(key);
