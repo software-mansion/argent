@@ -4310,6 +4310,74 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(api.records(8081)[1]).not.toHaveProperty("errorText");
   });
 
+  it("a request failed at an unacknowledged stop takes the final events a slow agent still sends, without the stop's error", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.started(agent.rid(1), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+
+    // The app was only slow: its agent reports the request's end after all.
+    agent.event("Network.responseReceived", {
+      requestId: agent.rid(1),
+      response: {
+        url: "https://example.com/slow",
+        status: 200,
+        headers: {},
+        mimeType: "text/plain",
+      },
+    });
+    agent.event("Network.loadingFinished", { requestId: agent.rid(1), encodedDataLength: 5 });
+    await vi.waitFor(() => expect(api.records(8081)[0]!.state).toBe("complete"));
+
+    expect(api.records(8081)[0]).toMatchObject({ response: { status: 200 }, encodedDataLength: 5 });
+    expect(api.records(8081)[0]).not.toHaveProperty("errorText");
+  });
+
+  it("a request failed at an unacknowledged stop stays failed when the slow agent sends only some of its events before the stop takes effect", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.started(agent.rid(1), "https://example.com/download");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+
+    // Events the agent queued before it read Network.disable: no final one follows.
+    agent.event("Network.responseReceived", {
+      requestId: agent.rid(1),
+      response: {
+        url: "https://example.com/download",
+        status: 200,
+        headers: {},
+        mimeType: "application/zip",
+      },
+    });
+    agent.event("Network.dataReceived", { requestId: agent.rid(1), dataLength: 5 });
+    agent.answer("Network.disable");
+    await vi.waitFor(() => expect(api.records(8081)[0]!.response?.status).toBe(200));
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+  });
+
   it("a Network.disable to an agent that connected while stopped fails none of the next start's requests when it times out after that start", async () => {
     const api = await armedInspector();
     await agents[0]!.close();

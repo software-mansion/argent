@@ -484,6 +484,11 @@ function createInspector(
   const cleared = new WeakSet<NativeNetworkRecord>();
   /** Failed only because their final events did not arrive; a later event still settles them. */
   const lostOnly = new WeakSet<NativeNetworkRecord>();
+  /**
+   * Failed when the agent did not acknowledge the stop in time: only a final
+   * event of an agent that was just slow settles them.
+   */
+  const failedAtStopTimeout = new WeakSet<NativeNetworkRecord>();
   /** The URL and method of each record's latest hop. */
   const hops = new WeakMap<NativeNetworkRecord, { url: string; method: string }>();
   const startArrivals = new WeakMap<NativeNetworkRecord, number>();
@@ -1335,13 +1340,15 @@ function createInspector(
           log(`Network.disable on connection ${conn.index} failed: ${errorMessage(err)}`);
           // While stopped, no request opens, so the open ones are from before
           // the stop. The requester drops a reply that comes after the timeout.
-          if (stopped && getFailureSignal(err)?.error_kind === "timeout") failStopped(conn);
+          // An agent that was only slow can still send their final events.
+          if (stopped && getFailureSignal(err)?.error_kind === "timeout") failStopped(conn, true);
           return false;
         }
       );
   }
 
-  function failStopped(conn: AgentConnection): void {
+  /** `settleLater`: a later final event of the request still settles it. */
+  function failStopped(conn: AgentConnection, settleLater = false): void {
     const open: NativeNetworkRecord[] = [];
     for (let c: AgentConnection | undefined = conn; c; c = c.resumes) {
       for (const record of c.byLayerId.values()) {
@@ -1350,6 +1357,7 @@ function createInspector(
     }
     for (const record of open) {
       lostOnly.delete(record);
+      if (settleLater) failedAtStopTimeout.add(record);
       record.state = "failed";
       record.errorText = STOPPED_BEFORE_FINISH;
       cleared.delete(record);
@@ -1499,7 +1507,8 @@ function createInspector(
       case "Network.responseReceived": {
         revive(record);
         const r = asObject(p.response);
-        record.state = "headers";
+        // Until a final event, the stop's failure stands.
+        if (!failedAtStopTimeout.has(record)) record.state = "headers";
         record.response = {
           url: capString(asString(r.url)) || hops.get(record)?.url || record.request.url,
           status: typeof r.status === "number" ? r.status : 0,
@@ -1513,6 +1522,7 @@ function createInspector(
       }
       case "Network.loadingFinished":
         revive(record);
+        if (failedAtStopTimeout.delete(record)) delete record.errorText;
         // A request in flight at a clear lists again once it settles, so
         // polling with clear sees it finish.
         cleared.delete(record);
@@ -1522,6 +1532,7 @@ function createInspector(
         break;
       case "Network.loadingFailed":
         revive(record);
+        failedAtStopTimeout.delete(record);
         cleared.delete(record);
         record.state = "failed";
         record.errorText = capString(asString(p.errorText)) || "Unknown error";
