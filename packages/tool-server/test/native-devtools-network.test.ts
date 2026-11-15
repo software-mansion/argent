@@ -575,6 +575,23 @@ describe("native-devtools network capture stop", () => {
     expect(api.networkRecords(BUNDLE)!.state().armed).toBe(false);
   });
 
+  it("points view-network-request-details at native-network-logs for an unknown ios- id after a stop of the only app", async () => {
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    for (const frame of requestEvents("kept", "https://example.com/kept")) app.send(frame);
+    await recordOf(api, "https://example.com/kept", "pending");
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({ confirmed: true });
+
+    await expect(
+      networkRequestTool.execute!(
+        {},
+        { device_id: UDID, requestId: "ios-0000-999999", includeBody: false }
+      )
+    ).resolves.toBe(
+      "Request ios-0000-999999 not found. Use native-network-logs to list the requests the iOS native layer recorded."
+    );
+  });
+
   it("says a stop the app does not acknowledge within 5 s is not confirmed", async () => {
     const api = await startService();
     await api.startNetworkCapture(BUNDLE, 8081);
