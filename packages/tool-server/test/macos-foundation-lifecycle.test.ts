@@ -913,6 +913,19 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
     });
 
+    it("completes a request in flight at network-capture-stop when its end comes after the stop", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/held", { hold: true });
+      expect((await stop()).layers).toEqual([{ layer: "macos-native", armed: false, total: 1 }]);
+      await (await macosApp()).call("Net.finish");
+      const log = await readUntil((l) => l.requests[0]?.state === "complete");
+      expect(log.stopped).toBe(true);
+      expect(log.requests.map((r) => [r.url, r.state])).toEqual([
+        ["https://example.com/held", "complete"],
+      ]);
+    });
+
     it("says no gap when the start waits for a launch, which arms the new process, and says it after a stop and a new start", async () => {
       const booting = run("boot-device", {
         macosAppPath: appPath,

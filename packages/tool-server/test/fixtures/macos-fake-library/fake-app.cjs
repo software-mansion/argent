@@ -146,8 +146,9 @@ function handle(socket, msg) {
       socket.write(JSON.stringify({ type: "CDP", payload: { id, result: {} } }) + "\n");
       return reply({ result: { network } });
     case "Net.finish":
-      // The held requests end, to whichever client is connected now.
-      if (network.active) for (const events of held.splice(0)) sendEvents(events);
+      // The held requests end, to whichever client is connected now, also
+      // after Network.disable: only a new request waits for capture to be on.
+      for (const events of held.splice(0)) sendEvents(events);
       return reply({ result: {} });
     case "Net.drop":
       // The fake answers, then closes this client's connection.
