@@ -2,6 +2,7 @@ import { execFileSync, spawn, type SpawnOptions } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as zlib from "node:zlib";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The macOS artifacts are stand-ins: a helper that runs a Node "app" speaking
@@ -752,6 +753,48 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       // A Mac app has only native ids.
       expect(await details("rn-net-1")).toBe(
         "Request rn-net-1 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
+      );
+    });
+
+    it("keeps a request body read open while the app sends the body, past the default wait of a CDP request", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/upload", {
+        method: "POST",
+        postData: "UPLOADED",
+        hold: true,
+      });
+      const [{ id }] = (await readLog()).requests;
+      const sending =
+        "[unavailable: the app is still sending this request body; read it again later]";
+      expect((await details(id)).request.postData).toBe(sending);
+      // The next wait ends 11 s after the read went out, and the read is still open.
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect((await details(id)).request.postData).toBe(sending);
+      // The app answers the read when the upload ends.
+      await (await macosApp()).call("Net.finish");
+      expect((await details(id)).request.postData).toBe("UPLOADED");
+    }, 25_000);
+
+    it("decodes a base64 body, and shows a response that is itself gzip data as binary, never decoding it again", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      const gz = zlib.gzipSync('{"inner":"gzip"}');
+      await request("https://example.com/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        postData: Buffer.from('{"city":"東京"}').toString("base64"),
+        body: gz.toString("base64"),
+        base64: true,
+        responseHeaders: { "Content-Encoding": "gzip", "Content-Type": "application/gzip" },
+        mimeType: "application/gzip",
+      });
+      const [{ id }] = (await readLog()).requests;
+      const found = await details(id);
+      expect(found.request.postData).toBe('{"city":"東京"}');
+      // The app reads a response decoded, so its Content-Encoding is not applied again.
+      expect(found.response.body).toBe(
+        `[body omitted: binary application/gzip, ${gz.length} bytes]`
       );
     });
 

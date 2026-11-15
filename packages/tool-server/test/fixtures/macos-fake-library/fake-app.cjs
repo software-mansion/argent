@@ -13,10 +13,13 @@
 // Network capture: like the real library, it reports requests as CDP events
 // only after a CDP Network.enable, which it answers, until Network.disable or
 // until the client's connection closes. `Net.request` sends one request (with
-// `headers`, a request body `postData`, a response `body`, and `hold: true` to
-// send only its first event, until `Net.finish`), and `--launch-request` sends
-// one 150 ms after the start. It keeps the bodies and answers the body reads,
-// as the real library does.
+// `headers`, a request body `postData`, a response `body`, `responseHeaders`
+// and `mimeType`, `base64: true` when both bodies are base64, and `hold: true`
+// to send only its first event, until `Net.finish`), and `--launch-request`
+// sends one 150 ms after the start. It keeps the bodies and answers the body
+// reads, as the real library does: a request body read of a held request
+// waits until `Net.finish`, which answers it to whichever client is connected
+// now, under the id of its read.
 "use strict";
 const fs = require("node:fs");
 const net = require("node:net");
@@ -95,16 +98,18 @@ function cdp(socket, { id, method, params }) {
       network.active = false;
       return answer({ result: {} });
     case "Network.getResponseBody": {
-      const body = bodies.get(params?.requestId)?.body;
-      return body
-        ? answer({ result: { body, base64Encoded: false, wasTruncated: false } })
+      const entry = bodies.get(params?.requestId);
+      return entry?.body
+        ? answer({ result: { body: entry.body, base64Encoded: entry.base64, wasTruncated: false } })
         : answer({ error: { message: "No response body stored for requestId" } });
     }
     case "Network.getRequestPostData": {
       const entry = bodies.get(params?.requestId);
       if (!entry) return answer({ error: { message: "No request stored for requestId" } });
+      // The app still sends the body: the read waits for its end.
+      if (entry.uploading) return entry.reads.push(id);
       return entry.postData
-        ? answer({ result: { postData: entry.postData, base64Encoded: false } })
+        ? answer({ result: { postData: entry.postData, base64Encoded: entry.base64 } })
         : answer({ error: { message: "No request post data available for requestId" } });
     }
     default:
@@ -121,16 +126,19 @@ function sendEvents(events) {
 }
 
 /** One request's events, to the connected client, as the real library sends them. */
-function sendRequest(url, method, headers = {}, hold = false, postData, body) {
+function sendRequest(params) {
+  const { url, method, headers = {}, postData, body, base64 = false } = params;
+  const hold = params.hold === true;
   if (!network.active) return;
   const requestId = `fake-${nextRequestId++}`;
-  bodies.set(requestId, { postData, body });
+  bodies.set(requestId, { postData, body, base64, uploading: hold && !!postData, reads: [] });
+  const responseHeaders = { "Set-Cookie": "session=fake-secret", ...params.responseHeaders };
   const last = [
     [
       "Network.responseReceived",
       {
         requestId,
-        response: { url, status: 200, headers: { "Set-Cookie": "session=fake-secret" } },
+        response: { url, status: 200, headers: responseHeaders, mimeType: params.mimeType },
       },
     ],
     ["Network.loadingFinished", { requestId, encodedDataLength: body?.length ?? 12 }],
@@ -138,12 +146,12 @@ function sendRequest(url, method, headers = {}, hold = false, postData, body) {
   // A body the app streams comes with no postData: the agent reads it.
   const request = { url, method, headers, ...(postData ? { hasPostData: true } : {}) };
   sendEvents([["Network.requestWillBeSent", { requestId, request }]]);
-  if (hold) held.push(last);
+  if (hold) held.push({ requestId, last });
   else sendEvents(last);
 }
 
 if (process.argv.includes("--launch-request")) {
-  setTimeout(() => sendRequest("https://example.com/launch", "GET"), 150);
+  setTimeout(() => sendRequest({ url: "https://example.com/launch", method: "GET" }), 150);
 }
 
 function handle(socket, msg) {
@@ -154,22 +162,23 @@ function handle(socket, msg) {
     case "Echo":
       return reply({ result: { params, pid: process.pid, argv: process.argv.slice(2), deadline } });
     case "Net.request":
-      for (let i = 0; i < (params.count ?? 1); i++) {
-        sendRequest(
-          params.url,
-          params.method,
-          params.headers,
-          params.hold === true,
-          params.postData,
-          params.body
-        );
-      }
+      for (let i = 0; i < (params.count ?? 1); i++) sendRequest(params);
       // A CDP reply: its id must neither answer the call nor enter the log.
       socket.write(JSON.stringify({ type: "CDP", payload: { id, result: {} } }) + "\n");
       return reply({ result: { network } });
     case "Net.finish":
       // The held requests end, to whichever client is connected now.
-      if (network.active) for (const events of held.splice(0)) sendEvents(events);
+      for (const { requestId } of held) {
+        const entry = bodies.get(requestId);
+        entry.uploading = false;
+        const result = { postData: entry.postData, base64Encoded: entry.base64 };
+        for (const readId of entry.reads.splice(0)) {
+          for (const client of clients) {
+            client.write(JSON.stringify({ type: "CDP", payload: { id: readId, result } }) + "\n");
+          }
+        }
+      }
+      if (network.active) for (const { last } of held.splice(0)) sendEvents(last);
       return reply({ result: {} });
     case "Net.drop":
       // The fake answers, then closes this client's connection.
