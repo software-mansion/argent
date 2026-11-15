@@ -852,6 +852,41 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
     });
 
+    it("reads a body after argent reconnects to the same process", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/kept", {
+        method: "POST",
+        postData: "SENT",
+        body: "RECEIVED",
+      });
+      const [{ id }] = (await readLog()).requests;
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      // The record keeps its process, so the read goes to the new connection.
+      await start();
+      expect(await details(id)).toMatchObject({
+        request: { postData: "SENT" },
+        response: { body: "RECEIVED" },
+      });
+    });
+
+    it("gives a body read before restart-app from argent's copy, and says that the process is gone for one not read", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/read", { body: "READ-BEFORE" });
+      await request("https://example.com/unread", { body: "NOT-READ" });
+      const [read, unread] = (await readLog()).requests;
+      expect((await details(read!.id)).response.body).toBe("READ-BEFORE");
+
+      await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      expect((await details(read!.id)).response.body).toBe("READ-BEFORE");
+      expect((await details(unread!.id)).response.body).toBe(
+        "[unavailable: the app process that made the request is gone]"
+      );
+    });
+
     it("leaves the requests of a quick reconnect open when the dropped connection's exit check ends", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();
