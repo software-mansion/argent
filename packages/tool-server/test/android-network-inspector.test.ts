@@ -71,6 +71,8 @@ const STOPPED_REASON =
   "capture stopped by network-capture-stop; network-capture-start turns it on again";
 const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
 const STOPPED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop); this process runs without it until network-capture-start`;
+const LOADED_NOTE =
+  "pid 4722 already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server is capturing this app or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's capture of the app; after restart-app, call network-capture-start again, since a relaunch ends the JS layer's capture";
 const AWAY_AT_STOP =
   "the agent's connection was down at the stop, so it did not get Network.disable; it gets it when it connects again, and argent records none of the app's new requests meanwhile";
 const UNCONFIRMED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop), but its running process (pid 4722) has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`;
@@ -2463,9 +2465,7 @@ describe("attaching and the app's lifecycle", () => {
     // True whether the loaded agent is free (it connects), held by another
     // tool-server (it stays there until that connection ends) or from an
     // earlier Argent (it dials a port of its own and never connects).
-    expect(api.state().note).toBe(
-      "pid 4722 already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server is capturing this app or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's capture of the app"
-    );
+    expect(api.state().note).toBe(LOADED_NOTE);
     const next = session();
     expect(next.secret).not.toBe(first.secret);
 
@@ -2494,6 +2494,15 @@ describe("attaching and the app's lifecycle", () => {
 
     await FakeAgent.fromSession(dirFor(), proc());
     expect(await start).toEqual({ armed: true });
+  });
+
+  it("network-capture-start says to start again after restart-app when the agent already in the app does not connect", async () => {
+    device.loaded.add("4722:91000");
+    device.agentOnAttach = false;
+    const api = await createInspector();
+
+    // The JS layer of the same start can be armed, and a relaunch ends it.
+    expect(await startUnarmed(api)).toEqual({ armed: false, reason: LOADED_NOTE });
   });
 
   it("writes the session owner-only, then copies the agent under code_cache and chmods it, before the attach", async () => {
