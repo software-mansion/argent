@@ -286,10 +286,9 @@ async function stopMacosLayer(
   bundleId: string,
   port: number
 ): Promise<StoppedLayer> {
+  // The service is light and reaches nothing in the app, so the bundle id is
+  // checked also before any tool reached the app.
   const ref = macosAppRef(device);
-  if (!isLiveService(registry, ref.urn)) {
-    return { layer: "macos-native", armed: false, total: 0, reason: NOT_STARTED };
-  }
   const app = requireMacosAppOfBundle(
     { macosApp: await registry.resolveService<MacosAppApi>(ref.urn, ref.options) },
     device,

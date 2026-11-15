@@ -1014,12 +1014,19 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     }, 20_000);
 
     it("refuses another app's bundle id", async () => {
+      const refusal = async (tool: string) =>
+        codeOf(
+          await run(tool, { udid: DEVICE_ID, bundleId: "com.argent.other" }).catch(
+            (e: unknown) => e
+          )
+        );
+      // Also before any tool reached the app.
+      expect(await refusal("network-capture-stop")).toBe(
+        FAILURE_CODES.MACOS_APP_BUNDLE_ID_MISMATCH
+      );
       await run("boot-device", { macosAppPath: appPath });
       for (const tool of ["native-network-logs", "network-capture-start", "network-capture-stop"]) {
-        const err = await run(tool, { udid: DEVICE_ID, bundleId: "com.argent.other" }).catch(
-          (e: unknown) => e
-        );
-        expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_BUNDLE_ID_MISMATCH);
+        expect(await refusal(tool)).toBe(FAILURE_CODES.MACOS_APP_BUNDLE_ID_MISMATCH);
       }
     });
   });
