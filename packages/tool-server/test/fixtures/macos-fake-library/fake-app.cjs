@@ -5,9 +5,10 @@
 // ignore-terminate, ask-save (answers quit with an alert; asked to quit again
 // while it shows it, it quits without saving, as AppKit does; `Prompt.cancel`
 // answers it), windowless, minimized, panel-only, network-silent (answers no
-// CDP request). `--alert` shows an alert of
+// CDP request), disable-silent (answers no Network.disable and keeps capturing). `--alert` shows an alert of
 // the app's own from the start. `--handshake-delay=<ms>` sends the handshake
-// that much later, as a slow launch does. Its one window appears
+// that much later, as a slow launch does. `--cdp-delay=<ms>` handles each CDP
+// request that much after the one before it, in order, as a busy app does. Its one window appears
 // 200 ms after the handshake, as a real app's first window comes after its launch.
 //
 // Network capture: like the real library, it reports requests as CDP events
@@ -27,6 +28,9 @@ const net = require("node:net");
 const mode = (process.argv.find((a) => a.startsWith("--mode=")) ?? "--mode=ok").slice(7);
 const handshakeDelayMs = Number(
   (process.argv.find((a) => a.startsWith("--handshake-delay=")) ?? "=0").split("=")[1]
+);
+const cdpDelayMs = Number(
+  (process.argv.find((a) => a.startsWith("--cdp-delay=")) ?? "=0").split("=")[1]
 );
 const startedAt = Date.now();
 const network = { active: false, activations: 0 };
@@ -71,6 +75,7 @@ function serve(socket) {
   if (handshakeDelayMs > 0) setTimeout(hello, handshakeDelayMs);
   else hello();
   let buf = "";
+  let cdpQueue = Promise.resolve();
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
     buf += chunk;
@@ -79,7 +84,11 @@ function serve(socket) {
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
       const msg = JSON.parse(line);
-      if (msg.type === "CDP") cdp(socket, msg.payload);
+      if (msg.type === "CDP" && cdpDelayMs > 0) {
+        cdpQueue = cdpQueue
+          .then(() => new Promise((r) => setTimeout(r, cdpDelayMs)))
+          .then(() => cdp(socket, msg.payload));
+      } else if (msg.type === "CDP") cdp(socket, msg.payload);
       else if (msg.type === "ViewInspector") handle(socket, msg);
     }
   });
@@ -95,6 +104,7 @@ function cdp(socket, { id, method, params }) {
       network.activations++;
       return answer({ result: {} });
     case "Network.disable":
+      if (mode === "disable-silent") return;
       network.active = false;
       return answer({ result: {} });
     case "Network.getResponseBody": {
@@ -167,7 +177,8 @@ function handle(socket, msg) {
       socket.write(JSON.stringify({ type: "CDP", payload: { id, result: {} } }) + "\n");
       return reply({ result: { network } });
     case "Net.finish":
-      // The held requests end, to whichever client is connected now.
+      // The held requests end, to whichever client is connected now, also
+      // after Network.disable: only a new request waits for capture to be on.
       for (const { requestId } of held) {
         const entry = bodies.get(requestId);
         entry.uploading = false;
@@ -178,7 +189,7 @@ function handle(socket, msg) {
           }
         }
       }
-      if (network.active) for (const { last } of held.splice(0)) sendEvents(last);
+      for (const { last } of held.splice(0)) sendEvents(last);
       return reply({ result: {} });
     case "Net.drop":
       // The fake answers, then closes this client's connection.

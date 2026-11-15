@@ -32,6 +32,7 @@ import {
   type CliSessionStartedStats,
 } from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
+import { pauseJsCapturesOf } from "./blueprints/network-inspector";
 import { renderFlagGated } from "./utils/flag-gated-text";
 
 const PROCESS_TIMEOUT_MS = 5_000;
@@ -338,6 +339,11 @@ export function start(): void {
     previewWindow.dispose();
     updateChecker.dispose();
     httpHandle.dispose();
+
+    // The JS network interceptor lives in the app, so the dispose below alone
+    // leaves it recording. Pause it and empty its log, as the native layers end
+    // their capture at their dispose. Each runtime gets at most 1 s.
+    await pauseJsCapturesOf(registry).catch(() => {});
 
     // Dispose BEFORE recording toolserver:stop, so a crash escalating mid-teardown
     // is reflected in the stop event's reason instead of being lost behind an

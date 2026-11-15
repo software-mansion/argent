@@ -6,6 +6,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   IOS_NATIVE_REQUEST_ID,
   KEPT_BODY_CHARS_BUDGET,
+  MACOS_CONNECTION_DROPPED,
   createIosNetworkRecords,
   findIosNativeRecord,
   hasIosNetworkCapture,
@@ -387,6 +388,31 @@ describe("iOS native network records: folding", () => {
     });
     expect(offline!.response).toBeUndefined();
     expect(silent).toMatchObject({ state: "failed", errorText: "Unknown error" });
+  });
+
+  it("keeps the start of a url, header value, mime type or error text past 64 KiB, and says how much it left out", () => {
+    const store = newStore();
+    const agent = agentOn(store);
+    const long = "v".repeat(70_000);
+    const url = `https://api.example.com/${long}`;
+    const mimeType = `text/${long}`;
+    const cut = (value: string): string =>
+      `${value.slice(0, 65_536)}…[${value.length - 65_536} more chars]`;
+
+    agent.requestWillBeSent("big", url, { headers: { "X-Big": long } });
+    agent.responseReceived("big", url, { headers: { "X-Big": long }, mimeType });
+    agent.requestWillBeSent("failed", "https://api.example.com/failed");
+    agent.loadingFailed("failed", long);
+
+    const [big, failed] = store.records(8081);
+    expect(big!.request.url).toBe(cut(url));
+    expect(big!.request.headers).toEqual({ "X-Big": cut(long) });
+    expect(big!.response).toMatchObject({
+      url: cut(url),
+      headers: { "X-Big": cut(long) },
+      mimeType: cut(mimeType),
+    });
+    expect(failed!.errorText).toBe(cut(long));
   });
 
   it("times a request from the arrival of its events when the app measured no duration", () => {
@@ -872,6 +898,43 @@ describe("iOS native network records: connection closed", () => {
   });
 });
 
+describe("Mac app native network records: a request still running after a reconnect", () => {
+  /** A Mac app's connection comes back for the same process, so its number does too. */
+  function macStore() {
+    const store = createIosNetworkRecords(
+      () => ({ armed: true }),
+      fakeApp().link,
+      () => true,
+      "macos-native"
+    );
+    return { store, agent: agentOn(store, CONN) };
+  }
+  const recordOf = (store: IosNetworkRecordStore) => store.records(8081)[0]!;
+
+  it("takes the response of a request that failed at the drop, without the drop's error", () => {
+    const { store, agent } = macStore();
+    agent.requestWillBeSent("long", "https://example.com/download");
+    store.connectionClosed(CONN, { superseded: false, running: true });
+    expect(recordOf(store)).toMatchObject({ state: "failed", errorText: MACOS_CONNECTION_DROPPED });
+
+    agent.responseReceived("long", "https://example.com/download");
+    expect(recordOf(store)).toMatchObject({ state: "headers", response: { status: 200 } });
+    expect(recordOf(store)).not.toHaveProperty("errorText");
+  });
+
+  it("completes a request whose headers came before the drop, without the drop's error", () => {
+    const { store, agent } = macStore();
+    agent.requestWillBeSent("long", "https://example.com/download");
+    agent.responseReceived("long", "https://example.com/download");
+    store.connectionClosed(CONN, { superseded: false, running: true });
+    expect(recordOf(store)).toMatchObject({ state: "failed", errorText: MACOS_CONNECTION_DROPPED });
+
+    agent.loadingFinished("long", 2);
+    expect(recordOf(store)).toMatchObject({ state: "complete", response: { status: 200 } });
+    expect(recordOf(store)).not.toHaveProperty("errorText");
+  });
+});
+
 describe("iOS native network records: events that name no open request", () => {
   it("ignores events for a request it never saw start", () => {
     const store = newStore();
@@ -1162,9 +1225,15 @@ describe("iOS native network records: body reads", () => {
       "the agent no longer holds this body",
     ],
     [
-      "the agent holding no request body",
+      "the agent no longer holding a request body",
       "post",
       (read) => read.fail(agentError(read.method, "No request stored for requestId")),
+      "the agent no longer holds this body",
+    ],
+    [
+      "the agent holding no request body",
+      "post",
+      (read) => read.fail(agentError(read.method, "No request post data available for requestId")),
       "the agent holds no body for this request",
     ],
     [
@@ -1316,6 +1385,23 @@ describe("iOS native network records: request body still being sent", () => {
     expect(app.request).toHaveBeenCalledTimes(1);
   });
 
+  it("says the app is still sending, not that the agent holds no body, when the agent holds no request still uploading", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = store.requestPostData(id);
+    await settle();
+    app.sent[0]!.fail(agentError("Network.getRequestPostData", "No request stored for requestId"));
+    expect(await during).toEqual(refused(STILL_SENDING));
+
+    // The reason is not kept, so a read after the upload asks again and gets the body.
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    const after = store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    app.sent[1]!.reply({ postData: "done", base64Encoded: false });
+    expect(await after).toEqual(body("done"));
+  });
+
   it("says the app did not answer, not that it is still sending, once the request has a response", async () => {
     const { app, store, agent, id } = uploading();
     agent.responseReceived("upload", "https://api.example.com/upload");
@@ -1356,6 +1442,56 @@ describe("iOS native network records: request body still being sent", () => {
     expect(app.request).toHaveBeenCalledTimes(2);
     app.sent[1]!.reply({ postData: "done", base64Encoded: false });
     expect(await again).toEqual(body("done"));
+    expect(await store.requestPostData(id)).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves the body that a replaced read brings late, as when the server answers before the upload ends", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(during.value).toEqual(refused(STILL_SENDING));
+    agent.responseReceived("upload", "https://api.example.com/upload", { status: 413 });
+    agent.loadingFinished("upload", 2);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const again = track(store.requestPostData(id));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    // The app answers the first read after the request's end, then the second with an error.
+    app.sent[0]!.reply({ postData: "late", base64Encoded: false });
+    await settle();
+    expect(again.value).toEqual(body("late"));
+    app.sent[1]!.fail(agentError("Network.getRequestPostData", "No body for this request"));
+    await settle();
+
+    expect(await store.requestPostData(id)).toEqual(body("late"));
+    expect(app.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the body of a read asked again when the read it replaced fails later, as at a relaunch", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(during.value).toEqual(refused(STILL_SENDING));
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const again = store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    app.sent[1]!.reply({ postData: "done", base64Encoded: false });
+    expect(await again).toEqual(body("done"));
+
+    // A relaunch closes the connection, and the replaced read fails only then.
+    app.setLive(OTHER_CONN);
+    store.connectionClosed(CONN, { superseded: true });
+    app.sent[0]!.fail(closedError("Network.getRequestPostData"));
+    await settle();
+
     expect(await store.requestPostData(id)).toEqual(body("done"));
     expect(app.request).toHaveBeenCalledTimes(2);
   });
@@ -1518,6 +1654,31 @@ describe("iOS native network records: request body still being sent", () => {
     lastSent().reply({ body: "body 0", base64Encoded: false, wasTruncated: false });
     expect(await r0).toEqual(body("body 0"));
   });
+
+  it(`keeps a request body read open, the oldest of all, once ${MAX_CACHED_BODIES + 1} newer bodies are read`, async () => {
+    const { app, store, agent, id } = uploading();
+    const first = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(first.value).toEqual(refused(STILL_SENDING));
+
+    const lastSent = (): SentRead => app.sent[app.sent.length - 1]!;
+    for (let i = 0; i <= MAX_CACHED_BODIES; i++) {
+      agent.complete(`r${i}`, `https://e.com/${i}`);
+      const read = store.responseBody(idOf(store, `r${i}`));
+      await settle();
+      lastSent().reply({ body: `body ${i}`, base64Encoded: false, wasTruncated: false });
+      expect(await read).toEqual(body(`body ${i}`));
+    }
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+
+    // The bodies went past the bound with the open read oldest: r0 made room, not the read.
+    const again = store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+    app.sent[0]!.reply({ postData: "done", base64Encoded: false });
+    expect(await again).toEqual(body("done"));
+  });
 });
 
 describe("iOS native network records: one body read at a time", () => {
@@ -1672,6 +1833,11 @@ describe("iOS native network records: bodies kept", () => {
     }));
     return { app, store, agent };
   }
+
+  it("keeps the bounds the docs give: 64 bodies, and 67,108,864 chars together", () => {
+    expect(MAX_CACHED_BODIES).toBe(64);
+    expect(KEPT_BODY_CHARS_BUDGET).toBe(67_108_864);
+  });
 
   it(`keeps the ${MAX_CACHED_BODIES} bodies read most recently`, async () => {
     const { app, store, agent } = answering();

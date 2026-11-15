@@ -7,6 +7,7 @@ import {
   makeNetworkLogReadScript,
   makeNetworkDetailReadScript,
   NETWORK_CAPTURE_MARK_SCRIPT,
+  NETWORK_CAPTURE_END_SCRIPT,
   makeNetworkCaptureControlScript,
 } from "../../src/utils/debugger/scripts/network-interceptor";
 import { PREVIOUS_NETWORK_INTERCEPTOR_SCRIPT } from "./previous-network-interceptor";
@@ -5266,6 +5267,27 @@ describe("NETWORK_CAPTURE_MARK_SCRIPT", () => {
 
     expect(read(rt)).toEqual(markOf(rt));
     expect(read(rt)).toEqual({ install: expect.any(String), lastId: 1 });
+  });
+});
+
+describe("NETWORK_CAPTURE_END_SCRIPT", () => {
+  it("empties a log at the 50 MB cap, so the next capture keeps a request with a body", async () => {
+    const rt = createRuntime();
+    rt.install();
+    const body = "x".repeat(BODY_CAP);
+    for (let i = 0; i < 50; i++) await xhrRoundTrip(rt, `https://api.test/big/${i}`, body);
+    expect(rt.context.__argent_network_log).toHaveLength(50);
+
+    rt.run(NETWORK_CAPTURE_END_SCRIPT);
+    rt.run(makeNetworkCaptureControlScript(false));
+    await xhrRoundTrip(rt, "https://api.test/after", "after");
+
+    expect(rt.records()).toHaveLength(1);
+    expect(rt.records()[0]).toMatchObject({
+      requestId: "rn-net-51",
+      request: { url: "https://api.test/after" },
+      responseBody: "after",
+    });
   });
 });
 

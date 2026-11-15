@@ -3336,6 +3336,59 @@ describe("flow composition (run:)", () => {
     }
   });
 
+  // With native network capture on, restart-app itself waits for the new
+  // process to be armed before the settle and the connect wait start. The
+  // figure the reason quotes must count that time too.
+  it("quotes the time restart-app spent in the launch-to-verdict figure", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.acme.app" }],
+    });
+    const CAPTURE_WAIT_MS = 5_000;
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "list-devices") return { devices: [] };
+        if (id === "restart-app") {
+          await new Promise((resolve) => setTimeout(resolve, CAPTURE_WAIT_MS));
+          return {
+            restarted: true,
+            bundleId: "com.acme.app",
+            networkCapture:
+              "native network capture is on for com.acme.app, and its new process has not connected yet; native-network-logs shows when it is armed",
+          };
+        }
+        return { ok: true };
+      }),
+      getTool: vi.fn(() => undefined),
+      resolveService: vi.fn(async () => ({
+        isConnected: () => false,
+        listConnectedBundleIds: () => [],
+        appConnectionState: async () => "unregistered" as const,
+      })),
+    } as unknown as Registry;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const pending = createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      );
+      let settled = false;
+      void pending.then(() => (settled = true));
+      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+        await vi.advanceTimersByTimeAsync(250);
+      }
+      const result = asRun(await pending);
+
+      expect(result.steps[0].status).toBe("error");
+      expect(result.steps[0].reason).toContain(`${CAPTURE_WAIT_MS + LAUNCH_TO_VERDICT_MS} ms`);
+      expect(result.steps[0].reason).not.toContain(`${LAUNCH_TO_VERDICT_MS} ms`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // `buildAppStateMessage` is written for a reader who has not launched
   // anything, so "call launch-app (or restart-app)" is the missing step there
   // and the step's own action here — emitted verbatim it hands the flow author

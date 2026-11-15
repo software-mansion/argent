@@ -21,7 +21,7 @@ type CapturePlatform = "android" | "ios";
 /** What the in-app agent does to the processes of the apps named before it. */
 function agentSentence(platform: CapturePlatform, one: boolean, where = ""): string {
   return platform === "android"
-    ? `Argent attaches its in-app agent to the processes of ${one ? "that app" : "these apps"}${where}.`
+    ? `Argent's in-app agent can run in the processes of ${one ? "that app" : "these apps"}${where}.`
     : `Argent's in-app agent captures the requests of ${one ? "that app's" : "these apps'"} processes${where}.`;
 }
 
@@ -29,8 +29,8 @@ function agentSentence(platform: CapturePlatform, one: boolean, where = ""): str
  * Warning for a profiler start on a device where `network-capture-start` turned
  * native network capture on for an app: the capture follows the app across
  * launches, and nothing else in a profile says the app may run instrumented.
- * After `network-capture-stop` the app is no longer named, except on iOS
- * while its connected process has not acknowledged the stop.
+ * After `network-capture-stop` the app is no longer named, except while its
+ * connected process has not acknowledged the stop.
  * "On" is the capture's setting, not a live attachment: the app may not be
  * running, or its current process may not have the agent yet. On iOS an app
  * counts only after it has connected, because an app that never connected,
@@ -68,8 +68,9 @@ export function nativeNetworkCaptureWarning(
 
 /**
  * With two or more devices on one Metro, the debugger is connected with a Metro
- * logicalDeviceId, which no device id can be derived from, so the lookup by
- * device finds nothing. The runtime still says which app it is and on which
+ * logicalDeviceId. A caller that found the device the runtime runs on passes
+ * that device's id instead. Otherwise the lookup by device finds nothing for
+ * the logicalDeviceId. The runtime still says which app it is and on which
  * platform, so it is warned when capture is on for its app on any device of
  * that platform, naming them: the id cannot say which one is profiled. A
  * runtime that did not say is never warned. A `deviceId` that names a device

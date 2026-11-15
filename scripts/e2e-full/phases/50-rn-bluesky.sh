@@ -112,8 +112,10 @@ run_phase() {
   sleep 4  # reload drops the runtime; let it re-register
 
   # The network reads only read: capture starts here, before the request they list.
+  # status is "ok" also when no layer armed, so check the JS layer that
+  # view-network-logs reads.
   local CAP="\"udid\":\"$DEV\",\"bundleId\":\"$PKG\",\"port\":$MPORT"
-  assert_field "$P" network-capture-start capture-start "{$CAP}" '.status' 'ok'
+  assert_true "$P" network-capture-start capture-start "{$CAP}" 'any(.layers[]; .layer == "js" and .armed == true)'
   run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
   sleep 2
   assert_ok "$P" view-network-logs netlogs "{$D,\"pageIndex\":\"latest\"}"
@@ -123,7 +125,7 @@ run_phase() {
   else
     skip "$P" view-network-request-details netdetails "no captured request id"
   fi
-  assert_field "$P" network-capture-stop capture-stop "{$CAP}" '.status' 'ok'
+  assert_true "$P" network-capture-stop capture-stop "{$CAP}" 'all(.layers[]; .armed == false)'
 
   run_tool react-profiler-start "{$D}"
   if [ "$RT_RC" -eq 0 ]; then

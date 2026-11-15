@@ -90,9 +90,9 @@ const NATIVE_LAYERS: Record<NativePlatform, { source: string; name: string }> = 
 const MAX_BODY_SIZE = 1000;
 
 /**
- * Bytes an encoded body of the Android native layer may decode to. A few
- * hundred bytes of br can decode to gigabytes, and the decode blocks the
- * tool-server while it runs.
+ * Bytes an encoded body of a native layer may decode to. A few hundred bytes
+ * of br can decode to gigabytes, and the decode blocks the tool-server while
+ * it runs.
  */
 const MAX_DECODED_BODY_BYTES = 16 * 1024 * 1024;
 
@@ -589,7 +589,10 @@ interface NativeBodyFraming {
   /** The body's Content-Type header, which may name a charset. */
   contentType: string;
   contentEncoding: string;
-  /** The whole body's size, shown when the agent kept only its start. */
+  /**
+   * The whole body's size, shown when the agent kept only its start, and when
+   * an inline body is omitted as binary.
+   */
   wholeSize?: string;
 }
 

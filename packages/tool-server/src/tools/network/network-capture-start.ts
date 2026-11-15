@@ -9,6 +9,7 @@ import {
   isInjectableBundleId,
   nativeDevtoolsRef,
   precheckNativeDevtools,
+  PROVIDER_CAPTURE_OFF,
   type NativeDevtoolsApi,
   type NativeDevtoolsPrecheckBlock,
 } from "../../blueprints/native-devtools";
@@ -87,6 +88,15 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
           "network-capture-start",
           params.bundleId
         );
+        // No launch of an Apple app loads argent's library, so nothing arms it.
+        if (!isInjectableBundleId(params.bundleId)) {
+          throw unavailableError(params, [
+            unavailable(
+              "macos-native",
+              `${params.bundleId} is an Apple app; argent captures only apps it can load its library into, such as your own builds`
+            ),
+          ]);
+        }
         const layer = await withCaptureLock(params.udid, params.bundleId, async () => {
           const { armed, reason } = await app.startNetworkCapture();
           return { layer: "macos-native" as const, armed, ...(reason ? { reason } : {}) };
@@ -119,21 +129,23 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
             : startIosLayer(registry, device, params.bundleId, port),
         ])
       );
-      if (layers.every((layer) => layer.unavailable)) {
-        throw new FailureError(
-          `Network capture cannot start for ${params.bundleId} on ${params.udid}: ` +
-            layers.map((layer) => `${layer.layer}: ${layer.reason}`).join("; "),
-          {
-            error_code: FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE,
-            failure_stage: "network_capture_start",
-            failure_area: "tool_server",
-            error_kind: "unsupported",
-          }
-        );
-      }
+      if (layers.every((layer) => layer.unavailable)) throw unavailableError(params, layers);
       return { status: "ok", layers };
     },
   };
+}
+
+function unavailableError(params: CaptureParams, layers: StartedLayer[]): FailureError {
+  return new FailureError(
+    `Network capture cannot start for ${params.bundleId} on ${params.udid}: ` +
+      layers.map((layer) => `${layer.layer}: ${layer.reason}`).join("; "),
+    {
+      error_code: FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE,
+      failure_stage: "network_capture_start",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    }
+  );
 }
 
 function unavailable(layer: StartedLayer["layer"], reason: string): StartedLayer {
@@ -330,12 +342,13 @@ async function startIosLayer(
   );
   if (armed) return { layer: "ios-native", armed: true };
   if (api.isConnected(bundleId)) {
+    const note = api.networkRecords(bundleId)?.state().note;
+    // Only the provider turns its capture on.
+    if (note === PROVIDER_CAPTURE_OFF) return unavailable("ios-native", note);
     return {
       layer: "ios-native",
       armed: false,
-      reason:
-        api.networkRecords(bundleId)?.state().note ??
-        "waiting for the agent to acknowledge Network.enable",
+      reason: note ?? "waiting for the agent to acknowledge Network.enable",
     };
   }
   if (!api.armsEnv) {
@@ -350,7 +363,7 @@ async function startIosLayer(
     armed: false,
     reason:
       block?.status === "restart_required"
-        ? "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now"
+        ? "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture"
         : "the app has not connected yet; capture arms when it does",
   };
 }

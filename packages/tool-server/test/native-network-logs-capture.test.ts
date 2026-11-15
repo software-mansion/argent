@@ -44,6 +44,8 @@ import {
   type NativeDevtoolsApi,
 } from "../src/blueprints/native-devtools";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
+import type { CaptureResult, StoppedLayer } from "../src/tools/network/network-capture";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 
 const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
@@ -196,6 +198,48 @@ describe("native network capture started through the blueprint", () => {
     });
   });
 
+  it("says the launch was missed only once, also when the started app is started again", async () => {
+    await withService(async (api) => {
+      const app = await connectApp(api.socketPath, BUNDLE);
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+      expect(headerOf(await callTool(api))).toMatch(/were not recorded.*restart-app/);
+
+      // A second start keeps the capture that is on, so nothing more was missed.
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+      const next = await callTool(api);
+      expect(next).toMatchObject({ status: "ok", armed: true });
+      expect(headerOf(next)).not.toMatch(/were not recorded/);
+      app.close();
+    });
+  });
+
+  it("does not say the launch was missed at a start after a stop, when capture recorded the process from its launch", async () => {
+    await withService(async (api) => {
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(false);
+      // The launch: capture is on from the handshake.
+      const app = await connectApp(api.socketPath, BUNDLE);
+      await vi.waitFor(() => expect(app.enables()).toBe(1));
+      app.sendEvent("Network.requestWillBeSent", {
+        requestId: "r1",
+        request: { url: "https://example.com/launch", method: "GET", headers: {} },
+      });
+      await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.records(8081)).toHaveLength(1));
+      expect(headerOf(await callTool(api))).not.toMatch(/were not recorded/);
+
+      await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({ confirmed: true });
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+
+      const next = await callTool(api);
+      expect(next).toMatchObject({
+        status: "ok",
+        armed: true,
+        requests: [expect.objectContaining({ url: "https://example.com/launch" })],
+      });
+      expect(headerOf(next)).not.toMatch(/were not recorded/);
+      app.close();
+    });
+  });
+
   it("arms a started app again when it reconnects after restart-app", async () => {
     await withService(async (api) => {
       const before = await connectApp(api.socketPath, BUNDLE);
@@ -321,6 +365,44 @@ describe("native-network-logs only reads iOS capture", () => {
       // The next start of the running app missed what came before it, and its first read says so.
       await api.startNetworkCapture(BUNDLE, 8081);
       expect(headerOf(await callTool(api))).toMatch(/were not recorded/);
+      app.close();
+    });
+  });
+
+  it("leaves the requests to Metro on the port out of what a stop keeps, in the stop's total and in the list", async () => {
+    await withRegistry(async (registry) => {
+      registry.registerTool(createNetworkCaptureStopTool(registry));
+      const ref = nativeDevtoolsRef(device);
+      const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+      const app = await connectApp(api.socketPath, BUNDLE);
+      await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+      const request = (requestId: string, url: string) =>
+        app.sendEvent("Network.requestWillBeSent", {
+          requestId,
+          request: { url, method: "GET", headers: {} },
+        });
+      request("metro", "http://localhost:8081/symbolicate");
+      request("app", "https://example.com/kept");
+      await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.records(0)).toHaveLength(2));
+
+      const stopped = await registry.invokeTool<CaptureResult<StoppedLayer>>(
+        "network-capture-stop",
+        { udid: UDID, bundleId: BUNDLE }
+      );
+      expect(stopped.layers.find((layer) => layer.layer === "ios-native")).toEqual({
+        layer: "ios-native",
+        armed: false,
+        total: 1,
+      });
+
+      expect(
+        await registry.invokeTool("native-network-logs", { udid: UDID, bundleId: BUNDLE })
+      ).toMatchObject({
+        header: `ios-native: stopped, 1 request (${STOPPED_DETAIL})`,
+        stopped: true,
+        total: 1,
+        requests: [expect.objectContaining({ url: "https://example.com/kept" })],
+      });
       app.close();
     });
   });

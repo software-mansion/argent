@@ -71,6 +71,11 @@ const STOPPED_REASON =
   "capture stopped by network-capture-stop; network-capture-start turns it on again";
 const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
 const STOPPED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop); this process runs without it until network-capture-start`;
+const LOADED_NOTE =
+  "pid 4722 already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server is capturing this app or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's capture of the app; after restart-app, call network-capture-start again, since a relaunch ends the JS layer's capture";
+const AWAY_AT_STOP =
+  "the agent's connection was down at the stop, so it did not get Network.disable; it gets it when it connects again, and argent records none of the app's new requests meanwhile";
+const UNCONFIRMED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop), but its running process (pid 4722) has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`;
 
 function dirFor(packageName = PKG, user = 0): string {
   return `/data/user/${user}/${packageName}/code_cache/.argent-inspector`;
@@ -2460,9 +2465,7 @@ describe("attaching and the app's lifecycle", () => {
     // True whether the loaded agent is free (it connects), held by another
     // tool-server (it stays there until that connection ends) or from an
     // earlier Argent (it dials a port of its own and never connects).
-    expect(api.state().note).toBe(
-      "pid 4722 already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server is capturing this app or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's capture of the app"
-    );
+    expect(api.state().note).toBe(LOADED_NOTE);
     const next = session();
     expect(next.secret).not.toBe(first.secret);
 
@@ -2491,6 +2494,15 @@ describe("attaching and the app's lifecycle", () => {
 
     await FakeAgent.fromSession(dirFor(), proc());
     expect(await start).toEqual({ armed: true });
+  });
+
+  it("network-capture-start says to start again after restart-app when the agent already in the app does not connect", async () => {
+    device.loaded.add("4722:91000");
+    device.agentOnAttach = false;
+    const api = await createInspector();
+
+    // The JS layer of the same start can be armed, and a relaunch ends it.
+    expect(await startUnarmed(api)).toEqual({ armed: false, reason: LOADED_NOTE });
   });
 
   it("writes the session owner-only, then copies the agent under code_cache and chmods it, before the attach", async () => {
@@ -2742,6 +2754,28 @@ describe("attaching and the app's lifecycle", () => {
       reason: expect.stringContaining("adb did not answer (device offline)"),
     });
     expect(api.isStarted()).toBe(true);
+  });
+
+  it("keeps why a start did not reach adb for later reads, which run no adb, until a later start says why it found the layer unavailable", async () => {
+    device.adbDown = true;
+    const api = await createInspector();
+    const offline =
+      "adb did not answer (device offline); the next launch or network-capture-start tries again";
+    expect(await api.startCapture(8081)).toEqual({ armed: false, reason: offline });
+    device.adbDown = false;
+    const before = device.commands.length;
+
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      `android-native: not armed, 0 requests (${offline})`
+    );
+    expect(device.commands).toHaveLength(before);
+
+    device.runAsError = `run-as: package not debuggable: ${PKG}`;
+    const refused = await api.startCapture(8081);
+    expect(refused).toMatchObject({ armed: false, unavailable: true });
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      `android-native: not armed, 0 requests (${refused.reason})`
+    );
   });
 
   it("gives each of two concurrent starts its own reason that adb did not answer", async () => {
@@ -3321,6 +3355,34 @@ describe("after a drop, with the clock under test control", () => {
     expect(api.records(8081)[0]!.errorText).toBeUndefined();
   });
 
+  it("says the agent did not reconnect once an adb outage outlasts the recheck window, and network-capture-start connects it again", async () => {
+    const api = await armedInspector();
+    const first = agents[0]!;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // The cable is out: adb does not answer, and the reverse is gone.
+    device.adbDown = true;
+    device.reverses.clear();
+    await first.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    await vi.advanceTimersByTimeAsync(16_000);
+    device.adbDown = false;
+    const before = device.commands.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    // Reads run no adb, so nothing puts the reverse back while the app runs.
+    expect(device.commands).toHaveLength(before);
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      "android-native: not armed, 0 requests (the agent's connection dropped, and it did not reconnect; network-capture-start connects it again)"
+    );
+    vi.useRealTimers();
+
+    const start = api.startCapture(8081);
+    await vi.waitFor(() => expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort));
+    await FakeAgent.fromSession(dirFor(), proc(), { instance: first.instance });
+    expect(await start).toEqual({ armed: true });
+    expect(attachCommands()).toHaveLength(1);
+  });
+
   it("restarts a process's recheck when its connection drops again during it", async () => {
     const api = await armedInspector();
     const first = agents[0]!;
@@ -3629,25 +3691,54 @@ describe("the tools on the Android native layer", () => {
     });
   });
 
-  it("network-capture-start is not armed when the agent reports capture unavailable, and native-network-logs shows it in its header", async () => {
+  it("network-capture-start reports the layer unavailable when the agent reports capture unavailable, and leaves capture not started", async () => {
     device.agentOptions = {
       capture: { state: "unavailable", detail: "no OkHttp in this process" },
     };
     const api = await createInspector();
-    // The agent is connected and enabled, but reports capture unavailable.
+    // The agent is connected and enabled, but reports capture unavailable. No
+    // retry changes that, and view-network-logs only reads.
     expect(await api.startCapture(8081)).toEqual({
       armed: false,
-      reason: "capture unavailable: no OkHttp in this process; use view-network-logs",
+      unavailable: true,
+      reason: "capture unavailable: no OkHttp in this process",
     });
-    const result = (await nativeNetworkLogsTool.execute!(
-      { androidNetwork: api },
-      { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
-    )) as { header: string; capture: string; captureDetail?: string };
-    expect(result.capture).toBe("unavailable");
-    expect(result.captureDetail).toBe("no OkHttp in this process");
-    expect(result.header).toBe(
-      "android-native: armed, 0 requests (pid 4722; capture unavailable: no OkHttp in this process; use view-network-logs)"
+    // As any start that finds the layer unavailable: capture is not started.
+    expect([api.isStarted(), api.isStopped(), api.captureMark()]).toEqual([
+      false,
+      false,
+      undefined,
+    ]);
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+    expect(await listNative(api)).toMatchObject({
+      header:
+        "android-native: unavailable, 0 requests (capture unavailable: no OkHttp in this process)",
+      started: false,
+      capture: "unavailable",
+      captureDetail: "capture unavailable: no OkHttp in this process",
+    });
+    device.process = { pid: 5100, startTime: 99_000 };
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBeUndefined();
+    expect(attachCommands()).toHaveLength(1);
+  });
+
+  it("a start after a stop that finds the agent of the app's new process unavailable keeps the stop, and disables that agent", async () => {
+    const api = await armedInspector();
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    // The app started again outside argent, as a build without OkHttp.
+    device.process = { pid: 5100, startTime: 99_000 };
+    device.agentOptions = {
+      capture: { state: "unavailable", detail: "no OkHttp in this process" },
+    };
+
+    expect(await api.startCapture(8081)).toMatchObject({ armed: false, unavailable: true });
+
+    expect([api.isStarted(), api.isStopped()]).toEqual([false, true]);
+    const next = agents.at(-1)!;
+    await vi.waitFor(() =>
+      expect(next.received).toEqual(["Control", "Network.enable", "Network.disable"])
     );
+    expect(api.state()).toEqual({ armed: false, stopped: true });
   });
 
   it("native-network-logs keeps its default text for a waiting capture without a detail", async () => {
@@ -4248,6 +4339,53 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
         "the agent did not acknowledge Network.disable within 5 s; argent records none of the app's new requests, and launches do not attach it",
     });
     expect(api.state()).toEqual({ armed: false, stopped: true });
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(UNCONFIRMED_LAUNCH_NOTE);
+    expect(attachCommands()).toHaveLength(1);
+  });
+
+  /** Arms the app as pid 4722, then stops its capture with a Network.disable the agent does not answer. */
+  async function stopUnacknowledged(): Promise<{
+    api: AndroidNetworkInspectorApi;
+    agent: FakeAgent;
+  }> {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+    vi.useRealTimers();
+    return { api, agent };
+  }
+
+  it("says at a launch that the process which did not acknowledge the stop may still intercept, and names the app to profiles until its connection closes", async () => {
+    const { agent } = await stopUnacknowledged();
+
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(UNCONFIRMED_LAUNCH_NOTE);
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
+    expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([SERIAL]);
+    // A launch that started a new process before the old connection closed.
+    device.process = { pid: 5100, startTime: 99_000 };
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+    expect(attachCommands()).toHaveLength(1);
+
+    await agent.close();
+    await vi.waitFor(() => expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]));
+    expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([]);
+    device.process = { pid: 4722, startTime: 91_000 };
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+  });
+
+  it("forgets a stop the agent did not acknowledge once it acknowledges a later Network.disable", async () => {
+    const { api, agent } = await stopUnacknowledged();
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
+
+    agent.options.unanswered!.length = 0;
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
   });
 
@@ -4281,11 +4419,80 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(api.records(8081)[1]).not.toHaveProperty("errorText");
   });
 
+  it("a request failed at an unacknowledged stop takes the final events a slow agent still sends, without the stop's error", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.started(agent.rid(1), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+
+    // The app was only slow: its agent reports the request's end after all.
+    agent.event("Network.responseReceived", {
+      requestId: agent.rid(1),
+      response: {
+        url: "https://example.com/slow",
+        status: 200,
+        headers: {},
+        mimeType: "text/plain",
+      },
+    });
+    agent.event("Network.loadingFinished", { requestId: agent.rid(1), encodedDataLength: 5 });
+    await vi.waitFor(() => expect(api.records(8081)[0]!.state).toBe("complete"));
+
+    expect(api.records(8081)[0]).toMatchObject({ response: { status: 200 }, encodedDataLength: 5 });
+    expect(api.records(8081)[0]).not.toHaveProperty("errorText");
+  });
+
+  it("a request failed at an unacknowledged stop stays failed when the slow agent sends only some of its events before the stop takes effect", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.started(agent.rid(1), "https://example.com/download");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+
+    // Events the agent queued before it read Network.disable: no final one follows.
+    agent.event("Network.responseReceived", {
+      requestId: agent.rid(1),
+      response: {
+        url: "https://example.com/download",
+        status: 200,
+        headers: {},
+        mimeType: "application/zip",
+      },
+    });
+    agent.event("Network.dataReceived", { requestId: agent.rid(1), dataLength: 5 });
+    agent.answer("Network.disable");
+    await vi.waitFor(() => expect(api.records(8081)[0]!.response?.status).toBe(200));
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+  });
+
   it("a Network.disable to an agent that connected while stopped fails none of the next start's requests when it times out after that start", async () => {
     const api = await armedInspector();
     await agents[0]!.close();
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
-    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    // The app still runs, so its agent connects again.
+    expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const again = (await FakeAgent.fromSession(dirFor(), proc(), {
       unanswered: ["Network.disable"],
@@ -4311,6 +4518,7 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     const stopping = api.stopCapture();
     await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
     // The app exits: its agent sends nothing more.
+    device.process = null;
     await agent.close();
 
     expect(await stopping).toEqual({ confirmed: true });
@@ -4325,7 +4533,7 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     await first.close();
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
     // No connection is open, so the stop has nothing to disable yet.
-    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
     expect(api.records(8081)[0]!.state).toBe("pending");
 
     const again = (await FakeAgent.fromSession(dirFor(), proc(), {
@@ -4350,6 +4558,100 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     again.send({ type: "Status", payload: { event: "capture", state: "waiting" } });
     await vi.waitFor(() => expect(stderrText()).toContain("] capture waiting"));
     expect(api.records(8081)).toHaveLength(1);
+  });
+
+  describe("a stop while an adb outage has the agent away", () => {
+    const SENT_WHILE_STOPPED = "https://example.com/sent-while-stopped";
+
+    /**
+     * Arms the app, then takes adb away with the reverse, which drops the
+     * agent's connection, and stops capture meanwhile.
+     */
+    async function stopWhileAway(): Promise<{
+      api: AndroidNetworkInspectorApi;
+      first: FakeAgent;
+      stop: { confirmed: boolean; reason?: string };
+    }> {
+      const api = await armedInspector();
+      const first = agents[0]!;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      device.adbDown = true;
+      device.reverses.clear();
+      await first.close();
+      await vi.waitFor(() => expect(api.state().armed).toBe(false));
+      const stop = await api.stopCapture();
+      return { api, first, stop };
+    }
+
+    /** As the agent does: what it buffered while away is gone once it got Network.disable. */
+    function flushUnlessDisabled(agent: FakeAgent): void {
+      if (!agent.received.includes("Network.disable"))
+        agent.request(agent.rid(1), SENT_WHILE_STOPPED);
+    }
+
+    it("is not confirmed, puts the reverse back once adb answers, and the agent that connects gets Network.disable and records nothing", async () => {
+      const { api, first, stop } = await stopWhileAway();
+      expect(stop).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      device.adbDown = false;
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort);
+      vi.useRealTimers();
+
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+        instance: first.instance,
+        beforeEnable: flushUnlessDisabled,
+      }))!;
+      await vi.waitFor(() =>
+        expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"])
+      );
+      expect(await api.startCapture(8081)).toEqual({ armed: true });
+      expect(api.records(8081)).toEqual([]);
+    });
+
+    it("puts the reverse back at a stop that comes once adb answers again after the checks after the drop ended", async () => {
+      const api = await armedInspector();
+      const first = agents[0]!;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      device.adbDown = true;
+      device.reverses.clear();
+      await first.close();
+      await vi.waitFor(() => expect(api.state().armed).toBe(false));
+      await vi.advanceTimersByTimeAsync(16_000);
+      device.adbDown = false;
+      vi.useRealTimers();
+
+      expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
+      expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort);
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+        instance: first.instance,
+        beforeEnable: flushUnlessDisabled,
+      }))!;
+      await vi.waitFor(() =>
+        expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"])
+      );
+      expect(api.records(8081)).toEqual([]);
+    });
+
+    it("sends Network.disable before Network.enable to the agent that connects only after the next start, so nothing sent while stopped is listed", async () => {
+      const { api, first } = await stopWhileAway();
+      // Longer than the checks after the drop.
+      await vi.advanceTimersByTimeAsync(16_000);
+      device.adbDown = false;
+      vi.useRealTimers();
+
+      const start = api.startCapture(8081);
+      await vi.waitFor(() => expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort));
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+        instance: first.instance,
+        beforeEnable: flushUnlessDisabled,
+      }))!;
+
+      expect(await start).toEqual({ armed: true });
+      expect(again.received).toEqual(["Control", "Network.disable", "Network.enable"]);
+      expect(api.records(8081)).toEqual([]);
+    });
   });
 
   it("a stop fails with the stop reason a request whose final events the agent lost while it was disconnected", async () => {

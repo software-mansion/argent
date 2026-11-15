@@ -53,7 +53,11 @@ import type { NativeNetworkRecord } from "../utils/native-network-record";
 
 /** The library acknowledges Network.enable and Network.disable within this. */
 const NETWORK_CAPTURE_ACK_TIMEOUT_MS = 5_000;
-/** How long a closed channel's process gets to exit before its open requests stay open. */
+/**
+ * How long a closed channel's process gets to exit. Then its open requests
+ * fail: as ended when the process is gone, else as cut off by the drop while
+ * argent has not reconnected.
+ */
 const PROCESS_EXIT_WAIT_MS = 2_000;
 
 /**
@@ -811,14 +815,19 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
   const network: ChannelNetworkSink = {
     event(method, params, pid) {
-      // Events come only after the Network.enable of an adopted channel.
+      // The app sends the events of a request in flight to whichever client is
+      // connected: also after Network.disable, and on a new connection to the
+      // same process before it acknowledges Network.enable. Only a new request
+      // waits for the capture to be on.
       if (recordedProcess?.pid === pid) records.fold(recordedProcess.index, method, params);
     },
     closed(ch) {
       const process = recordedProcess;
       if (!ch.handshake || process?.pid !== ch.handshake.pid) return;
-      // The app turns capture off when argent's connection closes, so the
-      // open requests get no more events. A reconnect fails them in adopt.
+      // The app turns capture off when argent's connection closes. The events
+      // of its open requests that come before argent reconnects reach no
+      // client, so an end can be lost. A reconnect fails them in adopt, and
+      // one that still runs completes when its end comes on the new connection.
       void pollPidsUntilGone([process.pid], {
         timeoutMs: PROCESS_EXIT_WAIT_MS,
         pollIntervalMs: POLL_MS,
@@ -882,7 +891,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         records.connectionClosed(recordedProcess.index, { superseded: true });
       }
       recordedProcess = { pid, index: nextProcessIndex++, channel: ch };
-      captureGap = false;
+      // A process argent did not start just now ran before capture reached it.
+      captureGap = captureStarted && !launched;
       armedSinceLaunch = launched && captureStarted;
     } else if (recordedProcess.channel !== ch) {
       // The open requests of the same process lost their events while argent
@@ -1452,23 +1462,33 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       captureStopped = false;
       const startedNow = !captureStarted;
       captureStarted = true;
+      // A stop of the app's services during this start ends the capture: the
+      // next service starts with capture off.
+      const servicesStopped = {
+        armed: false,
+        reason:
+          "the app's services stopped during this start, which ended the capture; call network-capture-start again",
+      };
       // A launch in flight adopts its channel, which arms it.
       await lifecycles.get(bundleId)?.settled;
+      if (disposed) return servicesStopped;
       let ch: LibraryChannel;
       try {
         ch = await ensureChannel();
       } catch (err) {
+        if (disposed) return servicesStopped;
         return {
           armed: false,
           reason:
             errorCode(err) === FAILURE_CODES.MACOS_APP_NOT_RUNNING
-              ? `${bundleId} is not running; capture arms when boot-device or launch-app starts it`
+              ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
               : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
         };
       }
       // A launch this start waited for armed its process from the start.
       if (startedNow && !armedSinceLaunch) captureGap = true;
       const armed = await enableOn(ch);
+      if (disposed) return servicesStopped;
       if (armed) return { armed };
       return { armed, reason: captureState().note ?? "the app did not acknowledge Network.enable" };
     },
