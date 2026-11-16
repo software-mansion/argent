@@ -32,4 +32,6 @@ sidebar_custom_props:
 
 Run `argent --help` for the full set of options, and `argent --version` to print the installed version.
 
+`argent init`, `update`, `uninstall`, `link` and `unlink` ask questions on a terminal. When stdin is not a terminal, as in CI or a Dockerfile, a command that must ask a question stops with exit code 2. To run these commands without a terminal, pass `--yes`. For `link`, also pass `--host`. The port is 3001 unless you pass `--port`.
+
 `argent init` exits with code `1` when the skills install fails and no skills are on disk.
