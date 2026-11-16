@@ -16,7 +16,9 @@ vi.mock("../src/utils/android-binary", async (importOriginal) => {
   };
 });
 
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { createAwaitScreenIdleTool } from "../src/tools/await-screen-idle";
+import { MultipleVegaDevicesError } from "../src/utils/vega-vvd";
 import {
   DependencyMissingError,
   __primeDepCacheForTests,
@@ -107,6 +109,37 @@ describe("await-screen-idle on Vega", () => {
     );
 
     expect(result.settled).toBe(false);
+  });
+
+  it("names the missing VVD instead of advising a relaunch", async () => {
+    fetchVegaPageSource.mockRejectedValue(
+      new FailureError("No running Vega Virtual Device found.", {
+        error_code: FAILURE_CODES.VEGA_DEVICE_NOT_FOUND,
+        failure_stage: "vega_discover_console_port",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      })
+    );
+    const tool = createAwaitScreenIdleTool({} as any);
+
+    const result = await tool.execute(
+      {},
+      { udid: VEGA_SERIAL, timeoutMs: 60, pollIntervalMs: 10, minStableMs: 20 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.note).toContain("No running Vega Virtual Device found.");
+    expect(result.note).not.toMatch(/relaunch/);
+  });
+
+  it("fails on the first read when several VVDs run, since waiting cannot pick one", async () => {
+    fetchVegaPageSource.mockRejectedValue(new MultipleVegaDevicesError([5554, 5556]));
+    const tool = createAwaitScreenIdleTool({} as any);
+
+    await expect(
+      tool.execute({}, { udid: VEGA_SERIAL, timeoutMs: 2000, pollIntervalMs: 10, minStableMs: 20 })
+    ).rejects.toBeInstanceOf(MultipleVegaDevicesError);
+    expect(fetchVegaPageSource).toHaveBeenCalledTimes(1);
   });
 
   it("fails fast with the adb install hint when adb is missing", async () => {

@@ -1,7 +1,6 @@
-import type { ToolDependency } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type ToolDependency } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../contract";
 import { fetchVegaPageSource } from "../../../utils/vega-inspect";
-import { MultipleVegaDevicesError } from "../../../utils/vega-vvd";
 import { parseVegaPageSource } from "./vega/source-parser";
 
 // Runs entirely over `adb` and never touches the `vega`/`kepler` CLI, so a running
@@ -21,20 +20,25 @@ const UNAVAILABLE_HINT =
 // A real page source is multi-KB; this only catches an empty root.
 const PAGE_SOURCE_EMPTY_LENGTH = 50;
 
+const DISCOVERY_FAILURES: ReadonlySet<string> = new Set([
+  FAILURE_CODES.VEGA_DEVICE_NOT_FOUND,
+  FAILURE_CODES.VEGA_DEVICE_NOT_REGISTERED,
+  FAILURE_CODES.VEGA_MULTIPLE_DEVICES,
+]);
+
 /**
  * Describe the current Vega screen from the automation toolkit's `getPageSource`
- * XML. An unreachable toolkit yields an empty tree + relaunch hint; a multi-VVD
- * ambiguity is rethrown. `_serial` is unused — the fetch targets the single
- * running VVD.
+ * XML. An unreachable toolkit yields an empty tree + relaunch hint; a failure to
+ * find the VVD (none, several, or not yet on adb) is rethrown, since a relaunch
+ * cannot fix it. `_serial` is unused — the fetch targets the single running VVD.
  */
 export async function describeVega(_serial: string): Promise<DescribeTreeData> {
   let xml: string;
   try {
     xml = (await fetchVegaPageSource()).trim();
   } catch (err) {
-    // A multi-VVD ambiguity is a hard error, not a toolkit problem — don't bury it
-    // under the relaunch hint.
-    if (err instanceof MultipleVegaDevicesError) throw err;
+    const code = getFailureSignal(err)?.error_code;
+    if (code && DISCOVERY_FAILURES.has(code)) throw err;
     return { tree: EMPTY_TREE, source: "vega-automation", hint: UNAVAILABLE_HINT };
   }
   if (xml.length < PAGE_SOURCE_EMPTY_LENGTH) {

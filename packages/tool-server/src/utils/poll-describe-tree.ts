@@ -8,6 +8,11 @@ import { settleWithin, sleepOrAbort } from "./timing";
  * this loop owns timing, cancellation, and the fetch lifecycle.
  */
 
+const UNWAITABLE_FAILURES: ReadonlySet<string> = new Set([
+  FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING,
+  FAILURE_CODES.VEGA_MULTIPLE_DEVICES,
+]);
+
 /** Verdict from evaluating one successfully-fetched tree. */
 type PollVerdict<R> = { done: true; result: R } | { done: false };
 
@@ -88,13 +93,9 @@ export async function pollDescribeTree<R>(
       break;
     }
     if (settled.type === "error") {
-      // Waiting cannot end this one, and a timeout result would hide what to do.
-      if (
-        getFailureSignal(settled.cause)?.error_code ===
-        FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING
-      ) {
-        throw settled.cause;
-      }
+      // Waiting cannot end these, and a timeout result would hide what to do.
+      const code = getFailureSignal(settled.cause)?.error_code;
+      if (code && UNWAITABLE_FAILURES.has(code)) throw settled.cause;
       lastError = settled.error;
     } else {
       lastData = settled.value;
