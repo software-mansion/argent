@@ -15,9 +15,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Node 22 is the oldest line Argent supports, and runs every test. Node 24 is
+  # what most users run, and the two differ where the tool-server's tests can
+  # see it: how Node loads the script of a `script:` step, and how TextDecoder
+  # reads windows-1252. So Node 24 runs the tool-server's tests.
   unit-tests:
-    name: Unit tests
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: "22"
+            name: Unit tests
+            tests: npm test --workspaces --if-present
+          - node: "24"
+            name: Unit tests (tool-server, Node 24)
+            tests: npm test --workspace @argent/tool-server
 
     steps:
       - name: Checkout
@@ -26,7 +40,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node }}
           cache: npm
 
       - name: Install dependencies
@@ -38,9 +52,10 @@ jobs:
         run: npm run build
 
       - name: Run tests
-        run: npm test --workspaces --if-present
+        run: ${{ matrix.tests }}
 
       - name: Test root scripts
+        if: matrix.node == '22'
         run: npm run test:scripts
 
   # Typechecking needs the same install and build as the tests but none of their
