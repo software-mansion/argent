@@ -25,6 +25,7 @@ import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { metroPort } from "../../utils/debugger/metro-port";
 import { resolveDevice } from "../../utils/device-info";
 import { localIosHost, remoteIosHost } from "../../utils/ios-host";
+import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../utils/simctl-config";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
@@ -233,7 +234,18 @@ async function appRuns(udid: string, bundleId: string): Promise<boolean | undefi
     }
     if (platform === "ios") return (await localIosHost.listRunningBundleIds(udid)).has(bundleId);
     if (platform === "ios-remote") {
-      return (await remoteIosHost.listRunningBundleIds(udid)).has(bundleId);
+      // The remote host waits up to 60 s; the stop waits as long as for a local simulator.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), SIMCTL_SPAWN_TIMEOUT_MS);
+      });
+      try {
+        return (await Promise.race([remoteIosHost.listRunningBundleIds(udid), late]))?.has(
+          bundleId
+        );
+      } finally {
+        clearTimeout(timer);
+      }
     }
   } catch {
     // A device that does not answer tells nothing about the app.

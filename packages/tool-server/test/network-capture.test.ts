@@ -1637,6 +1637,36 @@ describe("network-capture-stop", () => {
     }
   );
 
+  it("waits at most 10 s for a remote simulator's process list, as for the other devices", async () => {
+    serve(PORT, REMOTE_UDID, new FakeRuntime(APP));
+    await start(REMOTE_UDID, APP);
+    await reconnect(PORT, REMOTE_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // The remote host answers only at its own 60 s limit.
+      vi.mocked(remoteIosHost.listRunningBundleIds).mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(new Set([OTHER])), 60_000))
+      );
+      let settled = false;
+      const pending = stop(REMOTE_UDID, APP).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(settled).toBe(true);
+      expect(layer(await pending, "js")).toEqual({
+        layer: "js",
+        armed: true,
+        total: 0,
+        reason: `no app is connected to Metro on port ${PORT} yet; the interceptor already in the app's JS runtime may still record, so call network-capture-stop again once the app answers`,
+      });
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(
     PROCESS_PLATFORMS.flatMap((platform) => [
       { ...platform, device: "lists a process of the app", answers: true },
