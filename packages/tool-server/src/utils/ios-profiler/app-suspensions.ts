@@ -133,13 +133,13 @@ export function hangsToReport(
   rawHangs.forEach((hang, i) => {
     const overlap = overlapNs(hang.startNs, hang.startNs + hang.durationNs, merged);
     const suspended = overlap < MIN_OVERLAP_NS ? 0 : overlap;
-    if (suspended > 0) overlappedHangs++;
     const recorder = recorderNs[i] ?? 0;
     recorderTotalNs += recorder;
     if (recorder > 0 && hang.durationNs - recorder < MIN_HANG_NS) {
       recorderSummary.removedHangs++;
       return;
     }
+    if (suspended > 0) overlappedHangs++;
     if (recorder > 0) recorderSummary.adjustedHangs++;
     hangs.push(hang);
     suspendedNs.push(suspended);

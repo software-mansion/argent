@@ -350,4 +350,18 @@ describe("the analyze report on hangs of Instruments' recorder", () => {
     expect(report).not.toContain("mostly the recorder");
     expect(api.parsedData?.uiHangs).toEqual([]);
   });
+
+  it("does not count a hang that it left out as one that the app's suspensions overlapped", async () => {
+    // 400 ms with 200 ms of the recorder leaves 200 ms, and 100 ms of it was suspended.
+    const files = writeTrace([{ startMs: 1_000, durationMs: 400, recorderMs: 200, appMs: 100 }]);
+    const api = makeApi("macos", files);
+    api.appSuspensions = [{ startNs: 1_300_000_000, endNs: 1_400_000_000 }];
+    const { report } = await analyzeNativeProfilerIos(api);
+
+    expect(report).toContain(
+      "ran on the main thread for 200 ms in the hangs. argent left out 1 hang"
+    );
+    expect(report).not.toContain("**App pauses:**");
+    expect(api.parsedData?.uiHangs).toEqual([]);
+  });
 });
