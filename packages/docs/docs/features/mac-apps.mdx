@@ -97,7 +97,7 @@ The stop of a short recording takes about 15 to 25 seconds, because Instruments 
 
 - When the app quits, crashes or starts again during the recording, Instruments keeps only a part of the data. Argent tells the agent this in the stop result and in the report. Profile the scenario again, and do not quit the app before the stop.
 - Sometimes Instruments cannot attach to the app, and records nothing. Argent tells the agent this at the stop. Start the recording again.
-- Instruments checks the app for memory leaks about every 11 seconds, and macOS suspends the whole app for several seconds during each check. Argent watches for this during the recording. A tap, a `describe` or another call to the app waits until the app runs again, and the report takes the suspended time out of each hang. A hang that was only the suspension is left out, and the report says how many hangs changed.
+- Instruments checks the app for memory leaks about every 11 seconds, and macOS suspends the whole app for several seconds during each check. Argent watches for this during the recording. A tap, a `describe` or another call to the app waits until the app runs again. The report keeps each hang as Instruments recorded it, and gives the part of the hang when the app was suspended. The own hang of the app can be shorter by this part, or not, because a wait continues during the suspension, for example a sleep or I/O. To measure such a hang, record again with the Time Profiler template, which does not check for leaks.
 - A leak check can take several seconds, and a leak is in the profile only after a check has ended. When a recording shorter than 20 seconds found no leak, the report says that it can hold no finished check.
 
 ## E2E tests on a Mac

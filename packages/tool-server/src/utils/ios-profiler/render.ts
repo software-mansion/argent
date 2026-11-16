@@ -25,13 +25,17 @@ function hangFunctionName(hang: UiHang, fn: string): string {
 }
 
 /**
- * Follows a hang's duration when macOS held the app suspended during the hang,
- * time the duration leaves out. Empty otherwise.
+ * Follows a hang's recorded duration when macOS held the app suspended during the
+ * hang: the suspended part, and the range of the app's own hang (app-suspensions.ts).
+ * Empty otherwise.
  */
 export function hangSuspendedNote(hang: UiHang): string {
-  return hang.suspendedMs !== undefined && hang.suspendedMs > 0
-    ? `, not counting ${hang.suspendedMs}ms when the app was suspended`
-    : "";
+  if (hang.suspendedMs === undefined || !(hang.suspendedMs > 0)) return "";
+  const ownMs = Math.max(0, hang.durationMs - hang.suspendedMs);
+  return (
+    `, ${hang.suspendedMs}ms of it while the app was suspended ` +
+    `(the app's own hang: ${ownMs} to ${hang.durationMs}ms)`
+  );
 }
 
 /**
