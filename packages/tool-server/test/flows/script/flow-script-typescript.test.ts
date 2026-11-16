@@ -55,6 +55,28 @@ function outcome(over: Partial<FlowScriptResult>): FlowScriptResult {
 
 const PASSED = outcome({ ok: true, output: {} });
 
+/**
+ * What a CommonJS script's `require("./helpers.ts")` fails with where Node
+ * compiles the file as JavaScript: Node 20.19 and 22.17 write this stack.
+ */
+function requiredTypeScriptFailure(projectRoot: string): FlowScriptResult["failure"] {
+  const helper = path.join(projectRoot, "scripts", "helpers.ts");
+  const entry = path.join(projectRoot, "scripts", "entry.js");
+  return {
+    kind: "runtime",
+    message: "Missing initializer in const declaration",
+    stack: [
+      `${helper}:1`,
+      "const orderId: number = 4711;",
+      "      ^",
+      "",
+      "SyntaxError: Missing initializer in const declaration",
+      "    at TracingChannel.traceSync (node:diagnostics_channel:322:14)",
+      `    at Object.<anonymous> (${entry}:1:11)`,
+    ].join("\n"),
+  };
+}
+
 function mockRegistry(): Registry {
   return {
     invokeTool: vi.fn(async (id: string) =>
@@ -98,7 +120,9 @@ function executed(): string[] {
 beforeEach(async () => {
   __resetRecordingsForTesting();
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-typescript-")));
-  for (const file of ["before.mjs", "seed.mts", "entry.mjs"]) await write(`scripts/${file}`, "");
+  for (const file of ["before.mjs", "seed.mts", "seed.ts", "entry.mjs", "entry.js"]) {
+    await write(`scripts/${file}`, "");
+  }
   executeMock.mockReset();
   executeMock.mockResolvedValue(PASSED);
   stripsTypesMock.mockReset();
@@ -222,6 +246,52 @@ describe("a run with a TypeScript script on a host that cannot run it", () => {
     expect(executed()).toEqual([]);
   });
 
+  it.each([
+    ["mts", "or use JavaScript (.mjs) for the script and for the files it imports."],
+    // `.mjs` would break a `.ts` script that is CommonJS, so its twin is `.js`.
+    [
+      "ts",
+      "or use JavaScript (.js, or .mjs for an ES module) for the script and for the files it imports.",
+    ],
+  ])("refuses a .%s script, and names the JavaScript extension to use", async (ext, advice) => {
+    await flow(
+      "spelled",
+      [
+        "steps:",
+        "  - script: { path: ../../scripts/before.mjs }",
+        `  - script: { path: ../../scripts/seed.${ext} }`,
+        "",
+      ].join("\n")
+    );
+
+    const err = await runFlow("spelled").then(
+      () => undefined,
+      (thrown: Error) => thrown
+    );
+
+    expect(err?.message).toContain(`Script "../../scripts/seed.${ext}" is TypeScript`);
+    expect(err?.message).toContain(advice);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.FLOW_SCRIPT_TYPESCRIPT_UNSUPPORTED,
+    });
+    expect(executed()).toEqual([]);
+  });
+
+  it("does not record a .ts script either", async () => {
+    await flowStartRecordingTool.execute({}, { name: "recordedts", project_root: root });
+
+    const recorded = await flowAddScriptTool.execute({}, {
+      name: "recordedts",
+      project_root: root,
+      path: "../../scripts/seed.ts",
+    } as never);
+
+    expect(recorded.status).toBe("error");
+    expect(recorded.reason).toContain('Script "../../scripts/seed.ts" is TypeScript');
+    expect(recorded.reason).toContain("or use JavaScript (.js, or .mjs for an ES module)");
+    expect(executed()).toEqual([]);
+  });
+
   it("is refused for a script under a when: guard, whichever way the guard would go", async () => {
     await flow(
       "guarded",
@@ -303,6 +373,46 @@ describe("a run with a TypeScript script on a host that cannot run it", () => {
     expect(executed()).toEqual(["entry.mjs"]);
   });
 
+  it("reads a TypeScript file a CommonJS script could not require as the same host limit", async () => {
+    // The CommonJS loader refuses no extension: it compiles the file as
+    // JavaScript, so the failure is a SyntaxError at the first type, and only
+    // the place the stack opens with names the file.
+    executeMock.mockResolvedValue(outcome({ failure: requiredTypeScriptFailure(root) }));
+    await flow("requires", "steps:\n  - script: { path: ../../scripts/entry.js }\n");
+
+    const result = await runFlow("requires");
+
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "error" });
+    expect(result.steps[0]!.reason).toContain(
+      'Script "../../scripts/entry.js" loads the TypeScript file "scripts/helpers.ts", and the tool-server runs on'
+    );
+    expect(result.steps[0]!.reason).toMatch(
+      /or use JavaScript \(\.js, or \.mjs for an ES module\) for the script and for the files it imports\.$/
+    );
+  });
+
+  it("leaves a syntax error in a JavaScript file a script requires as the script's own", async () => {
+    const helper = path.join(root, "scripts", "helpers.js");
+    executeMock.mockResolvedValue(
+      outcome({
+        failure: {
+          kind: "runtime",
+          message: "Unexpected token ')'",
+          stack: `${helper}:1\nfoo();)\n      ^\n\nSyntaxError: Unexpected token ')'`,
+        },
+      })
+    );
+    await flow("requires", "steps:\n  - script: { path: ../../scripts/entry.js }\n");
+
+    const result = await runFlow("requires");
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "script",
+      status: "fail",
+      reason: "Unexpected token ')'\\n    at scripts/helpers.js:1",
+    });
+  });
+
   it.each([
     ["an extension no Node reads", "load", 'Unknown file extension ".tsx" for /p/view.tsx'],
     ["a script that threw the same words", "runtime", 'Unknown file extension ".mts" for /p/a.mts'],
@@ -346,6 +456,23 @@ describe("a run with a TypeScript script on a host that runs it", () => {
     expect(result.ok).toBe(true);
     expect(result.steps.map((step) => step.status)).toEqual(["pass", "pass"]);
     expect(executed()).toEqual(["before.mjs", "seed.mts"]);
+  });
+
+  it("leaves a syntax error in a TypeScript file a script requires as the script's own", async () => {
+    // The same stack as on a host that cannot: here Node did strip the types,
+    // so what is left is the file's fault, and its place still leads the frames.
+    executeMock.mockResolvedValue(outcome({ failure: requiredTypeScriptFailure(root) }));
+    await flow("requires", "steps:\n  - script: { path: ../../scripts/entry.js }\n");
+
+    const result = await runFlow("requires");
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "script",
+      status: "fail",
+      reason:
+        "Missing initializer in const declaration\\n    at scripts/helpers.ts:1\\n" +
+        "    at Object.<anonymous> (scripts/entry.js:1:11)",
+    });
   });
 
   it("leaves a TypeScript file Node could not load as the script's own failure", async () => {
@@ -396,6 +523,37 @@ describe("the place of syntax Node cannot strip", () => {
       status: "fail",
       reason:
         "TypeScript parameter property is not supported in strip-only mode\\n    at scripts/svc.mts:2",
+    });
+  });
+
+  it("leads the frames when Node names it as a bare path, as its CommonJS loader does", async () => {
+    // A `.ts` script under a package.json with no `type`, and every file a
+    // script `require`s: no `file:` URL, the same place.
+    const seed = path.join(root, "scripts", "seed.ts");
+    executeMock.mockResolvedValue(
+      outcome({
+        failure: {
+          kind: "load",
+          message: "TypeScript enum is not supported in strip-only mode",
+          stack: [
+            `${seed}:2`,
+            "enum Color { Red }",
+            "^^^^^^^^^^^^^^^^^^",
+            "",
+            "SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode",
+            "    at parseTypeScript (node:internal/modules/typescript:68:40)",
+          ].join("\n"),
+        },
+      })
+    );
+    await flow("stripcjs", "steps:\n  - script: { path: ../../scripts/seed.ts }\n");
+
+    const result = await runFlow("stripcjs");
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "script",
+      status: "fail",
+      reason: "TypeScript enum is not supported in strip-only mode\\n    at scripts/seed.ts:2",
     });
   });
 

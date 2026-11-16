@@ -412,12 +412,14 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 
 Use a `script` step for setup or cleanup that device steps cannot do. The script must be a local file with one of these extensions:
 
-| Extension | Language   |
-| --------- | ---------- |
-| `.mjs`    | JavaScript |
-| `.mts`    | TypeScript |
+| Extension | Language   | Module type                               |
+| --------- | ---------- | ----------------------------------------- |
+| `.mjs`    | JavaScript | ES module                                 |
+| `.mts`    | TypeScript | ES module                                 |
+| `.js`     | JavaScript | The `package.json` of the project decides |
+| `.ts`     | TypeScript | The `package.json` of the project decides |
 
-Node reads both as an ES module, whatever the `type` field of the `package.json` of the project holds. Parsing rejects each other extension, such as `.js` or `.ts`. See [TypeScript scripts](#typescript-scripts) for the limits of an `.mts` file.
+Parsing rejects each other extension, such as `.cjs` or `.tsx`. See [Module type](#module-type) for a `.js` or `.ts` file, and [TypeScript scripts](#typescript-scripts) for the limits of a `.ts` or `.mts` file.
 
 Over a link, the tool-server rejects an e2e test with a `script` step, and the `e2e-add-script` tool refuses to record one. Record and replay an e2e test with a `script` step without a link. An argent client that is older than the tool-server can record a `script` step when the computer of the tool-server has the `project_root` path, for example over a link to `127.0.0.1`. A replay over the link then rejects the e2e test. See [E2E tests over a link](#e2e-tests-over-a-link).
 
@@ -425,10 +427,10 @@ A `script` step needs no device. An e2e test of script steps alone runs with no 
 
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
-| Key       | Required | Description                                                                                                                                      |
-| --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `path`    | yes      | An `.mjs` or `.mts` file, relative to the e2e test file that holds the step. Write the extension in lowercase, and match the letter case on disk |
-| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                         |
+| Key       | Required | Description                                                                                                                                                    |
+| --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | yes      | An `.mjs`, `.mts`, `.js` or `.ts` file, relative to the e2e test file that holds the step. Write the extension in lowercase, and match the letter case on disk |
+| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                                       |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -467,9 +469,43 @@ On iOS, Android, Vega and macOS, a `script` step above the `launch` step runs be
 
 On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone, or the `requires` block allows only `chromium`. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform` and the `requires` block does not allow only `chromium`.
 
+### Module type
+
+An `.mjs` or `.mts` script is an ES module in every project.
+
+A `.js` or `.ts` script has the module type that Node gives each `.js` file in the same directory. Node reads the `type` field of the nearest `package.json`:
+
+| `type`     | Result                                                                                                             |
+| ---------- | ------------------------------------------------------------------------------------------------------------------ |
+| `module`   | The script is an ES module. A call to `require` makes the step fail                                                |
+| `commonjs` | The script is a CommonJS module. ES module syntax makes the step fail                                              |
+| Not set    | Node reads a script that holds ES module syntax as an ES module. Node reads each other script as a CommonJS module |
+
+Node counts each of these as ES module syntax:
+
+- An `import` statement or an `export` statement. An `export {}` statement alone is sufficient.
+- A reference to `import.meta`.
+- An `await` at the top level of the script.
+- A `const` or `let` declaration at the top level with the name `require`, `module`, `exports`, `__dirname` or `__filename`.
+
+A call to `import()` is not ES module syntax. In a `.ts` script, Node looks for the syntax after it removes the types. Thus an `import type` statement is not ES module syntax.
+
+A React Native project usually does not set `type`. When `type` is not set, the Node version of the tool-server decides if Node examines the syntax:
+
+| Node version                                  | Result when `type` is not set                                                                                          |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 20.19 or a later 20 version, or 22.7 or later | Node examines the syntax                                                                                               |
+| 20.12 to 20.18, 21, or 22.0 to 22.6           | Node does not examine the syntax. Node reads the script as a CommonJS module, and ES module syntax makes the step fail |
+
+When `type` is not set, Node usually prints a warning for a script that it reads as an ES module. Argent turns this warning off, so the log of the step does not hold it.
+
+When `type` is `module`, the error of Node for a call to `require` in a `.js` script tells you to rename the script to `.cjs`. Parsing rejects a `.cjs` file and a `.cts` file. Use an `import` statement in place of the call to `require`.
+
+Use the `.mjs` or `.mts` extension for a script that must behave the same in every project.
+
 ### TypeScript scripts
 
-Node runs an `.mts` script without a build step. Node removes the type annotations and runs the code that remains. Argent adds no compiler.
+Node runs a `.ts` or `.mts` script without a build step. Node removes the type annotations and runs the code that remains. Argent adds no compiler.
 
 The tool-server must run on a Node release that runs TypeScript:
 
@@ -479,18 +515,20 @@ The tool-server must run on a Node release that runs TypeScript:
 
 The Node build must also include TypeScript support. The `nodejs` package of Debian and of Ubuntu does not include it. On such a host, use a Node build from nodejs.org.
 
-A script that imports a TypeScript file has the same requirement, also when the script is an `.mjs` file.
+A script that imports a TypeScript file has the same requirement, also when the script is an `.mjs` or `.js` file.
 
 When the Node of the tool-server does not run TypeScript, the result depends on the place of the TypeScript file:
 
-| Place                                   | Result                                                                                                                           |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| An `.mts` step of the e2e test          | Argent rejects the e2e test before step 1, also when the step is in a `when` block. `argent e2e run` prints `not run (rejected)` |
-| An `.mts` step of a `run:` fragment     | The `run` step is errored, and no step of the fragment runs                                                                      |
-| An `.mts` file for `e2e-add-script`     | The script does not start, and the tool records no step                                                                          |
-| A TypeScript file that a script imports | The step is errored when Node loads the file                                                                                     |
+| Place                                       | Result                                                                                                                           |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| A `.ts` or `.mts` step of the e2e test      | Argent rejects the e2e test before step 1, also when the step is in a `when` block. `argent e2e run` prints `not run (rejected)` |
+| A `.ts` or `.mts` step of a `run:` fragment | The `run` step is errored, and no step of the fragment runs                                                                      |
+| A `.ts` or `.mts` file for `e2e-add-script` | The script does not start, and the tool records no step                                                                          |
+| A TypeScript file that a script imports     | The step is errored when Node loads the file                                                                                     |
 
-The reason names the Node version of the tool-server. A tool-server that runs keeps its Node version. To change the Node version, stop the tool-server with `argent server stop`. Then run Argent on the other Node version. Use `.mjs` files when you cannot change the Node version.
+The reason names the Node version of the tool-server. A tool-server that runs keeps its Node version. To change the Node version, stop the tool-server with `argent server stop`. Then run Argent on the other Node version.
+
+When you cannot change the Node version, write the script and the files that it imports in JavaScript. Use an `.mjs` file in place of an `.mts` file. Use a `.js` file in place of a `.ts` file, or an `.mjs` file when the file is an ES module.
 
 On Node 23.6 to 24.2, type stripping is experimental. Node writes a warning to the log of each step that loads a TypeScript file.
 
@@ -499,7 +537,7 @@ These limits apply:
 - Node does not check the types. See [Type check](#type-check).
 - Node does not read `tsconfig.json`. A path alias from `paths` does not resolve.
 - Node accepts only the syntax that it can remove. An `enum`, a `namespace` that holds code, or a parameter property makes the step fail.
-- Each relative import needs the file extension, for example `./helpers.mts`.
+- Each relative import needs the file extension, for example `./helpers.ts`.
 - An import of a type needs `import type`.
 - Node does not run a TypeScript file from `node_modules`.
 - An imported `.ts` or `.js` file can have a different module type. See [Imported files](#imported-files).
@@ -508,13 +546,15 @@ A frame in a failed step has the line and the column of the TypeScript source. A
 
 ### Imported files
 
-The `.mts` and `.mjs` extensions set the module type of one file. An imported `.mts` or `.mjs` file is an ES module too. An imported `.ts` or `.js` file takes its module type from the `type` field of the nearest `package.json`:
+The `.mts` and `.mjs` extensions set the module type of one file. An imported `.mts` or `.mjs` file is an ES module too. An imported `.ts` or `.js` file takes its module type from the `type` field of the nearest `package.json`, as a `.ts` or `.js` script does. See [Module type](#module-type).
 
-| `type`     | An imported `.ts` or `.js` file that has an `export` statement                                                               |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `module`   | Node loads the file as an ES module                                                                                          |
-| `commonjs` | The step fails. The reason says that the file does not provide the export, or that the file is a CommonJS module             |
-| Not set    | Node loads the file as an ES module. Node writes a `MODULE_TYPELESS_PACKAGE_JSON` warning to the log of the step in each run |
+| `type`     | An imported `.ts` or `.js` file that has an `export` statement                                                                    |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `module`   | Node loads the file as an ES module                                                                                               |
+| `commonjs` | The step fails. The reason says that the file does not provide the export, or that the file is a CommonJS module                  |
+| Not set    | Node loads the file as an ES module. On a Node version that does not examine the syntax, the step fails as it does for `commonjs` |
+
+When `type` is not set, Node has a `MODULE_TYPELESS_PACKAGE_JSON` warning for a file that it loads as an ES module. Argent turns this warning off, so the log of the step does not hold it.
 
 Give a file the `.mts` or `.mjs` extension when a script imports it and the project does not set `type` to `module`.
 
@@ -538,11 +578,11 @@ Node does not check the types of a TypeScript script. To check the types, run `t
 | Option                       | Effect                                                            |
 | ---------------------------- | ----------------------------------------------------------------- |
 | `noEmit`                     | `tsc` checks the files and writes no output                       |
-| `allowImportingTsExtensions` | `tsc` accepts an import that ends in `.mts`                       |
+| `allowImportingTsExtensions` | `tsc` accepts an import that ends in `.ts` or `.mts`              |
 | `erasableSyntaxOnly`         | `tsc` reports the syntax that Node cannot remove                  |
 | `verbatimModuleSyntax`       | `tsc` reports an import of a type that does not use `import type` |
 
-Without these options, `tsc` rejects an import that ends in `.mts`, and accepts an `enum` that Node rejects.
+Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and accepts an `enum` that Node rejects.
 
 <a id="the-argent-flow-command" />
 

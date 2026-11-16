@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MIN_SCRIPT_HEAP_LIMIT_MB } from "@argent/configuration-core";
 import {
   FlowScriptExecutor,
@@ -268,9 +268,36 @@ describe("flow script executor — execArgv", () => {
       expect(execArgv[0]).toBe("--max-old-space-size=512");
       expect(execArgv[1]).toBe("--import");
       expect(execArgv[2]).toMatch(/^file:\/\/.*flow-script-runner\.mjs$/);
-      expect(execArgv).toHaveLength(3);
+      expect(execArgv[3]).toBe("--disable-warning=MODULE_TYPELESS_PACKAGE_JSON");
+      expect(execArgv).toHaveLength(4);
     } finally {
       process.execArgv = before;
+    }
+  });
+});
+
+describe("flow script executor — the warning flag", () => {
+  it("leaves out a flag this Node would refuse to start with", async () => {
+    // Node 21.0 to 21.2 are inside the supported range and do not know
+    // `--disable-warning`. Node exits on an unknown option, so with the flag
+    // passed anyway no script step of any extension would start there.
+    const flags = new Set(process.allowedNodeEnvironmentFlags);
+    flags.delete("--disable-warning");
+    const spy = vi.spyOn(process, "allowedNodeEnvironmentFlags", "get").mockReturnValue(flags);
+    try {
+      const ws = workspace();
+      const script = ws.write("argv.mjs", `output.execArgv = process.execArgv;`);
+      const result = await executor({ heapLimitMb: 512 }).execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+      });
+
+      expect(result.ok).toBe(true);
+      const execArgv = result.output?.execArgv as string[];
+      expect(execArgv).toHaveLength(3);
+      expect(execArgv.join(" ")).not.toContain("--disable-warning");
+    } finally {
+      spy.mockRestore();
     }
   });
 });

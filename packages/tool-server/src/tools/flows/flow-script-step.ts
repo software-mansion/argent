@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   canonicalFlowPath,
   resolveFlowRelativeFile,
@@ -9,6 +9,7 @@ import {
 import type { FlowStep } from "./flow-utils";
 import {
   flowScriptExecutor,
+  type FlowScriptFailure,
   type FlowScriptFailureKind,
   type FlowScriptLogBudget,
   type FlowScriptResult,
@@ -125,12 +126,14 @@ export async function runFlowScriptStep(
       : scriptVerdict(result);
   // A host limit has no frame of the script's to show: Node stopped in its own
   // loader, before a line of the file it could not read.
-  const frames =
-    result.ok || hostLimit !== undefined ? "" : scriptFrames(result.failure?.stack, roots);
+  const tail =
+    result.ok || hostLimit !== undefined
+      ? ""
+      : cjsRenameNote(result.failure, canonical) + scriptFrames(result.failure?.stack, roots);
   return {
     outcome: {
       ...verdict,
-      ...(frames && verdict.reason !== undefined ? { reason: verdict.reason + frames } : {}),
+      ...(tail && verdict.reason !== undefined ? { reason: verdict.reason + tail } : {}),
       ...(result.log ? { scriptLog: result.log } : {}),
       ...(result.logTruncated ? { scriptLogTruncated: true } : {}),
     },
@@ -140,8 +143,40 @@ export async function runFlowScriptStep(
 }
 
 function isTypeScriptScript(base: string): boolean {
-  return base.endsWith(".mts");
+  return base.endsWith(".ts") || base.endsWith(".mts");
 }
+
+/**
+ * The JavaScript extension a refusal names for a script this host cannot run
+ * as TypeScript. `.mts` and `.mjs` are both ES modules, so `.mjs` stands in for
+ * either. A `.ts` or `.js` script has whatever module type Node gives a `.js`
+ * file in its directory, so `.js` is its twin — but the releases that cannot
+ * strip types are also, mostly, the ones that do not read the syntax of a `.js`
+ * file under a package.json with no `type`, and there only `.mjs` runs an
+ * `import`.
+ */
+function javaScriptSpelling(target: string): string {
+  return /\.m[jt]s$/.test(target) ? ".mjs" : ".js, or .mjs for an ES module";
+}
+
+/**
+ * Node ends its error for a `require` in a `.js` file it read as an ES module
+ * with advice to rename the file `.cjs` — an extension the parser refuses
+ * (`SCRIPT_FILE_EXTENSIONS`), so on a step line the advice leads straight into
+ * a second failure. The note says so, and what does work.
+ *
+ * Only for the script itself: the same error from a file the script loads is
+ * about a file that may be renamed, and Node's advice holds for it. The top
+ * frame says which, and an ES module's frame names its file as a URL.
+ */
+function cjsRenameNote(failure: FlowScriptResult["failure"], canonical: string): string {
+  if (!failure?.stack || !NODE_CJS_RENAME_ADVICE.test(failure.message)) return "";
+  const top = failure.stack.split("\n").find((line) => line.trim().startsWith("at "));
+  if (!top?.includes(`${pathToFileURL(canonical).href}:`)) return "";
+  return " A script step does not accept a .cjs file: use import in the script instead.";
+}
+
+const NODE_CJS_RENAME_ADVICE = /rename it to use the '\.cjs' file extension/;
 
 /** The first release of the oldest line that runs TypeScript with no flag. */
 const TYPESCRIPT_MIN_NODE = "22.18";
@@ -208,7 +243,8 @@ export function typeScriptGap(
 export function typeScriptRefusalReason(
   subject: string,
   gap: TypeScriptGap,
-  version: string = process.versions.node
+  version: string = process.versions.node,
+  javaScript: string = ".mjs"
 ): string {
   const host =
     gap === "release"
@@ -218,7 +254,7 @@ export function typeScriptRefusalReason(
       : `the tool-server runs on a build of Node.js ${version} that cannot run it: the build ` +
         `has no TypeScript support, like the nodejs package of Debian and Ubuntu. Stop the ` +
         `tool-server with \`argent server stop\`, then run Argent on a Node.js from nodejs.org,`;
-  return `${subject}, and ${host} or use JavaScript (.mjs) for the script and for the files it imports.`;
+  return `${subject}, and ${host} or use JavaScript (${javaScript}) for the script and for the files it imports.`;
 }
 
 /**
@@ -233,7 +269,15 @@ export function typeScriptRefusalReason(
 export async function typeScriptScriptRefusal(target: string): Promise<string | undefined> {
   if (!isTypeScriptScript(path.posix.basename(target))) return undefined;
   const gap = typeScriptGap(await flowScriptExecutor().stripsTypes());
-  return gap && typeScriptRefusalReason(`Script "${target}" is TypeScript`, gap);
+  return (
+    gap &&
+    typeScriptRefusalReason(
+      `Script "${target}" is TypeScript`,
+      gap,
+      undefined,
+      javaScriptSpelling(target)
+    )
+  );
 }
 
 /** Node's load failure for a TypeScript file it has no loader for, with the file. */
@@ -241,28 +285,58 @@ const UNKNOWN_TYPESCRIPT_FILE_RE = /^Unknown file extension "\.[mc]?ts" for (.+)
 
 /**
  * The same refusal, for TypeScript the step's own name does not show: a file
- * the script imports. Nothing before the run can see it, so it is read back
- * from Node's failure — `ERR_UNKNOWN_FILE_EXTENSION` for a TypeScript
- * extension, on a host with a {@link TypeScriptGap}. Left as it came, that is
- * the host's limit reported as the script's fault.
+ * the script loads. Nothing before the run can see it, so it is read back from
+ * Node's failure, on a host with a {@link TypeScriptGap}. Left as it came, that
+ * is the host's limit reported as the script's fault.
  */
 async function typeScriptLoadRefusal(
   target: string,
   result: FlowScriptResult,
   roots: readonly string[]
 ): Promise<string | undefined> {
-  if (result.ok || result.failure?.kind !== "load") return undefined;
-  const file = UNKNOWN_TYPESCRIPT_FILE_RE.exec(result.failure.message)?.[1];
+  if (result.ok || !result.failure) return undefined;
+  const file = unloadedTypeScriptFile(result.failure);
   if (file === undefined) return undefined;
   const gap = typeScriptGap(await flowScriptExecutor().stripsTypes());
   return (
     gap &&
     typeScriptRefusalReason(
       `Script "${target}" loads the TypeScript file "${readablePath(file, roots)}"`,
-      gap
+      gap,
+      undefined,
+      javaScriptSpelling(target)
     )
   );
 }
+
+/**
+ * The TypeScript file a failure says Node could not load, or undefined. Node
+ * says it two ways, by the loader the file went through.
+ *
+ * An `import` goes through the ESM loader, which has no format for the
+ * extension: `ERR_UNKNOWN_FILE_EXTENSION`, with the file in the message.
+ *
+ * A `require` goes through the CommonJS loader, which knows no extension it
+ * would refuse: it compiles the file as JavaScript, and the first type in it is
+ * a `SyntaxError`. Only the stack names the file, in the place it opens with
+ * (see `STACK_PLACE_RE`). On a host that runs TypeScript the same shape is the
+ * file's own fault — an `enum`, say — which is why the caller asks for the gap
+ * before it believes either.
+ */
+function unloadedTypeScriptFile(failure: FlowScriptFailure): string | undefined {
+  if (failure.kind === "load") {
+    const named = UNKNOWN_TYPESCRIPT_FILE_RE.exec(failure.message)?.[1];
+    if (named !== undefined) return named;
+  }
+  const lines = failure.stack?.split("\n") ?? [];
+  const place = lines[0]?.trim() ?? "";
+  if (!STACK_PLACE_RE.test(place) || place.startsWith("file:")) return undefined;
+  const file = place.slice(0, place.lastIndexOf(":"));
+  if (!TYPESCRIPT_FILE_RE.test(file)) return undefined;
+  return lines.some((line) => line.startsWith("SyntaxError")) ? file : undefined;
+}
+
+const TYPESCRIPT_FILE_RE = /\.[mc]?ts$/;
 
 /**
  * How many of the script's own frames ride into the reason. A thrown message
@@ -274,20 +348,34 @@ async function typeScriptLoadRefusal(
  */
 const SCRIPT_REASON_MAX_FRAMES = 6;
 
-/** A frame in the host's own machinery, not in anything the author wrote. */
+/**
+ * A frame in the host's own machinery, not in anything the author wrote: the
+ * runner, and every frame Node's own code is at. The second is not only
+ * `node:internal` — a CommonJS script is loaded through
+ * `node:diagnostics_channel`, which puts that frame under every one of its
+ * failures, and a callback reaches the script through `node:events` or
+ * `node:timers`.
+ */
 function isHostFrame(frame: string): boolean {
   return (
+    NODE_FRAME_RE.test(frame) ||
     frame.includes("node:internal") ||
     frame.includes("flow-script-runner.mjs") ||
     frame.includes("flow-script-watchdog")
   );
 }
 
+/** A frame whose location is a `node:` builtin: `at f (node:x:1:2)` or `at node:x:1:2`. */
+const NODE_FRAME_RE = /(?:^at (?:async )?|\()node:[^\s()]+\)?$/;
+
 /**
  * `file:///abs/path/seed.mjs:1:30` reads as `scripts/seed.mjs:1:30`. The frames
  * go on ONE step line, so the anchor is the run's own `project_root` — the
  * directory the script also ran in. A script outside it keeps its absolute
  * path, because a `..` chain says less than the path does.
+ *
+ * An ES module's frame names its file as that URL and a CommonJS module's as
+ * the bare path, `/abs/path/seed.js:1:30`. Both come out the same.
  *
  * `roots` is that directory both as given and canonicalized, because only one
  * of the two ever matches: Node resolves a module to its REAL path, so every
@@ -296,7 +384,7 @@ function isHostFrame(frame: string): boolean {
  * of the two differing.
  */
 function readableFrame(frame: string, roots: readonly string[]): string {
-  return frame.replace(/file:\/\/[^\s)]+/g, (match) => {
+  const withoutUrls = frame.replace(/file:\/\/[^\s)]+/g, (match) => {
     // The column is optional: the place Node names for a syntax error is a
     // line alone (see `STACK_PLACE_RE`).
     const split = /^(.*?)(:\d+(?::\d+)?)$/.exec(match);
@@ -310,6 +398,22 @@ function readableFrame(frame: string, roots: readonly string[]): string {
     }
     return `${readablePath(file, roots)}${position}`;
   });
+  return roots.reduce(withoutRoot, withoutUrls);
+}
+
+/**
+ * Drops `root` from the front of each bare path in a frame. A path starts a
+ * frame's location, so it follows `at ` or an opening parenthesis; anchoring
+ * there keeps one root from matching inside the other, which it does whenever
+ * the canonical one only adds a prefix (`/private/var/…` over `/var/…`).
+ */
+function withoutRoot(frame: string, root: string): string {
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Windows compares paths without case, and a drive letter's case is whatever
+  // the caller typed.
+  const flags = process.platform === "win32" ? "gi" : "g";
+  return frame.replace(new RegExp(`(^at (?:async )?|\\()${escaped}`, flags), "$1");
 }
 
 /** `file` relative to the first of `roots` that holds it, else as it stands. */
@@ -330,8 +434,13 @@ function readablePath(file: string, roots: readonly string[]): string {
  * parameter property — and for an import of a name the other module does not
  * export. Every `at` line under it is the loader's own, so without this line
  * the reason names no file at all.
+ *
+ * The file is a URL when the ESM loader compiled it and a bare absolute path
+ * when the CommonJS one did, which is every `require`d file and a `.ts` or
+ * `.js` script whose package.json sets no `type`: Node reads such a script as
+ * CommonJS first.
  */
-const STACK_PLACE_RE = /^file:\/\/\S+:\d+$/;
+const STACK_PLACE_RE = /^(?:file:\/\/\S+|(?:\/|[A-Za-z]:[\\/]).*):\d+$/;
 
 /**
  * The frames of a failed script, as a block appended to its message. Newline
@@ -347,7 +456,7 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
   let dropped = 0;
   const lines = stack.split("\n");
   const place = lines[0]!.trim();
-  if (STACK_PLACE_RE.test(place)) frames.push(`    at ${readableFrame(place, roots)}`);
+  if (STACK_PLACE_RE.test(place)) frames.push(`    ${readableFrame(`at ${place}`, roots)}`);
   for (const line of lines) {
     const frame = line.trim();
     if (!frame.startsWith("at ") || isHostFrame(frame)) continue;

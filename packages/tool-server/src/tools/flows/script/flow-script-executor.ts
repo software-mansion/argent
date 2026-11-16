@@ -535,11 +535,17 @@ export class FlowScriptExecutor {
         // The runner rides in as a preload, not as the entry module, so the
         // *script* is what `process.argv[1]`/`require.main` name and an "am I
         // the main module?" guard runs its body. Node awaits an `--import`
-        // module before the entry, which leaves room for the handshake.
+        // module before the entry, which leaves room for the handshake. The
+        // preload also sends a CommonJS entry through the ESM loader, which
+        // leaves `module.id` and `module.parent` unlike a main module's; the
+        // runner's `claimMainModuleIdentity` puts those back. A CommonJS `.ts`
+        // entry also gets a reduced `require` there, so the runner loads that
+        // one itself: see its `loadEntryAsPlainNodeDoes`.
         execArgv: [
           `--max-old-space-size=${bounds.heapLimitMb}`,
           "--import",
           pathToFileURL(runnerPath).href,
+          ...typelessPackageWarningFlags(),
         ],
         // Index 3 is a sink, and the protocol channel sits above it. The
         // channel is inherited by the script, Node parses it inside its own
@@ -1082,6 +1088,26 @@ function realPathOrSelf(candidate: string): string {
   } catch {
     return candidate;
   }
+}
+
+/**
+ * The flag that silences one Node warning by its code. A `.js` or `.ts` script
+ * with `import` in a project whose package.json sets no `type` — the ordinary
+ * React Native layout — makes Node print it on every run, into the step's log,
+ * and what it advises is setting `type` on the whole project for the sake of
+ * one e2e script.
+ *
+ * Only where Node knows the flag. `--disable-warning` arrived in 20.11 and
+ * 21.3, and Node exits on an option it does not know, so on 21.0 to 21.2 —
+ * which the package's `engines` admit — the flag would fail every script step
+ * before the runner started. Those releases never read a `.js` file's syntax,
+ * so they have no such warning to silence. Asked of the binary rather than of
+ * a version table: the script's process is this same binary.
+ */
+function typelessPackageWarningFlags(): string[] {
+  return process.allowedNodeEnvironmentFlags.has("--disable-warning")
+    ? ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON"]
+    : [];
 }
 
 /**
