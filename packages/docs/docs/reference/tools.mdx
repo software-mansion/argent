@@ -614,6 +614,8 @@ For each recording, xctrace writes the raw kernel trace to a file `instruments<r
 - xctrace did not report that tracing started, for example after a start that failed.
 - xctrace reported an error for the recording, for example because another recording used the kernel trace.
 
+Argent deletes the file only while the tool-server runs. When the tool-server stops before Argent deletes the file, for example during a recording, the file stays.
+
 On an iOS simulator and on a Mac app, xctrace can report errors when the recording ends, also when xctrace ends before `native-profiler-stop`. The result of `native-profiler-stop` then has a `warning` with these errors. In these conditions, the trace contains no data:
 
 - xctrace could not attach to the app.

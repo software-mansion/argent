@@ -333,7 +333,9 @@ function xctraceRunErrors(child: ChildProcess): string[] {
 /**
  * Deletes the raw kernel trace of this xctrace's recording once xctrace has
  * exited, by any path: stop, the 10-minute cap, its own exit or a teardown.
- * Nothing else deletes it. See kernel-trace.ts.
+ * The delete waits until the file stops growing, so a tool-server that exits
+ * first, as on a shutdown during the recording, leaves the file. Nothing else
+ * deletes it. See kernel-trace.ts.
  *
  * An xctrace that reported an error can have no file of its own: one that lost
  * the kernel trace to another recording says that tracing started and then
