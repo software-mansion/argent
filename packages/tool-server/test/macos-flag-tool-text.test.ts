@@ -167,9 +167,11 @@ describe("the React profiler tools' Mac app text", () => {
     "react-profiler-cpu-summary",
     "profiler-cpu-query",
     "profiler-commit-query",
-  ])("%s takes a Mac app id only with the flag on", (id) => {
-    expect(advertised(id, true).properties.device_id!.description).toMatch(
-      /\(iOS simulator UDID, Mac app id or Android logicalDeviceId\)\.$/
+  ])("%s takes a Mac app id, not from debugger-connect, only with the flag on", (id) => {
+    // debugger-connect refuses a Mac app id, so the id must not read as its result.
+    expect(advertised(id, true).properties.device_id!.description).toBe(
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android " +
+        "logicalDeviceId), or a Mac app id, which needs no debugger-connect."
     );
     const off = advertised(id, false);
     expect(off.properties.device_id!.description).toMatch(
