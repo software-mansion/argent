@@ -165,11 +165,12 @@ A directory run prints only the steps that need attention (each failure, each
 warning, and each script step's output), then its outcome. After the last test
 it lists every failed test with its reason and a command that re-runs that test
 alone, then a final summary; --recursive walks subdirectories too
-(dot-directories and node_modules are skipped). A test that fails its steps
-keeps the batch running, as does one the server rejects up front — an invalid
-file, or a device it cannot resolve. A transport failure, a rejection the server
-does not mark as validation, or a reply that is not a report stops the batch and
-counts the remaining tests skipped.
+(__baselines__, node_modules and dot-directories other than .argent are
+skipped). A test that fails its steps keeps the batch running, as does one the
+server rejects up front — an invalid file, or a device it cannot resolve. A
+transport failure, a rejection the server does not mark as validation, or a
+reply that is not a report stops the batch and counts the remaining tests
+skipped.
 
 A test can declare a \`requires:\` block (platform, runtimeKind) that names the
 targets it supports. A directory run skips each test whose requirements the
@@ -990,45 +991,6 @@ async function isRunnableFlowFile(filePath: string): Promise<boolean> {
 }
 
 /**
- * Every runnable flow path under `dir`, relative to it. `flow run` binds its
- * name contract to the filename alone — intermediate directory names are
- * unconstrained — so a YAML at any depth is runnable and a non-recursive
- * listing would hide paths `run` accepts. Two deliberate exclusions:
- *
- * - `__baselines__` directories at any depth are machine-managed snapshot
- *   storage, not a place flows live. `run` would technically execute a YAML
- *   dropped in one, but advertising the inside of an output directory invites
- *   keying baselines of baselines.
- * - Symlinked directories are not entered: a link cycle would walk forever. A
- *   symlinked flow FILE is still listed — the runnability probe stats through
- *   it, exactly as `flow run` does.
- *
- * An unreadable subdirectory omits its subtree; only the top-level readdir's
- * error propagates, so a missing `.argent/flows` still gets its own message.
- */
-async function collectRunnableFlowPaths(dir: string, relDir = ""): Promise<string[]> {
-  const found: string[] = [];
-  const entries = await fsp.readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const rel = relDir ? path.join(relDir, entry.name) : entry.name;
-    if (entry.isDirectory()) {
-      if (entry.name === "__baselines__") continue;
-      found.push(
-        ...(await collectRunnableFlowPaths(path.join(dir, entry.name), rel).catch(() => []))
-      );
-      continue;
-    }
-    // Same name gates as `run`: exact lowercase .yaml, stem in the safe
-    // charset. readdir returns on-disk names, so what passes here is the
-    // spelling `run`'s exact-basename check accepts.
-    if (!entry.name.endsWith(".yaml")) continue;
-    if (!SAFE_FLOW_NAME.test(path.basename(entry.name, ".yaml"))) continue;
-    if (await isRunnableFlowFile(path.join(dir, entry.name))) found.push(rel);
-  }
-  return found;
-}
-
-/**
  * The YAML path an `e2e run` argument addresses: a saved test's name becomes
  * `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when only that one
  * exists (the shared resolver's order, so the CLI and the tool-server pick the
@@ -1128,11 +1090,10 @@ async function savedFlowHint(projectRoot: string, missingPath: string): Promise<
 }
 
 /**
- * Runnable flows under `dir`, as paths relative to it, sorted for a
- * deterministic run order. Same acceptance rules as `flow list`, so `list` and
- * a directory `run` can never disagree. The recursive walk skips
- * dot-directories and node_modules and never follows a directory symlink (its
- * dirent is not a directory, and a `*.yaml` one fails isRunnableFlowFile).
+ * Runnable e2e tests under `dir`, as sorted paths relative to it. Used by both
+ * `list` and a directory `run`. The recursive walk skips `__baselines__`,
+ * dot-directories other than `.argent`, node_modules and directory symlinks
+ * below `dir`.
  */
 async function collectFlowFiles(dir: string, recursive: boolean): Promise<string[]> {
   const found: string[] = [];
@@ -1140,7 +1101,12 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
     for (const entry of await fsp.readdir(current, { withFileTypes: true })) {
       const entryRel = rel ? path.join(rel, entry.name) : entry.name;
       if (entry.isDirectory()) {
-        if (recursive && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+        if (
+          recursive &&
+          entry.name !== "__baselines__" &&
+          entry.name !== "node_modules" &&
+          (entry.name === ".argent" || !entry.name.startsWith("."))
+        ) {
           // An unreadable subtree is skipped so the rest of the walk still
           // runs; only the top-level readdir failure aborts discovery.
           await walk(path.join(current, entry.name), entryRel).catch(() => {});
@@ -1641,12 +1607,7 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
     for (const dir of dirs) {
       let rels: string[];
       try {
-        // One final sort over full relative paths, not per-directory: the
-        // ordering must be a pure function of the set of paths, never of the
-        // walk order.
-        rels = (await collectRunnableFlowPaths(path.resolve(dir)))
-          .filter((rel) => listDir === undefined || recursive || path.dirname(rel) === ".")
-          .sort();
+        rels = await collectFlowFiles(path.resolve(dir), listDir === undefined || recursive);
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
         if (listDir === undefined && (code === "ENOENT" || code === "ENOTDIR")) continue;
