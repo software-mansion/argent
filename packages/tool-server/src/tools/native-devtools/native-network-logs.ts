@@ -356,10 +356,9 @@ function headerDetail(state: AndroidNetworkInspectorState): string[] {
       `capture waiting: ${capture.detail ?? "the app has not loaded OkHttp yet, and capture starts when it does"}`
     );
   }
+  // No read is a remedy: view-network-logs only reads too.
   if (capture?.state === "unavailable") {
-    parts.push(
-      `capture unavailable${capture.detail ? `: ${capture.detail}` : ""}; use view-network-logs`
-    );
+    parts.push(`capture unavailable${capture.detail ? `: ${capture.detail}` : ""}`);
   }
   if (state.droppedEvents) {
     parts.push(`${state.droppedEvents} events were lost while the agent was disconnected`);

@@ -3833,6 +3833,23 @@ describe("the tools on the Android native layer", () => {
     expect(plain).not.toHaveProperty("captureDetail");
   });
 
+  it("native-network-logs says why the agent of a started capture captures nothing, and names no read as a remedy", async () => {
+    const api = await armedInspector();
+    agents[0]!.send({
+      type: "Status",
+      payload: { event: "capture", state: "unavailable", detail: "no OkHttp in this process" },
+    });
+    await vi.waitFor(() => expect(api.state().capture?.state).toBe("unavailable"));
+
+    // view-network-logs only reads, so it would say the JS layer is not started.
+    expect(await listNative(api)).toMatchObject({
+      header:
+        "android-native: armed, 0 requests (pid 4722; capture unavailable: no OkHttp in this process)",
+      capture: "unavailable",
+      captureDetail: "no OkHttp in this process",
+    });
+  });
+
   it("native-network-logs says why an unarmed layer is empty, and reads unavailable with the reason after a start that found the app not attachable", async () => {
     device.process = null;
     const api = await createInspector();
