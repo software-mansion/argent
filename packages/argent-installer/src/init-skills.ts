@@ -16,6 +16,7 @@ import {
   npxChildEnv,
   probeLocalInstall,
   resolveProjectRoot,
+  shellQuotePath,
   withNpmForce,
 } from "./utils.js";
 import { InitCancelled } from "./init-args.js";
@@ -82,12 +83,15 @@ function printManualInstructions(
   source: string,
   bundledCopy: string,
   scope: Scope,
-  customRoot: string | undefined,
+  root: string,
   npxMissing = false
 ): void {
-  const root = scope === "global" ? "~" : scope === "custom" ? customRoot! : ".";
+  // `~` stays bare so the shell expands it; a real root is quoted as one shell word.
+  const dir = (sub: string): string =>
+    scope === "global" ? `~/${sub}` : shellQuotePath(`${root}/${sub}`);
   const add = `skills add ${source}${scope === "global" ? " -g" : ""} --skill '*' -y`;
-  const cd = scope === "custom" ? `cd ${customRoot} && ` : "";
+  // `skills add` writes to its cwd, so a project-scope command runs from the root.
+  const cd = scope === "global" ? "" : `cd ${shellQuotePath(root)} && `;
   p.note(
     [
       `Skills are bundled at:`,
@@ -96,10 +100,10 @@ function printManualInstructions(
       `To install manually, copy them to your editor's skills directory:`,
       ``,
       `  ${pc.dim("# Claude Code")}`,
-      `  mkdir -p ${root}/.claude/skills && cp -r ${bundledCopy}/* ${root}/.claude/skills/`,
+      `  mkdir -p ${dir(".claude/skills")} && cp -r ${bundledCopy}/* ${dir(".claude/skills/")}`,
       ``,
       `  ${pc.dim("# Cursor")}`,
-      `  mkdir -p ${root}/.cursor/skills && cp -r ${bundledCopy}/* ${root}/.cursor/skills/`,
+      `  mkdir -p ${dir(".cursor/skills")} && cp -r ${bundledCopy}/* ${dir(".cursor/skills/")}`,
       ``,
       ...(npxMissing
         ? [`  ${pc.dim("# Or, with pnpm:")}`, `  ${cd}pnpm dlx ${add}`]
@@ -151,9 +155,15 @@ export async function runSkillsStep(args: {
   fromTar: string | null;
   version: string;
   scope: Scope;
-  customRoot?: string;
+  /** The root every other init step writes to: the custom root, else the resolved project root. */
+  effectiveRoot: string;
 }): Promise<SkillsStepResult> {
-  const { nonInteractive, fromTar, version, scope, customRoot } = args;
+  const { nonInteractive, fromTar, version, scope, effectiveRoot } = args;
+
+  // Project-scope `skills` commands act on their cwd, so pin them to init's
+  // root. Without this, `init` run from a project subdirectory installs the
+  // skills (and skills-lock.json) into that subdirectory instead (#1467).
+  const skillsCwd = scope === "global" ? undefined : effectiveRoot;
 
   p.log.step(pc.bold("Step 2: Skills Installation"));
   p.log.warn(pc.yellow("Skills installation is required for Argent to function properly."));
@@ -161,7 +171,7 @@ export async function runSkillsStep(args: {
   let skillsMethod: SkillsMethod;
 
   const online = await isOnline();
-  const offlineWithCache = !online && isSkillsCliAvailable();
+  const offlineWithCache = !online && isSkillsCliAvailable(skillsCwd);
   const skillsCliReady = online || offlineWithCache;
 
   if (!skillsCliReady) {
@@ -208,8 +218,7 @@ export async function runSkillsStep(args: {
   const useGitHubSource = online && !fromTar && version !== "unknown";
   const skillsSource = useGitHubSource ? buildArgentSkillsSource(version) : SKILLS_DIR;
   const bundledCopy = useGitHubSource ? bundledCopyFor(version) : SKILLS_DIR;
-  const skillsCwd = scope === "custom" ? customRoot : undefined;
-  const skillsRoot = scope === "global" ? os.homedir() : (skillsCwd ?? process.cwd());
+  const skillsRoot = scope === "global" ? os.homedir() : effectiveRoot;
   const skillsScope = scope === "global" ? "global" : "project";
   // Only the names this version ships count: retired names and stray dirs say
   // nothing about whether Argent's current skills are there.
@@ -224,7 +233,7 @@ export async function runSkillsStep(args: {
   let fallbackReason: "ref_missing" | "unclassified" | null = null;
 
   if (skillsMethod === "manual") {
-    printManualInstructions(skillsSource, bundledCopy, scope, customRoot);
+    printManualInstructions(skillsSource, bundledCopy, scope, effectiveRoot);
     skillOutcome = "skipped";
   } else {
     const interactive = skillsMethod === "interactive";
@@ -261,7 +270,7 @@ export async function runSkillsStep(args: {
       p.log.error(`Failed to install skills from ${attempted}: ${meaningfulLine(err)}`);
       // Name a source that could still work: printing the failing command back as
       // the remedy is what made #614 so confusing.
-      printManualInstructions(bundledCopy, bundledCopy, scope, customRoot, npxMissing);
+      printManualInstructions(bundledCopy, bundledCopy, scope, effectiveRoot, npxMissing);
       return "failure";
     };
 

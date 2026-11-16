@@ -1041,6 +1041,18 @@ describe("isSkillsCliAvailable", () => {
     expect(typeof opts?.timeout).toBe("number");
     expect(opts!.timeout!).toBeGreaterThan(0);
   });
+
+  it("probes from the given cwd, where the `skills` command will run", () => {
+    execSyncMock.mockReturnValue(Buffer.from(""));
+
+    isSkillsCliAvailable("/work/repo");
+    isSkillsCliAvailable();
+
+    const pinned = execSyncMock.mock.calls[0]![1] as { cwd?: string };
+    const unpinned = execSyncMock.mock.calls[1]![1] as { cwd?: string };
+    expect(pinned.cwd).toBe("/work/repo");
+    expect(unpinned).not.toHaveProperty("cwd");
+  });
 });
 
 // ── localInstallCommand / localUninstallCommand ──────────────────────────────
