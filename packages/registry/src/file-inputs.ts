@@ -248,7 +248,10 @@ export const FLOW_FILE_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}\\.yaml$`
  * copied into. `.js` and `.ts` do not — Node reads their module type from that
  * field — and are here because they are what a project already writes.
  * `.cjs` and `.cts` stay out: a script that wants CommonJS in an ES module
- * project is not a case worth a fifth and sixth spelling.
+ * project is not a case worth a fifth and sixth spelling. Node's error for
+ * `require` in such a project advises `.cjs` all the same, so the parser's
+ * refusal of the two (`parseScriptPath`) and the failed step's own reason
+ * (`cjsRenameNote`) both say to use `import` instead.
  *
  * Node runs the two TypeScript ones by stripping the types, with no type check
  * and no `tsconfig.json`, and only from the releases `nodeStripsTypes` names

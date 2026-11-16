@@ -187,6 +187,20 @@ describe("script path rules, shared with a run: target", () => {
     expect(() => step("{ path: scripts/seed.TS }")).toThrow(/lowercase \.ts extension/);
   });
 
+  it("refuses the CommonJS-only extensions, and says what to write instead", () => {
+    // Node's error for `require` in an ES module `.js` file advises `.cjs`, so
+    // this is where a script following that advice arrives.
+    for (const [body, extension] of [
+      ["{ path: seed.cjs }", ".cjs"],
+      ["{ path: scripts/seed.cts }", ".cts"],
+      ["{ path: seed.CJS }", ".cjs"],
+    ] as const) {
+      expect(() => step(body), body).toThrow(
+        `must end in .mjs, .mts, .js or .ts, and ${extension} is not accepted — where the project's package.json sets "type": "module", use \`import\` in the script in place of \`require\``
+      );
+    }
+  });
+
   it("refuses any other extension, and never completes a bare name", () => {
     for (const body of [
       "{ path: seed }",
