@@ -63,6 +63,8 @@ import {
 } from "../src/blueprints/android-network-inspector-device";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { networkRequestTool } from "../src/tools/network/network-request";
+import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
+import type { CaptureResult, StoppedLayer } from "../src/tools/network/network-capture";
 import { DEVICE_OWNED_NAMESPACES, deviceIdOwningUrn } from "../src/tools/simulator/device-services";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { followNativeNetworkCapture } from "../src/tools/launch-app/platforms/android";
@@ -4371,6 +4373,35 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(agent.socket.destroyed).toBe(false);
     expect(device.files.has(dirFor())).toBe(true);
     expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort);
+  });
+
+  it("leaves the requests to Metro on the port out of what a stop keeps, in the stop's total and in the list", async () => {
+    const registry = toolRegistry();
+    registry.registerTool(createNetworkCaptureStopTool(registry));
+    const api = await startThrough(registry);
+    const agent = agents[0]!;
+    agent.request(agent.rid(1), "http://localhost:8081/symbolicate");
+    agent.request(agent.rid(2), "https://example.com/kept");
+    await vi.waitFor(() => expect(api.records(0)).toHaveLength(2));
+
+    const stopped = await registry.invokeTool<CaptureResult<StoppedLayer>>("network-capture-stop", {
+      udid: SERIAL,
+      bundleId: PKG,
+    });
+    expect(stopped.layers.find((layer) => layer.layer === "android-native")).toEqual({
+      layer: "android-native",
+      armed: false,
+      total: 1,
+    });
+
+    expect(
+      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG })
+    ).toMatchObject({
+      header: `android-native: stopped, 1 request (${STOPPED_REASON})`,
+      stopped: true,
+      total: 1,
+      requests: [expect.objectContaining({ url: "https://example.com/kept" })],
+    });
   });
 
   it("a read after a stop runs no adb command and lists what the stop kept", async () => {
