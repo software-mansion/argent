@@ -1500,7 +1500,9 @@ describe("native-devtools body reads", () => {
       params: { requestId: "upload" },
     });
     await vi.advanceTimersByTimeAsync(5_000);
-    const stillSending = noBody("the app is still sending this request body; read it again later");
+    const stillSending = noBody(
+      "the app may still be sending this request body; read it again after the request ends"
+    );
     await expect(first).resolves.toEqual(stillSending);
 
     const second = records.requestPostData(id);
@@ -1641,6 +1643,36 @@ describe("native-devtools body reads", () => {
     await expect(records.responseBody(unread)).resolves.toEqual(noBody(PROCESS_GONE));
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(responseBodyReads(next)).toHaveLength(0);
+  });
+
+  it("answers a body never read as gone after a newer process connected and closed with no request and no read", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.state().pid).toBe(4711));
+    for (const frame of [
+      ...requestEvents("unread", "https://example.com/unread"),
+      ...finishEvents("unread"),
+      ...requestEvents("open", "https://example.com/open"),
+    ]) {
+      app.send(frame);
+    }
+    const unread = await recordOf(api, "https://example.com/unread");
+    const open = await recordOf(api, "https://example.com/open", "pending");
+    const records = api.networkRecords(BUNDLE)!;
+
+    // The host still lists the same process after the close.
+    app.close();
+    await vi.waitFor(() => expect(records.record(open)?.state).toBe("failed"));
+
+    // A newer process connects, makes no request, and closes before any read.
+    appRunsAs(4712);
+    const next = await connectArmedApp(api);
+    await vi.waitFor(() => expect(records.state().pid).toBe(4712));
+    next.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+
+    await expect(records.responseBody(unread)).resolves.toEqual(noBody(PROCESS_GONE));
   });
 
   it("never sends a body read queued on a connection that a relaunch replaced to the new process", async () => {

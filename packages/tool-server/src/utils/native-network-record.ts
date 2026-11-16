@@ -87,7 +87,11 @@ export const MAX_VALUE_CHARS = 64 * 1024;
 const MAX_HEADERS = 256;
 const MAX_HEADER_MAP_CHARS = 256 * 1024;
 export const MAX_LAYER_ID_CHARS = 200;
-/** The bodies most recently read, kept so a body is read from the app once per record. */
+/**
+ * The most bodies that one app's store keeps from its reads, so that a later
+ * read of a kept body does not ask the app again. Each layer has its own rule
+ * for which ones it keeps.
+ */
 export const MAX_CACHED_BODIES = 64;
 
 export const NOT_RECONNECTED =

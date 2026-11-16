@@ -1030,7 +1030,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
      */
     const settleClosedConnection = async (bundleId: string, conn: AppConnection): Promise<void> => {
       const store = networkStores.get(bundleId);
-      if (lentSocketPath || disposed || !store?.holdsRecordsOf(conn.index)) return;
+      if (lentSocketPath || disposed || !store) return;
+      if (!store.holdsRecordsOf(conn.index)) {
+        // No host probe, but the store learns of the connection: its process
+        // is newer than that of each earlier connection.
+        const live = connections.get(bundleId);
+        store.connectionClosed(conn.index, { superseded: live !== undefined && live !== conn });
+        return;
+      }
       const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
       if (disposed) return;
       const live = connections.get(bundleId);
@@ -1464,6 +1471,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         // Without a pid, as when the probe failed, any connection of the app
         // counts.
         const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
+        // A dispose during the probe ended the capture, and has already woken the waiters.
+        if (disposed) return undefined;
         const pid = inspection?.process?.pid;
         const ofLaunch = (): AppConnection | undefined => {
           const conn = connections.get(bundleId);
@@ -1481,7 +1490,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         const gone = `native network capture is on for ${bundleId}, but no process of it is running after the launch; its next process is armed when it connects`;
         // A launched process that already exited, as after a crash at start,
         // never connects.
-        if (inspection?.running === false && !disposed) return gone;
+        if (inspection?.running === false) return gone;
         // A launch of an app that already runs only brings it to the front.
         // When that process lacks this simulator's injection, or plainly
         // started before this listener and so dialed one we no longer hold,
