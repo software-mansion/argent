@@ -35,7 +35,6 @@ describe("package manifest", () => {
     // lists, so each of these needs its own.
     const extensionless: Record<string, string> = {
       "assets/manifest": "assets/manifest.json",
-      "assets/trace-processor/engine": "assets/trace-processor/engine.mjs",
       "assets/trace-processor/engine_bundle.node": "assets/trace-processor/engine_bundle.node.js",
       "bin/argent-simulator-server": "bin/argent-simulator-server.cjs",
       "dist/bundled-paths": "dist/bundled-paths.js",
