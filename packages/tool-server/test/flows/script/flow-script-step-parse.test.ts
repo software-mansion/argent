@@ -162,13 +162,33 @@ describe("script path rules, shared with a run: target", () => {
     expect(() => step("{ path: 'C:/seed.mjs' }")).toThrow(/must be relative to the e2e test file/);
   });
 
+  it("takes a TypeScript ES module", () => {
+    expect(step("{ path: scripts/seed.mts }")).toEqual([
+      { kind: "script", path: "scripts/seed.mts" },
+    ]);
+    expect(step("{ path: scripts/seed.mts, timeout: 5000 }")).toEqual([
+      { kind: "script", path: "scripts/seed.mts", timeout: 5000 },
+    ]);
+  });
+
   it("refuses an uppercase extension, saying which spelling it wants", () => {
-    expect(() => step("{ path: scripts/SEED.MJS }")).toThrow(/lowercase .mjs extension/);
+    expect(() => step("{ path: scripts/SEED.MJS }")).toThrow(/lowercase \.mjs extension/);
+    expect(() => step("{ path: scripts/seed.Mts }")).toThrow(/lowercase \.mts extension/);
   });
 
   it("refuses any other extension, and never completes a bare name", () => {
-    for (const body of ["{ path: seed }", "{ path: seed.js }", "{ path: seed.cjs }"]) {
-      expect(() => step(body), body).toThrow(/must end in .mjs/);
+    for (const body of [
+      "{ path: seed }",
+      "{ path: seed.js }",
+      "{ path: seed.cjs }",
+      // Their module type follows the project's package.json.
+      "{ path: seed.ts }",
+      "{ path: seed.TS }",
+      "{ path: seed.cts }",
+      "{ path: seed.tsx }",
+      "{ path: seedmts }",
+    ]) {
+      expect(() => step(body), body).toThrow(/must end in \.mjs or \.mts/);
     }
   });
 
@@ -177,6 +197,9 @@ describe("script path rules, shared with a run: target", () => {
       "{ path: 'my seed.mjs' }",
       "{ path: seed.step.mjs }",
       "{ path: 'sc/.mjs' }",
+      // A declaration file holds no code to run.
+      "{ path: seed.d.mts }",
+      "{ path: 'sc/.mts' }",
     ]) {
       expect(() => step(body), body).toThrow(/filename must match/);
     }

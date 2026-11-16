@@ -15,6 +15,7 @@ import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_EXTENSIONS,
   SCRIPT_FILE_NAME_PATTERN,
   completeRunExtension,
   type ClientFileDirective,
@@ -3175,7 +3176,7 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (typeof value !== "string" || value.length === 0) {
     badEntry(
       raw,
-      "a `script` step needs a `path` — a .mjs file path relative to this e2e test's file, e.g. `script: { path: scripts/seed.mjs }`"
+      `a \`script\` step needs a \`path\` — a ${SCRIPT_EXTENSIONS_FOR_MESSAGE} file path relative to this e2e test's file, e.g. \`script: { path: scripts/seed.mjs }\``
     );
   }
   if (value.includes("\\")) {
@@ -3187,23 +3188,28 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
     badEntry(raw, "a `script` path must be relative to the e2e test file that references it");
   }
-  if (!value.endsWith(".mjs")) {
-    if (value.toLowerCase().endsWith(".mjs")) {
-      badEntry(raw, "a `script` path must use the lowercase .mjs extension");
+  if (!SCRIPT_FILE_EXTENSIONS.some((extension) => value.endsWith(extension))) {
+    const lower = value.toLowerCase();
+    const miscased = SCRIPT_FILE_EXTENSIONS.find((extension) => lower.endsWith(extension));
+    if (miscased) {
+      badEntry(raw, `a \`script\` path must use the lowercase ${miscased} extension`);
     }
     badEntry(
       raw,
-      "a `script` path must end in .mjs — the extension pins the module type whatever the project's package.json says"
+      `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE} — the extension pins the module type whatever the project's package.json says`
     );
   }
   if (!SCRIPT_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
     badEntry(
       raw,
-      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the .mjs`
+      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the extension`
     );
   }
   return value;
 }
+
+/** ".mjs or .mts", for the messages that name every spelling a script may take. */
+const SCRIPT_EXTENSIONS_FOR_MESSAGE = `${SCRIPT_FILE_EXTENSIONS.slice(0, -1).join(", ")} or ${SCRIPT_FILE_EXTENSIONS.slice(-1)[0]}`;
 
 /**
  * The `timeout` a `script` step may carry, in milliseconds. The finiteness
