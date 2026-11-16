@@ -229,13 +229,18 @@ const STOPPED_DETAIL =
  * process has not acknowledged the stop, as launch-app and the profiler starts
  * say.
  */
-function stoppedDetail(mayIntercept: boolean): string[] {
+function stoppedDetail(mayIntercept: boolean, unavailableReason?: string): string[] {
+  // A start after the stop that found the layer unavailable kept the stop, and
+  // another start finds the same.
+  const stopped = unavailableReason
+    ? `capture stopped by network-capture-stop; a later network-capture-start found the layer unavailable: ${unavailableReason}`
+    : STOPPED_DETAIL;
   return mayIntercept
     ? [
-        STOPPED_DETAIL,
+        stopped,
         "the app's process did not acknowledge Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture",
       ]
-    : [STOPPED_DETAIL];
+    : [stopped];
 }
 
 /** The answer before any start: no service was reached, and nothing was turned on. */
@@ -298,6 +303,7 @@ function listAndroidNative(
 ): NativeListing {
   const all = api.records(port);
   const state = api.state();
+  const unavailable = state.stopped ? api.unavailableReason() : undefined;
   const listing = listNative("android-native", all, params.limit, {
     armed: state.armed,
     state: state.stopped
@@ -308,13 +314,19 @@ function listAndroidNative(
           ? "not attached"
           : "not armed",
     detail: state.stopped
-      ? stoppedDetail(liveAndroidNetworkCaptures(params.udid).includes(params.bundleId))
+      ? stoppedDetail(
+          liveAndroidNetworkCaptures(params.udid).includes(params.bundleId),
+          unavailable
+        )
       : headerDetail(state),
   });
   if (params.clear) api.clear();
   return {
     ...listing,
     ...(state.stopped ? { stopped: true as const } : {}),
+    ...(unavailable
+      ? { started: false as const, capture: "unavailable" as const, captureDetail: unavailable }
+      : {}),
     ...(state.capture ? { capture: state.capture.state } : {}),
     ...(state.capture?.detail ? { captureDetail: state.capture.detail } : {}),
   };

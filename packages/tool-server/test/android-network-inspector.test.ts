@@ -3765,6 +3765,30 @@ describe("the tools on the Android native layer", () => {
     expect(api.state()).toEqual({ armed: false, stopped: true });
   });
 
+  it("native-network-logs keeps the stop and gives the reason when a start after it finds an agent that captures nothing", async () => {
+    const api = await armedInspector();
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    device.process = { pid: 5100, startTime: 99_000 };
+    device.agentOptions = {
+      capture: { state: "unavailable", detail: "no OkHttp in this process" },
+    };
+
+    expect(await api.startCapture(8081)).toEqual({
+      armed: false,
+      unavailable: true,
+      reason: "capture unavailable: no OkHttp in this process",
+    });
+    expect(await listNative(api)).toMatchObject({
+      header:
+        "android-native: stopped, 0 requests (capture stopped by network-capture-stop; a later network-capture-start found the layer unavailable: capture unavailable: no OkHttp in this process)",
+      armed: false,
+      stopped: true,
+      started: false,
+      capture: "unavailable",
+      captureDetail: "capture unavailable: no OkHttp in this process",
+    });
+  });
+
   it("native-network-logs keeps its default text for a waiting capture without a detail", async () => {
     device.agentOptions = { capture: { state: "waiting" } };
     const api = await armedInspector();
@@ -4919,14 +4943,19 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
       device.runAsError = runAsError;
       device.process = { pid: 5100, startTime: 99_000 };
 
-      expect(await api.startCapture(8081)).toMatchObject({ armed: false, unavailable: true });
+      const refused = await api.startCapture(8081);
+      expect(refused).toMatchObject({ armed: false, unavailable: true });
 
       expect([api.isStarted(), api.isStopped()]).toEqual([false, true]);
       expect(api.captureMark()).toEqual(mark);
+      // The stop stays, and the read gives why the start did not arm.
       expect(await listNative(api)).toMatchObject({
-        header: `android-native: stopped, 1 request (${STOPPED_REASON})`,
+        header: `android-native: stopped, 1 request (capture stopped by network-capture-stop; a later network-capture-start found the layer unavailable: ${refused.reason})`,
         armed: false,
         stopped: true,
+        started: false,
+        capture: "unavailable",
+        captureDetail: refused.reason,
         total: 1,
         requests: [expect.objectContaining({ id, state: "complete" })],
       });

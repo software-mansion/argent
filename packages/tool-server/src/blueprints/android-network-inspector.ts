@@ -1956,8 +1956,13 @@ function createInspector(
       const { result } = unavailableStart(
         `capture unavailable${conn.capture.detail ? `: ${conn.capture.detail}` : ""}`
       );
-      // A stop the start found stays: the connections it enabled are disabled again.
-      if (stopped) void stopCapture();
+      // A stop the start found stays: the connections it enabled are disabled
+      // again. The reads keep the reason, as after any start that found the
+      // layer unavailable.
+      if (stopped) {
+        void stopCapture();
+        unavailableReason = result.reason;
+      }
       return result;
     }
     return { armed: true };
