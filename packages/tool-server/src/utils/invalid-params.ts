@@ -43,10 +43,8 @@ function collectIssueCodes(issues: ZodError["issues"], into: Set<string>): void 
 /**
  * The deduped issue codes, in INVALID_PARAM_ISSUES order so one set always
  * serializes the same. A field `params` left out reads "missing", not zod's
- * code for it (see isOmittedParamIssue). A union adds the codes of its branches
- * that did not reject the value's type, or of every branch when all did. Codes
- * outside INVALID_PARAM_ISSUES are dropped: the telemetry allowlist would void
- * the whole array for one.
+ * code for it (see isOmittedParamIssue). Codes outside INVALID_PARAM_ISSUES are
+ * dropped: the telemetry allowlist would void the whole array for one.
  */
 export function deriveInvalidParamIssues(error: ZodError, params: unknown): InvalidParamIssue[] {
   const raised = new Set<string>();

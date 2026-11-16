@@ -123,7 +123,6 @@ describe("deriveInvalidParamIssues", () => {
     expect(codesFor(schema, {})).toEqual(["missing"]);
     expect(codesFor(schema, { udid: 1 })).toEqual(["invalid_type", "missing"]);
     expect(codesFor(schema, { udid: "x", condition: "bogus" })).toEqual(["invalid_value"]);
-    // A union left out reads missing, not as its branches' codes.
     const union = z.object({ button: z.union([z.enum(["up"]), z.array(z.enum(["up"]))]) });
     expect(codesFor(union, {})).toEqual(["missing"]);
   });

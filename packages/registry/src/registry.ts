@@ -511,10 +511,10 @@ function valueAtPath(root: unknown, path: readonly PropertyKey[]): unknown {
 }
 
 /**
- * Whether `issue` is about a field `params` left out. Decided from the input,
- * not the code: Zod reports an omitted enum as `invalid_value` and an omitted
- * string as `invalid_type`, which read as if a bad value had been sent. An
- * author-written `custom` issue never counts: it states its own rule.
+ * Whether `issue` is about a field `params` left out. Decided from the input:
+ * Zod reports an omitted enum as `invalid_value` and an omitted string as
+ * `invalid_type`, as if a bad value had been sent. A `custom` issue never
+ * counts: it states its own rule.
  */
 export function isOmittedParamIssue(issue: ZodIssue, params: unknown): boolean {
   return issue.code !== "custom" && valueAtPath(params, issue.path) === undefined;
