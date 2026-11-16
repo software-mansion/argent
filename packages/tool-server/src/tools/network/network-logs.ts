@@ -7,6 +7,7 @@ import {
   jsCapture,
   jsCapturePayload,
   jsCapturesOn,
+  jsUnavailableOn,
   type JsCapture,
   type NetworkInspectorApi,
 } from "../../blueprints/network-inspector";
@@ -56,7 +57,7 @@ export function jsCaptureForRead(
 
 /**
  * The not-started text, ending with `then`, and with the Metro ports the device's capture is on
- * instead.
+ * instead. After a start that found the JS layer unavailable on the port, it gives that reason.
  */
 export function jsNotStarted(
   device: string,
@@ -71,7 +72,11 @@ export function jsNotStarted(
         ` This device has network capture for ${capture.bundleId} on Metro port ${capture.port}: pass port ${capture.port} to read it.`
     )
     .join("");
-  return `${lead}${NOT_STARTED} ${then}.${elsewhere}`;
+  const unavailable = jsUnavailableOn(jsCapturePayload(port, device));
+  const head = unavailable
+    ? `Network capture is not started on the JS layer: network-capture-start for ${unavailable.bundleId} found it unavailable (${unavailable.reason}). native-network-logs lists the requests of the native layer. Once the JS layer can start, call network-capture-start again, repeat the action, then`
+    : NOT_STARTED;
+  return `${lead}${head} ${then}.${elsewhere}`;
 }
 
 /**

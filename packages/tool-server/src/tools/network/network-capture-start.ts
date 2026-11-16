@@ -24,6 +24,7 @@ import {
   installNetworkInterceptor,
   jsCapturePayload,
   setJsCapture,
+  setJsUnavailable,
   type JsCapture,
   type JsCaptureMark,
   type NetworkInspectorApi,
@@ -191,9 +192,11 @@ async function startJsLayer(
       };
     }
     if (lost) {
-      // No mark stays for a layer that is unavailable.
+      // No mark stays for a layer that is unavailable; a read says why.
       forgetJsCapture(device, bundleId);
-      return unavailable("js", jsNotReached(reason, port, err));
+      const text = jsNotReached(reason, port, err);
+      setJsUnavailable(payload, bundleId, text);
+      return unavailable("js", text);
     }
     // The app may connect, or answer, after this call; the next start arms it.
     // This start did not reach the JS context, so a pause a stop left there stays.
@@ -221,16 +224,12 @@ async function startJsLayer(
         reason: `${notOurs}; the interceptor already in ${bundleId}'s JS runtime may still record, so call network-capture-start again once that runtime answers on this port`,
       };
     }
-    // That app's own capture on this port stays as it is.
-    if (!other) forgetJsCapture(device, bundleId);
-    return unavailable(
-      "js",
-      `${notOurs}; ${
-        other
-          ? otherPortHint(bundleId, other.port)
-          : `if that runtime is the app, pass bundleId ${appId}; otherwise pass the port of ${bundleId}'s Metro`
-      }`
-    );
+    if (other) return unavailable("js", `${notOurs}; ${otherPortHint(bundleId, other.port)}`);
+    // That app's own capture on this port stays as it is; a read says why this app has none.
+    forgetJsCapture(device, bundleId);
+    const text = `${notOurs}; if that runtime is the app, pass bundleId ${appId}; otherwise pass the port of ${bundleId}'s Metro`;
+    setJsUnavailable(payload, bundleId, text);
+    return unavailable("js", text);
   }
 
   const capture: JsCapture = { bundleId, intent: "started", installed: installedHere };

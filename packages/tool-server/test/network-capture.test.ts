@@ -1016,6 +1016,36 @@ describe("network-capture-start", () => {
       expect(await details(IOS_UDID, "rn-net-1")).toBe(`Request rn-net-1 not found. ${says}`);
     });
 
+    it.each(PLATFORMS)(
+      "on $platform, lets a read after a start that found Metro down give that reason, until stop-all-simulator-servers or a start that reaches the app",
+      async ({ udid, native, connect }) => {
+        connect();
+        const result = await start(udid, APP);
+        expect(result.layers).toEqual([
+          { layer: "js", armed: false, unavailable: true, reason: METRO_DOWN },
+          { layer: native, armed: true },
+        ]);
+        const unavailable = `Network capture is not started on the JS layer: network-capture-start for ${APP} found it unavailable (${METRO_DOWN}). native-network-logs lists the requests of the native layer. Once the JS layer can start, call network-capture-start again, repeat the action, then`;
+
+        expect(await read(udid)).toBe(`${unavailable} call view-network-logs again.`);
+        expect(await details(udid, "rn-net-1")).toBe(
+          `Request rn-net-1 not found. ${unavailable} list the requests with view-network-logs.`
+        );
+
+        await stopAll([udid]);
+        expect(await read(udid)).toBe(
+          "Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then call view-network-logs again."
+        );
+
+        await start(udid, APP);
+        const rt = new FakeRuntime(APP);
+        serve(PORT, udid, rt);
+        await start(udid, APP);
+        rt.send("/a");
+        expect(await read(udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+      }
+    );
+
     it("stores a started capture with an empty mark when Metro has no app connected yet", async () => {
       serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
       ios.connected.add(APP);
@@ -2050,7 +2080,7 @@ describe("a JS runtime of another app on the port", () => {
     }
   );
 
-  it("gets nothing from a stop and a start of this app, and a read then says capture is not started", async () => {
+  it("gets nothing from a stop and a start of this app, and a read then gives the start's reason", async () => {
     const rt = new FakeRuntime(OTHER);
     serve(PORT, IOS_UDID, rt);
     ios.connected.add(APP);
@@ -2070,7 +2100,7 @@ describe("a JS runtime of another app on the port", () => {
     expect(rt.evaluated).toEqual([]);
     expect(urns()).not.toContain(`NetworkInspector:${jsCapturePayload(PORT, IOS_UDID)}`);
     expect(text).toBe(
-      "Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then call view-network-logs again."
+      `Network capture is not started on the JS layer: network-capture-start for ${APP} found it unavailable (${layer(started, "js").reason}). native-network-logs lists the requests of the native layer. Once the JS layer can start, call network-capture-start again, repeat the action, then call view-network-logs again.`
     );
   });
 });

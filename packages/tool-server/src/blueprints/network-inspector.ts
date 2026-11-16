@@ -55,6 +55,14 @@ export interface JsCapture {
  */
 const jsCaptures = new Map<string, JsCapture>();
 
+/**
+ * Why the last network-capture-start of an app found the JS layer unavailable
+ * on a port, keyed like {@link jsCaptures}, so a read there can say why it has
+ * no capture. Storing a capture there or for the app, and a teardown of the
+ * device, drop it.
+ */
+const jsUnavailable = new Map<string, { bundleId: string; reason: string }>();
+
 function splitPayload(payload: string): { port: number; device: string } {
   const at = payload.indexOf(":");
   return { port: Number(payload.slice(0, at)), device: payload.slice(at + 1) };
@@ -81,11 +89,16 @@ export function jsCapture(payload: string): JsCapture | undefined {
   return key === undefined ? undefined : jsCaptures.get(key);
 }
 
-/** Forgets the app's entries on the device, on every Metro port. */
+/** Forgets the app's entries on the device, on every Metro port, and why a start found none. */
 export function forgetJsCapture(device: string, bundleId: string): void {
   for (const [payload, capture] of jsCaptures) {
     if (capture.bundleId === bundleId && sameDevice(splitPayload(payload).device, device)) {
       jsCaptures.delete(payload);
+    }
+  }
+  for (const [payload, found] of jsUnavailable) {
+    if (found.bundleId === bundleId && sameDevice(splitPayload(payload).device, device)) {
+      jsUnavailable.delete(payload);
     }
   }
 }
@@ -95,7 +108,31 @@ export function setJsCapture(payload: string, capture: JsCapture): void {
   // A port holds one entry for the device, and that entry can have the device id in another case.
   const held = storedPayload(payload);
   if (held !== undefined) jsCaptures.delete(held);
+  const unavailable = unavailablePayload(payload);
+  if (unavailable !== undefined) jsUnavailable.delete(unavailable);
   jsCaptures.set(payload, capture);
+}
+
+/** The key of the payload's entry in {@link jsUnavailable}, whatever the case of the device id. */
+function unavailablePayload(payload: string): string | undefined {
+  const { port, device } = splitPayload(payload);
+  return [...jsUnavailable.keys()].find((key) => {
+    const at = splitPayload(key);
+    return at.port === port && sameDevice(at.device, device);
+  });
+}
+
+/** Keeps why a start of the app found the JS layer unavailable on the payload's port. */
+export function setJsUnavailable(payload: string, bundleId: string, reason: string): void {
+  const held = unavailablePayload(payload);
+  if (held !== undefined) jsUnavailable.delete(held);
+  jsUnavailable.set(payload, { bundleId, reason });
+}
+
+/** Why the last start on the payload's port found the JS layer unavailable, if it did. */
+export function jsUnavailableOn(payload: string): { bundleId: string; reason: string } | undefined {
+  const key = unavailablePayload(payload);
+  return key === undefined ? undefined : jsUnavailable.get(key);
 }
 
 /** The device's entries, with the Metro port each is on. */
@@ -125,7 +162,8 @@ function payloadsOf(devices?: readonly string[]): string[] {
 }
 
 /**
- * Forgets every entry of the devices, or every entry at all without them.
+ * Forgets every entry of the devices, or every entry at all without them, and
+ * why a start found the JS layer unavailable there.
  * `paused` holds the payloads whose runtime a teardown's pause reached. An
  * interceptor that a start installed and that pause did not reach still records
  * in the app, so its entry stays as a stopped capture: the reads then say
@@ -135,6 +173,10 @@ export function forgetJsCapturesOf(
   devices?: readonly string[],
   paused?: ReadonlySet<string>
 ): void {
+  for (const payload of jsUnavailable.keys()) {
+    const { device } = splitPayload(payload);
+    if (!devices || devices.some((id) => sameDevice(id, device))) jsUnavailable.delete(payload);
+  }
   for (const payload of payloadsOf(devices)) {
     const capture = jsCaptures.get(payload)!;
     if (paused && !paused.has(payload) && capture.installed && !capture.paused) {
