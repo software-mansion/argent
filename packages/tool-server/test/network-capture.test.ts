@@ -2144,6 +2144,58 @@ describe("stop-all-simulator-servers", () => {
     expect(rt.paused).toBe(false);
   });
 
+  it("ends no JS capture when the call was cancelled before it began", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    rt.send("/a");
+    const capture = structuredClone(findJsCapture(IOS_UDID, APP));
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await stopAll([IOS_UDID], controller.signal);
+
+    expect(result).toEqual({ stopped: [], aborted: true });
+    expect(rt.evaluated).not.toContain("end");
+    expect(rt.paused).toBe(false);
+    expect(findJsCapture(IOS_UDID, APP)).toEqual(capture);
+    expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+  });
+
+  it("ends no JS capture when the call is cancelled while it waits for a stop under way", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    await start(SERIAL, APP);
+    rt.send("/a");
+    // The Android layer's stop takes a while.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const android = androidFor(APP);
+    const stopNative = android.stopCapture.bind(android);
+    android.stopCapture = async () => {
+      await held;
+      return stopNative();
+    };
+    const stopping = stop(SERIAL, APP);
+    await settle();
+    const controller = new AbortController();
+    const sweep = stopAll([SERIAL], controller.signal);
+    await settle();
+
+    controller.abort();
+    release();
+    await stopping;
+    const result = await sweep;
+
+    expect(result).toEqual({ stopped: [], aborted: true });
+    expect(rt.evaluated).not.toContain("end");
+    expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", paused: true });
+    expect(await read(SERIAL)).toContain(
+      "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ==="
+    );
+  });
+
   it("waits for a start under way before it pauses or disposes anything, so the start's answer holds until the teardown ends it", async () => {
     // A device service the sweep reaches first, whose dispose takes a while.
     let releaseServer!: () => void;
