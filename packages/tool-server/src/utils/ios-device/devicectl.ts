@@ -303,6 +303,21 @@ export async function installApp(udid: string, installablePath: string): Promise
   );
 }
 
+/** The file URL of the installed app's bundle, or null when the app is not installed. */
+export async function installedAppUrl(udid: string, bundleId: string): Promise<string | null> {
+  const { json } = await runDevicectl(
+    ["device", "info", "apps", "--device", udid, "--bundle-id", bundleId],
+    `look up ${bundleId}`,
+    { json: true }
+  );
+  const result = (
+    json as { result?: { apps?: Array<{ bundleIdentifier?: string; url?: string }> } } | null
+  )?.result;
+  // A list with no match means not installed; no list at all is not a verdict.
+  if (!result?.apps) throw new Error(`devicectl returned no app list for ${bundleId}.`);
+  return result.apps.find((app) => app.bundleIdentifier === bundleId)?.url ?? null;
+}
+
 /** Uninstall by bundle id. Missing apps count as success. */
 export async function uninstallApp(udid: string, bundleId: string): Promise<void> {
   try {

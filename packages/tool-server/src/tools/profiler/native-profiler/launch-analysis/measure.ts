@@ -17,11 +17,10 @@ import {
   commandFailureKind,
   ensureLaunchDeviceReady,
   freeProfileLimitMessage,
-  launchBuildCacheDir,
-  launchBuildPlatform,
   prepareLaunch,
   runLogged,
-  withLaunchBuildLock,
+  runnerBuildCacheDir,
+  withRunnerBuildLock,
   xcodeVersion,
 } from "../../../../utils/ios-launch-time/workflow";
 import { launchSampleStats } from "../../../../utils/ios-launch-time/results";
@@ -72,12 +71,9 @@ export async function measureLaunch(
   }
   const context = await prepareLaunch(
     {
-      workspacePath: params.workspace_path,
+      bundleId: params.bundle_id,
       deviceId: params.device_id,
-      scheme: params.scheme,
-      xcodeContainer: params.xcode_container,
       allowSimulator: params.allow_simulator,
-      configuration: params.configuration,
     },
     (message) => ctx?.emitProgress?.({ type: "device-action", message }),
     ctx?.signal
@@ -102,7 +98,8 @@ export async function measureLaunch(
   const runnerBuildKey = createHash("sha256")
     .update(
       [
-        launchBuildPlatform(context.simulator),
+        // Builds for two simulators, or two iPhones, are the same build.
+        context.simulator ? "iOS Simulator" : "iOS",
         runnerBundleId,
         testBundleId,
         "Release",
@@ -111,7 +108,7 @@ export async function measureLaunch(
     )
     .digest("hex")
     .slice(0, 16);
-  const runnerDerivedData = launchBuildCacheDir("runner", runnerBuildKey);
+  const runnerDerivedData = runnerBuildCacheDir(runnerBuildKey);
   const resultPath = path.join(context.runDir, "launch.xcresult");
   const runnerLog = path.join(context.runDir, "xctest.log");
   const args = [
@@ -148,9 +145,9 @@ export async function measureLaunch(
   ];
   try {
     // The build and the five launches hold the runner's DerivedData.
-    await withLaunchBuildLock(runnerDerivedData, () =>
+    await withRunnerBuildLock(runnerDerivedData, () =>
       runLogged("xcodebuild", args, {
-        cwd: params.workspace_path,
+        cwd: context.runDir,
         logPath: runnerLog,
         signal: ctx?.signal,
         env: {
@@ -165,7 +162,6 @@ export async function measureLaunch(
     // The message keeps only the cap line; the installed bundle IDs follow it in the log.
     const log = await fsp.readFile(runnerLog, "utf8").catch(() => message);
     const friendly = freeProfileLimitMessage(log, {
-      subject: "Argent's UI-test runner",
       logPath: runnerLog,
       ownBundleIdPrefix: runnerBundleId,
     });

@@ -599,16 +599,28 @@ While `react-profiler-stop` collects a run, wait for its result:
 
 `native-profiler-launch-analysis` measures or records the launch of an iOS app up to the first frame. The `mode` parameter is required and selects the task:
 
-| `mode`    | Task                                                           | Parameters for this mode only |
-| --------- | -------------------------------------------------------------- | ----------------------------- |
-| `measure` | Build the app and measure five launches with XCTest            | None                          |
-| `profile` | Build the app and record one App Launch trace with Instruments | `duration_seconds`            |
+| `mode`    | Task                                         | Parameters for this mode only |
+| --------- | -------------------------------------------- | ----------------------------- |
+| `measure` | Measure five launches with XCTest            | None                          |
+| `profile` | Record one App Launch trace with Instruments | `duration_seconds`            |
 
-The tool rejects `duration_seconds` in `measure` mode. All other parameters apply to the two modes.
+The tool rejects `duration_seconds` in `measure` mode. All other parameters apply to the two modes. The tool rejects unknown parameters.
 
-The tool accepts `workspace_path`, an absolute path to the app project root. The tool rejects a relative path. Argent finds one `.xcworkspace` or `.xcodeproj` at the root or in `ios/`. Set `xcode_container` to select a different workspace or project inside the root. Argent selects the scheme in this order: the only scheme, the only scheme that CocoaPods did not generate, the scheme with the name of the workspace or project. Set `scheme` when none of these applies. Argent uses the iOS app target of the scheme and ignores watchOS apps and App Clips. Argent stops when the scheme has multiple iOS app targets.
+The tool does not build or install the app. The `bundle_id` parameter is required. It is the bundle ID of an app that is already installed on the selected device. Before you call the tool, do these steps:
 
-The two modes build the app in Release. Set `configuration` only when the Release configuration of the project has another name, for example `Production`. Argent stops when Xcode does not resolve the app to this configuration. The Argent UI test runner is always built in Release.
+1. Build the app in Release with the build flow of the project.
+2. Install the build on the selected device.
+3. After each change to native code or JavaScript, build and install the app again before the next run.
+
+These commands are examples of a Release build and install:
+
+| Project          | Command                                                                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Expo             | `npx expo run:ios --configuration Release --device <udid>`                                                                                                                        |
+| React Native CLI | `npx react-native run-ios --mode Release --udid <udid>`                                                                                                                           |
+| Xcode project    | `xcodebuild ... -configuration Release build`, then `xcrun devicectl device install app --device <udid> <app>` on an iPhone or `xcrun simctl install <udid> <app>` on a simulator |
+
+Argent cannot read the build configuration of an installed app. The launch times of a Debug build are not useful, so measure a Release build only. When the app is not installed on the selected device, the tool stops before it launches the app and reports `LAUNCH_ANALYSIS_APP_NOT_INSTALLED`.
 
 The two modes require `device_id` to select a connected iPhone. Set `allow_simulator: true` to use a booted simulator when no selected iPhone is available. Simulator timings use Mac hardware. With `allow_simulator: true`, these rules apply:
 
@@ -616,9 +628,9 @@ The two modes require `device_id` to select a connected iPhone. Set `allow_simul
 - Argent does not boot a simulator. When `device_id` names a simulator that is not booted, the tool stops. Boot the simulator, then run the tool again.
 - Argent uses only the simulators of the default Xcode device set, because `xcodebuild` and `xctrace` do not see other device sets.
 
-The two modes build the app with its original bundle ID. Argent tries automatic signing and waits briefly for device unlock or trust actions. If the original bundle ID cannot be provisioned, Argent stops and reports the signing error.
+Argent waits briefly for device unlock or trust actions.
 
-`measure` mode builds the Argent UI test runner in Release. The runner uses `XCTApplicationLaunchMetric` for five samples. Apple's metric includes the first frame and extended launch tasks. The result includes these fields:
+`measure` mode builds the Argent UI test runner in Release. The runner launches the app by its bundle ID. The runner uses `XCTApplicationLaunchMetric` for five samples. Apple's metric includes the first frame and extended launch tasks. The result includes these fields:
 
 - `averageMs` and `medianMs`: the average and the median of the collected samples.
 - `samplesMs`: the collected samples.
@@ -628,9 +640,9 @@ The two modes build the app with its original bundle ID. Argent tries automatic 
 
 On iPhones with iOS 18, XCTest loses some launch measurements. The cause is on the device, not in Argent. When `samplesCollected` is lower than `samplesExpected`, the average uses the remaining samples and `warning` explains this. Run the tool again for a full set. When XCTest loses the first measured launch, it discards the whole result and the tool fails with no samples. On a simulator, the error reports that XCTest recorded no launch metric and does not name iOS 18. A new run usually returns samples. `profile` mode is an alternative. Simulators and iPhones with iOS 26 or later do not lose measurements in Argent tests. Argent does not retry automatically.
 
-Argent includes the Xcode version in the build cache key, so a build from another Xcode is not reused. When the free developer profile of the iPhone has no slot for the app or for the runner, Argent reports this. When the error lists an installed Argent runner that is not the runner of the current team, Argent names it. Argent calls it a leftover of another team only when it knows the current runner bundle ID.
+Argent includes the Xcode version in the build cache key of the runner, so a runner build from another Xcode is not reused. When the free developer profile of the iPhone has no slot for the runner, Argent reports this. When the error lists an installed Argent runner of another team, Argent names it as a leftover.
 
-If Argent already has an active UI test runner on the selected iPhone, `measure` mode stops before the build. Run `stop-simulator-server` for that device, then retry the measurement.
+If Argent already has an active UI test runner on the selected iPhone, `measure` mode stops before it builds the runner. Run `stop-simulator-server` for that device, then retry the measurement.
 
 `profile` mode accepts `duration_seconds` from 5 to 60, with a default of 8. It records with the Instruments App Launch template. On an iPhone, Argent ends the launch at the end of the `Launching - Initial Frame Rendering` phase. The result includes these fields:
 
@@ -645,13 +657,13 @@ If Argent already has an active UI test runner on the selected iPhone, `measure`
 
 `launchMs` does not include the `Initializing - Process Creation` phase. With `xctrace record --launch`, this phase includes the time that the recording takes to attach to the app. Xcode 26.4.1 records this phase. Xcode 27.0 does not record it. When the trace has this phase, `phases` keeps it and `warning` gives a note.
 
-On a simulator, Instruments does not record lifecycle phases, so `phases` is empty. Argent adds the `os_signpost` instrument and ends the launch at the `ApplicationFirstFramePresentation` signpost that the system emits for the app. If the signpost is missing, the CPU session covers the whole recording and is not cut. Timings of a recording on a simulator are about two times slower than an uninstrumented launch and reflect Mac hardware. Use them for relative CPU analysis only.
+On a simulator, Instruments does not record lifecycle phases, so `phases` is empty. Argent adds the `os_signpost` instrument and ends the launch at the `ApplicationFirstFramePresentation` signpost that the system emits for the app. Argent selects the signpost of the process that the trace launched. If the signpost is missing, the CPU session covers the whole recording and is not cut. Timings of a recording on a simulator are about two times slower than an uninstrumented launch and reflect Mac hardware. Use them for relative CPU analysis only.
 
 The session has only the samples of running threads. On a simulator, the App Launch template also records waiting threads. Argent removes the samples of blocked and runnable threads, because their weight is the time that the thread waited, not CPU time. `cpuSamples` is the number of samples that `profiler-load` reads from the session.
 
 The sampling period of the App Launch template varies between 1 ms and 5 ms, so `profilerSession.cpuSamples` counts are not comparable between runs.
 
-Xcode 26.4.x has a known issue: `xctrace record --launch` on a simulator stalls after `Starting recording`. When the active Xcode is 26.4.x and the selected device is a simulator, `profile` mode stops before the build and reports the issue. Use Xcode 27, or record on a physical iPhone.
+Xcode 26.4.x has a known issue: `xctrace record --launch` on a simulator stalls after `Starting recording`. When the active Xcode is 26.4.x and the selected device is a simulator, `profile` mode stops before it launches the app and reports the issue. Use Xcode 27, or record on a physical iPhone.
 
 Argent exports the tables of the trace with `xctrace export`. With Xcode 26.4.1, `xctrace export` crashes in most attempts on a valid trace. Xcode 27.0 exports the same traces without a crash. When `xctrace export` crashes, Argent runs the export again, up to 3 times in total. Argent does not run the export again after a timeout or a usual error.
 
@@ -666,20 +678,19 @@ If a recording stalls after `Starting recording` on another Xcode or on an iPhon
 
 Load the session with `profiler-load` in `load_native` mode. Then run `profiler-stack-query` in `thread_breakdown` mode with `thread: "Main Thread"` to see the hot functions. The session file is an xctrace XML export, so the agent can also read it directly. The launch ends at the first frame. The session shows the sampled CPU work before the first frame, including React Native work such as runtime creation. Use the React profiler for work after the first frame.
 
-The two modes run the app once and stop it before the measured launch. The measured launch starts a new process. Usually this is a warm launch, but iOS can remove the app from memory, so Argent cannot guarantee it. The tool does not measure a cold launch after a restart or a background resume. Argent saves logs and results under `<workspace_path>/.argent/traces/<datetime>/`. Argent writes a `.gitignore` file in `.argent/traces/`, so git ignores these files. Argent does not delete them. A `.trace` bundle can use hundreds of megabytes. Argent reuses DerivedData under `~/.argent/build-cache/ios-launch-time/` and `~/.argent/build-cache/ios-launch-time-runner/`, outside the app project. Argent keeps one build cache for each project, scheme, configuration, Xcode version and platform (iPhone or simulator), and does not delete old caches. Two builds into the same cache run one after the other. The tool requires a USB cable to the iPhone. See [iOS launch performance](/docs/features/ios-launch-performance).
+The two modes run the app once and stop it before the measured launch. The measured launch starts a new process. Usually this is a warm launch, but iOS can remove the app from memory, so Argent cannot guarantee it. The tool does not measure a cold launch after a restart or a background resume. Argent saves logs and results in a new `launch-analysis-<datetime>` directory. This directory is in `argent-profiler-cwd` in the temporary directory of the system, together with the traces of the other native profiler tools. Argent does not delete these files. A `.trace` bundle can use hundreds of megabytes. Argent reuses the DerivedData of the runner under `~/.argent/build-cache/ios-launch-time-runner/`. Argent keeps one runner build cache for each runner bundle ID, Xcode version and platform (iPhone or simulator), and does not delete old caches. Two runner builds into the same cache run one after the other. The tool requires a USB cable to the iPhone. See [iOS launch performance](/docs/features/ios-launch-performance).
 
 When the tool fails, the error has an `error_code` and an `error_kind`. The `error_code` gives the cause of the failure:
 
 | `error_code`                         | Cause                                                                                                               |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `TOOL_INPUT_INVALID`                 | `workspace_path` is relative or is not a directory, or `xcode_container` is outside `workspace_path` or is missing. |
+| `TOOL_INPUT_INVALID`                 | A parameter is missing, unknown or out of range.                                                                    |
 | `LAUNCH_ANALYSIS_UNSUPPORTED_HOST`   | The host is not macOS, or the active Xcode 26.4.x cannot record a launch on a simulator.                            |
 | `LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE` | Argent cannot select an iPhone or a simulator, or the Argent device runner is active on the iPhone.                 |
-| `LAUNCH_ANALYSIS_PROJECT_UNRESOLVED` | Argent cannot resolve the workspace or project, the scheme, the app target or the configuration.                    |
-| `LAUNCH_ANALYSIS_BUILD_FAILED`       | The build of the app failed.                                                                                        |
-| `LAUNCH_ANALYSIS_SIGNING_FAILED`     | The build of the app or of the runner for an iPhone failed on signing or provisioning.                              |
-| `LAUNCH_ANALYSIS_FREE_PROFILE_LIMIT` | The free developer profile of the iPhone has no slot for the app or for the runner.                                 |
-| `LAUNCH_ANALYSIS_SIMCTL_FAILED`      | A `simctl` step on the simulator failed: the boot wait, the install, the launch or the stop of the app.             |
+| `LAUNCH_ANALYSIS_APP_NOT_INSTALLED`  | The app with `bundle_id` is not installed on the selected device. Install a Release build, then run the tool again. |
+| `LAUNCH_ANALYSIS_SIGNING_FAILED`     | The build of the runner for an iPhone failed on signing or provisioning.                                            |
+| `LAUNCH_ANALYSIS_FREE_PROFILE_LIMIT` | The free developer profile of the iPhone has no slot for the runner.                                                |
+| `LAUNCH_ANALYSIS_SIMCTL_FAILED`      | A `simctl` step on the simulator failed: the boot wait, the app lookup, the launch or the stop of the app.          |
 | `IOS_DEVICECTL_COMMAND_FAILED`       | A `devicectl` step on the iPhone failed.                                                                            |
 | `IOS_DEVICE_RUNNER_NOT_READY`        | Argent cannot find a signing team or the Xcode project for the runner.                                              |
 | `LAUNCH_ANALYSIS_RECORD_FAILED`      | `xctrace` did not record the launch. A stalled recording gives `error_kind: "timeout"`.                             |

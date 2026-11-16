@@ -26,6 +26,7 @@ import {
   cpuTableXpath,
   earliestDyldStartNs,
   launchEndNs,
+  launchedProcessName,
   parseFirstFrameSignpostNs,
   parseLifecyclePhases,
   keepRunningRows,
@@ -89,12 +90,9 @@ export const DEFAULT_PROFILE_SECONDS = 8;
 export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, ctx?: ToolContext) {
   const context = await prepareLaunch(
     {
-      workspacePath: params.workspace_path,
+      bundleId: params.bundle_id,
       deviceId: params.device_id,
-      scheme: params.scheme,
-      xcodeContainer: params.xcode_container,
       allowSimulator: params.allow_simulator,
-      configuration: params.configuration,
       checkDevice: async ({ simulator }) => {
         if (!simulator) return;
         const version = await xcodeVersion();
@@ -146,7 +144,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
         context.bundleId,
       ],
       {
-        cwd: params.workspace_path,
+        cwd: context.runDir,
         logPath: recordLog,
         timeoutMs: RECORD_TIMEOUT_MS,
         signal: ctx?.signal,
@@ -170,7 +168,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     ) {
       throw new FailureError(
         context.simulator
-          ? // Xcode 26.4.x never gets here: checkDevice stops it before the build.
+          ? // Xcode 26.4.x never gets here: checkDevice stops it before the app launches.
             `xctrace stalled at "Starting recording" with ${await xcodeVersion()} and was stopped after ${RECORD_TIMEOUT_MS / 1000} s. ` +
               "It can stall on the first recording after the simulator boots; run the tool again, or record on a physical iPhone. " +
               `Record log: ${recordLog}`
@@ -240,7 +238,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
             "xcrun",
             ["xctrace", "export", "--input", tracePath, "--output", output, "--xpath", xpath],
             {
-              cwd: params.workspace_path,
+              cwd: context.runDir,
               logPath: path.join(context.runDir, `xctrace-export-${key}.log`),
               timeoutMs: 120_000,
               signal: ctx?.signal,
@@ -299,7 +297,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     const signpostNs = exported.signpost
       ? parseFirstFrameSignpostNs(
           await fsp.readFile(exported.signpost, "utf8"),
-          context.executableName
+          launchedProcessName(toc) ?? undefined
         )
       : null;
     // Optional: the simulator estimate starts at dyld.

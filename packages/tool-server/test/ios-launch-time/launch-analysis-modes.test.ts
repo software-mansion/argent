@@ -20,13 +20,14 @@ import {
 import {
   CommandExitError,
   CommandTimeoutError,
+  prepareLaunch,
   runLogged,
   terminateLaunchedApp,
 } from "../../src/utils/ios-launch-time/workflow";
 import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../src/blueprints/ios-device-runner";
 
 // Pins what each mode's execute() passes to xcodebuild / xctrace and how it
-// turns the exports into a result. Device and build steps are stubbed.
+// turns the exports into a result. Device steps are stubbed.
 
 const state = vi.hoisted(() => ({
   runDir: "",
@@ -80,11 +81,7 @@ vi.mock("../../src/utils/ios-launch-time/workflow", async (importOriginal) => {
             ? "platform=iOS Simulator,id=UDID-1"
             : "platform=iOS,id=UDID-1",
           bundleId: "com.example.app",
-          executableName: "App",
-          appPath: "/dd/App.app",
-          scheme: "App",
-          container: "/w/App.xcodeproj",
-          teamId: null,
+          appPath: "/sim/App.app",
           warning: null,
         };
       }
@@ -137,8 +134,7 @@ const params = (
   overrides: Partial<NativeProfilerLaunchAnalysisParams> = {}
 ): NativeProfilerLaunchAnalysisParams => ({
   mode: "profile",
-  workspace_path: "/w",
-  configuration: "Release",
+  bundle_id: "com.example.app",
   allow_simulator: true,
   ...overrides,
 });
@@ -147,6 +143,7 @@ const fixture = (name: string) =>
   readFileSync(join(__dirname, "..", "fixtures", "ios-launch-time", name), "utf8");
 
 const TOC =
+  '<target><process type="launched" name="App" pid="123"/></target>' +
   '<table schema="life-cycle-period"/><table schema="dyld-activity-interval"/>' +
   '<table schema="time-profile" record-waiting-threads="1"/><table schema="os-signpost"/>';
 
@@ -261,6 +258,11 @@ describe('mode "profile" on a simulator', () => {
     expect(result.profilerSession.cpuSamples).toBe(2);
   });
 
+  it("takes the signpost of the process the trace launched", async () => {
+    state.stdout.set("toc", TOC.replace('name="App"', 'name="Other App"'));
+    expect((await profile()).firstFrameEndMs).toBeNull();
+  });
+
   it("records for 8 seconds by default", async () => {
     await profile();
     expect(recordArgs()[recordArgs().indexOf("--time-limit") + 1]).toBe("8s");
@@ -325,7 +327,7 @@ describe('mode "profile" on a simulator', () => {
     expect(terminateLaunchedApp).toHaveBeenCalledTimes(1);
   });
 
-  it("stops before the build with Xcode 26.4 on a simulator", async () => {
+  it("stops before it launches the app with Xcode 26.4 on a simulator", async () => {
     state.xcodeVersion = "Xcode 26.4.1 Build version 17E202";
     const { error, signal } = await failure(profileLaunch(params()));
     expect(error.message).toContain("known issue with Xcode 26.4.x");
@@ -418,7 +420,7 @@ describe('mode "profile" on an iPhone', () => {
     const { error, signal } = await failure(
       registry.invokeTool("native-profiler-launch-analysis", {
         mode: "profile",
-        workspace_path: "/w",
+        bundle_id: "com.example.app",
       })
     );
     expect(error.message).toBe(
@@ -480,7 +482,13 @@ describe('mode "measure"', () => {
         "CODE_SIGNING_ALLOWED=NO",
       ])
     );
+    expect(vi.mocked(prepareLaunch).mock.calls.at(-1)![0]).toEqual({
+      bundleId: "com.example.app",
+      deviceId: undefined,
+      allowSimulator: true,
+    });
     expect(options.env?.TEST_RUNNER_ARGENT_LAUNCH_BUNDLE_ID).toBe("com.example.app");
+    expect(options.cwd).toBe(state.runDir);
     expect(result).toMatchObject({
       averageMs: 250,
       medianMs: 250,

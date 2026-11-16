@@ -128,6 +128,17 @@ export function parseFirstFrameSignpostNs(xml: string, processName?: string): nu
   return earliest;
 }
 
+/**
+ * Name of the process `xctrace record --launch` started, from the trace TOC.
+ * It is the name the signpost process column uses, which can differ from
+ * CFBundleExecutable (Instruments shows "My App" for the executable MyApp).
+ */
+export function launchedProcessName(tocXml: string): string | null {
+  const tag = tocXml.match(/<process\s[^>]*type="launched"[^>]*>/)?.[0];
+  const name = tag?.match(/\sname="([^"]*)"/)?.[1];
+  return name ? decodeXml(name) : null;
+}
+
 /** Earliest `start-time` among `dyld-activity-interval` rows, trace-relative ns. */
 export function earliestDyldStartNs(xml: string): number | null {
   const registry = valueRegistry(xml, ["start-time"]);

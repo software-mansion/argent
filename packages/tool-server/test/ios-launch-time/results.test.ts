@@ -238,7 +238,7 @@ describe("coreExportFailureMessage", () => {
     reason: "Command failed: xcrun xctrace export --toc",
     attempts: 3,
     xcodeVersion: "Xcode 26.4.1 Build version 17E202",
-    tracePath: "/w/.argent/traces/x/app-launch.trace",
+    tracePath: "/tmp/argent-profiler-cwd/launch-analysis-x/app-launch.trace",
   };
 
   it("names the Xcode version, the trace and the fix after repeated crashes", () => {

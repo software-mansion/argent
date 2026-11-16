@@ -2,28 +2,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { createRegistry } from "../../src/utils/setup-registry";
 import { definitionsById } from "../helpers/catalog";
 import {
-  appBuildArgs,
-  appBuildKey,
-  assertResolvedConfiguration,
   CommandExitError,
   commandFailureKind,
   CommandTimeoutError,
-  deviceErrorText,
   freeProfileLimitMessage,
-  iosAppTargets,
   isAppExecutable,
   isCrash,
-  launchBuildCacheDir,
-  launchBuildPlatform,
-  pickScheme,
-  prepareLaunch,
   runLogged,
-  showBuildSettingsArgs,
-  withLaunchBuildLock,
+  runnerBuildCacheDir,
+  withRunnerBuildLock,
   withXctraceCrashRetry,
 } from "../../src/utils/ios-launch-time/workflow";
 
@@ -81,48 +71,6 @@ it("marks a subprocess that runs past its timeout", async () => {
   expect((error as CommandTimeoutError).timedOut).toBe(true);
 });
 
-it("passes the requested configuration to xcodebuild", () => {
-  const settings = showBuildSettingsArgs("App.xcodeproj", "App", "Production", "dest", "/dd");
-  expect(settings[settings.indexOf("-configuration") + 1]).toBe("Production");
-  const build = appBuildArgs("App.xcodeproj", "App", "Production", "dest", "/dd", ["X=1"]);
-  expect(build[0]).toBe("build");
-  expect(build[build.indexOf("-configuration") + 1]).toBe("Production");
-  expect(build).not.toContain("Release");
-  expect(build.at(-1)).toBe("X=1");
-});
-
-it("checks the resolved CONFIGURATION against the requested one", () => {
-  expect(() =>
-    assertResolvedConfiguration({ CONFIGURATION: "Production" }, "Production")
-  ).not.toThrow();
-  const error = (() => {
-    try {
-      assertResolvedConfiguration({ CONFIGURATION: "Release" }, "Production");
-    } catch (e) {
-      return e;
-    }
-  })();
-  expect((error as Error).message).toBe("Xcode did not resolve the app to Production.");
-  expect(getFailureSignal(error)).toEqual({
-    error_code: FAILURE_CODES.LAUNCH_ANALYSIS_PROJECT_UNRESOLVED,
-    failure_stage: "launch_analysis_resolve_settings",
-    failure_area: "tool_server",
-    error_kind: "validation",
-  });
-});
-
-it("keeps build caches of different configurations apart", () => {
-  const a = appBuildKey("c", "s", "d", "Release", "Xcode 26.3");
-  expect(a).toBe(appBuildKey("c", "s", "d", "Release", "Xcode 26.3"));
-  expect(a).not.toBe(appBuildKey("c", "s", "d", "Production", "Xcode 26.3"));
-});
-
-it("keeps build caches of different Xcode versions apart", () => {
-  expect(appBuildKey("c", "s", "d", "Release", "Xcode 26.3")).not.toBe(
-    appBuildKey("c", "s", "d", "Release", "Xcode 26.4")
-  );
-});
-
 describe("freeProfileLimitMessage", () => {
   const cap =
     "This device has reached the maximum number of installed apps using a free developer profile.";
@@ -143,25 +91,21 @@ User Info: {
     ARGENT_RUNNER_APP_BUNDLE_ID=com.argent.runner.t5dpz5ekad8
 ** TEST FAILED **`;
 
+  const options = { logPath: "/l.log", ownBundleIdPrefix: "com.argent.runner.t5dpz5ekad8" };
+
   it("ignores text without the free-profile cap", () => {
-    expect(
-      freeProfileLimitMessage("No profiles for x", { subject: "s", logPath: "/l" })
-    ).toBeNull();
+    expect(freeProfileLimitMessage("No profiles for x", options)).toBeNull();
   });
 
   it("explains the cap and names the log", () => {
-    const message = freeProfileLimitMessage(cap, { subject: "the runner", logPath: "/l.log" });
-    expect(message).toContain("no slot for the runner");
+    const message = freeProfileLimitMessage(cap, options);
+    expect(message).toContain("no slot for Argent's UI-test runner");
     expect(message).toContain("Log: /l.log");
     expect(message).not.toContain("leftover");
   });
 
   it("names a team-prefixed Argent runner of another team from the installed list", () => {
-    const message = freeProfileLimitMessage(xcodebuildLog, {
-      subject: "the runner",
-      logPath: "/l",
-      ownBundleIdPrefix: "com.argent.runner.t5dpz5ekad8",
-    });
+    const message = freeProfileLimitMessage(xcodebuildLog, options);
     expect(message).toContain(
       "com.argent.runner.t5w6h93822s looks like a leftover Argent runner from a different team"
     );
@@ -170,42 +114,12 @@ User Info: {
 
   it("does not call the own runner a leftover", () => {
     const message = freeProfileLimitMessage(xcodebuildLog, {
-      subject: "the runner",
       logPath: "/l",
       ownBundleIdPrefix: "com.argent.runner.T5W6H93822S",
     });
     expect(message).not.toContain("t5w6h93822s");
     // The own runner's ID outside the installed list is not a leftover either.
     expect(message).not.toContain("t5dpz5ekad8");
-  });
-
-  it("does not claim a different team when the own runner is unknown", () => {
-    const message = freeProfileLimitMessage(xcodebuildLog, { subject: "the app" });
-    expect(message).toContain("com.argent.runner.t5w6h93822s is an installed Argent runner");
-    expect(message).not.toContain("different team");
-  });
-
-  it("reads the installed IDs from a multi-line devicectl install failure", () => {
-    // runDevicectl keeps only the first stderr line in the message; the rest
-    // stays in the stderr of the execFile error it wraps as the cause.
-    const stderr = `ERROR: Unable to Install “Ledger” (com.apple.dt.CoreDeviceError error 3002.)
-       NSURL = file:///tmp/Ledger.app/
---
-This device has reached the maximum number of installed apps using a free developer profile: {(
-    "5DPZ5EKAD8.com.maciekstosio.ttiledgerapp",
-    "5W6H93822S.com.argent.runner.t5w6h93822s.uitests.xctrunner"
-)} (MIInstallerErrorDomain error 13.)`;
-    const error = new Error(
-      "Failed to install app: ERROR: Unable to Install “Ledger” (com.apple.dt.CoreDeviceError error 3002.)",
-      { cause: Object.assign(new Error("Command failed"), { stderr }) }
-    );
-    expect(freeProfileLimitMessage(error.message, { subject: "the app" })).toBeNull();
-    const message = freeProfileLimitMessage(deviceErrorText(error), {
-      subject: "the app com.maciekstosio.ttiledgerapp",
-      ownBundleIdPrefix: "com.argent.runner.t5dpz5ekad8",
-    });
-    expect(message).toContain("no slot for the app com.maciekstosio.ttiledgerapp");
-    expect(message).toContain("com.argent.runner.t5w6h93822s looks like a leftover");
   });
 });
 
@@ -222,67 +136,38 @@ it("reports the free-profile cap from a failed logged command, not a signing hin
   expect((error as Error).message).not.toContain("Provisioning failed");
 });
 
-it("picks the app scheme among the schemes CocoaPods adds", () => {
-  const pods = new Set(["React-Core", "Yoga", "Pods-App"]);
-  const all = ["App", "React-Core", "Yoga", "Pods-App"];
-  expect(pickScheme(all, "/r/ios/App.xcworkspace", pods)).toBe("App");
-  expect(pickScheme(["Only"], "/r/ios/App.xcworkspace", new Set())).toBe("Only");
-  // Several app schemes: the one named after the workspace wins.
-  expect(pickScheme(["Runner", "Runner-Dev", "Yoga"], "/r/ios/Runner.xcworkspace", pods)).toBe(
-    "Runner"
-  );
-  expect(pickScheme(["Dev", "Prod"], "/r/ios/App.xcworkspace", new Set())).toBeNull();
-});
-
-it("picks the only app scheme when it is not named after the workspace", () => {
-  const pods = new Set(["Pods-Foo", "React"]);
-  expect(pickScheme(["MyApp", "Pods-Foo", "React"], "/w/ios/Foo.xcworkspace", pods)).toBe("MyApp");
-});
-
-it("matches the app executable in devicectl's percent-encoded file URL", () => {
-  const appPath = "/dd/Build/Products/Release-iphoneos/My App.app";
-  expect(
-    isAppExecutable(
-      "file:///private/var/containers/Bundle/Application/X/My%20App.app/My%20App",
-      appPath,
-      "My App"
-    )
-  ).toBe(true);
+it("matches the app executable in devicectl's percent-encoded file URLs", () => {
+  const app = "file:///private/var/containers/Bundle/Application/X/My%20App.app/";
+  expect(isAppExecutable(`${app}My%20App`, app)).toBe(true);
+  // The installed URL and the process URL can spell the container differently.
   expect(
     isAppExecutable(
       "file:///private/var/containers/Bundle/Application/X/App.app/App",
-      "/dd/App.app",
-      "App"
+      "file:///var/containers/Bundle/Application/X/App.app"
     )
   ).toBe(true);
+  // An extension inside the bundle, or the same name in another container, is not the app.
+  expect(isAppExecutable(`${app}PlugIns/Widget.appex/Widget`, app)).toBe(false);
   expect(
-    isAppExecutable(
-      "file:///private/var/containers/Bundle/Application/X/Other.app/App",
-      "/dd/App.app",
-      "App"
-    )
+    isAppExecutable("file:///private/var/containers/Bundle/Application/Y/My%20App.app/App", app)
   ).toBe(false);
+  expect(isAppExecutable(app, app)).toBe(false);
   // An invalid escape still compares the raw text.
-  expect(isAppExecutable("file:///X/100%.app/100%", "/dd/100%.app", "100%")).toBe(true);
+  expect(isAppExecutable("file:///X/100%.app/100%", "file:///X/100%.app/")).toBe(true);
 });
 
-it("keys launch builds by platform, not by device", () => {
-  expect(launchBuildPlatform(true)).toBe("iOS Simulator");
-  expect(launchBuildPlatform(false)).toBe("iOS");
-});
-
-it("runs launch builds that share a DerivedData one at a time", async () => {
+it("runs runner builds that share a DerivedData one at a time", async () => {
   const order: string[] = [];
   let release!: () => void;
-  const first = withLaunchBuildLock("/dd/a", async () => {
+  const first = withRunnerBuildLock("/dd/a", async () => {
     order.push("first start");
     await new Promise<void>((resolve) => (release = resolve));
     order.push("first end");
   });
-  const second = withLaunchBuildLock("/dd/a", async () => {
+  const second = withRunnerBuildLock("/dd/a", async () => {
     order.push("second");
   });
-  const other = withLaunchBuildLock("/dd/b", async () => {
+  const other = withRunnerBuildLock("/dd/b", async () => {
     order.push("other");
   });
   await other;
@@ -293,48 +178,8 @@ it("runs launch builds that share a DerivedData one at a time", async () => {
   expect(order).toEqual(["first start", "other", "first end", "second"]);
 });
 
-it("rejects a relative workspace_path before it touches a device", async () => {
-  await expect(prepareLaunch({ workspacePath: "." })).rejects.toThrow(
-    "workspace_path must be an absolute path"
-  );
-  const error = await prepareLaunch({ workspacePath: "~/dev" }).catch((e: unknown) => e);
-  expect((error as Error).message).toBe("workspace_path must be an absolute path: ~/dev");
-  expect(getFailureSignal(error)).toEqual({
-    error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
-    failure_stage: "launch_analysis_workspace_path",
-    failure_area: "tool_server",
-    error_kind: "validation",
-  });
-});
-
-it("selects the iOS app target over embedded watch apps and App Clips", () => {
-  const target = (name: string, settings: Record<string, string>) => ({
-    target: name,
-    buildSettings: { WRAPPER_EXTENSION: "app", ...settings },
-  });
-  const app = target("App", {
-    PRODUCT_TYPE: "com.apple.product-type.application",
-    PLATFORM_NAME: "iphoneos",
-  });
-  const watch = target("Watch", {
-    PRODUCT_TYPE: "com.apple.product-type.application",
-    PLATFORM_NAME: "watchos",
-  });
-  const clip = target("Clip", {
-    PRODUCT_TYPE: "com.apple.product-type.application.on-demand-install-capable",
-    PLATFORM_NAME: "iphoneos",
-  });
-  const widget = { target: "Widget", buildSettings: { WRAPPER_EXTENSION: "appex" } };
-  expect(iosAppTargets([app, watch, clip, widget])).toEqual([app]);
-  const unknown = target("Legacy", {});
-  expect(iosAppTargets([unknown, widget])).toEqual([unknown]);
-});
-
-it("keeps launch build caches out of the app project", () => {
-  expect(launchBuildCacheDir("app", "k")).toBe(
-    join(homedir(), ".argent", "build-cache", "ios-launch-time", "k")
-  );
-  expect(launchBuildCacheDir("runner", "k")).toBe(
+it("keeps runner build caches in Argent's home directory", () => {
+  expect(runnerBuildCacheDir("k")).toBe(
     join(homedir(), ".argent", "build-cache", "ios-launch-time-runner", "k")
   );
 });

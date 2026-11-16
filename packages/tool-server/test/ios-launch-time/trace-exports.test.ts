@@ -5,6 +5,7 @@ import {
   cpuTableXpath,
   earliestDyldStartNs,
   launchEndNs,
+  launchedProcessName,
   parseFirstFrameSignpostNs,
   parseLifecyclePhases,
   keepRunningRows,
@@ -261,6 +262,21 @@ describe("parseFirstFrameSignpostNs", () => {
   it("returns null without a matching End signpost", () => {
     expect(parseFirstFrameSignpostNs(SIGNPOST, "Missing")).toBeNull();
     expect(parseFirstFrameSignpostNs("<trace-query-result></trace-query-result>")).toBeNull();
+  });
+});
+
+describe("launchedProcessName", () => {
+  it("reads the launched process from the trace TOC, not the executable name", () => {
+    // Trimmed from a simulator trace of an app whose executable is DeclutterPoC.
+    const toc = `<target>
+  <process type="launched" return-exit-status="0" name="Declutter PoC" pid="84653" termination-reason="exit(0)"/>
+</target>
+<processes>
+  <process name="kernel" pid="0" path="/System/Library/Kernels/kernel.release.t6050"/>
+</processes>`;
+    expect(launchedProcessName(toc)).toBe("Declutter PoC");
+    expect(launchedProcessName(toc.replace("Declutter PoC", "R&amp;D"))).toBe("R&D");
+    expect(launchedProcessName("<processes></processes>")).toBeNull();
   });
 });
 
