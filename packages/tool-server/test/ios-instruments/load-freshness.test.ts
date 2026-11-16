@@ -84,8 +84,8 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
 
     // The load succeeded and parsed the XML into memory…
     expect(api.exportedFiles).toMatchObject({ cpu: cpuXml });
-    // …but the start time was never restored: still null. THIS is why the
-    // freshness note is dead on a loaded iOS session.
+    // …but with no metadata file there is no start time to restore: still null.
+    // THIS is why the freshness note is off for such a loaded session.
     expect(api.wallClockStartMs).toBeNull();
 
     // Drive analyze on the just-loaded session: the trace is "old" (loaded from
@@ -97,7 +97,7 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     expect(report).toContain("iOS Instruments Analysis");
   });
 
-  it("a live iOS session WITH a start time still flags staleness (wiring is correct, just unreachable via load)", async () => {
+  it("a live iOS session WITH a start time flags staleness (a load restores it from the metadata file)", async () => {
     const api = await buildIosSession();
     // Simulate what native-profiler-start does in-process: stamp the start time.
     api.wallClockStartMs = Date.now() - 2 * DAY_MS;
