@@ -1,8 +1,8 @@
 /**
- * When macOS held a Mac app suspended during a recording. Instruments suspends
- * the whole app while it checks it for leaks (about every 11 s, up to about
- * 10 s each on an app that argent drove), and a debugger or a stop signal
- * suspends it too. A hang that such a pause overlaps holds the pause in the
+ * When macOS held a Mac app or an iOS simulator app suspended during a recording.
+ * Instruments suspends the whole app while it checks it for leaks (a Mac app that
+ * argent drove about every 11 s and up to about 10 s each, an iOS simulator app
+ * every 12 to 15 s), and a debugger or a stop signal suspends it too. A hang that such a pause overlaps holds the pause in the
  * trace. The pause makes a hang of fixed work longer, but not a hang whose main
  * thread waits for something that goes on during the pause (a sleep, a deadline,
  * I/O, another process). Measured on a Mac app: a 1.5 s main-thread spin to a

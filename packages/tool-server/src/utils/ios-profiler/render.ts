@@ -855,7 +855,9 @@ function renderExportErrors(exportErrors?: Record<string, string>): string[] {
 /**
  * The advice must match the Android main-thread state breakdown: "move heavy
  * work off the main thread" is misleading when the thread was asleep waiting on
- * the GPU. iOS hangs carry no breakdown and get the generic line.
+ * the GPU. xctrace's hangs (iOS, Mac apps) carry no breakdown: a hang whose main
+ * thread mostly did not run (`hangThreadRanMs`) gets the waited line, the others the
+ * generic line.
  */
 function hangCoreAdvice(hang: UiHang): string {
   if (hang.hangThreadRanMs !== undefined) {

@@ -91,8 +91,8 @@ export interface UiHang {
   toolingLabels?: Record<string, string>;
   severity: "RED" | "YELLOW";
   /**
-   * Mac apps only: ms of the hang's span during which macOS held the app
-   * suspended, such as for a leak check. `durationMs` includes this time.
+   * Mac apps and iOS simulator apps: ms of the hang's span during which macOS held
+   * the app suspended, such as for a leak check. `durationMs` includes this time.
    */
   suspendedMs?: number;
   /**
