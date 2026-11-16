@@ -854,6 +854,30 @@ describe("describe full-hierarchy adapter", () => {
     expect(findAll(tree, { text: "1" })).toHaveLength(0);
   });
 
+  it("reads no text from a text input whose class name does not name one", () => {
+    // A known limit. The hierarchy tells a text input only by its class name,
+    // and every other view's value stays out of the tree (see the switch
+    // above), so a filled field of such a class still reads as empty.
+    for (const className of ["MyApp.AmountField", "MyApp.OTPInput", "PinCodeView"]) {
+      const tree = adaptFullHierarchyToDescribeResult(
+        withFields({
+          className,
+          identifier: "otp",
+          value: "123456",
+          windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+          children: [],
+        })
+      );
+      const field = findAll(tree, { identifier: "otp" });
+
+      expect(field[0]!.role).toBe("AXGroup");
+      expect(field[0]!.value).toBeUndefined();
+      expect(evaluateCondition("text", "123456", field, "equals")).toBe(false);
+      // Not a text field to the runner, so nothing keeps `^$` from passing.
+      expect(evaluateCondition("text", "^$", field, "matches")).toBe(true);
+    }
+  });
+
   it("does not hoist the text of a text field scrolled off screen", () => {
     const tree = adaptFullHierarchyToDescribeResult(
       withFields({

@@ -212,7 +212,7 @@ The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a
 
 A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
 
-A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
+A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. A text field that is not secure shows the value on the screen. When a later step fails and its reason quotes that text, the reason shows the placeholder in place of the value. See [Secrets](/docs/reference/configuration#secrets).
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
@@ -322,7 +322,17 @@ The `text` comparators:
 | `equals`   | Case-insensitive full match     |
 | `matches`  | Case-sensitive JavaScript regex |
 
-`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: `matches` never reads an iOS text field as empty. On an iOS simulator, an empty text field reads as its placeholder, and Argent does not read the text in a secure text field. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
+`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: `matches` never reads an iOS text field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
+
+On an iOS simulator, a `text` check reads a text field as follows:
+
+- A text field reads as the text that it contains.
+- An empty text field reads as its placeholder.
+- A text field with an accessibility label reads as the label, then a space, then the text or the placeholder. For example, an empty field with the label `Email` and the placeholder `Required` reads as `Email Required`.
+- Argent does not read the text in a secure text field.
+- The runner knows a text field by the class name of its view. The name must contain `TextField`, `TextView` or `SearchField`. Argent does not read the text in a text field of a different class, for example a `UITextField` subclass with the name `AmountField`. For such a field, `matches: '^$'` passes also when the field contains text.
+
+On an iOS simulator, Argent does not use the text in a text field as the selector of a recorded tap.
 
 A negative condition passes before the element appears, for a typo, and on the wrong screen. First prove the screen and the same selector with `visible`. Then perform the action and check `hidden`.
 
