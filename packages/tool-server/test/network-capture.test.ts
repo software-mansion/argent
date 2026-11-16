@@ -2077,6 +2077,29 @@ describe("stop-all-simulator-servers", () => {
     expect(await read(IOS_UDID)).toContain('"GET /after-start"');
   });
 
+  it.each(PLATFORMS)(
+    "leaves the $platform native service it disposed as it is at a later stop, which says capture was not started",
+    async ({ udid, native, connect }) => {
+      serve(PORT, udid, new FakeRuntime(APP));
+      connect();
+      await start(udid, APP);
+      await stopAll([udid]);
+      const disposed = nativeUrns();
+      expect(disposed).toHaveLength(1);
+
+      const stopped = await stop(udid, APP);
+
+      // The stop builds no new service, which would bind the device's socket again.
+      expect(registry.getSnapshot().services.get(disposed[0]!)?.state).toBe(ServiceState.IDLE);
+      expect(layer(stopped, native)).toEqual({
+        layer: native,
+        armed: false,
+        total: 0,
+        reason: NOT_STARTED,
+      });
+    }
+  );
+
   it("disposes a service of the device that another call creates while the pause runs", async () => {
     const rt = new FakeRuntime(APP);
     serve(PORT, SERIAL, rt);
