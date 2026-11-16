@@ -15,10 +15,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Node 22 is the oldest line Argent supports, and runs every test. Node 24 is
-  # what most users run, and the two differ where the tool-server's tests can
-  # see it: how Node loads the script of a `script:` step, and how TextDecoder
-  # reads windows-1252. So Node 24 runs the tool-server's tests.
+  # Node 22 is the oldest line Argent supports, and Node 24 is what most users
+  # run, so both run every test. The two differ where the tests can see it, for
+  # example in how Node loads the script of a `script:` step and how
+  # TextDecoder reads windows-1252.
   unit-tests:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -28,10 +28,8 @@ jobs:
         include:
           - node: "22"
             name: Unit tests
-            tests: npm test --workspaces --if-present
           - node: "24"
-            name: Unit tests (tool-server, Node 24)
-            tests: npm test --workspace @argent/tool-server
+            name: Unit tests (Node 24)
 
     steps:
       - name: Checkout
@@ -52,7 +50,7 @@ jobs:
         run: npm run build
 
       - name: Run tests
-        run: ${{ matrix.tests }}
+        run: npm test --workspaces --if-present
 
       - name: Test root scripts
         if: matrix.node == '22'
