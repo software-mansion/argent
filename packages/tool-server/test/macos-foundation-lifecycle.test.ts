@@ -37,7 +37,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 // Pids that the process search reports besides the real ones: a pid that
 // another program has by the time argent signals it.
-const searched = vi.hoisted(() => ({ extraPids: [] as number[] }));
+const searched = vi.hoisted(() => ({
+  extraPids: [] as number[],
+  /** Apps that the Spotlight lookup finds, by bundle id. */
+  spotlight: {} as Record<string, string>,
+}));
 vi.mock("../src/utils/macos-apps", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/macos-apps")>();
   return {
@@ -46,6 +50,8 @@ vi.mock("../src/utils/macos-apps", async (importOriginal) => {
       const found = await actual.findRunningCopies(...args);
       return { ...found, same: [...found.same, ...searched.extraPids] };
     },
+    findMacosAppByBundleId: async (bundleId: string) =>
+      searched.spotlight[bundleId] ?? actual.findMacosAppByBundleId(bundleId),
   };
 });
 
@@ -255,6 +261,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     native.missing = false;
     spawned.length = 0;
     searched.extraPids = [];
+    searched.spotlight = {};
     registry = new Registry();
     registry.registerBlueprint(macosAppBlueprint);
     tools = {
@@ -1186,6 +1193,33 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       }).catch((e: unknown) => e);
       expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
       expect((err as Error).message).toContain("macos-native: com.apple.TextEdit is an Apple app");
+    });
+
+    it("fails with NETWORK_CAPTURE_UNAVAILABLE for a Mac Catalyst or an Electron app, which argent never starts", async () => {
+      const catalystId = `${BUNDLE_ID}.catalyst`;
+      const catalyst = writeBundle(path.join(root, `catalyst-${Date.now()}`), catalystId);
+      // A 64-bit Mach-O header and one LC_BUILD_VERSION load command for platform 6, Mac Catalyst.
+      const thin = Buffer.alloc(56);
+      [0xfeedfacf, 0x0100000c, 0, 2, 1, 24].forEach((v, i) => thin.writeUInt32LE(v, i * 4));
+      [0x32, 24, 6].forEach((v, i) => thin.writeUInt32LE(v, 32 + i * 4));
+      fs.writeFileSync(path.join(catalyst, "Contents", "MacOS", "FakeApp"), thin);
+      const electronId = `${BUNDLE_ID}.electron`;
+      const electron = writeBundle(path.join(root, `electron-${Date.now()}`), electronId);
+      fs.mkdirSync(path.join(electron, "Contents", "Frameworks", "Electron Framework.framework"), {
+        recursive: true,
+      });
+      searched.spotlight = { [catalystId]: catalyst, [electronId]: electron };
+      for (const [bundleId, refusal] of [
+        [catalystId, "is a Mac Catalyst (UIKit) app"],
+        [electronId, "is an Electron app"],
+      ] as const) {
+        const err = await run("network-capture-start", {
+          udid: `macos-app-${bundleId}`,
+          bundleId,
+        }).catch((e: unknown) => e);
+        expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+        expect((err as Error).message).toContain(`macos-native: ${bundleId} ${refusal}`);
+      }
     });
 
     it("refuses to read an Apple app instead of naming network-capture-start, which fails for it", async () => {

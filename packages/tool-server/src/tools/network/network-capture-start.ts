@@ -35,7 +35,7 @@ import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
 import { xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
-import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
+import { macosAppRef, macosLaunchRefusal, type MacosAppApi } from "../../blueprints/macos-app";
 import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
@@ -141,6 +141,9 @@ async function startMacosLayer(
       ),
     ]);
   }
+  // Nor does a launch arm an app that argent refuses to start.
+  const refusal = app.isConnected() ? undefined : await macosLaunchRefusal(params.bundleId);
+  if (refusal) throw unavailableError(params, [unavailable("macos-native", refusal)]);
   const { armed, reason } = await app.startNetworkCapture();
   return { layer: "macos-native", armed, ...(reason ? { reason } : {}) };
 }
