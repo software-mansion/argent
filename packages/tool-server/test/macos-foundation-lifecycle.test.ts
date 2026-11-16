@@ -866,6 +866,23 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(pidAlive(pid)).toBe(true);
     });
 
+    it("fails a request cut off by a dropped connection as ended once restart-app replaces its process", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/held", { hold: true });
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      await waitUntil(() => app.networkRecords().records(8081)[0]?.state === "failed", 6_000);
+      expect(app.networkRecords().records(8081)[0]?.errorText).toBe(MACOS_CONNECTION_DROPPED);
+
+      await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      // Its process is gone, so its end can no longer come.
+      expect((await readLog()).requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
+        ["https://example.com/held", "failed", PROCESS_ENDED],
+      ]);
+    }, 20_000);
+
     it("stop-simulator-server ends the capture and drops its records: the next read says not started, and the app records nothing", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();

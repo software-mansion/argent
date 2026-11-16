@@ -527,8 +527,13 @@ export function createIosNetworkRecords(
           check.runningPid !== check.connectionPid);
       if (ended) endedConnections.add(connection);
       // Collected first: re-measuring a record can evict the oldest, which
-      // would shift the array under a loop over it and skip a record.
-      const open = records.filter((r) => r.connection === connection && isOpen(r));
+      // would shift the array under a loop over it and skip a record. A Mac
+      // request cut off by a drop can complete only while its process runs.
+      const open = records.filter(
+        (r) =>
+          r.connection === connection &&
+          (isOpen(r) || (ended && r.errorText === MACOS_CONNECTION_DROPPED))
+      );
       for (const record of open) {
         record.state = "failed";
         record.errorText = ended
