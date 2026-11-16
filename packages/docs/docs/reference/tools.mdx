@@ -41,12 +41,13 @@ The SDK and `argent run` return the full JSON object.
 
 `launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators, physical iPhones and Mac apps. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a local iOS simulator, the tool fails if that termination does not finish within 15 seconds. On a remote simulator, `launch-app` and `restart-app` fail if the termination fails for a reason other than the app not running, and launch nothing. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply. On a Mac app, `launch-app` applies `launchArgs` only when it starts the app. See [Mac apps](#mac-apps).
 
-On Chromium, `restart-app` relaunches an Electron app that `boot-device` or an e2e run started. The new copy gets the same arguments and the same port, so the device id does not change. Argent stops all processes in the process group of the app, also when the first process of the app has exited.
+On Chromium, `restart-app` relaunches an Electron app that `boot-device` or an e2e run started. The new copy gets the same arguments and the same port, so the device id does not change. The result has `appPath` and `args`, the app path and the `electronArgs` of that boot. Argent stops all processes in the process group of the app, also when the first process of the app has exited.
 
 The tool fails and does not stop the app in these cases:
 
 - Argent did not start the app.
 - The tool-server restarted after the boot.
+- A later `boot-device` with `electronPort` on the port of the app failed.
 - The app path or its `electron` launcher is gone or is not executable.
 - The app would start with a different `electron` launcher than at the boot.
 
@@ -57,7 +58,7 @@ A failure after the app quits leaves the app stopped:
 
 The error message tells if the tool stopped the app. A copy that the app starts itself, for example with `app.relaunch()`, runs outside the process group of the app. `restart-app` does not stop this copy, so it fails with `CHROMIUM_RESTART_PORT_IN_USE`.
 
-`boot-device` with `electronPort` starts nothing and fails with `CHROMIUM_ELECTRON_PORT_IN_USE` when a process already listens on that port.
+`boot-device` with `electronPort` starts nothing and fails with `CHROMIUM_ELECTRON_PORT_IN_USE` when a process already listens on that port. If `boot-device` started an app on that port before, the error names the app and its arguments. `restart-app` relaunches that app with these arguments. To start another app or other arguments on that port, quit the process on the port first.
 
 `reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
 
