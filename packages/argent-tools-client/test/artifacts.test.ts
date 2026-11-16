@@ -188,6 +188,45 @@ describe("materializeArtifacts", () => {
     expect((result as { file: null }).file).toBeNull();
   });
 
+  it("caps a cache-path download that over-streams past its declared size", async () => {
+    // The durable branch stops an under-declared body with `readCapped`; the
+    // temp-cache branch must do the same. A compromised tool-server announces
+    // 8 bytes and streams 200,000: the body has to be abandoned once it passes
+    // the declared size, before the whole thing is held in memory.
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= 100) {
+          controller.close();
+          return;
+        }
+        pulled++;
+        controller.enqueue(new Uint8Array(2000));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const floodFetch = (async () => new Response(body)) as unknown as typeof fetch;
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "cacheflood",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: 8, // declares 8, delivers 200_000
+    };
+
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: floodFetch }
+    );
+
+    expect((result as { video: null }).video).toBeNull();
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThan(100);
+  });
+
   it("scopes the cache dir by device and omits the device segment when absent", () => {
     expect(artifactDir("DEV-9").endsWith("DEV-9")).toBe(true);
     expect(artifactDir()).not.toContain("undefined");

@@ -193,12 +193,13 @@ function configuredRecordingsDir(): string | null {
 }
 
 /**
- * Hard ceiling on a durable download, independent of the `size` a possibly
- * hostile tool-server announces: a durable file survives temp-cache GC, so an
- * over-declared body must not be able to fill the disk or client memory. Well
- * above any real recording (600 s cap at device-native h264).
+ * Hard ceiling on any artifact download, independent of the `size` a possibly
+ * hostile tool-server announces: a body must not be able to fill client memory
+ * or the disk. Also the fallback cap when a handle announces no usable size
+ * (directory bundles use `size: 0`). Well above any real recording (600 s cap
+ * at device-native h264).
  */
-const MAX_DURABLE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 
 /**
  * Read a response body into a Buffer, or null once `cap` bytes are exceeded —
@@ -481,7 +482,7 @@ export async function materializeArtifacts(
           // size. `size` is unvalidated wire JSON, and an absent/NaN one would
           // make the `readCapped` cap `NaN` and never trip, letting an unbounded
           // body buffer into memory — the exact DoS the cap exists to prevent.
-          if (!Number.isInteger(value.size) || value.size <= 0 || value.size > MAX_DURABLE_BYTES) {
+          if (!Number.isInteger(value.size) || value.size <= 0 || value.size > MAX_ARTIFACT_BYTES) {
             return null;
           }
           const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
@@ -521,7 +522,17 @@ export async function materializeArtifacts(
           signal: ctx.signal,
         });
         if (!res.ok) return null;
-        const data = Buffer.from(await res.arrayBuffer());
+        // Bound the read before it is buffered, as the durable branch does: a
+        // compromised tool-server can answer with a body of any size. Cap at the
+        // declared size when it is usable; directory bundles announce `size: 0`
+        // and get the hard ceiling. The length check below still enforces
+        // integrity for every handle with a known size.
+        const cap =
+          Number.isInteger(value.size) && value.size > 0
+            ? Math.min(value.size, MAX_ARTIFACT_BYTES)
+            : MAX_ARTIFACT_BYTES;
+        const data = await readCapped(res, cap);
+        if (!data) return null;
         await ensureDir();
         // Directory bundle: unpack the tar rather than writing it as a file.
         if (value.archive === "tar.gz") {
