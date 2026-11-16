@@ -4,10 +4,14 @@ import type { DebuggerNotConnectedReason } from "@argent/telemetry";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { withKeyedLock } from "../../utils/keyed-lock";
+import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 
 export const captureSchema = z.object({
   udid: z.string().describe("Device ID from list-devices: an iOS simulator UDID or Android serial"),
-  bundleId: z.string().describe("App bundle ID on iOS or package name on Android"),
+  bundleId: z
+    .string()
+    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
+    .describe("App bundle ID on iOS or package name on Android"),
   port: metroPortField.describe(
     "The app's Metro port: the JS layer is reached through it, and the native layers leave its requests out. Omit it to use this device's port, 8081 by default."
   ),

@@ -48,6 +48,7 @@ import {
   makeNetworkCaptureControlScript,
 } from "../src/utils/debugger/scripts/network-interceptor";
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
+import { BUNDLE_ID_MESSAGE } from "../src/utils/bundle-id";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
@@ -2283,6 +2284,26 @@ describe("the tool definitions", () => {
       `Failed to ${verb[2]} network capture for ${APP}: ${FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE}`
     );
   });
+
+  it.each(tools)(
+    "network-capture-$verb.2 refuses a bundleId outside the app id alphabet before any layer runs",
+    async ({ verb }) => {
+      serve(PORT, IOS_UDID, new FakeRuntime(APP));
+      const call = verb[2] === "start" ? start : stop;
+
+      for (const bundleId of [`${APP} `, `${APP}/.MainActivity`, ""]) {
+        const err = await call(IOS_UDID, bundleId).then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+        expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+        expect(err?.message).toContain(BUNDLE_ID_MESSAGE);
+      }
+      expect(jsCapturesOn(IOS_UDID)).toEqual([]);
+      expect(urns()).toEqual([]);
+    }
+  );
 
   it.each(tools)(
     "network-capture-$verb.2 runs on iOS simulators, remote simulators and Android, and refuses the rest",
