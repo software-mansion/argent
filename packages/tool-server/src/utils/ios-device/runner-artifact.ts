@@ -50,8 +50,20 @@ export function resolveRunnerProjectPath(): string {
   );
 }
 
-/** Local Xcode and SwiftPM state plus Finder metadata. Never part of the fingerprint. */
-const FINGERPRINT_NOISE = new Set(["xcuserdata", "DerivedData", ".build", ".swiftpm", ".DS_Store"]);
+/**
+ * Local Xcode and SwiftPM state plus Finder metadata. Never part of the fingerprint.
+ * `build` and `Build` are what a Legacy or Custom build location in Xcode's
+ * settings left next to the project before the build pinned its location.
+ */
+const FINGERPRINT_NOISE = new Set([
+  "xcuserdata",
+  "DerivedData",
+  "build",
+  "Build",
+  ".build",
+  ".swiftpm",
+  ".DS_Store",
+]);
 
 /** Hash every regular file under the project root for the cache key. */
 async function fingerprintRunnerSources(projectPath: string): Promise<string> {
@@ -139,11 +151,16 @@ async function removeBuildSharedByAllTeams(currentTeamId: string): Promise<void>
   );
 }
 
+/** Where a runner build keeps its products. */
+function runnerProductsDir(derivedDataPath: string): string {
+  return path.join(derivedDataPath, "Build", "Products");
+}
+
 /**
  * Find the base device .xctestrun under a derived-data dir.
  */
 function findBaseXctestrun(derivedDataPath: string): string | null {
-  const productsDir = path.join(derivedDataPath, "Build", "Products");
+  const productsDir = runnerProductsDir(derivedDataPath);
 
   if (!fs.existsSync(productsDir)) {
     return null;
@@ -211,6 +228,35 @@ export function runnerBuildStaticArgs(projectPath: string, config: RunnerSigning
 }
 
 /**
+ * xcodebuild arguments that put a runner build under `derivedDataPath`.
+ *
+ * `-derivedDataPath` alone does not decide where products and intermediates go.
+ * A Custom or Legacy build location in Xcode's settings (Locations > Advanced)
+ * moves them out of it, for one next to the project, which is inside the
+ * installed package. Build settings on the command line win over that
+ * preference. They name the layout Xcode uses by default, so a build made
+ * without them stays valid.
+ *
+ * Kept out of the static args: the directory follows from the team, which the
+ * cache key already covers, and a new key would cost every user a rebuild.
+ */
+export function runnerBuildLocationArgs(derivedDataPath: string): string[] {
+  // xcodebuild resolves a relative build setting against the project directory,
+  // and -derivedDataPath, like the lookup of the build, against the working directory.
+  const root = path.resolve(derivedDataPath);
+  const intermediatesDir = path.join(root, "Build", "Intermediates.noindex");
+
+  return [
+    "-derivedDataPath",
+    derivedDataPath,
+    `SYMROOT=${runnerProductsDir(root)}`,
+    `OBJROOT=${intermediatesDir}`,
+    // Set from the same preference, and OBJROOT does not move it.
+    `SHARED_PRECOMPS_DIR=${path.join(intermediatesDir, "PrecompiledHeaders")}`,
+  ];
+}
+
+/**
  * Cache key over sources, toolchain, and static build args.
  */
 export function computeRunnerCacheKey(
@@ -273,9 +319,7 @@ const PROFILE_RENEWAL_MARGIN_MS = 60 * 60 * 1000;
  */
 async function readRunnerExpiryDate(derivedDataPath: string): Promise<Date | null> {
   const file = path.join(
-    derivedDataPath,
-    "Build",
-    "Products",
+    runnerProductsDir(derivedDataPath),
     "Debug-iphoneos",
     "ArgentRunnerUITests-Runner.app",
     "embedded.mobileprovision"
@@ -377,8 +421,7 @@ async function buildRunnerArtifact(
     "-destination",
     // A concrete UDID lets automatic signing register that device on the profile.
     destinationUdid ? `platform=iOS,id=${destinationUdid}` : "generic/platform=iOS",
-    "-derivedDataPath",
-    derivedDataPath,
+    ...runnerBuildLocationArgs(derivedDataPath),
   ];
 
   try {
@@ -413,7 +456,7 @@ async function buildRunnerArtifact(
   if (!built) {
     throw withFailureSignal(
       new Error(
-        `xcodebuild reported success but no iphoneos .xctestrun was found under ${derivedDataPath}/Build/Products.`
+        `xcodebuild reported success but no iphoneos .xctestrun was found under ${runnerProductsDir(derivedDataPath)}.`
       ),
       {
         error_code: FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY,
