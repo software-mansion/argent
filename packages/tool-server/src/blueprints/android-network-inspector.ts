@@ -414,6 +414,8 @@ interface AgentConnection {
   stopUnconfirmed?: boolean;
   /** The agent acknowledged a stop's Network.disable, and no Network.enable went to it since. */
   disabled?: boolean;
+  /** The agent was away at a stop, and the reply that ends its flush has not come. */
+  afterMissedStop?: boolean;
   /** A process read found its process gone. */
   ended?: boolean;
   byLayerId: Map<string, NativeNetworkRecord>;
@@ -526,7 +528,10 @@ function createInspector(
   const tunnelLock = new Map<string, Promise<unknown>>();
   /** One recheck per process; a drop while one runs restarts its delays. */
   const rechecks = new Map<string, { restart: boolean }>();
-  /** Agents, by instance, that were away at a stop: each gets Network.disable first when it connects. */
+  /**
+   * Agents, by instance, that were away at a stop and have not connected
+   * since: the flush of each one's next connection adds no new record.
+   */
   const missedStop = new Set<string>();
 
   const user = (): number => appUser;
@@ -1157,11 +1162,9 @@ function createInspector(
             phase = "ready";
             conn = openConnection(socket, cdp, send, handshake);
             sendMetroPort(conn);
-            // After a start, so what it captured while stopped is not flushed.
-            // While stopped, the enable's reply sends Network.disable.
-            if (missedStop.delete(handshake.instance) && !stopped) {
-              void disableOn(conn, STOP_DISABLE_TIMEOUT_MS);
-            }
+            // What it flushes can hold requests the app sent after the stop
+            // it missed. While stopped, the enable's reply sends Network.disable.
+            if (missedStop.delete(handshake.instance)) conn.afterMissedStop = true;
             enableNetwork(conn);
             return;
           }
@@ -1328,6 +1331,8 @@ function createInspector(
 
   function onEnabled(conn: AgentConnection, result: unknown): void {
     if (conn.closed || disposed) return;
+    // Every flushed event came before this reply.
+    conn.afterMissedStop = false;
     const r = asObject(result);
     const capture = parseCapture(r.capture);
     if (capture) conn.capture = capture;
@@ -1372,7 +1377,7 @@ function createInspector(
         {
           timeoutMs,
           onResult: () => {
-            // Not after a start: its Network.enable follows this one.
+            // A start since then enabled the agent again.
             if (stopped) conn.disabled = true;
             failStopped(conn);
           },
@@ -1665,8 +1670,9 @@ function createInspector(
       );
       break;
     }
-    // While stopped, a new request gets no record.
-    if (stopped) return;
+    // While stopped, a new request gets no record, and nor does one in the
+    // flush of an agent that missed a stop: it can be from after that stop.
+    if (stopped || conn.afterMissedStop) return;
     const req = asObject(p.request);
     const startedAt =
       typeof p.wallTime === "number"

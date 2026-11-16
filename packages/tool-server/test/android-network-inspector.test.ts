@@ -5043,7 +5043,7 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
       expect(api.records(8081)).toEqual([]);
     });
 
-    it("sends Network.disable before Network.enable to the agent that connects only after the next start, so nothing sent while stopped is listed", async () => {
+    it("lists nothing sent while stopped from the flush of the agent that connects only after the next start", async () => {
       const { api, first } = await stopWhileAway();
       // Longer than the checks after the drop.
       await vi.advanceTimersByTimeAsync(16_000);
@@ -5058,25 +5058,100 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
       }))!;
 
       expect(await start).toEqual({ armed: true });
-      expect(again.received).toEqual(["Control", "Network.disable", "Network.enable"]);
+      expect(again.received).toEqual(["Control", "Network.enable"]);
       expect(api.records(8081)).toEqual([]);
+      // Once the flush ended, the app's requests are listed again.
+      again.request(again.rid(2), "https://example.com/after-the-start");
+      await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
     });
 
-    it("counts that agent away at the next stop once its connection drops: the Network.enable after its Network.disable armed it", async () => {
+    it("counts the agent away at the next stop when a start came before its reply to the Network.disable it got while stopped", async () => {
       const { api, first } = await stopWhileAway();
-      await vi.advanceTimersByTimeAsync(16_000);
+      await vi.advanceTimersByTimeAsync(2_000);
       device.adbDown = false;
+      await vi.advanceTimersByTimeAsync(8_000);
       vi.useRealTimers();
-      const start = api.startCapture(8081);
-      await vi.waitFor(() => expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort));
-      const again = (await FakeAgent.fromSession(dirFor(), proc(), { instance: first.instance }))!;
-      expect(await start).toEqual({ armed: true });
-      expect(again.received).toEqual(["Control", "Network.disable", "Network.enable"]);
-
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+        instance: first.instance,
+        unanswered: ["Network.disable"],
+      }))!;
+      await vi.waitFor(() =>
+        expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"])
+      );
+      expect(await api.startCapture(8081)).toEqual({ armed: true });
+      // The reply to the Network.disable comes after the start enabled the agent again.
+      again.answer("Network.disable");
       await again.close();
       await vi.waitFor(() => expect(api.state().armed).toBe(false));
 
       expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
+    });
+
+    it("lists nothing sent while stopped when a start comes before the enable reply of the agent that connected while stopped", async () => {
+      const { api, first } = await stopWhileAway();
+      await vi.advanceTimersByTimeAsync(2_000);
+      device.adbDown = false;
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort);
+      vi.useRealTimers();
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+        instance: first.instance,
+        unanswered: ["Network.enable"],
+        beforeEnable: flushUnlessDisabled,
+      }))!;
+      await vi.waitFor(() => expect(again.received).toEqual(["Control", "Network.enable"]));
+
+      // The start lands while the agent flushes what it buffered.
+      const { start } = await startInBackground(api);
+      again.answer("Network.enable");
+
+      expect(await start).toEqual({ armed: true });
+      expect(api.records(8081)).toEqual([]);
+    });
+
+    it("keeps the outcome of a request from before the stop that the agent buffered while away, and lists nothing new from that buffer", async () => {
+      const api = await armedInspector();
+      const first = agents[0]!;
+      first.started(first.rid(1), "https://example.com/before-the-stop");
+      await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      device.adbDown = true;
+      device.reverses.clear();
+      await first.close();
+      await vi.waitFor(() => expect(api.state().armed).toBe(false));
+      // Longer than the checks after the drop.
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
+      device.adbDown = false;
+      vi.useRealTimers();
+
+      const start = api.startCapture(8081);
+      await vi.waitFor(() => expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort));
+      // As the agent does: Network.disable drops what it buffered.
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+        instance: first.instance,
+        lastSeq: 1,
+        beforeEnable: (agent) => {
+          if (agent.received.includes("Network.disable")) return;
+          agent.event("Network.responseReceived", {
+            requestId: first.rid(1),
+            response: { url: "https://example.com/before-the-stop", status: 200, headers: {} },
+          });
+          agent.event("Network.loadingFinished", { requestId: first.rid(1), encodedDataLength: 5 });
+          agent.request(agent.rid(2), SENT_WHILE_STOPPED);
+        },
+      }))!;
+
+      expect(await start).toEqual({ armed: true });
+      expect(api.records(8081)).toEqual([
+        expect.objectContaining({
+          request: expect.objectContaining({ url: "https://example.com/before-the-stop" }),
+          state: "complete",
+          response: expect.objectContaining({ status: 200 }),
+        }),
+      ]);
+      expect(api.records(8081)[0]).not.toHaveProperty("errorText");
+      expect(again.received).toEqual(["Control", "Network.enable"]);
     });
   });
 
