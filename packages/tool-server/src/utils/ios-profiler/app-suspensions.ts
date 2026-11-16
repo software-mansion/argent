@@ -2,11 +2,17 @@
  * When macOS held a Mac app suspended during a recording. Instruments suspends
  * the whole app while it checks it for leaks (about every 11 s, up to about
  * 10 s each on an app that argent drove), and a debugger or a stop signal
- * suspends it too. A hang that began just before such a pause lasts as long as
- * the pause in the trace, though the app did not work in that time.
+ * suspends it too. A hang that such a pause overlaps holds the pause in the
+ * trace. The pause makes a hang of fixed work longer, but not a hang whose main
+ * thread waits for something that goes on during the pause (a sleep, a deadline,
+ * I/O, another process). Measured on a Mac app: a 1.5 s main-thread spin to a
+ * deadline was recorded as a 7167 ms hang with 6726 ms of it suspended, though the
+ * app's own hang was about 1.8 s. The trace cannot tell the two cases apart, so a
+ * hang keeps its recorded length and Instruments' label, and gets the suspended
+ * part of its span: the app's own hang is between the recorded length less that
+ * part and the recorded length.
  */
 import type { RawHang, UiHang } from "./types";
-import { classifyHangSeverity } from "./pipeline/01-correlate";
 
 /** A suspension in wall-clock ms since 1970, as `argent-macos-helper watch-suspension` reports it. */
 export interface AppSuspensionWindow {
@@ -45,33 +51,23 @@ export function suspensionSpansInTrace(
   return spans;
 }
 
-// xctrace's hang labels, measured on macOS 27 / Xcode 27.2 with main-thread blocks of known
-// length: none for a block under 250 ms, "Microhang" for 402 ms, "Hang" for 504 and 1961 ms,
-// "Severe Hang" for 2000.7 ms.
-const MIN_HANG_NS = 250_000_000;
-const HANG_NS = 500_000_000;
-const SEVERE_HANG_NS = 2_000_000_000;
 /**
  * The watch reads the suspend count every 10 ms, so each edge of a window can
  * be up to 10 ms off: a smaller overlap is no evidence that a suspension was in the hang.
  */
 const MIN_OVERLAP_NS = 20_000_000;
 
-/** What taking the app's suspensions out of its hangs changed. */
+/** What the app's suspensions overlapped. */
 export interface SuspensionAdjustment {
   /** The suspensions on the trace's timeline, with overlapping ones merged. */
   pauses: number;
   pausedMs: number;
-  /** Hangs left out: under 250 ms of each was not a suspension. */
-  removedHangs: number;
-  /** Hangs kept with the suspended time taken out of their length. */
-  adjustedHangs: number;
+  /** Hangs that a suspension overlapped. Each keeps its recorded length and label. */
+  overlappedHangs: number;
 }
 
-export interface HangsWithoutSuspensions {
-  /** The hangs to report, in their order, with their recorded spans. */
-  hangs: RawHang[];
-  /** For each of `hangs`: the ns of its recorded span during which the app was suspended. */
+export interface SuspendedTimeInHangs {
+  /** For each hang: the ns of its recorded span during which the app was suspended. */
   suspendedNs: number[];
   summary: SuspensionAdjustment;
 }
@@ -100,63 +96,32 @@ function overlapNs(startNs: number, endNs: number, merged: readonly AppSuspensio
   return total;
 }
 
-/**
- * Takes the time the app was suspended out of each hang. A hang with under 250 ms
- * of its own is left out, as xctrace reports no shorter hang. The other hangs
- * keep their recorded spans, so their CPU samples stay theirs.
- */
-export function removeSuspendedTime(
+/** The time the app was suspended in each hang's recorded span. */
+export function suspendedTimeInHangs(
   rawHangs: readonly RawHang[],
   spans: readonly AppSuspensionSpan[]
-): HangsWithoutSuspensions {
+): SuspendedTimeInHangs {
   const merged = mergeSpans(spans);
-  const hangs: RawHang[] = [];
-  const suspendedNs: number[] = [];
-  let removedHangs = 0;
-  let adjustedHangs = 0;
-  for (const hang of rawHangs) {
+  const suspendedNs = rawHangs.map((hang) => {
     const overlap = overlapNs(hang.startNs, hang.startNs + hang.durationNs, merged);
-    const suspended = overlap < MIN_OVERLAP_NS ? 0 : overlap;
-    if (suspended > 0 && hang.durationNs - suspended < MIN_HANG_NS) {
-      removedHangs++;
-      continue;
-    }
-    if (suspended > 0) adjustedHangs++;
-    hangs.push(hang);
-    suspendedNs.push(suspended);
-  }
+    return overlap < MIN_OVERLAP_NS ? 0 : overlap;
+  });
   const pausedNs = merged.reduce((sum, s) => sum + (s.endNs - s.startNs), 0);
   return {
-    hangs,
     suspendedNs,
     summary: {
       pauses: merged.length,
       pausedMs: Math.round(pausedNs / 1_000_000),
-      removedHangs,
-      adjustedHangs,
+      overlappedHangs: suspendedNs.filter((ns) => ns > 0).length,
     },
   };
 }
 
-/** xctrace's label for a hang of this length (of 250 ms or more). */
-function hangLabel(ns: number): string {
-  if (ns >= SEVERE_HANG_NS) return "Severe Hang";
-  return ns >= HANG_NS ? "Hang" : "Microhang";
-}
-
 /**
- * The hang as the report shows it: as long as its own time, and labeled and
- * graded from that length. Its span stays the recorded one.
+ * The hang with the suspended part of its span. Its length, label and severity
+ * stay those that Instruments recorded.
  */
-export function withoutSuspendedTime(hang: UiHang, suspendedNs: number): UiHang {
+export function withSuspendedTime(hang: UiHang, suspendedNs: number): UiHang {
   if (!(suspendedNs > 0)) return hang;
-  const ownNs = hang.endNs - hang.startNs - suspendedNs;
-  const hangType = hangLabel(ownNs);
-  return {
-    ...hang,
-    hangType,
-    durationMs: Math.round(ownNs / 1_000_000),
-    severity: classifyHangSeverity(hangType),
-    suspendedMs: Math.round(suspendedNs / 1_000_000),
-  };
+  return { ...hang, suspendedMs: Math.round(suspendedNs / 1_000_000) };
 }

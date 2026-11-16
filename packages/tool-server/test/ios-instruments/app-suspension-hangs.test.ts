@@ -1,9 +1,11 @@
 /**
- * Hangs of a Mac app without the time macOS held the app suspended. Instruments'
- * leak check suspends the whole app, so a hang that began before or during a
- * check includes it in xctrace's duration. The pipeline leaves out a hang with
- * under 250 ms of its own, shortens and relabels the others, analyze says what
- * it changed, and the reports name the suspended time next to the duration.
+ * Hangs of a Mac app with the time macOS held the app suspended. Instruments'
+ * leak check suspends the whole app, so a hang that a check overlaps holds it in
+ * xctrace's duration. The pause makes a hang of fixed work longer, but not one
+ * that waits for a deadline or a sleep, and the trace cannot tell them apart. So
+ * the pipeline keeps every hang with its recorded length and label, gives it the
+ * suspended part, analyze says how to read it, and the reports name the suspended
+ * time and the range of the app's own hang next to the duration.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -15,9 +17,9 @@ import type {
   NativeProfilerSessionApi,
 } from "../../src/blueprints/native-profiler-session";
 import {
-  removeSuspendedTime,
+  suspendedTimeInHangs,
   suspensionSpansInTrace,
-  withoutSuspendedTime,
+  withSuspendedTime,
   type AppSuspensionSpan,
 } from "../../src/utils/ios-profiler/app-suspensions";
 import { correlateHangsWithCpu } from "../../src/utils/ios-profiler/pipeline/01-correlate";
@@ -47,24 +49,24 @@ function span(startMs: number, endMs: number): AppSuspensionSpan {
   return { startNs: startMs * MS, endNs: endMs * MS };
 }
 
-/** The hangs as the pipeline reports them: correlated, then without the suspended time. */
+/** The hangs as the pipeline reports them: correlated, then with the suspended time. */
 function report(hangs: RawHang[], spans: AppSuspensionSpan[]) {
-  const out = removeSuspendedTime(hangs, spans);
-  const { uiHangs } = correlateHangsWithCpu(out.hangs, []);
+  const out = suspendedTimeInHangs(hangs, spans);
+  const { uiHangs } = correlateHangsWithCpu(hangs, []);
   return {
-    uiHangs: uiHangs.map((h, i) => withoutSuspendedTime(h, out.suspendedNs[i]!)),
+    uiHangs: uiHangs.map((h, i) => withSuspendedTime(h, out.suspendedNs[i]!)),
     summary: out.summary,
   };
 }
 
-describe("taking the suspended time out of a hang", () => {
+describe("the suspended time in a hang", () => {
   it("leaves a hang with no suspension in it as recorded", () => {
     const hang = rawHang(1_000, 600, "Hang");
     const { uiHangs, summary } = report([hang], [span(5_000, 15_000)]);
     const [recorded] = correlateHangsWithCpu([hang], []).uiHangs;
     expect(uiHangs).toEqual([recorded]);
     expect(uiHangs[0]).not.toHaveProperty("suspendedMs");
-    expect(summary).toEqual({ pauses: 1, pausedMs: 10_000, removedHangs: 0, adjustedHangs: 0 });
+    expect(summary).toEqual({ pauses: 1, pausedMs: 10_000, overlappedHangs: 0 });
   });
 
   it("keeps xctrace's own label on a hang with no suspension in it", () => {
@@ -73,56 +75,68 @@ describe("taking the suspended time out of a hang", () => {
     expect(uiHangs[0]).toMatchObject({ hangType: "Hang", durationMs: 300, severity: "RED" });
   });
 
-  it("shortens and relabels a hang that a suspension covers in part, on its recorded span", () => {
+  it("keeps the recorded length and label of a hang that a suspension covers in part", () => {
     // 11 s in the trace, of which 10 s the app was suspended for a leak check.
     const { uiHangs, summary } = report([rawHang(3_000, 11_000)], [span(4_000, 14_000)]);
     expect(uiHangs).toHaveLength(1);
     expect(uiHangs[0]).toMatchObject({
-      hangType: "Hang",
-      durationMs: 1_000,
+      hangType: "Severe Hang",
+      durationMs: 11_000,
       severity: "RED",
       suspendedMs: 10_000,
       startNs: 3_000 * MS,
       endNs: 14_000 * MS,
       startTimeFormatted: "00:03.000",
     });
-    expect(summary).toEqual({ pauses: 1, pausedMs: 10_000, removedHangs: 0, adjustedHangs: 1 });
+    expect(summary).toEqual({ pauses: 1, pausedMs: 10_000, overlappedHangs: 1 });
   });
 
-  it("leaves out a hang that was only the suspension", () => {
+  it("keeps a hang whose main thread waited on through the pause", () => {
+    // Measured on a Mac app: a 1.5 s main-thread spin to a deadline began 269 ms into a
+    // 7167 ms hang, and a 6726 ms leak check began about 170 ms after the spin. The deadline
+    // passed during the pause, so the app hung for about 1.77 s of its own, much more than
+    // the 441 ms that was not suspended.
+    const { uiHangs, summary } = report(
+      [rawHang(38_998, 7_167, "Severe Hang")],
+      [span(39_439, 46_165)]
+    );
+    expect(uiHangs[0]).toMatchObject({
+      hangType: "Severe Hang",
+      severity: "RED",
+      durationMs: 7_167,
+      suspendedMs: 6_726,
+    });
+    expect(summary).toEqual({ pauses: 1, pausedMs: 6_726, overlappedHangs: 1 });
+  });
+
+  it("keeps a hang that the suspension covers all of", () => {
     // The 13.8 s Severe Hang that a leak check made on a Mac app that argent drove.
     const { uiHangs, summary } = report([rawHang(3_644, 13_827)], [span(3_600, 17_500)]);
-    expect(uiHangs).toEqual([]);
-    expect(summary).toEqual({ pauses: 1, pausedMs: 13_900, removedHangs: 1, adjustedHangs: 0 });
+    expect(uiHangs).toHaveLength(1);
+    expect(uiHangs[0]).toMatchObject({
+      hangType: "Severe Hang",
+      durationMs: 13_827,
+      suspendedMs: 13_827,
+    });
+    expect(summary).toEqual({ pauses: 1, pausedMs: 13_900, overlappedHangs: 1 });
   });
 
-  it.each([
-    [249, null, null],
-    [249.999999, null, null],
-    [250, "Microhang", "YELLOW"],
-    [499, "Microhang", "YELLOW"],
-    [500, "Hang", "RED"],
-    [1_999, "Hang", "RED"],
-    [2_000, "Severe Hang", "RED"],
-  ] as const)("with %s ms of its own: %s", (ownMs, label, severity) => {
-    // A 10 s pause, with half of the hang's own time before it and half after.
-    const { uiHangs, summary } = report(
-      [rawHang(1_000 - ownMs / 2, 10_000 + ownMs)],
-      [span(1_000, 11_000)]
-    );
-    if (label === null) {
-      expect(uiHangs).toEqual([]);
-      expect(summary.removedHangs).toBe(1);
-      return;
+  it.each([249, 250, 499, 2_000])(
+    "keeps Instruments' label with %s ms outside the pause",
+    (ownMs) => {
+      // A 10 s pause, with half of the rest of the hang before it and half after.
+      const { uiHangs } = report(
+        [rawHang(1_000 - ownMs / 2, 10_000 + ownMs, "Severe Hang")],
+        [span(1_000, 11_000)]
+      );
+      expect(uiHangs[0]).toMatchObject({
+        hangType: "Severe Hang",
+        severity: "RED",
+        durationMs: 10_000 + ownMs,
+        suspendedMs: 10_000,
+      });
     }
-    expect(uiHangs[0]).toMatchObject({
-      hangType: label,
-      severity,
-      durationMs: Math.round(ownMs),
-      suspendedMs: 10_000,
-    });
-    expect(summary.adjustedHangs).toBe(1);
-  });
+  );
 
   it("adds up several suspensions in one hang", () => {
     const { uiHangs, summary } = report(
@@ -131,23 +145,24 @@ describe("taking the suspended time out of a hang", () => {
     );
     expect(uiHangs[0]).toMatchObject({
       hangType: "Severe Hang",
-      durationMs: 5_000,
+      durationMs: 10_000,
       suspendedMs: 5_000,
     });
-    expect(summary).toEqual({ pauses: 2, pausedMs: 5_000, removedHangs: 0, adjustedHangs: 1 });
+    expect(summary).toEqual({ pauses: 2, pausedMs: 5_000, overlappedHangs: 1 });
   });
 
   it("ignores an overlap under 20 ms, which the watch's 10 ms reads cannot tell from none", () => {
     const touching = report([rawHang(1_000, 2_010, "Severe Hang")], [span(2_995, 3_010)]);
     expect(touching.uiHangs[0]).toMatchObject({ hangType: "Severe Hang", durationMs: 2_010 });
     expect(touching.uiHangs[0]).not.toHaveProperty("suspendedMs");
-    expect(touching.summary).toMatchObject({ removedHangs: 0, adjustedHangs: 0 });
+    expect(touching.summary).toMatchObject({ overlappedHangs: 0 });
     const inside = report([rawHang(1_000, 2_010, "Severe Hang")], [span(2_985, 3_010)]);
     expect(inside.uiHangs[0]).toMatchObject({
-      hangType: "Hang",
-      durationMs: 1_985,
+      hangType: "Severe Hang",
+      durationMs: 2_010,
       suspendedMs: 25,
     });
+    expect(inside.summary).toMatchObject({ overlappedHangs: 1 });
   });
 
   it("counts overlapping and touching suspensions once", () => {
@@ -156,8 +171,8 @@ describe("taking the suspended time out of a hang", () => {
       [rawHang(0, 7_000)],
       [span(2_000, 5_000), span(5_000, 6_000), span(1_000, 4_000)]
     );
-    expect(uiHangs[0]).toMatchObject({ durationMs: 2_000, suspendedMs: 5_000 });
-    expect(summary).toEqual({ pauses: 1, pausedMs: 5_000, removedHangs: 0, adjustedHangs: 1 });
+    expect(uiHangs[0]).toMatchObject({ durationMs: 7_000, suspendedMs: 5_000 });
+    expect(summary).toEqual({ pauses: 1, pausedMs: 5_000, overlappedHangs: 1 });
   });
 
   it("counts only the part of a suspension inside the hang", () => {
@@ -173,35 +188,35 @@ describe("taking the suspended time out of a hang", () => {
     );
     expect(uiHangs[0]).toMatchObject({
       hangType: "Severe Hang",
-      durationMs: 3_500,
+      durationMs: 5_000,
       suspendedMs: 1_500,
     });
-    expect(summary).toEqual({ pauses: 4, pausedMs: 10_500, removedHangs: 0, adjustedHangs: 1 });
+    expect(summary).toEqual({ pauses: 4, pausedMs: 10_500, overlappedHangs: 1 });
   });
 
-  it("keeps the order of the hangs it keeps, and the spans it was given", () => {
+  it("keeps every hang in its order, and the spans it was given", () => {
     const spans = [span(5_000, 15_000), span(1_000, 2_000)];
     const copy = spans.map((s) => ({ ...s }));
     const { uiHangs, summary } = report(
       [rawHang(0, 600, "Hang"), rawHang(4_900, 10_150), rawHang(20_000, 400, "Microhang")],
       spans
     );
-    expect(uiHangs.map((h) => [h.startNs / MS, h.durationMs])).toEqual([
-      [0, 600],
-      [20_000, 400],
+    expect(uiHangs.map((h) => [h.startNs / MS, h.durationMs, h.suspendedMs])).toEqual([
+      [0, 600, undefined],
+      [4_900, 10_150, 10_000],
+      [20_000, 400, undefined],
     ]);
-    expect(summary).toEqual({ pauses: 2, pausedMs: 11_000, removedHangs: 1, adjustedHangs: 0 });
+    expect(summary).toEqual({ pauses: 2, pausedMs: 11_000, overlappedHangs: 1 });
     expect(spans).toEqual(copy);
   });
 
   it("changes nothing without a suspension", () => {
     const hangs = [rawHang(0, 600, "Hang"), rawHang(1_000, 3_000)];
-    const out = removeSuspendedTime(hangs, []);
-    expect(out.hangs).toEqual(hangs);
+    const out = suspendedTimeInHangs(hangs, []);
     expect(out.suspendedNs).toEqual([0, 0]);
-    expect(out.summary).toEqual({ pauses: 0, pausedMs: 0, removedHangs: 0, adjustedHangs: 0 });
+    expect(out.summary).toEqual({ pauses: 0, pausedMs: 0, overlappedHangs: 0 });
     const [uiHang] = correlateHangsWithCpu([hangs[0]!], []).uiHangs;
-    expect(withoutSuspendedTime(uiHang!, 0)).toBe(uiHang);
+    expect(withSuspendedTime(uiHang!, 0)).toBe(uiHang);
   });
 });
 
@@ -272,13 +287,19 @@ function writeTrace(leaks = true): Record<string, string | null> {
 const LEAK_CHECKS = [span(3_700, 17_471), span(21_000, 31_000)];
 
 describe("runIosProfilerPipeline with the app's suspensions", () => {
-  it("leaves out the hang that was the pause, before its samples mark a hotspot as during a hang", async () => {
+  it("keeps each hang that a pause overlaps, with its samples and the suspended part", async () => {
     const out = await runIosProfilerPipeline(writeTrace(), { appSuspensions: LEAK_CHECKS });
 
-    expect(out.uiHangs).toHaveLength(1);
+    expect(out.uiHangs).toHaveLength(2);
     expect(out.uiHangs[0]).toMatchObject({
-      hangType: "Hang",
-      durationMs: 1_000,
+      hangType: "Severe Hang",
+      durationMs: 13_827,
+      suspendedMs: 13_771,
+      suspectedFunctions: ["-[ExampleView layoutA]"],
+    });
+    expect(out.uiHangs[1]).toMatchObject({
+      hangType: "Severe Hang",
+      durationMs: 11_000,
       suspendedMs: 10_000,
       startNs: 20_000 * MS,
       endNs: 31_000 * MS,
@@ -289,16 +310,37 @@ describe("runIosProfilerPipeline with the app's suspensions", () => {
       out.cpuHotspots.map((h) => [h.dominantFunction, h.duringHang])
     );
     expect(duringHang).toEqual({
-      "-[ExampleView layoutA]": false,
+      "-[ExampleView layoutA]": true,
       "-[ExampleView layoutB]": true,
       "-[ExampleView idle]": false,
     });
     expect(out.suspensionAdjustment).toEqual({
       pauses: 2,
       pausedMs: 23_771,
-      removedHangs: 1,
-      adjustedHangs: 1,
+      overlappedHangs: 2,
     });
+  });
+
+  it("keeps the hangs of 1.5 s spins to a deadline that leak checks overlapped", async () => {
+    // Measured on a Mac app (the same spin each time, ended by a 1.5 s deadline): one leak
+    // check left 441 ms of a 7167 ms hang outside it, and one left under 250 ms of a 3868 ms
+    // hang. Without the pause, each was a hang of about 1.5 s or more.
+    const hangs = join(dir, "spin-hangs.xml");
+    writeFileSync(
+      hangs,
+      `<trace-query-result><node>` +
+        hangRow(rawHang(38_998, 7_167)) +
+        hangRow(rawHang(57_116, 3_868)) +
+        `</node></trace-query-result>`
+    );
+    const out = await runIosProfilerPipeline(
+      { cpu: null, hangs, leaks: null },
+      { appSuspensions: [span(39_439, 46_165), span(57_300, 60_984)] }
+    );
+    expect(out.uiHangs.map((h) => [h.hangType, h.severity, h.durationMs, h.suspendedMs])).toEqual([
+      ["Severe Hang", "RED", 7_167, 6_726],
+      ["Severe Hang", "RED", 3_868, 3_684],
+    ]);
   });
 
   it("leaves the hangs as recorded without suspensions, and counts nothing for an empty list", async () => {
@@ -317,12 +359,8 @@ describe("runIosProfilerPipeline with the app's suspensions", () => {
 
     const none = await runIosProfilerPipeline(files, { appSuspensions: [] });
     expect(none.uiHangs.map((h) => h.durationMs)).toEqual([13_827, 11_000]);
-    expect(none.suspensionAdjustment).toEqual({
-      pauses: 0,
-      pausedMs: 0,
-      removedHangs: 0,
-      adjustedHangs: 0,
-    });
+    expect(none.uiHangs.map((h) => h.suspendedMs)).toEqual([undefined, undefined]);
+    expect(none.suspensionAdjustment).toEqual({ pauses: 0, pausedMs: 0, overlappedHangs: 0 });
   });
 });
 
@@ -366,35 +404,45 @@ describe("the analyze report's note on the app's suspensions", () => {
   const OLD_NOTE = "**Hangs and the leak check:**";
   const NOTE = "**Leak-check pauses:**";
 
-  it("says what argent took out of the hangs, in place of the leak-check warning", async () => {
+  it("says how to read the hangs that the pauses overlap, in place of the leak-check warning", async () => {
     const api = makeApi("macos", LEAK_CHECKS);
     const { report } = await analyzeNativeProfilerIos(api);
 
     expect(report).toContain(
-      `> ℹ️ ${NOTE} Instruments held the app suspended 2 times (23.8 s in all) to check it for ` +
-        `leaks. argent left out 1 hang that was only these pauses, and took the pauses out of ` +
-        `the length of 1 other hang.`
+      `> ⚠️ ${NOTE} Instruments held the app suspended 2 times (23.8 s in all) to check it for ` +
+        `leaks. These pauses overlap 2 hangs. Such a hang keeps the length that Instruments ` +
+        `recorded, and the report gives the part of it when the app was suspended. A pause ` +
+        `makes a hang of fixed work longer. It does not make a hang longer when the main thread ` +
+        `waits for something that goes on during the pause, such as a sleep, a deadline, I/O or ` +
+        `another process. So the app's own hang is between the recorded length less the ` +
+        `suspended part and the recorded length. To measure such a hang, record the same ` +
+        `actions again with \`template_path: "Time Profiler"\`, which does not check for leaks.`
     );
     expect(report.indexOf(NOTE)).toBeLessThan(report.indexOf("---"));
     expect(report).not.toContain(OLD_NOTE);
+    // Both hangs stay in the table, with their recorded lengths and labels.
+    expect(report).toContain(
+      "| 1 | Severe Hang | 00:03.644 | 13827ms, 13771ms of it while the app was suspended " +
+        "(the app's own hang: 56 to 13827ms) | 🔴 |"
+    );
+    expect(report).toContain(
+      "| 2 | Severe Hang | 00:20.000 | 11000ms, 10000ms of it while the app was suspended " +
+        "(the app's own hang: 1000 to 11000ms) | 🔴 |"
+    );
     // The frozen data the drill-downs read has the same hangs.
     expect(api.parsedData?.uiHangs.map((h) => [h.durationMs, h.suspendedMs])).toEqual([
-      [1_000, 10_000],
+      [13_827, 13_771],
+      [11_000, 10_000],
     ]);
   });
 
-  it("words one pause and one kind of change", async () => {
-    const removed = await analyzeNativeProfilerIos(makeApi("macos", [LEAK_CHECKS[0]!]));
-    expect(removed.report).toContain(
-      `> ℹ️ ${NOTE} Instruments held the app suspended once (13.8 s) to check it for leaks. ` +
-        `argent left out 1 hang that was only this pause.`
+  it("words one pause and one hang", async () => {
+    const { report } = await analyzeNativeProfilerIos(makeApi("macos", [LEAK_CHECKS[1]!]));
+    expect(report).toContain(
+      `> ⚠️ ${NOTE} Instruments held the app suspended once (10.0 s) to check it for leaks. ` +
+        `This pause overlaps 1 hang. Such a hang keeps`
     );
-
-    const adjusted = await analyzeNativeProfilerIos(makeApi("macos", [LEAK_CHECKS[1]!]));
-    expect(adjusted.report).toContain(
-      `> ℹ️ ${NOTE} Instruments held the app suspended once (10.0 s) to check it for leaks. ` +
-        `argent took the pause out of the length of 1 hang.`
-    );
+    expect(report).toContain("| 1 | Severe Hang | 00:03.644 | 13827ms | 🔴 |");
   });
 
   it("does not name the leak check when the recording did not check for leaks", async () => {
@@ -405,10 +453,15 @@ describe("the analyze report's note on the app's suspensions", () => {
     for (const api of [noExport, noDetail]) {
       const { report } = await analyzeNativeProfilerIos(api);
       expect(report).toContain(
-        `> ℹ️ **App pauses:** macOS held the app suspended 2 times (23.8 s in all). argent left ` +
-          `out 1 hang that was only these pauses, and took the pauses out of the length of 1 other hang.`
+        `> ⚠️ **App pauses:** macOS held the app suspended 2 times (23.8 s in all). These ` +
+          `pauses overlap 2 hangs. Such a hang keeps`
+      );
+      expect(report).toContain(
+        `and the recorded length. To measure such a hang, record the same actions again while ` +
+          `nothing suspends the app, such as a debugger.`
       );
       expect(report).not.toContain(NOTE);
+      expect(report).not.toContain("Time Profiler");
     }
   });
 
@@ -437,18 +490,22 @@ describe("the analyze report's note on the app's suspensions", () => {
     const api = makeApi("ios", LEAK_CHECKS);
     const { report } = await analyzeNativeProfilerIos(api);
     expect(report).not.toContain(NOTE);
-    expect(api.parsedData?.uiHangs.map((h) => h.durationMs)).toEqual([13_827, 11_000]);
+    expect(api.parsedData?.uiHangs.map((h) => [h.durationMs, h.suspendedMs])).toEqual([
+      [13_827, undefined],
+      [11_000, undefined],
+    ]);
   });
 });
 
-const SUSPENDED = ", not counting 10000ms when the app was suspended";
+const SUSPENDED =
+  ", 10000ms of it while the app was suspended (the app's own hang: 1000 to 11000ms)";
 
 function uiHang(partial: Partial<UiHang> = {}): UiHang {
   return {
     type: "ui_hang",
     platform: "ios",
-    hangType: "Hang",
-    durationMs: 1_000,
+    hangType: "Severe Hang",
+    durationMs: 11_000,
     startTimeFormatted: "00:20.000",
     startNs: 20_000 * MS,
     endNs: 31_000 * MS,
@@ -462,7 +519,12 @@ function uiHang(partial: Partial<UiHang> = {}): UiHang {
 
 describe("the suspended time next to a hang's duration", () => {
   it("is in the hang table, the hang's heading and its advice", async () => {
-    const plain = uiHang({ startTimeFormatted: "00:40.000", durationMs: 700, suspendedMs: 0 });
+    const plain = uiHang({
+      hangType: "Hang",
+      startTimeFormatted: "00:40.000",
+      durationMs: 700,
+      suspendedMs: 0,
+    });
     const { report } = await renderNativeProfilerReport({
       payload: {
         metadata: { traceFile: null, platform: "macOS", timestamp: "2026-01-01T00:00:00Z" },
@@ -470,9 +532,11 @@ describe("the suspended time next to a hang's duration", () => {
       },
       traceFile: null,
     });
-    expect(report).toContain(`| 1 | Hang | 00:20.000 | 1000ms${SUSPENDED} | 🔴 |`);
-    expect(report).toContain(`**Hang at 00:20.000 (1000ms${SUSPENDED})**`);
-    expect(report).toContain(`- 🔴 Hang at 00:20.000 (1000ms${SUSPENDED}): Main thread stalled`);
+    expect(report).toContain(`| 1 | Severe Hang | 00:20.000 | 11000ms${SUSPENDED} | 🔴 |`);
+    expect(report).toContain(`**Severe Hang at 00:20.000 (11000ms${SUSPENDED})**`);
+    expect(report).toContain(
+      `- 🔴 Severe Hang at 00:20.000 (11000ms${SUSPENDED}): Main thread stalled`
+    );
     expect(report).toContain("| 2 | Hang | 00:40.000 | 700ms | 🔴 |");
     expect(report).toContain("**Hang at 00:40.000 (700ms)**");
     expect(report.split(SUSPENDED)).toHaveLength(4);
@@ -480,10 +544,10 @@ describe("the suspended time next to a hang's duration", () => {
 
   it("is in profiler-stack-query's hang_stacks heading", () => {
     expect(renderHangStacksIos([], [uiHang()], 0, 5)).toContain(
-      `## Hang #0 — Hang (1000ms at 00:20.000${SUSPENDED})`
+      `## Hang #0 — Severe Hang (11000ms at 00:20.000${SUSPENDED})`
     );
     expect(renderHangStacksIos([], [uiHang({ suspendedMs: undefined })], 0, 5)).toContain(
-      `## Hang #0 — Hang (1000ms at 00:20.000)\n`
+      `## Hang #0 — Severe Hang (11000ms at 00:20.000)\n`
     );
   });
 
@@ -544,8 +608,8 @@ describe("the suspended time next to a hang's duration", () => {
         port: PORT,
         device_id: DEVICE,
       })) as string;
-      expect(out).toContain(`### Hang at 00:20.000 (1000ms${SUSPENDED}) ↔ Commit #0`);
-      expect(out).toContain(`- **Hang** at 01:00.000 (1000ms${SUSPENDED})`);
+      expect(out).toContain(`### Severe Hang at 00:20.000 (11000ms${SUSPENDED}) ↔ Commit #0`);
+      expect(out).toContain(`- **Severe Hang** at 01:00.000 (11000ms${SUSPENDED})`);
     } finally {
       clearCachedProfilerPaths(PORT, DEVICE);
     }
