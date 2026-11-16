@@ -163,6 +163,9 @@ async function startJsLayer(
   // An interceptor an earlier start installed here stays in the app's JS context
   // until a reload, whatever becomes of this start.
   const installedHere = found !== undefined && !other && found.installed;
+  // That interceptor records until a stop pauses it, so its entry stays, and
+  // the layer is not unavailable, whatever this start finds.
+  const recording = installedHere && found.paused !== true;
   let dbg: JsRuntimeDebuggerApi;
   try {
     dbg = await resolveDebuggerService(registry, { port, device_id: udid });
@@ -173,10 +176,16 @@ async function startJsLayer(
       const text = `${jsNotReached(reason, port, err)}; ${otherPortHint(bundleId, other.port)}`;
       return lost ? unavailable("js", text) : { layer: "js", armed: false, reason: text };
     }
+    if (lost && recording) {
+      return {
+        layer: "js",
+        armed: false,
+        reason: `${jsNotReached(reason, port, err)}; the interceptor already in the app's JS runtime may still record, so call network-capture-start again once the app answers`,
+      };
+    }
     if (lost) {
-      // No mark stays for a layer that is unavailable, but an interceptor an
-      // earlier start installed records until a stop pauses it, so its entry stays.
-      if (!found?.installed || found.paused) forgetJsCapture(device, bundleId);
+      // No mark stays for a layer that is unavailable.
+      forgetJsCapture(device, bundleId);
       return unavailable("js", jsNotReached(reason, port, err));
     }
     // The app may connect, or answer, after this call; the next start arms it.
@@ -197,12 +206,19 @@ async function startJsLayer(
 
   const appId = dbg.runtimeApp?.appId;
   if (appId !== undefined && appId !== bundleId) {
-    // That app's own capture on this port stays as it is, and so does an
-    // interceptor an earlier start of this app installed.
-    if (!other && (!found?.installed || found.paused)) forgetJsCapture(device, bundleId);
+    const notOurs = `the JS runtime on Metro port ${port} is ${appId}'s, not ${bundleId}'s`;
+    if (recording) {
+      return {
+        layer: "js",
+        armed: false,
+        reason: `${notOurs}; the interceptor already in ${bundleId}'s JS runtime may still record, so call network-capture-start again once that runtime answers on this port`,
+      };
+    }
+    // That app's own capture on this port stays as it is.
+    if (!other) forgetJsCapture(device, bundleId);
     return unavailable(
       "js",
-      `the JS runtime on Metro port ${port} is ${appId}'s, not ${bundleId}'s; ${
+      `${notOurs}; ${
         other ? otherPortHint(bundleId, other.port) : `pass the port of ${bundleId}'s Metro`
       }`
     );

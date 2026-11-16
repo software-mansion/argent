@@ -654,6 +654,35 @@ describe("network-capture-start", () => {
       expect(androidFor(APP).calls).toEqual([]);
     });
 
+    it("does not fail while the interceptor an earlier start installed may still record", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, SERIAL, rt);
+      const noOkHttp = {
+        armed: false,
+        unavailable: true as const,
+        reason: "the app has no OkHttp",
+      };
+      androidFor(APP).startAnswer = () => noOkHttp;
+      expect(layer(await start(SERIAL, APP), "js")).toEqual({ layer: "js", armed: true });
+      await reconnect(PORT, SERIAL, undefined);
+
+      const result = await start(SERIAL, APP);
+
+      expect(result).toEqual({
+        status: "ok",
+        layers: [
+          {
+            layer: "js",
+            armed: false,
+            reason: `${METRO_DOWN}; the interceptor already in the app's JS runtime may still record, so call network-capture-start again once the app answers`,
+          },
+          { layer: "android-native", ...noOkHttp },
+        ],
+      });
+      expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "started", installed: true });
+      expect(rt.paused).toBe(false);
+    });
+
     it("does not fail while a layer is only waiting for the app", async () => {
       ios.appState = "connecting";
 
@@ -962,22 +991,28 @@ describe("network-capture-start", () => {
       });
     });
 
+    const SHARED_METRO = `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; give each device its own Metro port (udid takes the id from list-devices, not a logicalDeviceId)`;
+    const STILL_RECORDS =
+      "the interceptor already in the app's JS runtime may still record, so call network-capture-start again once the app answers";
     const NOT_REACHED = [
       {
         found: "no Metro",
         answer: (): FakeRuntime | FailureCode | undefined => undefined,
         reason: METRO_DOWN,
+        kept: `${METRO_DOWN}; ${STILL_RECORDS}`,
       },
       {
         found: "a Metro with no runtime of this device",
         answer: (): FakeRuntime | FailureCode | undefined =>
           FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
-        reason: `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; give each device its own Metro port (udid takes the id from list-devices, not a logicalDeviceId)`,
+        reason: SHARED_METRO,
+        kept: `${SHARED_METRO}; ${STILL_RECORDS}`,
       },
       {
         found: "another app's runtime",
         answer: (): FakeRuntime | FailureCode | undefined => new FakeRuntime(OTHER),
         reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; pass the port of ${APP}'s Metro`,
+        kept: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; the interceptor already in ${APP}'s JS runtime may still record, so call network-capture-start again once that runtime answers on this port`,
       },
     ];
 
@@ -1004,8 +1039,8 @@ describe("network-capture-start", () => {
     );
 
     it.each(NOT_REACHED)(
-      "keeps the capture an earlier start installed when it finds $found, so a stop still says the interceptor may record",
-      async ({ answer, reason }) => {
+      "is not unavailable, and keeps the capture an earlier start installed, when it finds $found, so a stop still says the interceptor may record",
+      async ({ answer, kept }) => {
         const rt = new FakeRuntime(APP);
         serve(PORT, IOS_UDID, rt);
         ios.connected.add(APP);
@@ -1016,12 +1051,7 @@ describe("network-capture-start", () => {
         await reconnect(PORT, IOS_UDID, answer());
         const result = await start(IOS_UDID, APP);
 
-        expect(layer(result, "js")).toEqual({
-          layer: "js",
-          armed: false,
-          unavailable: true,
-          reason,
-        });
+        expect(layer(result, "js")).toEqual({ layer: "js", armed: false, reason: kept });
         expect(findJsCapture(IOS_UDID, APP)).toEqual(capture);
 
         // The app's interceptor still records, so a stop that does not reach it is not confirmed.
