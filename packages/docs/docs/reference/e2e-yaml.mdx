@@ -467,6 +467,10 @@ if (ARGENT_DEVICE_PLATFORM === "android") {
 
 Some ids are not the ids of the platform tools. A remote simulator has the platform `ios-remote`. A device from a [device provider](/docs/reference/device-providers) has an id that starts with `ext:`. `xcrun simctl` and `adb` do not accept these ids.
 
+A HarmonyOS id is `harmony-` and then the `hdc` connect key. Remove `harmony-` before you give the id to `hdc -t`.
+
+A simulator in an additional device set of [`ios.additionalDeviceSets`](/docs/reference/configuration#available-keys), for example a Radon IDE simulator, is only in that set. `xcrun simctl` finds the simulator only with `--set <dir>`, where `<dir>` is the directory of the set.
+
 Argent reads the device when the step starts. A `launch` step that boots a new Chromium instance moves the run to that instance. A later `script` step then gets the id of the new instance. A run without a device sets none of the three variables. An e2e test of script steps alone has no device, unless you pass `--device`. Argent sets these variables itself. A value with the same name in the environment of the tool-server does not reach the script.
 
 When the agent records a `script` step in an e2e test that runs on a device, the agent gives `e2e-add-script` that device in `udid`. The script then gets the same three variables as on a replay. For an e2e test of script steps alone, the agent omits `udid`, because a replay of that e2e test has no device. Argent does not write the device to the e2e test file. A replay gives the script the device of that run.
