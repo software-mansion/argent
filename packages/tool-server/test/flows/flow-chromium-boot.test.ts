@@ -560,6 +560,36 @@ describe("flow-execute chromium boot", () => {
     expect(udids).toEqual(["chromium-cdp-12345", "chromium-cdp-12346"]);
   });
 
+  it("gives a script step after a nested launch the id of the new instance", async () => {
+    // A real child process per script step, so the default budget is too tight.
+    const parent = await writeFlow(
+      "steps:\n" +
+        "  - launch: { chromium: ./app-a }\n" +
+        "  - script: { path: ./device.mjs }\n" +
+        "  - run: nested-chromium\n" +
+        "  - script: { path: ./device.mjs }\n"
+    );
+    await writeSiblingFlow(
+      parent,
+      "nested-chromium",
+      "steps:\n  - launch: { chromium: ./app-b }\n"
+    );
+    writeFileSync(
+      path.join(path.dirname(parent), "device.mjs"),
+      "console.log(process.env.ARGENT_DEVICE_ID);\n"
+    );
+
+    const result = await runFlow(makeRegistry(), {
+      name: "rebind-script",
+      project_root: path.dirname(parent),
+      e2e_test_file: parent,
+    });
+
+    expect(result.ok).toBe(true);
+    const ids = result.steps.filter((s) => s.kind === "script").map((s) => s.scriptLog?.trim());
+    expect(ids).toEqual(["chromium-cdp-12345", "chromium-cdp-12346"]);
+  }, 30_000);
+
   it("retires the instance it owns for the same app before relaunching it", async () => {
     // Kill first, then boot: an Electron app holding a single-instance lock
     // would make the second process quit before its CDP endpoint came up.

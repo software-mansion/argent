@@ -23,6 +23,7 @@ import {
 import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
 import { utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";
+import { resolveDevice } from "../../utils/device-info";
 
 const OUTPUT_RENDER_LIMIT_BYTES = 64 * 1024;
 
@@ -119,6 +120,13 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe("Time limit in milliseconds. The default is 30000 and the minimum is 100."),
+  udid: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Device the recording runs on, from `list-devices`. The script reads it as ARGENT_DEVICE_ID, ARGENT_DEVICE_PLATFORM and ARGENT_DEVICE_KIND, as on a replay. Omit it when the e2e test uses no device."
+    ),
 });
 
 export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAddScriptResult> = {
@@ -190,10 +198,14 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     //
     // No `logBudget`: the run-scoped allowance would silently truncate a late
     // script's logs during authoring. The per-step limit still applies.
+    //
+    // `udid` stays out of the recorded step: a replay hands the script the
+    // device of that run instead.
     const { outcome, result, ran } = await runFlowScriptStep({
       flowDir,
       step,
       projectRoot: params.project_root,
+      ...(params.udid !== undefined ? { device: resolveDevice(params.udid) } : {}),
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
 
