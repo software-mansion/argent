@@ -2805,6 +2805,33 @@ describe("a start and a stop of one app", () => {
   });
 });
 
+describe("a device the capture tools do not cover", () => {
+  // A call made inside the tool-server, as an e2e `tool:` step makes it, skips the HTTP gate.
+  it.each([
+    { platform: "Vega", udid: "amazon-0123456789" },
+    { platform: "Chromium", udid: "chromium-cdp-9222" },
+  ])(
+    "on $platform, refuses a start and a stop called inside the tool-server, and leaves the app's JS runtime as it is",
+    async ({ udid }) => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, udid, rt);
+
+      for (const call of [start, stop]) {
+        const err = await call(udid, APP).then(
+          () => undefined,
+          (e: unknown) => e
+        );
+        expect((err as Error | undefined)?.cause).toBeInstanceOf(UnsupportedOperationError);
+        expect(String(err)).toContain("network capture has no start or stop");
+      }
+
+      expect(rt.evaluated).toEqual([]);
+      expect(rt.paused).toBeUndefined();
+      expect(jsCapturesOn(udid)).toEqual([]);
+    }
+  );
+});
+
 describe("the tool definitions", () => {
   const tools = [
     { make: createNetworkCaptureStartTool, verb: ["Starting", "Started", "start"] },

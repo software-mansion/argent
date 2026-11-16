@@ -24,6 +24,7 @@ import {
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { metroPort } from "../../utils/debugger/metro-port";
 import { resolveDevice } from "../../utils/device-info";
+import { assertSupported } from "../../utils/capability";
 import { localIosHost, remoteIosHost } from "../../utils/ios-host";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../utils/simctl-config";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
@@ -66,6 +67,8 @@ Returns { status, layers }: per layer, armed (false once the layer confirmed the
     services: () => ({}),
     async execute(_services, params) {
       const device = resolveDevice(params.udid);
+      // Only the HTTP gate checks the capability, and an e2e `tool:` step does not pass it.
+      assertSupported("network-capture-stop", CAPTURE_CAPABILITY, device);
       const port = metroPort({ device_id: params.udid, port: params.port });
       const layers = await withCaptureLock(params.udid, params.bundleId, () =>
         runLayers([

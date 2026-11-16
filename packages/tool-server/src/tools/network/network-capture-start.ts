@@ -36,6 +36,7 @@ import { metroPort } from "../../utils/debugger/metro-port";
 import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
 import { xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { resolveDevice } from "../../utils/device-info";
+import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
@@ -77,6 +78,8 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
     services: () => ({}),
     async execute(_services, params) {
       const device = resolveDevice(params.udid);
+      // Only the HTTP gate checks the capability, and an e2e `tool:` step does not pass it.
+      assertSupported("network-capture-start", CAPTURE_CAPABILITY, device);
       await ensureDeps(
         device.platform === "android"
           ? ["adb"]
