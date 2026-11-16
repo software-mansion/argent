@@ -4885,6 +4885,43 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
   });
 
+  it("says at a launch that the process whose agent was away at the stop may still intercept, and names the app to profiles until that agent acknowledges", async () => {
+    const api = await armedInspector();
+    const first = agents[0]!;
+    await first.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
+
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
+    expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([SERIAL]);
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(UNCONFIRMED_LAUNCH_NOTE);
+
+    // The agent connects again and acknowledges the Network.disable it missed.
+    const again = (await FakeAgent.fromSession(dirFor(), proc(), { instance: first.instance }))!;
+    await vi.waitFor(() =>
+      expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"])
+    );
+    await vi.waitFor(() => expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]));
+    expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([]);
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+  });
+
+  it("stops naming the app whose agent was away at the stop once a launch finds that process gone", async () => {
+    const api = await armedInspector();
+    // The checks after the drop do not run: only the launch reads the processes.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
+
+    device.process = { pid: 5100, startTime: 99_000 };
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+    expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([]);
+  });
+
   it("a stop is confirmed after a start attached again to a known process that lost its agent: that agent is not away", async () => {
     const api = await armedInspector();
     await agents[0]!.close();

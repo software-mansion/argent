@@ -243,7 +243,7 @@ interface InspectorHandle {
   /** Capture is live from network-capture-start until network-capture-stop or a dispose. */
   isLive(): boolean;
   isStopped(): boolean;
-  /** Live, or stopped while a connected agent has not acknowledged the stop and may still intercept. */
+  /** Live, or stopped while an agent has not acknowledged the stop and may still intercept. */
   mayIntercept(): boolean;
   attachLaunch(): Promise<string | undefined>;
   /** The launch note while stopped. */
@@ -284,7 +284,7 @@ function stoppedLaunchNote(packageName: string): string {
 
 /**
  * Package names with live native network capture on the device, and those
- * whose connected agent has not acknowledged the stop.
+ * whose agent has not acknowledged the stop.
  */
 export function liveAndroidNetworkCaptures(deviceId: string): string[] {
   return [...(liveInspectors.get(deviceKeyOf(deviceId)) ?? [])]
@@ -295,7 +295,7 @@ export function liveAndroidNetworkCaptures(deviceId: string): string[] {
 
 /**
  * Adb serials of the devices with live native network capture for the app, or
- * whose connected agent has not acknowledged the stop.
+ * whose agent has not acknowledged the stop.
  */
 export function liveAndroidNetworkCaptureDevices(packageName: string): string[] {
   const serials = allHandles()
@@ -2026,16 +2026,21 @@ function createInspector(
 
   /**
    * An agent whose connection dropped captures on in the app until it
-   * connects again, so the stop's Network.disable did not reach it. It gets
-   * that Network.disable when it connects. An agent that acknowledged an
-   * earlier stop's Network.disable before the drop captures nothing, and nor
-   * does one whose process ended, which the process read leaves out.
+   * connects again. An agent that acknowledged an earlier stop's
+   * Network.disable before the drop captures nothing, and nor does one whose
+   * process ended.
+   */
+  function isAway(c: AgentConnection): boolean {
+    return c.closed && !c.resumedBy && !c.agentGone && !c.ended && !c.disabled;
+  }
+
+  /**
+   * The stop's Network.disable did not reach an agent that is away. It gets
+   * that Network.disable when it connects. The process read leaves out an
+   * agent whose process ended.
    */
   async function awayAtStop(): Promise<boolean> {
-    const away = (): AgentConnection[] =>
-      connections.filter(
-        (c) => c.closed && !c.resumedBy && !c.agentGone && !c.ended && !c.disabled
-      );
+    const away = (): AgentConnection[] => connections.filter(isAway);
     if (away().length === 0) return false;
     try {
       const read = await readAppProcesses(serial, packageName, STOP_DISABLE_TIMEOUT_MS);
@@ -2088,9 +2093,17 @@ function createInspector(
     return launchNote(outcome, reason);
   }
 
-  /** The open connection whose agent did not acknowledge the stop. */
+  /**
+   * The connection whose agent did not acknowledge the stop: an open one that
+   * did not answer Network.disable, or one away at the stop that has not
+   * connected again.
+   */
   function unconfirmedStop(): AgentConnection | undefined {
-    return stopped ? connections.find((c) => !c.closed && c.stopUnconfirmed) : undefined;
+    if (!stopped) return undefined;
+    return (
+      connections.find((c) => !c.closed && c.stopUnconfirmed) ??
+      connections.find((c) => missedStop.has(c.instance) && isAway(c))
+    );
   }
 
   /**
@@ -2102,6 +2115,8 @@ function createInspector(
     if (!conn) return stoppedLaunchNote(packageName);
     // Without a process read, as when adb does not answer, the connection counts.
     const read = await readAppProcesses(serial, packageName).catch(() => null);
+    // An agent away at the stop counts only while its process runs.
+    if (read) failOrphans(runningKeys(read));
     const current = read ? processOfUser(read, user()) : null;
     // A start, an acknowledgement or a closed connection while adb answered.
     if (unconfirmedStop() !== conn) return stoppedLaunchNote(packageName);
