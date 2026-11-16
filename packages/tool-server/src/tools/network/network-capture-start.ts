@@ -361,7 +361,7 @@ async function startIosLayer(
     armed: false,
     reason:
       block?.status === "restart_required"
-        ? "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture"
+        ? "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app"
         : "the app has not connected yet; capture arms when it does",
   };
 }

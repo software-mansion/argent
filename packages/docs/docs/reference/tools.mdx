@@ -212,6 +212,8 @@ A native layer that is not armed often arms later without a new start. For examp
 | `android-native` | The app did not run at the start. `launch-app` or `restart-app` attaches the in-app agent to its next process.                               | absent        |
 | `android-native` | The in-app agent captures no requests in this process, for example because R8 fully minified OkHttp.                                         | `true`        |
 
+On iOS, Argent cannot tell an app that does not run from an app that is not installed. Thus the `ios-native` reason that tells you to call `restart-app` also says this: if `restart-app` cannot start the app, the bundle ID is not installed on the simulator.
+
 When all layers are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each layer. An Apple system app runs no React Native JS, so both of its layers are unavailable, and a start for it always fails.
 
 A second call of `network-capture-start` keeps the requests that Argent recorded.

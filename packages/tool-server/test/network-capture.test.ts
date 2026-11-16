@@ -84,6 +84,8 @@ const OTHER = "com.example.other";
 const PORT = 8081;
 const NOT_STARTED = "capture was not started for this app";
 const METRO_DOWN = `Metro is not running on port ${PORT}; start it, or pass the port of the app's Metro`;
+const RESTART_REASON =
+  "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app";
 
 // ── The app's JS runtime ────────────────────────────────────────────────────
 
@@ -1257,12 +1259,7 @@ describe("network-capture-start", () => {
 
       expect(result.layers).toEqual([
         { layer: "js", armed: true },
-        {
-          layer: "ios-native",
-          armed: false,
-          reason:
-            "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture",
-        },
+        { layer: "ios-native", armed: false, reason: RESTART_REASON },
       ]);
       // Capture is on, so the next launch arms it.
       expect(ios.isNetworkCaptureStarted(APP)).toBe(true);
@@ -1277,6 +1274,22 @@ describe("network-capture-start", () => {
       ]);
       relaunched.send("/after-restart");
       expect(await read(IOS_UDID)).toContain('"GET /after-restart"');
+    });
+
+    it("says what a failed restart-app means for an app with no running process, which may not be installed", async () => {
+      const typo = "com.example.shopp";
+      ios.appState = "not_running";
+
+      const result = await start(IOS_UDID, typo);
+
+      expect(layer(result, "ios-native")).toEqual({
+        layer: "ios-native",
+        armed: false,
+        reason: RESTART_REASON,
+      });
+      expect(RESTART_REASON).toContain(
+        "if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app"
+      );
     });
 
     it("reports a service the app no longer dials unavailable and starts nothing", async () => {
