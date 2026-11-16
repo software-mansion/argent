@@ -2094,6 +2094,24 @@ describe("a JS capture on another Metro port", () => {
     expect(otherRuntime.evaluated).toEqual([]);
   });
 
+  it("stays as it is when stopped there, through a start against another app's runtime, which names its port", async () => {
+    await startedOnNewPort();
+    await stop(IOS_UDID, APP, NEW_PORT);
+    const capture = findJsCapture(IOS_UDID, APP);
+    expect(capture).toMatchObject({ intent: "stopped", installed: true, paused: true });
+    serve(PORT, IOS_UDID, new FakeRuntime(OTHER));
+
+    const started = await start(IOS_UDID, APP);
+
+    expect(layer(started, "js")).toEqual({
+      layer: "js",
+      armed: false,
+      unavailable: true,
+      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; ${hint}`,
+    });
+    expect(jsCapturesOn(IOS_UDID)).toEqual([capture]);
+  });
+
   it("stays as it is, with another app's capture on the port, through a stop there on runtimes that name no app", async () => {
     const rt = new FakeRuntime(undefined);
     serve(NEW_PORT, IOS_UDID, rt);
