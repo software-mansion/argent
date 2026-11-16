@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { ensureCdpReachable } from "../../blueprints/chromium-cdp";
@@ -194,8 +195,9 @@ export interface ElectronLaunchSpec {
    */
   pid?: number;
   /**
-   * That boot's process group, kept after the leader exits: restart-app and a
-   * run's teardown still reap processes that outlived their launcher.
+   * That boot's process group, kept after the leader exits while the group
+   * lives: restart-app and a run's teardown still reap processes that outlived
+   * their launcher. See {@link watchGroupUntilEmpty}.
    */
   pgid?: number;
 }
@@ -224,6 +226,54 @@ export function withPortLock<T>(port: number, task: () => Promise<T>): Promise<T
   return withKeyedLock(portLocks, String(port), task);
 }
 
+/**
+ * Why a new copy could not bind `port` now, or null when it could. The boot's
+ * readiness probe accepts whatever answers on the port, so a holder would pass
+ * for the new copy while that copy fails to bind; binding asks what the copy
+ * needs, also of a holder that accepts connections but never answers CDP.
+ * Chromium listens on 127.0.0.1; on Windows it binds with SO_EXCLUSIVEADDRUSE,
+ * which fails beside a holder of 0.0.0.0 or ::, so only there are those probed
+ * too. Linux refuses the loopback bind beside such a holder, and macOS grants
+ * it and routes loopback to Chromium.
+ */
+export async function heldPortError(port: number): Promise<NodeJS.ErrnoException | null> {
+  const held = await bindError(port, "127.0.0.1");
+  if (held || process.platform !== "win32") return held;
+  // One at a time: a dual-stack :: bind collides with a concurrent 0.0.0.0 one.
+  for (const host of ["0.0.0.0", "::"]) {
+    const err = await bindError(port, host);
+    if (err?.code === "EADDRINUSE") return err;
+  }
+  return null;
+}
+
+function bindError(port: number, host: string): Promise<NodeJS.ErrnoException | null> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", (err: NodeJS.ErrnoException) => resolve(err));
+    srv.listen(port, host, () => srv.close(() => resolve(null)));
+  });
+}
+
+/** Refuse a fixed `port` that a process already listens on ({@link heldPortError}). */
+export async function assertElectronPortFree(port: number): Promise<void> {
+  const held = await heldPortError(port);
+  if (!held) return;
+  throw new FailureError(
+    `Electron boot: port ${port} is already in use (${held.code ?? held.message}), so the ` +
+      `app could not open CDP there, and nothing was started. If boot-device started that ` +
+      `app in this tool-server session, restart-app relaunches it on chromium-cdp-${port}. ` +
+      `Otherwise check which process listens on port ${port} before you quit it, or omit ` +
+      `electronPort to boot on a free port.`,
+    {
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
+      failure_stage: "electron_port_check",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
 /** Drop `port`'s launch spec, so restart-app no longer relaunches its app. */
 export function forgetElectronLaunchSpec(port: number): void {
   launchSpecs.delete(port);
@@ -249,8 +299,8 @@ export async function assertElectronAppLaunchable(spec: ElectronLaunchSpec): Pro
     if ((await commandOnPath(spec.command)) === null) {
       throw fail(
         `${spec.appPath} was booted with the 'electron' command, and no 'electron' is on PATH ` +
-          `now. Install electron globally, or run npm install in the app directory and boot ` +
-          `the app again with boot-device.`,
+          `now. Install electron globally, or quit the app, run npm install in the app ` +
+          `directory and boot the app again with boot-device.`,
         "electron_launcher_missing"
       );
     }
@@ -333,6 +383,19 @@ export async function killChromiumByPortAndWait(
   // No handle to await (the child exited and was evicted, or an earlier
   // tool-server booted it), so poll.
   if (!child && pid !== undefined) await waitForGroupExit(pid, deadline);
+}
+
+/**
+ * Clear `spec.pgid` once its group is seen empty: the kernel then hands the id
+ * to new groups, though never while the group has a member. Polling misses
+ * only a reuse within one {@link EXIT_POLL_MS}.
+ */
+function watchGroupUntilEmpty(spec: ElectronLaunchSpec): void {
+  if (spec.pgid !== undefined && signalGroup(spec.pgid, 0)) {
+    setTimeout(() => watchGroupUntilEmpty(spec), EXIT_POLL_MS).unref();
+  } else {
+    spec.pgid = undefined;
+  }
 }
 
 /**
@@ -564,6 +627,7 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   child.once("exit", () => {
     if (liveChildren.get(port) === child) liveChildren.delete(port);
     spec.pid = undefined;
+    watchGroupUntilEmpty(spec);
   });
 
   trackChromiumPort(port);

@@ -666,8 +666,8 @@ function networkCaptureWarning(
  * so the run still returns a structured report; a run cancelled mid-launch
  * returns the shared aborted outcome (reported as a skip).
  *
- * A Chromium launch boots instead of relaunching in place — see
- * {@link runChromiumLaunch}.
+ * A Chromium launch boots or attaches instead, and relaunches in place only
+ * the instance the run booted, once a script ran — see {@link runChromiumLaunch}.
  */
 async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
   const env = deviceEnv(state);
@@ -796,6 +796,7 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
         if (signal?.aborted) return ABORTED_OUTCOME;
         return { ok: false, reason: `restart-app failed: ${errMsg(err)}` };
       }
+      await frontChromiumPage(registry, device);
     }
     // Then settle. Reported as a boot all the same — a reason's presence is how
     // a consumer tells an instance the run owns (and will kill) from one it

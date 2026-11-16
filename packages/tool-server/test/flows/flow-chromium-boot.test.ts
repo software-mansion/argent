@@ -324,7 +324,14 @@ describe("flow-execute chromium boot", () => {
     );
     const flowDir = path.dirname(flowFile);
     await fs.writeFile(path.join(flowDir, "seed.mjs"), "", "utf8");
-    const registry = makeRegistry();
+    const events: string[] = [];
+    const registry = makeRegistry(async (id) => {
+      events.push(id);
+      return {};
+    });
+    (registry.resolveService as any).mockImplementation(async () => ({
+      cdp: { send: async (method: string) => events.push(method) },
+    }));
 
     const result = await runFlow(registry, {
       name: "seed-then-launch",
@@ -347,7 +354,41 @@ describe("flow-execute chromium boot", () => {
       (c: unknown[]) => c[0] === "restart-app"
     );
     expect(restarts).toHaveLength(1);
+    // The relaunched window is a new one: front it, as a booting launch does.
+    expect(events.slice(events.indexOf("restart-app"))).toEqual([
+      "restart-app",
+      "Page.bringToFront",
+    ]);
     expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("reports a leading launch cancelled while restarting after a script as a skip", async () => {
+    const flowFile = await writeFlow(
+      "steps:\n  - script: { path: ./seed.mjs }\n  - launch: { chromium: ./app }\n"
+    );
+    const flowDir = path.dirname(flowFile);
+    await fs.writeFile(path.join(flowDir, "seed.mjs"), "", "utf8");
+    const controller = new AbortController();
+    // The cancellation makes the restart-app sub-tool itself reject.
+    const registry = makeRegistry(async (id) => {
+      if (id === "restart-app") {
+        controller.abort();
+        throw new Error("This operation was aborted");
+      }
+      return {};
+    });
+
+    const result = await runFlow(
+      registry,
+      { name: "seed-cancelled", project_root: flowDir, e2e_test_file: flowFile },
+      controller.signal
+    );
+
+    expect(result.steps[1]).toMatchObject({
+      kind: "launch",
+      status: "skip",
+      reason: "run aborted",
+    });
   });
 
   it("fails the leading launch when restarting the hoisted instance after a script fails", async () => {

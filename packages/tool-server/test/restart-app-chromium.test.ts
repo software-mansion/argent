@@ -41,6 +41,7 @@ import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../src/tools/flows/flow-insert-echo";
+import { flowAddScriptTool } from "../src/tools/flows/flow-add-script";
 import { __resetRecordingsForTesting, parseFlow } from "../src/tools/flows/flow-utils";
 
 interface FakeChild extends EventEmitter {
@@ -56,6 +57,8 @@ interface FakeChild extends EventEmitter {
 
 let nextPid = 5000;
 let children: FakeChild[] = [];
+/** Ids the kernel handed to an unrelated process group: their probe answers. */
+let recycledGroups: Set<number>;
 
 /** A CDP endpoint on `port`, held while the process it stands for runs. */
 function cdpServer(): http.Server {
@@ -135,6 +138,7 @@ afterAll(() => {
 
 beforeEach(() => {
   children = [];
+  recycledGroups = new Set();
   spawnMock.mockReset();
   spawnMock.mockImplementation(() => {
     const child = makeFakeChild();
@@ -144,6 +148,7 @@ beforeEach(() => {
   // Fake pids: group signals must never reach real processes. An exited
   // child's group answers ESRCH, as the OS would.
   vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
+    if (pid < 0 && recycledGroups.has(-pid)) return true;
     const child = children.find((c) => c.pid === Math.abs(pid));
     if (child?.survivor && pid < 0) {
       if (signal === "SIGKILL") {
@@ -194,15 +199,15 @@ describe("restart-app on Chromium", () => {
     expect(second![1]).toContain("--feature-x");
   });
 
-  it("relaunches an app that already exited", async () => {
+  it("relaunches an app that already exited, sparing a group that took its id", async () => {
     await bootElectronApp({ appPath: appDir, port });
     await exitChild(children[0]!, 1, null);
+    recycledGroups.add(children[0]!.pid);
     const registry = registryWithRestartApp();
 
     await registry.invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" });
 
     expect(children).toHaveLength(2);
-    // An empty group's pgid may be recycled, so it is only probed, never signalled.
     for (const signal of ["SIGTERM", "SIGKILL"]) {
       expect(process.kill).not.toHaveBeenCalledWith(-children[0]!.pid, signal);
     }
@@ -356,10 +361,34 @@ describe("restart-app on Chromium", () => {
     await bootElectronApp({ appPath: appDir, port });
     const leader = children[0]!;
     // The launcher exits on its own; the rest of its group lives on.
+    leader.survivor = true;
     leader.exitCode = 0;
     leader.emit("exit", 0, null);
 
     expect(electronLaunchSpec(port)).toMatchObject({ pid: undefined, pgid: leader.pid });
+  });
+
+  it("spares a group that took the id of an app group that emptied after its launcher", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    const leader = children[0]!;
+    leader.survivor = true;
+    leader.exitCode = 0;
+    leader.emit("exit", 0, null);
+    // The rest of the group exits, then the kernel reuses the id.
+    leader.survivor = false;
+    await releasePort(await childServers.get(leader));
+    await new Promise((r) => setTimeout(r, 200));
+    recycledGroups.add(leader.pid);
+
+    const result = await registryWithRestartApp().invokeTool("restart-app", {
+      udid: `chromium-cdp-${port}`,
+      bundleId: "tag",
+    });
+
+    expect(result).toEqual({ restarted: true, bundleId: "tag" });
+    for (const signal of ["SIGTERM", "SIGKILL"]) {
+      expect(process.kill).not.toHaveBeenCalledWith(-leader.pid, signal);
+    }
   });
 
   it("runs overlapping restarts of one port one after the other", async () => {
@@ -379,30 +408,54 @@ describe("restart-app on Chromium", () => {
     expect(children[2]!.kill).not.toHaveBeenCalled();
   });
 
-  it("runs a boot-device on the same fixed port after a restart in flight", async () => {
+  it("refuses a boot-device on a fixed port that a running copy holds", async () => {
     await bootElectronApp({ appPath: appDir, port });
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      // The boot-device copy finds the port taken, so it never binds it.
-      const child = makeFakeChild(!args.includes("--from-boot-device"));
+    const registry = new Registry();
+    registry.registerTool(createBootDeviceTool(registry));
+
+    const err = await registry
+      .invokeTool("boot-device", { electronAppPath: appDir, electronPort: port })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
+    expect((err as Error).message).toContain("restart-app relaunches it");
+    expect(children).toHaveLength(1);
+    expect(electronLaunchSpec(port)?.pid).toBe(children[0]!.pid);
+  });
+
+  it("holds a boot-device on the fixed port of a restart in flight until the relaunch", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    spawnMock.mockImplementation(() => {
+      const child = makeFakeChild(false);
       children.push(child);
+      // The relaunch binds the port a moment after it starts.
+      if (children.length === 2) {
+        childServers.set(
+          child,
+          new Promise((r) => setTimeout(r, 200)).then(() => holdPort(cdpServer()))
+        );
+      }
       return child;
     });
     const registry = registryWithRestartApp();
     registry.registerTool(createBootDeviceTool(registry));
+    let boot: Promise<unknown> | undefined;
+    // Issued once the old copy has freed the port, before the relaunch binds it.
+    children[0]!.once("exit", () => {
+      boot = registry
+        .invokeTool("boot-device", { electronAppPath: appDir, electronPort: port })
+        .catch((e: unknown) => e);
+    });
 
-    await Promise.all([
-      registry.invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" }),
-      registry.invokeTool("boot-device", {
-        electronAppPath: appDir,
-        electronPort: port,
-        electronArgs: ["--from-boot-device"],
-      }),
-    ]);
+    await registry.invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" });
 
-    const spawnedArgs = spawnMock.mock.calls.map((c) => c[1] as string[]);
-    expect(spawnedArgs).toHaveLength(3);
-    expect(spawnedArgs[1]).not.toContain("--from-boot-device");
-    expect(spawnedArgs[2]).toContain("--from-boot-device");
+    expect(getFailureSignal(await boot)?.error_code).toBe(
+      FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE
+    );
+    expect(children).toHaveLength(2);
   });
 
   it("waits for a process that outlives the launcher before checking the port", async () => {
@@ -847,11 +900,39 @@ describe("restart-app on Chromium", () => {
     }
   );
 
+  it("records a restart behind a step hand-added to the file mid-recording as a raw step", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-flow-"));
+    try {
+      await flowStartRecordingTool.execute({}, { name: "edited", project_root: projectRoot });
+      const file = path.join(projectRoot, ".argent", "e2e", "edited.yaml");
+      fs.writeFileSync(file, "version: 1\nsteps:\n  - tool: screenshot\n    args: {}\n");
+
+      await createFlowAddStepTool(registryWithRestartApp()).execute(
+        {},
+        {
+          name: "edited",
+          project_root: projectRoot,
+          command: "restart-app",
+          args: JSON.stringify({ udid: `chromium-cdp-${port}`, bundleId: "tag" }),
+        }
+      );
+
+      expect(parseFlow(fs.readFileSync(file, "utf8")).steps).toMatchObject([
+        { kind: "tool", name: "screenshot" },
+        { kind: "tool", name: "restart-app", args: { bundleId: "tag" } },
+      ]);
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ["two restarts", undefined, [{}, {}], 0],
     ["a restart behind a step that is not a launch", undefined, [{ delayMs: 1 }, {}], -1],
     ["a restart in a fragment", "the app shows its home screen", [{}], -1],
     ["a restart behind an echo", undefined, ["echo", {}], 1],
+    ["a restart behind a script", undefined, ["script", {}], 1],
   ])(
     "records a Chromium restart as the launch only when it leads a standalone test: %s",
     async (_name, executionPrerequisite, restarts, launchAt) => {
@@ -871,6 +952,16 @@ describe("restart-app on Chromium", () => {
               {},
               { name: "restarts", project_root: projectRoot, message: "start" }
             );
+            continue;
+          }
+          if (extra === "script") {
+            fs.mkdirSync(path.join(projectRoot, "scripts"));
+            fs.writeFileSync(path.join(projectRoot, "scripts", "seed.mjs"), "output.ok = true;");
+            const added = await flowAddScriptTool.execute(
+              {},
+              { name: "restarts", project_root: projectRoot, path: "../../scripts/seed.mjs" }
+            );
+            expect(added.status).toBe("pass");
             continue;
           }
           await createFlowAddStepTool(registry).execute(
@@ -893,8 +984,8 @@ describe("restart-app on Chromium", () => {
         expect(steps).toHaveLength(restarts.length);
         steps.forEach((step, i) =>
           expect(step).toMatchObject(
-            restarts[i] === "echo"
-              ? { kind: "echo" }
+            restarts[i] === "echo" || restarts[i] === "script"
+              ? { kind: restarts[i] }
               : i === launchAt
                 ? { kind: "launch", app: { chromium: appDir } }
                 : { kind: "tool", name: "restart-app", args: { bundleId: "tag" } }

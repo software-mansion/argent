@@ -57,6 +57,8 @@ A failure after the app quits leaves the app stopped:
 
 The error message tells if the tool stopped the app. A copy that the app starts itself, for example with `app.relaunch()`, runs outside the process group of the app. `restart-app` does not stop this copy, so it fails with `CHROMIUM_RESTART_PORT_IN_USE`.
 
+`boot-device` with `electronPort` starts nothing and fails with `CHROMIUM_ELECTRON_PORT_IN_USE` when a process already listens on that port.
+
 `reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
 
 - `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS).

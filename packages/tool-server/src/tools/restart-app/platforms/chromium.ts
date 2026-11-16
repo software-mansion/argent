@@ -1,4 +1,3 @@
-import * as net from "node:net";
 import {
   FAILURE_CODES,
   FailureError,
@@ -15,6 +14,7 @@ import {
   assertElectronAppLaunchable,
   bootElectronApp,
   electronLaunchSpec,
+  heldPortError,
   killChromiumByPortAndWait,
   withPortLock,
 } from "../../devices/boot-electron";
@@ -91,23 +91,11 @@ export function makeChromiumImpl(
 }
 
 /**
- * The boot's readiness probe accepts whatever answers on the port, so a process
- * still holding it (another runtime on the freed port, or a kill that did not
- * land) would pass for the relaunch while the new copy fails to bind. Probing
- * by binding asks what the relaunch needs, including of a holder that accepts
- * connections but never answers CDP. Chromium listens on 127.0.0.1; on Windows
- * it binds with SO_EXCLUSIVEADDRUSE, which fails beside a holder of 0.0.0.0 or
- * ::, so only there are those probed too. Linux refuses the loopback bind
- * beside such a holder, and macOS grants it and routes loopback to Chromium.
+ * Fail when the kill left the port held: by another runtime on the freed port,
+ * or a process the kill did not reach ({@link heldPortError}).
  */
 async function assertPortReleased(port: number, lead: string): Promise<void> {
-  let held = await bindError(port, "127.0.0.1");
-  // One at a time: a dual-stack :: bind collides with a concurrent 0.0.0.0 one.
-  for (const host of process.platform === "win32" ? ["0.0.0.0", "::"] : []) {
-    if (held) break;
-    const err = await bindError(port, host);
-    if (err?.code === "EADDRINUSE") held = err;
-  }
+  const held = await heldPortError(port);
   if (!held) return;
   throw new FailureError(
     `${lead}: port ${port} is still held ` +
@@ -145,12 +133,4 @@ function notBooted(udid: string): FailureError {
 function withPrefix(err: unknown, prefix: string): unknown {
   const signal = getFailureSignal(err);
   return signal && err instanceof Error ? wrapFailure(err, signal, prefix + err.message) : err;
-}
-
-function bindError(port: number, host: string): Promise<NodeJS.ErrnoException | null> {
-  return new Promise((resolve) => {
-    const srv = net.createServer();
-    srv.once("error", (err: NodeJS.ErrnoException) => resolve(err));
-    srv.listen(port, host, () => srv.close(() => resolve(null)));
-  });
 }

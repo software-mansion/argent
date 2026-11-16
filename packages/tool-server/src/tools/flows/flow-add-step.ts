@@ -30,6 +30,7 @@ import {
   foldStepFromArgs,
   isLinkedRecorderCall,
   precedesLeadingLaunch,
+  type FlowFile,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
@@ -838,6 +839,20 @@ async function captureTapSelector(
     return {
       warning: `selector capture failed (${innermostTreeReason(message)}); kept coordinates`,
     };
+  }
+}
+
+/**
+ * The take a step lands in. In "host" mode that is the file, which a hand edit
+ * since the last append can have changed; `session.flow` stays as it was, for
+ * the append to notice that edit.
+ */
+async function recordedTake(session: RecordingSession): Promise<FlowFile> {
+  if (session.persist !== "host") return session.flow;
+  try {
+    return parseFlow(await fs.readFile(session.filePath, "utf8"));
+  } catch {
+    return session.flow; // the append re-reads the file and reports why it cannot
   }
 }
 
@@ -1755,6 +1770,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           ? parseChromiumCdpPort(args.udid as string)
           : null;
       const chromiumSpec = chromiumPort === null ? undefined : electronLaunchSpec(chromiumPort);
+      const take = chromiumSpec ? await recordedTake(session) : session.flow;
       const isMacos = platformOf(args.udid) === "macos";
       const macosArgs = isMacos ? (toolResult as { args?: string[] } | null)?.args : undefined;
       const isLaunch =
@@ -1763,8 +1779,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         typeof strippedArgs.bundleId === "string" &&
         (chromiumPort !== null
           ? chromiumSpec !== undefined &&
-            !session.flow.executionPrerequisite &&
-            session.flow.steps.every(precedesLeadingLaunch)
+            !take.executionPrerequisite &&
+            take.steps.every(precedesLeadingLaunch)
           : Object.keys(extraLaunchArgs).length === 0 &&
             (noLaunchArgs || iosArgs !== undefined || isMacos));
 
