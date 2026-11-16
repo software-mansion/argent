@@ -90,6 +90,23 @@ export async function runFlowScriptStep(
     };
   }
 
+  // Asked of the name the flow spells, not of `canonical`: Node picks a module's
+  // format from the real path's extension, but a symlink that renames a file
+  // across the TypeScript line is not a layout worth a second rule, and the
+  // load failure Node reports for it names the file.
+  if (isTypeScriptScript(suppliedBase) && !nodeStripsTypes()) {
+    return {
+      ran: "no",
+      outcome: {
+        status: "error",
+        reason:
+          `Script "${target}" is TypeScript, and the tool-server runs on Node.js ` +
+          `${process.versions.node}, which cannot run it. Start the tool-server on Node.js ` +
+          `${TYPESCRIPT_MIN_NODE} or later, or write the script as a .mjs file.`,
+      },
+    };
+  }
+
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
     output: {},
@@ -119,6 +136,36 @@ export async function runFlowScriptStep(
     result,
     ran: scriptRan(result),
   };
+}
+
+function isTypeScriptScript(base: string): boolean {
+  return base.endsWith(".mts");
+}
+
+/** The first release of the oldest line that runs TypeScript with no flag. */
+const TYPESCRIPT_MIN_NODE = "22.18";
+
+/**
+ * Whether this Node runs a TypeScript file as it stands: 22.18 on the 22 line,
+ * 23.6 on the 23 line, and every release after. Older ones either cannot or
+ * need `--experimental-strip-types`.
+ *
+ * Read from the version rather than from `process.features.typescript`: the
+ * script's process is this same binary, but the executor gives it its own
+ * `execArgv` and drops `NODE_OPTIONS`, so a flag that turned stripping on or
+ * off for the tool-server says nothing about the child.
+ *
+ * Refusing up front is what makes this a host error. Left to Node, an old
+ * release reports `ERR_UNKNOWN_FILE_EXTENSION` from the loader, which reads as
+ * the script's own load failure and names nothing the author can change.
+ *
+ * Exported for its test.
+ */
+export function nodeStripsTypes(version: string = process.versions.node): boolean {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  if (major >= 24) return true;
+  if (major === 23) return minor >= 6;
+  return major === 22 && minor >= 18;
 }
 
 /**

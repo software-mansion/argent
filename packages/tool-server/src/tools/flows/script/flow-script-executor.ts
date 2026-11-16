@@ -1,5 +1,6 @@
 /**
- * Runs one trusted local JavaScript file in a fresh Node.js child process.
+ * Runs one trusted local JavaScript or TypeScript file in a fresh Node.js child
+ * process.
  *
  * The child is a *reliability* boundary, not a security one: a script is as
  * trusted as a local npm script, and all the process buys is that an infinite

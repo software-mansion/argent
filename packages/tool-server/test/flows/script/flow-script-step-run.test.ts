@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
 import { stepRequiresDevice } from "../../../src/tools/flows/flow-device";
+import { nodeStripsTypes } from "../../../src/tools/flows/flow-script-step";
 
 /**
  * The `script:` step in a run; the executor's own behaviour is covered beside
@@ -316,6 +317,117 @@ describe("a script step that fails", () => {
     expect(result.steps[0]).toMatchObject({ status: "error" });
     expect(result.steps[0]!.reason).toMatch(/did not finish within its 800ms time limit/);
     expect(result.errored).toBe(1);
+  });
+});
+
+/**
+ * The suite runs on whichever Node CI pins, and only some releases run
+ * TypeScript. Each side of that line is covered by the tests it can reach.
+ */
+const stripsTypes = nodeStripsTypes();
+
+describe("a TypeScript script step", () => {
+  it("knows which Node releases run TypeScript with no flag", () => {
+    for (const version of ["22.18.0", "22.23.2", "23.6.0", "24.0.0", "25.8.0"]) {
+      expect(nodeStripsTypes(version), version).toBe(true);
+    }
+    for (const version of ["20.19.5", "22.6.0", "22.17.1", "23.5.0"]) {
+      expect(nodeStripsTypes(version), version).toBe(false);
+    }
+  });
+
+  it.runIf(stripsTypes)("runs a .mts file with its types stripped", async () => {
+    await write(
+      "scripts/seed.mts",
+      [
+        `import * as os from "node:os";`,
+        `interface Order { id: number; host: string }`,
+        `const order: Order = { id: 4711, host: typeof os.hostname() };`,
+        `await Promise.resolve();`,
+        `console.log(\`seeded order \${order.id}\`);`,
+      ].join("\n")
+    );
+    await flow("seedmts", "steps:\n  - script: { path: ../../scripts/seed.mts }\n");
+
+    const { result, invokeTool } = await runFlow("seedmts");
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "script",
+      status: "pass",
+      target: "../../scripts/seed.mts",
+    });
+    expect(result.steps[0]!.scriptLog).toContain("seeded order 4711");
+    expect(listedDevices(invokeTool)).toBe(false);
+  });
+
+  it.runIf(stripsTypes)("runs it as an ES module in a CommonJS package", async () => {
+    // The point of the extension: the project's `type` field does not reach it.
+    await write("package.json", `{ "type": "commonjs" }`);
+    await write(
+      "scripts/pinned.mts",
+      `import { basename } from "node:path";\nconst name: string = basename("/a/b.txt");\nconsole.log(name);\n`
+    );
+    await flow("pinned", "steps:\n  - script: { path: ../../scripts/pinned.mts }\n");
+
+    const { result } = await runFlow("pinned");
+
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "pass" });
+    expect(result.steps[0]!.scriptLog).toContain("b.txt");
+    // Node warns when it has to guess a module type; a pinned one leaves none.
+    expect(result.steps[0]!.scriptLog).not.toContain("Warning");
+  });
+
+  it.runIf(stripsTypes)("keeps the line and column of the TypeScript source", async () => {
+    // Node blanks the types out in place, so a frame needs no source map.
+    await write(
+      "scripts/deep.mts",
+      "interface Order { id: number }\nfunction inner(o: Order): number { return o.id; }\ninner(undefined as unknown as Order);\n"
+    );
+    await flow("deepts", "steps:\n  - script: { path: ../../scripts/deep.mts }\n");
+
+    const { result } = await runFlow("deepts");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(reason).toContain("Cannot read properties of undefined");
+    expect(reason).toContain("at inner (scripts/deep.mts:2:45)");
+  });
+
+  it.runIf(stripsTypes)("fails on syntax that stripping cannot remove", async () => {
+    await write("scripts/enum.mts", `enum Color { Red }\nconsole.log(Color.Red);\n`);
+    await flow("enumts", "steps:\n  - script: { path: ../../scripts/enum.mts }\n");
+
+    const { result } = await runFlow("enumts");
+
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(result.steps[0]!.reason).toMatch(/enum is not supported/);
+  });
+
+  it.runIf(!stripsTypes)("errors on a Node that cannot run it, and starts nothing", async () => {
+    const marker = path.join(root, "ran.txt");
+    await write(
+      "scripts/seed.mts",
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\n`
+    );
+    await flow("oldnode", "steps:\n  - script: { path: ../../scripts/seed.mts }\n");
+
+    const { result } = await runFlow("oldnode");
+
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "error" });
+    expect(result.steps[0]!.reason).toContain(
+      `Script "../../scripts/seed.mts" is TypeScript, and the tool-server runs on Node.js ${process.versions.node}`
+    );
+    expect(result.steps[0]!.reason).toContain("Node.js 22.18 or later");
+    expect(fsSync.existsSync(marker)).toBe(false);
+  });
+
+  it("reports a missing TypeScript file as missing on every Node", async () => {
+    await flow("gonets", "steps:\n  - script: { path: ../../scripts/gone.mts }\n");
+
+    const { result } = await runFlow("gonets");
+
+    expect(result.steps[0]).toMatchObject({ status: "fail", kind: "script" });
+    expect(result.steps[0]!.reason).toContain('Script "../../scripts/gone.mts" does not exist');
   });
 });
 
