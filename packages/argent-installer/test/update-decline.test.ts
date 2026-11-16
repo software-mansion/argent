@@ -332,6 +332,47 @@ describe("update — record-only local project stays updatable", () => {
   });
 });
 
+describe("update — local pnpm project", () => {
+  it("skips pnpm's workspace-root check and runs in the project root", async () => {
+    // At a workspace root a bare `pnpm add -D` fails with ERR_PNPM_ADDING_TO_ROOT.
+    topologyState.globalInstalled = false;
+    fs.writeFileSync(
+      path.join(projDir, "package.json"),
+      JSON.stringify({ name: "root", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    fs.writeFileSync(path.join(projDir, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n");
+    const pkgDir = path.join(projDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    const localPkgJson = path.join(pkgDir, "package.json");
+    fs.writeFileSync(localPkgJson, JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" }));
+
+    childProcessMock.execFileSync.mockImplementation(((bin: string) => {
+      if (bin === "pnpm") {
+        fs.writeFileSync(
+          localPkgJson,
+          JSON.stringify({ name: "@swmansion/argent", version: "99.0.0" })
+        );
+      }
+      return undefined;
+    }) as never);
+
+    await update(["--yes"]);
+
+    const pnpmCalls = (
+      childProcessMock.execFileSync.mock.calls as Array<[string, string[], { cwd?: string }]>
+    ).filter(([bin]) => bin === "pnpm");
+    expect(pnpmCalls).toHaveLength(1);
+    expect(pnpmCalls[0]![1]).toEqual([
+      "add",
+      "-D",
+      "--ignore-workspace-root-check",
+      "@swmansion/argent@99.0.0",
+    ]);
+    // realpath: os.tmpdir() is a symlink on macOS, and process.cwd() resolves it.
+    expect(fs.realpathSync(pnpmCalls[0]![2].cwd!)).toBe(fs.realpathSync(projDir));
+  });
+});
+
 describe("update — customized MCP entries survive the refresh and the sweep", () => {
   it("never rewrites (or sweeps away) a customized global-scope entry", async () => {
     // Local-mode project, no global argent on PATH — the exact setup where the
