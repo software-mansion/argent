@@ -124,8 +124,9 @@ export interface MemoryLeak {
    */
   attributed: boolean;
   /**
-   * True when the responsible frame is in a system library (a path the trace
-   * shows under /System/Library/, /usr/lib/ or a simulator runtime). Either the OS
+   * True when the responsible frame is in a system library: its path, that of a
+   * binary the trace sampled or of a framework found on disk in the OS of the
+   * trace, is under /System/Library/, /usr/lib/ or a simulator runtime. Either the OS
    * leaked the object by itself, or the app's code leaked an object that this
    * library made: the leak does not tell which.
    */

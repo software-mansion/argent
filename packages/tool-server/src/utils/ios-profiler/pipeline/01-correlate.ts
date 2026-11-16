@@ -186,8 +186,10 @@ const ALLOCATOR_LIBRARIES = new Set(["libswiftCore.dylib"]);
  * Whether the responsible frame of a leak is in a system library. This does not
  * tell who leaked the object: the app's own code also leaks objects that a system
  * library made (measured on a Mac app: a CGPath that it did not release, an NSData
- * that it retained too often). `libraryPaths` gives the path of each binary the
- * trace sampled, by name; a library not in it counts as the app's.
+ * that it retained too often). `libraryPaths` gives the path of each responsible
+ * library, by name: a binary that the trace sampled, or a framework that the
+ * pipeline found in the app's bundle or in the OS of the trace (leakLibraryPaths).
+ * A library not in it counts as the app's.
  */
 function inSystemLibrary(library: string, libraryPaths: ReadonlyMap<string, string>): boolean {
   if (ALLOCATOR_LIBRARIES.has(library)) return false;
