@@ -1,6 +1,7 @@
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   type DeviceInfo,
   type Registry,
   type ToolDefinition,
@@ -171,7 +172,13 @@ async function startJsLayer(
     dbg = await resolveDebuggerService(registry, { port, device_id: udid });
   } catch (err) {
     const reason = classifyNotConnected(err);
-    const lost = reason === "metro_not_running" || reason === "device_mismatch";
+    const code = getFailureSignal(err)?.error_code;
+    // Only the device provider changes its grant, or offers the device again.
+    const lost =
+      reason === "metro_not_running" ||
+      reason === "device_mismatch" ||
+      code === FAILURE_CODES.EXTERNAL_DEVICE_CAPABILITY_DENIED ||
+      code === FAILURE_CODES.EXTERNAL_DEVICE_UNAVAILABLE;
     if (other) {
       const text = `${jsNotReached(reason, port, err)}; ${otherPortHint(bundleId, other.port)}`;
       return lost ? unavailable("js", text) : { layer: "js", armed: false, reason: text };

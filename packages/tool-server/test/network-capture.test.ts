@@ -654,6 +654,32 @@ describe("network-capture-start", () => {
       expect(androidFor(APP).calls).toEqual([]);
     });
 
+    it.each([
+      {
+        refusal: "does not grant the JS debugger",
+        code: FAILURE_CODES.EXTERNAL_DEVICE_CAPABILITY_DENIED,
+      },
+      { refusal: "no longer offers the device", code: FAILURE_CODES.EXTERNAL_DEVICE_UNAVAILABLE },
+    ])(
+      "fails with NETWORK_CAPTURE_UNAVAILABLE when the device provider $refusal and the native layer is unavailable",
+      async ({ code }) => {
+        serve(PORT, IOS_UDID, code);
+        ios.appState = "unregistered";
+
+        const err = await start(IOS_UDID, APP).then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+        expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+        expect(err?.message).toContain(
+          `js: the JS debugger could not connect: [JsRuntimeDebugger:${PORT}:${IOS_UDID}] Metro on port ${PORT}: ${code}; ios-native: `
+        );
+        expect(err?.message).not.toContain("call network-capture-start again");
+        expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
+      }
+    );
+
     it("does not fail while the interceptor an earlier start installed may still record", async () => {
       const rt = new FakeRuntime(APP);
       serve(PORT, SERIAL, rt);

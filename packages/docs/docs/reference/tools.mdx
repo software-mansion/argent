@@ -201,6 +201,7 @@ A native layer that is not armed often arms later without a new start. For examp
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | `js`             | Metro does not run on the port.                                                                                                              | `true`        |
 | `js`             | The JS runtime on the port belongs to a different app.                                                                                       | `true`        |
+| `js`             | The device provider did not grant `js-debugger` for the device, or does not offer the device.                                                | `true`        |
 | `js`             | Argent did not reach the JS runtime of the app, but the capture that an earlier start installed there can still record.                      | absent        |
 | `js`             | No app is connected to Metro yet, or the JS runtime did not answer.                                                                          | absent        |
 | `js`             | The JavaScript of the app did not load yet.                                                                                                  | absent        |
