@@ -148,7 +148,7 @@ describe("adaptChromiumTreeForFlows", () => {
   });
 
   // Documented in reference/e2e-yaml.mdx.
-  it("reads a container whose text is all in identified or off-screen children as empty, so '^$' passes", () => {
+  it("reads a container whose text is all in identified, password or off-screen children as empty, so '^$' passes", () => {
     const row = { x: 0.1, y: 0.1, width: 0.5, height: 0.04 };
     const tree = adaptChromiumTreeForFlows(
       el({
@@ -161,6 +161,11 @@ describe("adaptChromiumTreeForFlows", () => {
           }),
           el({ identifier: "plain", frame: row, children: [el({ value: "Hi", frame: row })] }),
           el({
+            identifier: "form",
+            frame: row,
+            children: [el({ role: "input", password: true, clickable: true, frame: row })],
+          }),
+          el({
             identifier: "offscreen",
             frame: row,
             children: [el({ value: "Hi", frame: { x: 0, y: 0, width: 0, height: 0 } })],
@@ -172,6 +177,7 @@ describe("adaptChromiumTreeForFlows", () => {
       evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches");
     expect(emptyPasses("box")).toBe(true);
     expect(emptyPasses("plain")).toBe(false);
+    expect(emptyPasses("form")).toBe(true);
     expect(emptyPasses("offscreen")).toBe(true);
   });
 

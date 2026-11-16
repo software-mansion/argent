@@ -853,6 +853,19 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(JSON.stringify(tree)).not.toContain("abc");
   });
 
+  // Documented in reference/e2e-yaml.mdx.
+  it("cuts each label and text at 200 characters, so a label the same as a longer text is read twice", () => {
+    const long = "a".repeat(250);
+    const cut = long.slice(0, 200);
+    const { tree } = run([
+      el({ text: long, attrs: { "id": "same-long", "aria-label": long }, rect: BOX }),
+      el({ text: long, attrs: { id: "plain-long" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "same-long")).toMatchObject({ label: cut, value: cut });
+    expect(findById(tree, "plain-long")).toMatchObject({ value: cut });
+    expect(findById(tree, "plain-long")?.label).toBeUndefined();
+  });
+
   it("reads a textarea's default text as its value, which typing does not change", () => {
     const { tree } = run([
       textareaEl({ text: "Draft", attrs: { id: "cleared" }, rect: BOX }),

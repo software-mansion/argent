@@ -580,20 +580,29 @@ describe("macOS describe and flow trees of one read", () => {
   });
 
   // Documented in reference/e2e-yaml.mdx.
-  it("keeps a secure field's placeholder out of the container around it, so '^$' passes there", async () => {
+  it("gives a container a text field's placeholder, unless the field is secure or identified", async () => {
     const tree = probeTree();
+    const box = (identifier: string, y: number, field: Json) =>
+      axNode("AXGroup", rect(0.6, y, 0.3, 0.03), { identifier }, [
+        axNode("AXTextField", rect(0.61, y + 0.005, 0.28, 0.02), { value: "", ...field }),
+      ]);
     (windowRoot(tree).children as Json[]).push(
-      axNode("AXGroup", rect(0.6, 0.9, 0.3, 0.06), { identifier: "login" }, [
-        axNode("AXTextField", rect(0.61, 0.91, 0.28, 0.04), {
-          subrole: "AXSecureTextField",
-          placeholder: "Password",
-          value: "•••",
-        }),
-      ])
+      box("login", 0.86, { subrole: "AXSecureTextField", placeholder: "Password", value: "•••" }),
+      box("named", 0.9, { identifier: "email", placeholder: "Email" }),
+      box("search", 0.94, { placeholder: "Search" })
     );
-    const group = findAll(await flowTree({ trees: [tree] }), { identifier: "login" });
-    expect(group.map(assertText)).toEqual([""]);
-    expect(evaluateCondition("text", "^$", group, "matches", undefined, true)).toBe(true);
+    const flow = await flowTree({ trees: [tree] });
+    const read = (id: string) => findAll(flow, { identifier: id });
+    const emptyPasses = (id: string) =>
+      evaluateCondition("text", "^$", read(id), "matches", undefined, true);
+    expect(["login", "named", "search"].map((id) => read(id).map(assertText))).toEqual([
+      [""],
+      [""],
+      ["Search"],
+    ]);
+    expect(emptyPasses("login")).toBe(true);
+    expect(emptyPasses("named")).toBe(true);
+    expect(emptyPasses("search")).toBe(false);
   });
 
   it.each([
