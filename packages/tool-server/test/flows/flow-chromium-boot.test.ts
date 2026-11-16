@@ -274,6 +274,8 @@ describe("flow-execute chromium boot", () => {
     ["a restart-app replaced the booted process", { pid: 777, pgid: 777 }, 777],
     // The group can outlive its launcher, still holding the port.
     ["the replacement's launcher already exited", { pid: undefined, pgid: 777 }, 777],
+    // The emptied group's id may already name another group: signal nothing.
+    ["the app's group already emptied", { pid: undefined, pgid: undefined }, undefined],
   ])("tears down the current process group when %s", async (_name, spec, pid) => {
     electronLaunchSpec.mockReturnValue(spec);
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: done\n");

@@ -2120,7 +2120,7 @@ function clientRootCanonical(
  * run doesn't begin with a launch, or when the chain can't be read (a broken
  * `run:` target is reported by {@link execRunStep} when it executes).
  */
-async function leadingLaunch(
+export async function leadingLaunch(
   flow: FlowFile,
   stack: RunStackEntry[],
   env: Pick<ExecState, "registry" | "project">
@@ -2393,7 +2393,7 @@ function pushReport(state: ExecState, report: StepReport): void {
  * One `run:` chain entry: the cycle guard compares canonical (realpath'd)
  * paths; error messages render the human-readable display names.
  */
-interface RunStackEntry {
+export interface RunStackEntry {
   canonical: string;
   display: string;
 }

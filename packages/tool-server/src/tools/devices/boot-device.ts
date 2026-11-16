@@ -104,6 +104,7 @@ import { UITEST_TIMEOUT_MS, harmonyDisplay, harmonyDumpLayout } from "../../util
 import {
   assertElectronPortFree,
   bootElectronApp,
+  forgetElectronLaunchSpec,
   withPortLock,
   type ElectronBootResult,
 } from "./boot-electron";
@@ -2256,7 +2257,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Shut down and re-boot the device even if already running.<flag:harmonyos> On HarmonyOS it is also what ties an already-running instance to its `hdc` connect key: without it the instance is left alone and its key stays unresolved (`list-devices` lists the keys, but not which instance each belongs to).</flag:harmonyos><flag:macos-apps> On a Mac app it quits and restarts the app, also a copy of the same build running without the argent library: that copy loses its unsaved changes. When the app argent runs answers the quit with a save prompt, the call fails and the app keeps running. Force never quits a copy of another build (another .app path).</flag:macos-apps> Ignored for Electron, which always spawns a fresh process."
+      "Shut down and re-boot the device even if already running.<flag:harmonyos> On HarmonyOS it is also what ties an already-running instance to its `hdc` connect key: without it the instance is left alone and its key stays unresolved (`list-devices` lists the keys, but not which instance each belongs to).</flag:harmonyos><flag:macos-apps> On a Mac app it quits and restarts the app, also a copy of the same build running without the argent library: that copy loses its unsaved changes. When the app argent runs answers the quit with a save prompt, the call fails and the app keeps running. Force never quits a copy of another build (another .app path).</flag:macos-apps> Ignored for Electron: each boot spawns a new process, and an `electronPort` that a process already listens on is refused."
     ),
   sound: z
     .boolean()
@@ -2476,7 +2477,14 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
         ? electronBoot()
         : withPortLock(fixedPort, async () => {
             await assertElectronPortFree(fixedPort);
-            return electronBoot();
+            try {
+              return await electronBoot();
+            } catch (err) {
+              // This boot was to replace the port's app, so restart-app must not
+              // relaunch the one it replaced.
+              forgetElectronLaunchSpec(fixedPort);
+              throw err;
+            }
           });
     },
   };

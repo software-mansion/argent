@@ -67,7 +67,12 @@ export function makeChromiumImpl(
           : "restart-app could not relaunch the app: "
       );
     }
-    return { restarted: true, bundleId: params.bundleId };
+    return {
+      restarted: true,
+      bundleId: params.bundleId,
+      appPath: spec.appPath,
+      args: spec.extraArgs,
+    };
   }
 
   return {
@@ -116,7 +121,8 @@ function notBooted(udid: string): FailureError {
   return new FailureError(
     `restart-app can only relaunch an Electron app that this tool-server session booted ` +
       `(boot-device, or an e2e run), and ${udid} is not one: argent did not boot it, an e2e ` +
-      `run booted it and stopped it at its end, or the tool-server restarted since the boot ` +
+      `run booted it and stopped it at its end, a boot-device on its port failed since, or ` +
+      `the tool-server restarted since the boot ` +
       `(an auto-started one exits after 30 idle minutes) and no longer knows how the app was ` +
       `launched. Quit the app if it still runs, then start it again: for an Electron app, ` +
       `boot-device with electronAppPath; otherwise relaunch it with --remote-debugging-port.`,

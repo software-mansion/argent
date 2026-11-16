@@ -259,12 +259,20 @@ function bindError(port: number, host: string): Promise<NodeJS.ErrnoException | 
 export async function assertElectronPortFree(port: number): Promise<void> {
   const held = await heldPortError(port);
   if (!held) return;
+  const spec = launchSpecs.get(port);
+  const remedy = spec
+    ? `This tool-server session booted ${spec.appPath} on that port ` +
+      (spec.extraArgs.length
+        ? `with the arguments ${JSON.stringify(spec.extraArgs)}`
+        : `with no extra arguments`) +
+      `, and restart-app relaunches that app with those arguments on chromium-cdp-${port}. ` +
+      `To start another app or other arguments there, quit the process that listens on ` +
+      `port ${port} first, or omit electronPort to boot on a free port.`
+    : `Check which process listens on port ${port} before you quit it, or omit ` +
+      `electronPort to boot on a free port.`;
   throw new FailureError(
     `Electron boot: port ${port} is already in use (${held.code ?? held.message}), so the ` +
-      `app could not open CDP there, and nothing was started. If boot-device started that ` +
-      `app in this tool-server session, restart-app relaunches it on chromium-cdp-${port}. ` +
-      `Otherwise check which process listens on port ${port} before you quit it, or omit ` +
-      `electronPort to boot on a free port.`,
+      `app could not open CDP there, and nothing was started. ${remedy}`,
     {
       error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
       failure_stage: "electron_port_check",
@@ -603,17 +611,14 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     // cleanup and reject the orphan promises.
     detachBootListeners();
     killChildEscalating(child);
+    // Until the copy is gone it holds the port, so a retry would find it held.
+    await waitForGroupExit(child.pid, Date.now() + EXIT_WAIT_TIMEOUT_MS);
     throw err;
   }
   // Detach the boot-time listeners: the child is intentionally long-lived, and
   // any later exit / error belongs to whoever manages the session next.
   detachBootListeners();
 
-  // Retain the handle so teardown (killChromiumByPort) can kill via the
-  // ChildProcess instead of a recyclable raw pid — see liveChildren. This
-  // listener only clears the map entry, so a natural exit long after boot stays
-  // inert; the identity check keeps a stale child's exit from evicting a newer
-  // boot that reused the same fixed port.
   const appPath = path.resolve(options.appPath);
   const spec: ElectronLaunchSpec = {
     appPath,
@@ -623,6 +628,11 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     pgid: child.pid,
   };
   launchSpecs.set(port, spec);
+  // Retain the handle so teardown (killChromiumByPort) can kill via the
+  // ChildProcess instead of a recyclable raw pid — see liveChildren. The exit
+  // listener rejects nothing, so a natural exit long after boot cannot crash
+  // the tool-server; the identity check keeps a stale child's exit from
+  // evicting a newer boot that reused the same fixed port.
   liveChildren.set(port, child);
   child.once("exit", () => {
     if (liveChildren.get(port) === child) liveChildren.delete(port);

@@ -29,13 +29,14 @@ import {
   describeSelector,
   foldStepFromArgs,
   isLinkedRecorderCall,
-  precedesLeadingLaunch,
   type FlowFile,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
+  type Launch,
   type RecordingSession,
 } from "./flow-utils";
+import { leadingLaunch } from "./flow-run";
 import {
   AWAIT_UI_ELEMENT_TOOL_ID,
   isUnmetUiWaitResult,
@@ -856,6 +857,22 @@ async function recordedTake(session: RecordingSession): Promise<FlowFile> {
   }
 }
 
+/**
+ * Whether a launch appended to `take` would be the launch its run begins with,
+ * by the runner's own scan ({@link leadingLaunch}).
+ */
+async function leadsRun(
+  take: FlowFile,
+  filePath: string,
+  env: Parameters<typeof leadingLaunch>[2]
+): Promise<boolean> {
+  const app: Launch = {};
+  const steps: FlowStep[] = [...take.steps, { kind: "launch", app }];
+  const display = path.basename(filePath);
+  const found = await leadingLaunch({ ...take, steps }, [{ canonical: filePath, display }], env);
+  return found?.app === app;
+}
+
 async function activeFlowState(
   session: RecordingSession
 ): Promise<{ stepCount: number; note?: string }> {
@@ -906,8 +923,9 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     rewriteCondition:
       "when it carries only the bundle id, or `launchArgs` on iOS (any other extra arg, e.g. an " +
       "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it); " +
-      "on Chromium, as the app's path and boot args, only as the leading step of a recording " +
-      "without an executionPrerequisite",
+      "on Chromium, for an app this tool-server session booted, as the app's path and boot args " +
+      "(other args are ignored), when only echo and script steps, also inside leading `run:` " +
+      "fragments, come before it in a recording without an executionPrerequisite",
   },
   run: {
     tool: "e2e-execute",
@@ -1780,7 +1798,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         (chromiumPort !== null
           ? chromiumSpec !== undefined &&
             !take.executionPrerequisite &&
-            take.steps.every(precedesLeadingLaunch)
+            (await leadsRun(take, session.filePath, { registry, project }))
           : Object.keys(extraLaunchArgs).length === 0 &&
             (noLaunchArgs || iosArgs !== undefined || isMacos));
 

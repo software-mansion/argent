@@ -75,10 +75,14 @@ function cdpServer(): http.Server {
 
 const held = new Set<net.Server>();
 
-async function holdPort(server: net.Server, host = "127.0.0.1"): Promise<net.Server> {
+async function holdPort(
+  server: net.Server,
+  host = "127.0.0.1",
+  ipv6Only = false
+): Promise<net.Server> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, host, () => resolve());
+    server.listen({ port, host, ipv6Only }, () => resolve());
   });
   held.add(server);
   return server;
@@ -172,6 +176,11 @@ afterEach(async () => {
   childServers.clear();
 });
 
+/** What restart-app returns for the app booted from `appDir` with `args`. */
+function restarted(args: string[] = []) {
+  return { restarted: true, bundleId: "tag", appPath: appDir, args };
+}
+
 function registryWithRestartApp(): Registry {
   const registry = new Registry();
   registry.registerTool(createRestartAppTool(registry));
@@ -188,7 +197,7 @@ describe("restart-app on Chromium", () => {
       bundleId: "tag",
     });
 
-    expect(result).toEqual({ restarted: true, bundleId: "tag" });
+    expect(result).toEqual(restarted(["--feature-x"]));
     expect(children).toHaveLength(2);
     expect(children[0]!.kill).toHaveBeenCalledWith("SIGTERM");
     expect(children[1]!.kill).not.toHaveBeenCalled();
@@ -227,7 +236,7 @@ describe("restart-app on Chromium", () => {
       bundleId: "tag",
     });
 
-    expect(result).toEqual({ restarted: true, bundleId: "tag" });
+    expect(result).toEqual(restarted());
     expect(process.kill).toHaveBeenCalledWith(-leader.pid, "SIGTERM");
     expect(children).toHaveLength(2);
     expect(electronLaunchSpec(port)).toMatchObject({ pgid: children[1]!.pid });
@@ -267,27 +276,33 @@ describe("restart-app on Chromium", () => {
     }
   );
 
-  it("refuses a wildcard holder of the freed port on Windows, where Chromium binds exclusively", async () => {
-    await bootElectronApp({ appPath: appDir, port });
-    await exitChild(children[0]!, 1, null);
-    const foreign = await holdPort(cdpServer(), "0.0.0.0");
-    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
-    try {
-      const err = await registryWithRestartApp()
-        .invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" })
-        .then(
-          () => undefined,
-          (e: unknown) => e
-        );
+  it.each([
+    ["0.0.0.0", false],
+    ["::", true],
+  ])(
+    "refuses a %s holder of the freed port on Windows, where Chromium binds exclusively",
+    async (host, ipv6Only) => {
+      await bootElectronApp({ appPath: appDir, port });
+      await exitChild(children[0]!, 1, null);
+      const foreign = await holdPort(cdpServer(), host, ipv6Only);
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+      try {
+        const err = await registryWithRestartApp()
+          .invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" })
+          .then(
+            () => undefined,
+            (e: unknown) => e
+          );
 
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE);
-      expect(children).toHaveLength(1);
-    } finally {
-      Object.defineProperty(process, "platform", platform);
-      await releasePort(foreign);
+        expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE);
+        expect(children).toHaveLength(1);
+      } finally {
+        Object.defineProperty(process, "platform", platform);
+        await releasePort(foreign);
+      }
     }
-  });
+  );
 
   // Chromium's 127.0.0.1 listener binds beside it and takes the loopback connections.
   it.runIf(process.platform === "darwin")(
@@ -302,7 +317,7 @@ describe("restart-app on Chromium", () => {
         bundleId: "tag",
       });
 
-      expect(result).toEqual({ restarted: true, bundleId: "tag" });
+      expect(result).toEqual(restarted());
       expect(children).toHaveLength(2);
       await releasePort(foreign);
     }
@@ -330,7 +345,7 @@ describe("restart-app on Chromium", () => {
         bundleId: "tag",
       });
 
-      expect(result).toEqual({ restarted: true, bundleId: "tag" });
+      expect(result).toEqual(restarted());
       expect(children).toHaveLength(2);
     } finally {
       Object.defineProperty(process, "platform", platform);
@@ -385,7 +400,7 @@ describe("restart-app on Chromium", () => {
       bundleId: "tag",
     });
 
-    expect(result).toEqual({ restarted: true, bundleId: "tag" });
+    expect(result).toEqual(restarted());
     for (const signal of ["SIGTERM", "SIGKILL"]) {
       expect(process.kill).not.toHaveBeenCalledWith(-leader.pid, signal);
     }
@@ -408,8 +423,35 @@ describe("restart-app on Chromium", () => {
     expect(children[2]!.kill).not.toHaveBeenCalled();
   });
 
-  it("refuses a boot-device on a fixed port that a running copy holds", async () => {
-    await bootElectronApp({ appPath: appDir, port });
+  it("refuses a boot-device on a fixed port that a running copy holds, naming that copy's boot", async () => {
+    await bootElectronApp({ appPath: appDir, port, extraArgs: ["--old"] });
+    const registry = new Registry();
+    registry.registerTool(createBootDeviceTool(registry));
+
+    const err = await registry
+      .invokeTool("boot-device", {
+        electronAppPath: appDir,
+        electronPort: port,
+        electronArgs: ["--new"],
+      })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
+    expect((err as Error).message).toContain(
+      `This tool-server session booted ${appDir} on that port with the arguments ["--old"], ` +
+        `and restart-app relaunches that app with those arguments on chromium-cdp-${port}. ` +
+        `To start another app or other arguments there,`
+    );
+    expect(children).toHaveLength(1);
+    expect(electronLaunchSpec(port)?.pid).toBe(children[0]!.pid);
+  });
+
+  it("refuses a boot-device on a fixed port that a process Argent did not boot holds", async () => {
+    forgetElectronLaunchSpec(port);
+    const foreign = await holdPort(cdpServer());
     const registry = new Registry();
     registry.registerTool(createBootDeviceTool(registry));
 
@@ -421,9 +463,59 @@ describe("restart-app on Chromium", () => {
       );
 
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
-    expect((err as Error).message).toContain("restart-app relaunches it");
+    expect((err as Error).message).toContain(`Check which process listens on port ${port}`);
+    expect((err as Error).message).not.toContain("restart-app");
+    expect(spawnMock).not.toHaveBeenCalled();
+    await releasePort(foreign);
+  });
+
+  it("forgets the port's app when a fixed-port boot-device there fails", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    await exitChild(children[0]!, 1, null);
+    spawnMock.mockImplementationOnce(() => {
+      throw new Error("spawn EAGAIN");
+    });
+    const registry = registryWithRestartApp();
+    registry.registerTool(createBootDeviceTool(registry));
+    await expect(
+      registry.invokeTool("boot-device", { electronAppPath: appDir, electronPort: port })
+    ).rejects.toThrow(/failed to spawn/);
+
+    const err = await registry
+      .invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_NOT_BOOTED);
+    expect((err as Error).message).toContain("a boot-device on its port failed since");
     expect(children).toHaveLength(1);
-    expect(electronLaunchSpec(port)?.pid).toBe(children[0]!.pid);
+  });
+
+  it("returns from a failed relaunch only once its copy is gone, so a retry relaunches", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    spawnMock.mockImplementationOnce(() => {
+      const child = makeFakeChild();
+      children.push(child);
+      // The launcher exits before CDP is ready; the rest of its group holds the port.
+      child.survivor = true;
+      setTimeout(() => {
+        child.exitCode = 1;
+        child.emit("exit", 1, null);
+      }, 10);
+      return child;
+    });
+    const registry = registryWithRestartApp();
+    const udid = `chromium-cdp-${port}`;
+    await expect(registry.invokeTool("restart-app", { udid, bundleId: "tag" })).rejects.toThrow(
+      /stopped the app but could not relaunch it/
+    );
+
+    const result = await registry.invokeTool("restart-app", { udid, bundleId: "tag" });
+
+    expect(result).toEqual(restarted());
+    expect(children).toHaveLength(3);
   });
 
   it("holds a boot-device on the fixed port of a restart in flight until the relaunch", async () => {
@@ -468,7 +560,7 @@ describe("restart-app on Chromium", () => {
       bundleId: "tag",
     });
 
-    expect(result).toEqual({ restarted: true, bundleId: "tag" });
+    expect(result).toEqual(restarted());
     expect(process.kill).toHaveBeenCalledWith(-children[0]!.pid, "SIGKILL");
     expect(children).toHaveLength(2);
   });
@@ -548,7 +640,7 @@ describe("restart-app on Chromium", () => {
     const reason = (first as PromiseRejectedResult).reason as Error;
     expect(getFailureSignal(reason)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED);
     expect(reason.message).toContain("stopped the app but could not relaunch it");
-    expect(second).toEqual({ status: "fulfilled", value: { restarted: true, bundleId: "tag" } });
+    expect(second).toEqual({ status: "fulfilled", value: restarted() });
     expect(spawnMock).toHaveBeenCalledTimes(3);
     expect(children).toHaveLength(2);
     expect(children[1]!.kill).not.toHaveBeenCalled();
@@ -620,7 +712,7 @@ describe("restart-app on Chromium", () => {
         bundleId: "tag",
       });
 
-      expect(result).toEqual({ restarted: true, bundleId: "tag" });
+      expect(result).toEqual({ ...restarted(), appPath: bare });
       expect(children).toHaveLength(2);
     } finally {
       process.chdir(startCwd);
@@ -749,8 +841,10 @@ describe("restart-app on Chromium", () => {
       properties: { executionPrerequisite: { description: string } };
     };
     const description = schema.properties.executionPrerequisite.description;
-    expect(description).toContain("`launch: { chromium: <app path> }`");
-    expect(description).not.toContain("no chromium support");
+    expect(description).toContain(
+      "a leading restart-app of an app that boot-device started in this tool-server session"
+    );
+    expect(description).toContain("For any other chromium app, add that step to the YAML by hand.");
   });
 
   it("disposes the CDP service after the kill", async () => {
@@ -926,6 +1020,54 @@ describe("restart-app on Chromium", () => {
       fs.rmSync(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    ["only echo steps", "  - echo: seeded\n", { kind: "launch", app: { chromium: "__APP__" } }],
+    [
+      "a step that is not a launch",
+      "  - tool: screenshot\n    args: {}\n",
+      { kind: "tool", name: "restart-app", args: { bundleId: "tag" } },
+    ],
+    // That launch leads the run, so the restart is a later one.
+    [
+      "its own launch",
+      "  - launch: { chromium: ./app }\n",
+      { kind: "tool", name: "restart-app", args: { bundleId: "tag" } },
+    ],
+  ])(
+    "records a restart behind a leading run: of a fragment of %s as the runner scans it",
+    async (_name, fragmentSteps, expected) => {
+      await bootElectronApp({ appPath: appDir, port });
+      const projectRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "argent-restart-app-chromium-flow-")
+      );
+      try {
+        await flowStartRecordingTool.execute({}, { name: "seeded", project_root: projectRoot });
+        const dir = path.join(projectRoot, ".argent", "e2e");
+        fs.writeFileSync(path.join(dir, "seed.yaml"), `version: 1\nsteps:\n${fragmentSteps}`);
+        const file = path.join(dir, "seeded.yaml");
+        fs.writeFileSync(file, "version: 1\nsteps:\n  - run: seed\n");
+
+        await createFlowAddStepTool(registryWithRestartApp()).execute(
+          {},
+          {
+            name: "seeded",
+            project_root: projectRoot,
+            command: "restart-app",
+            args: JSON.stringify({ udid: `chromium-cdp-${port}`, bundleId: "tag" }),
+          }
+        );
+
+        const steps = parseFlow(fs.readFileSync(file, "utf8")).steps;
+        expect(steps).toMatchObject([
+          { kind: "run", flow: "seed.yaml" },
+          JSON.parse(JSON.stringify(expected).replace('"__APP__"', JSON.stringify(appDir))),
+        ]);
+      } finally {
+        fs.rmSync(projectRoot, { recursive: true, force: true });
+      }
+    }
+  );
 
   it.each([
     ["two restarts", undefined, [{}, {}], 0],

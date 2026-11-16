@@ -96,8 +96,13 @@ afterAll(() => {
 // Every boot-failure test runs killChildEscalating against a fake child
 // carrying a stand-in pid, and its group sweep signals through process.kill —
 // real signals must never escape onto whatever owns that pid. Never restored:
-// the unref'd 2s escalation timer can fire after the test that armed it.
-vi.spyOn(process, "kill").mockImplementation(() => true);
+// the unref'd 2s escalation timer can fire after the test that armed it. A
+// liveness probe finds the group gone, as after a real failed boot, so the
+// failure path's wait for it returns at once.
+vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+  if (signal === 0) throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+  return true;
+});
 
 beforeEach(() => {
   spawnMock.mockReset();

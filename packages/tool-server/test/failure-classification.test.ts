@@ -255,6 +255,10 @@ describe("chromium CDP discovery classifications", () => {
     const err = await captureError(ensureCdpReachable(port));
     expectCode(err, FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE);
     expect(getFailureSignal(err)?.network_failure).toBe("connection_refused");
+    // A crashed app Argent booted refuses too, and restart-app is its way back.
+    expect((err as Error).message).toContain(
+      "If boot-device started it in this tool-server session, restart-app relaunches it on the same device id."
+    );
   });
 
   it("classifies a port that accepts and never answers as CHROMIUM_CDP_UNREACHABLE", async () => {

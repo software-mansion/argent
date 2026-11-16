@@ -50,8 +50,10 @@ const zodSchema = z.object({
     .optional()
     .describe(
       'Fragments only: the app/device state assumed on entry (e.g. "Settings app open on General page"). ' +
-        "Omit it for a standalone e2e test (on chromium, its recorded restart-app is captured as " +
-        "`launch: { chromium: <app path> }` with the app's absolute path)."
+        "Omit it for a standalone e2e test. On chromium, a leading restart-app of an app that " +
+        "boot-device started in this tool-server session is captured as a " +
+        "`launch: { chromium: ... }` step: the app's absolute path, or `{ path, args }` when the " +
+        "boot had electronArgs. For any other chromium app, add that step to the YAML by hand."
     ),
   requires: z
     .object({

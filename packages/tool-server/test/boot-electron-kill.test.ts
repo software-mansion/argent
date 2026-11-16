@@ -382,6 +382,23 @@ describe("killChromiumByPortAndWait", () => {
     }
   });
 
+  it("spends one timeout on the leader and the group it leaves behind", async () => {
+    const { child, port, close } = await bootFakeChild();
+    try {
+      // The leader exits near the timeout; the rest of its group never does.
+      setTimeout(() => {
+        child.exitCode = 0;
+        child.emit("exit", 0, null);
+      }, 250).unref();
+      const started = Date.now();
+      await killChromiumByPortAndWait(port, FAKE_PID, 300);
+      // A second timeout for the group would end at 550 ms or later.
+      expect(Date.now() - started).toBeLessThan(500);
+    } finally {
+      close();
+    }
+  });
+
   it("returns immediately when the child already exited", async () => {
     const { child, port, close } = await bootFakeChild();
     try {
