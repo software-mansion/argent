@@ -671,6 +671,125 @@ describe("describe full-hierarchy adapter", () => {
     expect(evaluateCondition("text", "Name", field, "equals")).toBe(true);
   });
 
+  it("reads a labelled text field as its label and the text it holds", () => {
+    // A React Native TextInput with an accessibilityLabel: the label differs
+    // from the text, and both are part of what the field reads as.
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "RCTUITextField",
+        identifier: "email",
+        label: "Email",
+        value: "linda@example.com",
+        windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+        children: [],
+      })
+    );
+    const field = findAll(tree, { identifier: "email" });
+
+    expect(field[0]!.label).toBe("Email");
+    expect(field[0]!.value).toBe("linda@example.com");
+    expect(assertText(field[0]!)).toBe("Email linda@example.com");
+    expect(evaluateCondition("text", "Email linda@example.com", field, "equals")).toBe(true);
+    expect(evaluateCondition("text", "linda@example.com", field, "contains")).toBe(true);
+    // A text selector matches the label and the text separately.
+    expect(findAll(tree, { text: "linda@example.com" })).toEqual(field);
+    expect(findAll(tree, { text: "Email" })).toEqual(field);
+  });
+
+  it("hoists a labelled text field's label, then its text", () => {
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "RCTView",
+        identifier: "email-row",
+        windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+        children: [
+          {
+            className: "RCTUITextField",
+            label: "Email",
+            value: "linda@example.com",
+            windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+            children: [],
+          },
+        ],
+      })
+    );
+    const row = findAll(tree, { identifier: "email-row" });
+
+    expect(row[0]!.subtreeText).toBe("Email linda@example.com");
+    expect(evaluateCondition("text", "Email linda@example.com", row, "equals")).toBe(true);
+  });
+
+  it("reads the placeholder of a labelled empty text field once", () => {
+    // The field's value is its placeholder, and the label view under the field
+    // draws the same text. The field's own label is in no view under it.
+    const emptyField = (identifier: string | undefined, label: string, placeholder: string) => ({
+      className: "UITextField",
+      ...(identifier ? { identifier } : {}),
+      label,
+      value: placeholder,
+      windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+      children: [
+        {
+          className: "UITextFieldLabel",
+          label: placeholder,
+          windowFrame: { x: 27, y: 111, width: 286, height: 22 },
+          children: [],
+        },
+      ],
+    });
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields(
+        {
+          className: "UIView",
+          identifier: "labeled-row",
+          windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+          children: [emptyField(undefined, "Email", "Required")],
+        },
+        emptyField("query", "Query", "Find")
+      )
+    );
+    const row = findAll(tree, { identifier: "labeled-row" });
+    const field = findAll(tree, { identifier: "query" });
+
+    expect(row[0]!.subtreeText).toBe("Email Required");
+    expect(evaluateCondition("text", "Email Required", row, "equals")).toBe(true);
+    expect(assertText(field[0]!)).toBe("Query Find");
+    expect(field[0]!.subtreeText).toBeUndefined();
+    expect(evaluateCondition("text", "Query Find", field, "equals")).toBe(true);
+  });
+
+  it("keeps a text field's text when a view under it draws only its label", () => {
+    // A floating-label field: the label is drawn above the text the field holds.
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "UIView",
+        identifier: "floating-row",
+        windowFrame: { x: 20, y: 100, width: 300, height: 60 },
+        children: [
+          {
+            className: "UITextField",
+            label: "Email",
+            value: "a@b.c",
+            windowFrame: { x: 20, y: 100, width: 300, height: 60 },
+            children: [
+              {
+                className: "UILabel",
+                label: "Email",
+                windowFrame: { x: 27, y: 102, width: 286, height: 16 },
+                children: [],
+              },
+            ],
+          },
+        ],
+      })
+    );
+    const row = findAll(tree, { identifier: "floating-row" });
+
+    // Each text once: the label from the view that draws it.
+    expect(row[0]!.subtreeText).toBe("a@b.c Email");
+    expect(evaluateCondition("text", "a@b.c", row, "contains")).toBe(true);
+  });
+
   it("reads a text field that serves no value as holding no text", () => {
     // A secure field: the framework never serves what it holds.
     const tree = adaptFullHierarchyToDescribeResult(
@@ -690,12 +809,14 @@ describe("describe full-hierarchy adapter", () => {
   });
 
   it("keeps the value of a view that is not a text input out of the tree", () => {
-    // A switch's "1" would turn the row's text into "Wi-Fi 1".
+    // A switch's "1" would turn the row's text into "Wi-Fi 1". The first switch
+    // has no identifier: an identified view shields its text, so only a switch
+    // without one can show that its value does not hoist.
     const tree = adaptFullHierarchyToDescribeResult(
       withFields({
         className: "RCTView",
         identifier: "wifi-row",
-        windowFrame: { x: 0, y: 100, width: 400, height: 44 },
+        windowFrame: { x: 0, y: 100, width: 400, height: 88 },
         children: [
           {
             className: "UILabel",
@@ -705,18 +826,32 @@ describe("describe full-hierarchy adapter", () => {
           },
           {
             className: "UISwitch",
-            identifier: "wifi-switch",
             value: "1",
             windowFrame: { x: 330, y: 106, width: 51, height: 31 },
+            children: [],
+          },
+          {
+            className: "UISwitch",
+            identifier: "bluetooth-switch",
+            label: "Bluetooth",
+            value: "0",
+            windowFrame: { x: 330, y: 150, width: 51, height: 31 },
             children: [],
           },
         ],
       })
     );
     const row = findAll(tree, { identifier: "wifi-row" });
+    const switches = findAll(tree, { role: "AXAdjustable" });
 
-    expect(findAll(tree, { identifier: "wifi-switch" })[0]!.value).toBeUndefined();
+    expect(switches).toHaveLength(2);
+    expect(switches.map((s) => s.value)).toEqual([undefined, undefined]);
+    expect(row[0]!.subtreeText).toBe("Wi-Fi");
     expect(evaluateCondition("text", "Wi-Fi", row, "equals")).toBe(true);
+    // The identified switch reads as its label alone.
+    const bluetooth = findAll(tree, { identifier: "bluetooth-switch" });
+    expect(assertText(bluetooth[0]!)).toBe("Bluetooth");
+    expect(findAll(tree, { text: "1" })).toHaveLength(0);
   });
 
   it("does not hoist the text of a text field scrolled off screen", () => {

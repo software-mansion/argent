@@ -125,7 +125,11 @@ function asViewNode(v: unknown): RawViewNode | null {
   };
 }
 
-const TEXT_INPUT_ROLE = "AXTextField";
+/**
+ * The role of a text input in the simulator tree, and the only role whose leaf
+ * carries a `value` there: see {@link projectIosNode}.
+ */
+export const IOS_TEXT_INPUT_ROLE = "AXTextField";
 
 // Role guessed from the UIView class name — the full hierarchy carries no
 // accessibility traits. Selectors lean on text/identifier, so a coarse mapping
@@ -133,7 +137,7 @@ const TEXT_INPUT_ROLE = "AXTextField";
 function roleFromClassName(cn: string | undefined): string {
   if (!cn) return "AXGroup";
   if (/Button/i.test(cn)) return "AXButton";
-  if (/(TextField|TextView|SearchField)/i.test(cn)) return TEXT_INPUT_ROLE;
+  if (/(TextField|TextView|SearchField)/i.test(cn)) return IOS_TEXT_INPUT_ROLE;
   if (/(Label|Text)/i.test(cn)) return "AXStaticText";
   if (/Image/i.test(cn)) return "AXImage";
   if (/(Slider|Stepper|Switch|ProgressView)/i.test(cn)) return "AXAdjustable";
@@ -178,7 +182,7 @@ function projectIosNode(
 ): FlatNode<RawViewNode> {
   const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
   const role = roleFromClassName(node.className);
-  const value = role === TEXT_INPUT_ROLE && node.value !== node.label ? node.value : undefined;
+  const value = role === IOS_TEXT_INPUT_ROLE && node.value !== node.label ? node.value : undefined;
 
   // Scroll-clip inputs (see `flattenHoisting`). Screen (or window) space only:
   // `frame` is parent-local, so falling back to it (as the leaf frame does)
@@ -205,6 +209,10 @@ function projectIosNode(
     }
   }
 
+  const ownTextParts = frame
+    ? [node.label, value].filter((text): text is string => Boolean(text))
+    : [];
+
   return {
     skip,
     children: node.children ?? [],
@@ -214,7 +222,10 @@ function projectIosNode(
     // leaf-eligible, and so does the text input role a value needs, so `frame`
     // was computed for any node with text. Mirrors what `nodeText` reads off
     // the leaf: the label plus a distinct value.
-    ownText: frame ? [node.label, value].filter(Boolean).join(" ") : "",
+    ownText: ownTextParts.join(" "),
+    // Apart as well: the view under an empty field that draws its placeholder
+    // repeats the value and not the label, and a floating label the reverse.
+    ownTextParts,
     leaf,
     shield: Boolean(node.identifier),
     rect,
