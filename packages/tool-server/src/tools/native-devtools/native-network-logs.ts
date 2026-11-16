@@ -23,6 +23,7 @@ import {
 } from "../../blueprints/android-network-inspector";
 import type { NativeNetworkRecord, NativeRecordState } from "../../utils/native-network-record";
 import { resolveDevice } from "../../utils/device-info";
+import { externalClaimForAnyId } from "../../utils/external-devices";
 import { ensureDeps } from "../../utils/check-deps";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 import type { NetworkEvent } from "../../blueprints/macos-app";
@@ -143,7 +144,7 @@ The first call for an app starts capture, so earlier requests are not captured: 
 On iOS: the first call waits until the app acknowledges capture. When capture started while the app was already running, the header of the first answer says that the app's launch was not recorded; to capture the launch, restart-app and call again, unless the header says the launch cannot be recorded on that device. Capture stays on for later processes of the app.
 <flag:macos-apps>On a Mac app: { status, count, events } of NSURLSession requests, react-native-macos fetch included; capture stays on across restart-app, a new log per process.
 </flag:macos-apps>On iOS: If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
-On a device whose devtools agent argent attached to rather than armed itself, the list starts at argent's connection, not at the first call; a relaunch ends capture and clears the list; a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
+On a device whose devtools agent argent attached to rather than armed itself, only the agent's owner turns capture off; the list starts at argent's connection, not at the first call; a relaunch ends capture and clears the list; a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
 On Android: needs a debuggable build. The first call usually returns armed: false. Call it again every few seconds until armed is true, then repeat the action whose requests you need.
 Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
 Android results also carry capture and captureDetail. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing. Pass an Android request's ID (android-3f9a-12) to view-network-request-details for its headers, redirects and bodies.
@@ -255,7 +256,9 @@ async function stopAndroidNative(
     throw new FailureError(
       device.platform === "macos"
         ? "stop applies to Android only. On a Mac app, network capture stays on until stop-all-simulator-servers stops this device's services or the tool-server stops."
-        : "stop applies to Android only. On iOS, network capture stays on for the app until stop-all-simulator-servers stops this device's services and the app restarts.",
+        : externalClaimForAnyId(device.id)
+          ? "stop applies to Android only. On this simulator the device provider controls network capture: argent does not turn it on or off, so turn it off in the provider."
+          : "stop applies to Android only. On iOS, network capture stays on for the app until stop-all-simulator-servers stops this device's services and the app restarts.",
       {
         error_code: FAILURE_CODES.NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED,
         failure_stage: "native_network_logs_stop",

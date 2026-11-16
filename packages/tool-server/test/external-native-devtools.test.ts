@@ -581,6 +581,41 @@ describe("a provider that lends its native-devtools agent", () => {
   });
 
   /**
+   * Argent turned nothing on here, and disposing its services sends the lent
+   * agent nothing, so stopping them and restarting the app ends no capture.
+   */
+  it("rejects stop with the provider's remedy, not a stop of the services and a restart", async () => {
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { FAILURE_CODES, Registry, getFailureSignal } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+
+    for (const udid of [DEVICE_ID, IOS_UDID]) {
+      const err = await Promise.resolve(
+        nativeNetworkLogsTool.execute(
+          {},
+          { bundleId: BUNDLE_ID, clear: false, limit: 50, stop: true, udid }
+        )
+      ).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED
+      );
+      expect((err as Error).message).toBe(
+        "stop applies to Android only. On this simulator the device provider controls network capture: argent does not turn it on or off, so turn it off in the provider."
+      );
+    }
+
+    await agent.close();
+  });
+
+  /**
    * The provider can turn capture off between two calls. The second call must
    * say so, not repeat what the first one read.
    */

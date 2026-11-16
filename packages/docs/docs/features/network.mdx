@@ -76,7 +76,7 @@ The network log of this layer keeps the requests of the earlier processes of the
 
 Each request has an ID such as `ios-3f9a-12`. The agent cannot read the details of a request of this layer.
 
-The capture stays on until `stop-all-simulator-servers` stops the services of the simulator, or until a local simulator shuts down. The agent cannot stop the capture for one app. The running process of the app keeps the capture until the app restarts. Thus restart the app after the services stop.
+On a simulator without a device provider, the capture stays on until `stop-all-simulator-servers` stops the services of the simulator, or until a local simulator shuts down. The agent cannot stop the capture for one app. The running process of the app keeps the capture until the app restarts. Thus restart the app after the services stop. On a simulator where Argent uses the socket of a device provider, `stop-all-simulator-servers` does not stop the capture of the provider. There, turn off the capture in the provider.
 
 ## The request record
 
