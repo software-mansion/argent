@@ -31,7 +31,15 @@ import {
   ServiceState,
   type ServiceInstance,
 } from "@argent/registry";
-import { adbReverse, adbShell, adbShellInput, removeAdbReverse, runAdb } from "../src/utils/adb";
+import {
+  adbArgv,
+  adbReverse,
+  adbShell,
+  adbShellInput,
+  removeAdbReverse,
+  runAdb,
+} from "../src/utils/adb";
+import { __resetExternalDeviceCacheForTesting } from "../src/utils/external-devices";
 import {
   AGENT_BINARIES_MISSING_REASON,
   ANDROID_NATIVE_REQUEST_ID,
@@ -3860,6 +3868,64 @@ describe("the tools on the Android native layer", () => {
     expect(api.unavailableReason()).toContain("is not a debuggable build");
     expect(await api.stopCapture()).toEqual({ confirmed: true });
     expect(api.unavailableReason()).toBeUndefined();
+  });
+
+  it("reports the layer unavailable, and not started, on a provider's device whose grant leaves out adb", async () => {
+    const providerDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-android-provider-"));
+    const descriptor = path.join(providerDir, "provider.json");
+    fs.writeFileSync(
+      descriptor,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "acme-3f2a9c",
+        name: "Acme IDE",
+        devices: [
+          {
+            nativeId: SERIAL,
+            platform: "android",
+            kind: "emulator",
+            name: "Pixel 9",
+            state: "device",
+            capabilities: [],
+          },
+        ],
+      })
+    );
+    process.env.ARGENT_DEVICE_PROVIDERS = descriptor;
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+    __resetExternalDeviceCacheForTesting();
+    // The provider's grant is checked on each adb argv before adb runs.
+    const shell = vi.mocked(adbShell).getMockImplementation()!;
+    vi.mocked(adbShell).mockImplementation(async (serial, command, options) => {
+      adbArgv(["-s", serial]);
+      return shell(serial, command, options);
+    });
+    try {
+      const api = await createInspector();
+      const denied =
+        "adb is not available on 'Pixel 9': Acme IDE did not grant the 'adb' capability for this device.";
+      // No retry changes a grant.
+      for (let i = 0; i < 2; i++) {
+        expect(await api.startCapture(8081)).toEqual({
+          armed: false,
+          unavailable: true,
+          reason: denied,
+        });
+      }
+      expect(api.isStarted()).toBe(false);
+      expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+      expect(await listNative(api)).toMatchObject({
+        header: `android-native: unavailable, 0 requests (${denied})`,
+        started: false,
+        capture: "unavailable",
+      });
+      expect(device.commands).toEqual([]);
+    } finally {
+      delete process.env.ARGENT_DEVICE_PROVIDERS;
+      process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+      __resetExternalDeviceCacheForTesting();
+      fs.rmSync(providerDir, { recursive: true, force: true });
+    }
   });
 
   it("native-network-logs with clear hides what it listed and what it did not return past limit, its ids still read, and a request in flight lists again once it finishes", async () => {

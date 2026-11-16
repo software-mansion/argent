@@ -2361,12 +2361,16 @@ function isAgentAbi(abi: string): abi is AgentAbi {
   return (AGENT_ABIS as readonly string[]).includes(abi);
 }
 
-/** A start that throws one of these reports the layer unavailable: no retry changes them. */
+/**
+ * A start that throws one of these reports the layer unavailable: no retry
+ * changes them. A device provider that did not grant adb blocks every adb call.
+ */
 function isUnavailableFailure(err: unknown): boolean {
   const code = getFailureSignal(err)?.error_code;
   return (
     code === FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_UNKNOWN_PACKAGE ||
-    code === FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_DEVICE_IN_USE
+    code === FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_DEVICE_IN_USE ||
+    code === FAILURE_CODES.EXTERNAL_DEVICE_CAPABILITY_DENIED
   );
 }
 
