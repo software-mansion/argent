@@ -2373,6 +2373,29 @@ describe("a JS runtime of another app on the port", () => {
     expect(rt.paused).toBe(true);
   });
 
+  it("does not say an interceptor may still record when an earlier stop already paused it", async () => {
+    serve(PORT, IOS_UDID, new FakeRuntime(APP));
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    expect(layer(await stop(IOS_UDID, APP), "js")).toMatchObject({ armed: false });
+    await reconnect(PORT, IOS_UDID, new FakeRuntime(OTHER));
+    const paused = {
+      layer: "js",
+      armed: false,
+      total: 0,
+      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; while capture is stopped, ${APP}'s JS runtime gets no interceptor`,
+    };
+
+    // Each stop there keeps the pause the first one confirmed.
+    expect(layer(await stop(IOS_UDID, APP), "js")).toEqual(paused);
+    expect(layer(await stop(IOS_UDID, APP), "js")).toEqual(paused);
+    expect(findJsCapture(IOS_UDID, APP)).toMatchObject({
+      intent: "stopped",
+      installed: true,
+      paused: true,
+    });
+  });
+
   it.each(PLATFORMS)(
     "on $platform, stores the stop of this app's started capture there, and says nothing records, when the app is not running",
     async ({ udid }) => {
