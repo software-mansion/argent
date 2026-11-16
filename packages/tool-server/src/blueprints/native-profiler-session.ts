@@ -46,14 +46,14 @@ export interface NativeProfilerParsedData {
   /**
    * Capture mode of THIS data, frozen at parse time so drill-down consumers
    * (leak_stacks, the combined report) are not re-labeled by a later capture.
-   * Null when unknown (session restored from disk).
+   * Null when unknown (a session restored from disk that has no metadata file).
    */
   mallocStackLogging: boolean | null;
   /**
    * Recording start (wall-clock ms) of THIS data, frozen at parse time: the
    * combined report anchors these hangs, and reading the live session field
-   * instead would shift them all once a later capture re-stamps it. Null for
-   * iOS sessions restored from disk (no start-time sidecar).
+   * instead would shift them all once a later capture re-stamps it. Null for an
+   * iOS or Mac app session restored from disk that has no metadata file.
    */
   wallClockStartMs: number | null;
 }
@@ -97,9 +97,9 @@ export interface NativeProfilerSessionApi {
   /**
    * xctrace only (iOS and macOS): capture mode of the data in `exportedFiles` (and, via analyze,
    * `parsedData`), so the report layer names it instead of inferring it from
-   * the attributed-leak count. Stamped at stop; cleared by profiler-load (the
-   * raw_*.xml carry no capture-mode sidecar). Null before any stop, on
-   * Android, or after a load.
+   * the attributed-leak count. Stamped at stop; profiler-load restores it from the
+   * metadata file the stop saved. Null before any stop, on Android, or after a
+   * load of a session that has no metadata file.
    */
   mallocStackLogging: boolean | null;
   /**
@@ -116,7 +116,7 @@ export interface NativeProfilerSessionApi {
   /**
    * Mac apps only: the app quit, crashed or was restarted while the data in
    * `exportedFiles` was recorded, so the trace holds only part of it. Stamped
-   * at stop; cleared by profiler-load.
+   * at stop; restored by profiler-load from the metadata file.
    */
   appEndedDuringCapture: boolean;
   /**
@@ -127,7 +127,7 @@ export interface NativeProfilerSessionApi {
   /**
    * Mac apps only: how long the last recording ran, from the return of the start
    * to the stop. Stamped at stop, null when xctrace ended before the stop;
-   * cleared by profiler-load.
+   * restored by profiler-load from the metadata file.
    */
   recordedMs: number | null;
   /**
@@ -144,7 +144,8 @@ export interface NativeProfilerSessionApi {
   /**
    * Mac apps only: when macOS held the app suspended during the recording in
    * `exportedFiles`, on the trace's timeline. Null when argent did not watch the
-   * app or the trace's start is unknown. Stamped at stop; cleared by profiler-load.
+   * app or the trace's start is unknown. Stamped at stop; restored by profiler-load
+   * from the metadata file.
    */
   appSuspensions: AppSuspensionSpan[] | null;
   /**

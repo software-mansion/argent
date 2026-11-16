@@ -33,6 +33,7 @@ describe("the report with no hot commit", () => {
       anyRuntimeCompilerDetected: false,
       reactCommits: 12,
       debugDir,
+      sessionId: "20260101-000000",
       noHotCommits: true,
       maxCommitMs: 9,
     });

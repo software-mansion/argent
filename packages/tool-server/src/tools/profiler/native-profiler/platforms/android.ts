@@ -3,6 +3,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
+import { startOldProfilerSessionCleanup } from "../../../../utils/profiler-shared/session-retention";
 import { startPerfetto, stopPerfetto } from "../../../../utils/android-profiler/capture";
 import {
   detectAndroidRunningApp,
@@ -52,6 +53,7 @@ export async function startNativeProfilerAndroid(
   }
 
   const debugDir = await getDebugDir();
+  startOldProfilerSessionCleanup(debugDir);
   const timestamp = new Date()
     .toISOString()
     .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
@@ -194,6 +196,12 @@ export async function stopNativeProfilerAndroid(
     api.recordingTimeout = null;
   }
 
+  // When the recording ended: at the cap, or now, at this stop.
+  const capEndMs =
+    api.recordingTimedOut && api.wallClockStartMs !== null
+      ? api.wallClockStartMs + RECORDING_CAP_MS
+      : null;
+  const stopCalledAtMs = Date.now();
   let stopResult: Awaited<ReturnType<typeof stopPerfetto>>;
   try {
     stopResult = await stopPerfetto({
@@ -217,6 +225,9 @@ export async function stopNativeProfilerAndroid(
   }
 
   const { hostTracePath, warning } = stopResult;
+  // A perfetto that ended before the stop for another reason (the app crashed, for
+  // example) ended at a time that is not known: no end, so no React session pairs.
+  const stoppedAtMs = capEndMs ?? (stopResult.endedBeforeStop ? null : stopCalledAtMs);
   const exportedFiles: Record<AndroidExportKey, string | null> = { pftrace: hostTracePath };
   api.exportedFiles = exportedFiles;
   if (api.appProcess) {
@@ -224,6 +235,8 @@ export async function stopNativeProfilerAndroid(
       platform: "android",
       appProcess: api.appProcess,
       wallClockStartMs: api.wallClockStartMs,
+      stoppedAtMs,
+      deviceId: api.deviceId,
     });
   }
 

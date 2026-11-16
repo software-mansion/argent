@@ -18,6 +18,7 @@ import type {
   ProfilingDataBackend,
 } from "../../../utils/react-profiler/types/input";
 import { getDebugDir, writeDumpCompact } from "../../../utils/react-profiler/debug/dump";
+import { startOldProfilerSessionCleanup } from "../../../utils/profiler-shared/session-retention";
 import {
   STOP_AND_READ_SCRIPT,
   RESOLVE_FIBER_META_SCRIPT,
@@ -477,6 +478,7 @@ Fails if no active profiling session exists, another stop is running, the CDP co
           .slice(0, 15);
 
         const debugDir = await getDebugDir();
+        startOldProfilerSessionCleanup(debugDir);
 
         const cpuProfilePath = await writeDumpCompact(
           debugDir,
@@ -496,6 +498,7 @@ Fails if no active profiling session exists, another stop is running, the CDP co
               profileStartWallMs: api.profileStartWallMs,
               projectRoot: api.projectRoot,
               deviceId: api.deviceId,
+              runtimeDeviceId: api.runtimeDeviceId,
               port: api.port,
               appName: api.appName,
               deviceName: api.deviceName,

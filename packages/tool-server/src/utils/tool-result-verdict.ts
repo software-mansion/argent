@@ -34,7 +34,7 @@ export function toolResultVerdict(tool: string, result: unknown): ToolResultVerd
   if (nested) return nested;
   if (isDebuggerNotConnectedResult(tool, result)) {
     // `detail` is the only place the underlying error lives: device_mismatch's
-    // guidance points at the logicalDeviceId "listed in the detail message".
+    // guidance sends the agent to the detail.
     return {
       status: "fail",
       reason: `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}`,

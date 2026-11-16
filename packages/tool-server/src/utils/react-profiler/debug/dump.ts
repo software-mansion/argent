@@ -89,6 +89,8 @@ interface CommitTreeOnDisk {
     profileStartWallMs?: number | null;
     projectRoot?: string | null;
     deviceId?: string | null;
+    // The device's list-devices id when deviceId is Metro's logicalDeviceId.
+    runtimeDeviceId?: string | null;
     port?: number | null;
     appName?: string | null;
     deviceName?: string | null;

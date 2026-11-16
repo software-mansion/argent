@@ -112,6 +112,8 @@ export type Bottleneck = CpuHotspot | UiHang | MemoryLeak | MemoryRssGrowth;
 export interface ProfilerPayload {
   metadata: {
     traceFile: string | null;
+    /** iOS and Mac apps: the trace bundle is no longer on disk, so the report names its session. */
+    traceMissing?: boolean;
     platform: string;
     timestamp: string;
   };

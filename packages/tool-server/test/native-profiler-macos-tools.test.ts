@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ArtifactStore, FAILURE_CODES, getFailureSignal, Registry } from "@argent/registry";
@@ -387,6 +387,9 @@ describe("the wall-clock start of a Mac recording", () => {
     const session = await macSession();
     expect(session.wallClockStartMs).toBeGreaterThan(traceStartMs + 1_000);
     expect((await call("native-profiler-stop", { device_id: MAC })).status).toBe(200);
+    // The saved session too, so that profiler-load pairs it as the live analyze does.
+    const saved = JSON.parse(readFileSync(`${session.traceFile}.metadata.json`, "utf8"));
+    expect(saved.wallClockStartMs).toBe(traceStartMs);
     expect((await call("native-profiler-analyze", { device_id: MAC })).status).toBe(200);
     expect(session.parsedData!.wallClockStartMs).toBe(traceStartMs);
   });

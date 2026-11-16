@@ -23,7 +23,11 @@ const LOGICAL_ID = "1c3346c4a6889e88dbb8116da34f0f4af6f8067c";
  * A session whose app answers every start script. `onStart` runs while the
  * start script is in flight, which is where a teardown can land.
  */
-function fakeSession(deviceId: string, onStart: (api: ReactProfilerSessionApi) => void = () => {}) {
+function fakeSession(
+  deviceId: string,
+  onStart: (api: ReactProfilerSessionApi) => void = () => {},
+  runningSessionId: string | null = null
+) {
   const evaluated: string[] = [];
   const sent: string[] = [];
   const api = {
@@ -45,8 +49,14 @@ function fakeSession(deviceId: string, onStart: (api: ReactProfilerSessionApi) =
           return JSON.stringify({
             hookExists: true,
             rendererInterfaceFound: true,
-            isRunning: false,
-            owner: null,
+            isRunning: runningSessionId !== null,
+            owner: runningSessionId
+              ? {
+                  sessionId: runningSessionId,
+                  startedAtEpochMs: Date.now() - 1000,
+                  lastHeartbeatEpochMs: Date.now(),
+                }
+              : null,
             nowEpochMs: Date.now(),
           });
         }
@@ -137,5 +147,54 @@ describe("react-profiler-start registers the run where the device's calls look",
 
     expect(findRuntimeDeviceMock).not.toHaveBeenCalled();
     expect(isProfiling("emulator-5554")).toBe(true);
+  });
+
+  it("names the runtime it took when its device_id matched no target", async () => {
+    const { api, registry } = fakeSession("emulator-5554");
+    api.fallbackNote = "Metro does not list device ids, so Argent connected to the only device";
+    const tool = createReactProfilerStartTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { device_id: "emulator-5554", port: 8081, sample_interval_us: 100, force: false }
+    );
+
+    expect(result.__argentNote).toBe(api.fallbackNote);
+  });
+
+  it("names the runtime it took when that runtime already records", async () => {
+    // Another tool-server's live run, and then one that this tool-server started.
+    for (const mine of [false, true]) {
+      const { api, registry } = fakeSession("emulator-5554", () => {}, "run-1");
+      api.fallbackNote = "Metro does not list device ids, so Argent connected to the only device";
+      if (mine) {
+        api.sessionId = "run-1";
+        api.profilingActive = true;
+      }
+      const tool = createReactProfilerStartTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { device_id: "emulator-5554", port: 8081, sample_interval_us: 100, force: false }
+      );
+
+      expect(result).toMatchObject({ already_running: true, mine });
+      expect(result.__argentNote).toBe(api.fallbackNote);
+    }
+  });
+
+  it("names the runtime it took while a stop collects that runtime's run", async () => {
+    const { api, registry } = fakeSession("emulator-5554");
+    api.fallbackNote = "Metro does not list device ids, so Argent connected to the only device";
+    api.stopping = true;
+    const tool = createReactProfilerStartTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { device_id: "emulator-5554", port: 8081, sample_interval_us: 100, force: false }
+    );
+
+    expect(result).toMatchObject({ already_running: true, mine: true });
+    expect(result.__argentNote).toBe(api.fallbackNote);
   });
 });

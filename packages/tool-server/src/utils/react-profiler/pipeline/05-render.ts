@@ -1,8 +1,9 @@
 /**
  * Stage 05-render: HotCommitSummary[] + ComponentFinding[] -> markdown.
  *
- * Writes the full report to debugDir/react-profiler-report.md; returns a copy capped to
- * the top 10 hot commits by totalRenderMs for the inline response.
+ * Writes the full report to debugDir/react-profiler-<sessionId>_report.md, next to the
+ * session's other files; returns a copy capped to the top 10 hot commits by
+ * totalRenderMs for the inline response.
  *
  * Commits are labeled with the most recent prior annotation, with no time cutoff, so a
  * long gap still shows causality.
@@ -29,7 +30,6 @@ import { createComponentOriginClassifier, type ComponentOriginResult } from "../
 const MAX_INLINE_COMMITS = 10;
 const MAX_OTHER_MATCHES = 3;
 const MAX_OUTSIDE_SOURCE_NAMES = 5;
-const REPORT_FILENAME = "react-profiler-report.md";
 
 interface RenderInput {
   hotCommitSummaries: HotCommitSummary[];
@@ -40,6 +40,8 @@ interface RenderInput {
   reactCommits: number;
   annotations?: Array<{ offsetMs: number; label: string }>;
   debugDir: string;
+  /** The session the report is of: each session gets its own report file. */
+  sessionId: string;
   noHotCommits?: boolean;
   /** Stop recorded no commit at all. Read from the commit count, so it needs no summary. */
   noReactCommits?: boolean;
@@ -58,7 +60,7 @@ interface RenderOutput {
 }
 
 export async function renderProfilingReport(input: RenderInput): Promise<RenderOutput> {
-  const reportFile = join(input.debugDir, REPORT_FILENAME);
+  const reportFile = join(input.debugDir, `react-profiler-${input.sessionId}_report.md`);
 
   if (input.noHotCommits) {
     const maxMs = input.maxCommitMs ?? 0;

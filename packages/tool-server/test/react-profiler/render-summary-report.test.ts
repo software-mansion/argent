@@ -104,6 +104,7 @@ async function render(
     anyRuntimeCompilerDetected: false,
     reactCommits: 468,
     debugDir,
+    sessionId: "20260101-000000",
     noHotCommits: true,
     ...overrides,
   });

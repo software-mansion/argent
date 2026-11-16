@@ -4,8 +4,11 @@
  * hung one early and says so. An iOS simulator's stop has no such watch.
  * xctrace, its progress probe and the export are faked.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { EventEmitter } from "events";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import type { ChildProcess } from "child_process";
 import type { DeviceInfo } from "@argent/registry";
 
@@ -54,7 +57,9 @@ class FakeXctrace extends EventEmitter {
   }
 }
 
-const TRACE = "/tmp/native-profiler-20260101-000000.trace";
+// In a folder of its own: the stop saves a metadata file next to the trace.
+const TRACE_DIR = mkdtempSync(join(tmpdir(), "argent-stop-stall-"));
+const TRACE = join(TRACE_DIR, "native-profiler-20260101-000000.trace");
 const STALL_MS = 30_000;
 const POLL_MS = 2_000;
 
@@ -79,6 +84,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+});
+afterAll(() => {
+  rmSync(TRACE_DIR, { recursive: true, force: true });
 });
 
 describe("native-profiler-stop and an xctrace that hangs after SIGINT", () => {

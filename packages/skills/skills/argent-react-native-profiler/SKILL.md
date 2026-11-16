@@ -85,7 +85,7 @@ Pass component names exactly as the report prints them; the wrapped name (`Memo(
 
 ### Step 7: Reload a previous session
 
-To revisit earlier data, e.g. to compare before and after a fix: `profiler-load` mode `list`, then `load_react` and/or `load_native` with the `session_id` and the `device_id`. **Pass that same `device_id` to the query tools afterwards**, or they miss the reloaded data.
+To revisit earlier data, e.g. to compare before and after a fix: `profiler-load` mode `list`, then `load_react` and/or `load_native` with the `session_id` and the `device_id`. `load_react` and `load_native` each take either session id of a run. **Pass that same `device_id` to the query tools afterwards**, or they miss the reloaded data.
 
 ### Step 8: Apply fix and re-profile
 
