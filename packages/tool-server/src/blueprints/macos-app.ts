@@ -1473,7 +1473,15 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         await ch.cdp.request("Network.disable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS });
         return { confirmed: true };
       } catch (err) {
-        if (!ch.isOpen || disposed) return { confirmed: true };
+        // A stop of the app's services during this stop closed the channel and dropped the records.
+        if (disposed) {
+          return {
+            confirmed: true,
+            reason:
+              "the app's services stopped during this stop, which dropped the requests it recorded",
+          };
+        }
+        if (!ch.isOpen) return { confirmed: true };
         return {
           confirmed: false,
           reason: `${
@@ -1499,6 +1507,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     dispose: () => {
       disposed = true;
       macosCaptures.delete(capture);
+      // The records go with the service: a call that still holds it lists none.
+      records.clear();
       // A launch in flight finishes its checks on its channel first. A closed
       // channel takes the network capture off with it.
       if (!launching) closeChannel();

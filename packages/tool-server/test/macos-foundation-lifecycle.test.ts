@@ -1032,6 +1032,27 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(urls(await readLog())).toEqual(["https://example.com/x"]);
     }, 20_000);
 
+    it("says that the records are gone when stop-simulator-server comes while a stop waits for Network.disable", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--cdp-delay=1500"] });
+      await start();
+      await request("https://example.com/a");
+      const [{ id }] = (await readLog()).requests;
+      const stopping = stop();
+      await new Promise((r) => setTimeout(r, 300));
+      await run("stop-simulator-server", { udid: DEVICE_ID });
+      expect((await stopping).layers).toEqual([
+        {
+          layer: "macos-native",
+          armed: false,
+          total: 0,
+          reason:
+            "the app's services stopped during this stop, which dropped the requests it recorded",
+        },
+      ]);
+      expect(await readLog()).toMatchObject({ started: false, total: 0 });
+      expect(await details(id)).toMatch(/Native network capture is not started/);
+    }, 20_000);
+
     it("sends Network.enable again at a start after a stop on the same process", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();
