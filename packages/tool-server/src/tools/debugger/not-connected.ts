@@ -102,8 +102,8 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
     "The app's CDP endpoint could not be reached (or did not answer like CDP — see " +
     "detail). launch-app cannot start a Chromium app. If boot-device started it in " +
     "this tool-server session, restart-app relaunches it on the same device id; " +
-    "otherwise relaunch it (an Electron app with boot-device and electronAppPath, any " +
-    "other with --remote-debugging-port). Then retry once.",
+    "otherwise quit it if it still runs and relaunch it (an Electron app with boot-device " +
+    "and electronAppPath, any other with --remote-debugging-port). Then retry once.",
   runtime_unresponsive:
     "The app accepted the debugger connection but did not answer within the " +
     "timeout — it is likely frozen. Do not retry in a loop (each attempt waits out " +

@@ -71,6 +71,8 @@ describe("guidance platform-correctness", () => {
       "If boot-device started it in this tool-server session, restart-app relaunches it on the same device id"
     );
     expect(result.guidance).toContain("an Electron app with boot-device and electronAppPath");
+    // A copy still running (CDP answered without a page) holds the single-instance lock.
+    expect(result.guidance).toContain("otherwise quit it if it still runs and relaunch it");
   });
 
   it("Metro cdp_unreachable keeps the launch-app guidance (it IS actionable there)", () => {

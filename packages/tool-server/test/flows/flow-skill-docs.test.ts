@@ -32,8 +32,8 @@ const SPELLED = ["zero", "one", "two", "three", "four", "five", "six", "seven", 
 /**
  * How each insertion in {@link LIVE_AUTHORING}'s list is spelled in rule 5 of
  * the core skill, which enumerates them rather than counting them. Kept in
- * step with that list by the length assertion in the guard below, so a fourth
- * bullet cannot be added while rule 5 still says "the only" three.
+ * step with that list by the length assertion in the guard below, so a bullet
+ * cannot be added while rule 5 still names only the current ones.
  */
 const RULE_5_INSERTIONS = ["`snapshot:`", "`await: { idle: true }`"];
 const INSERTION_COUNT_CITATIONS = [
