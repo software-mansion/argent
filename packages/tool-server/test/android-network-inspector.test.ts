@@ -5238,7 +5238,7 @@ describe("native-network-logs only reads", () => {
     expect(await listNative(api)).toEqual({
       status: "ok",
       header:
-        "android-native: not attached, 0 requests (the app restarted as pid 5300 without launch-app or restart-app, so that process runs without capture; restart-app attaches capture to the next process, or call network-capture-start)",
+        "android-native: not attached, 0 requests (the app restarted as pid 5300, and this tool-server did not attach capture to that process; call network-capture-start to attach it)",
       armed: false,
       count: 0,
       total: 0,
@@ -5255,6 +5255,29 @@ describe("native-network-logs only reads", () => {
     expect(((await listNative(api)) as { header: string }).header).toBe(
       "android-native: armed, 0 requests (pid 5300; capture active)"
     );
+  });
+
+  it("does not say the app's new process runs without capture when another tool-server attached it", async () => {
+    // Two inspectors of one app stand for two tool-servers.
+    const x = await armedInspector();
+    const y = await createInspector();
+    device.agentOnAttach = false;
+    expect(await startUnarmed(y)).toEqual({ armed: false, reason: LOADED_NOTE });
+    // The restart-app of the other tool-server gives the app a process with its agent.
+    device.process = { pid: 5100, startTime: 99_000 };
+    device.agentOnAttach = true;
+    expect(await y.startCapture(8081)).toEqual({ armed: true });
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(x.state().notAttached).toBe(true), { timeout: 3_000 });
+
+    expect(x.state().note).toBe(
+      "the app restarted as pid 5100, and this tool-server did not attach capture to that process; call network-capture-start to attach it"
+    );
+    // That start says that the agent of another tool-server is in the process.
+    expect(await startUnarmed(x)).toEqual({
+      armed: false,
+      reason: LOADED_NOTE.replace("pid 4722", "pid 5100"),
+    });
   });
 
   it("reads a process restart-app attached as attached, also when the check after the drop read it first", async () => {

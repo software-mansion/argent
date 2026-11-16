@@ -1527,8 +1527,10 @@ function createInspector(
       // The note stays until capture attaches again, also over a process started without launch-app.
       return `the process of ${packageName} that capture was attached to exited, and no later process has capture; launch-app or restart-app attaches capture to the next process, or call network-capture-start once the app runs`;
     }
+    // Another tool-server can have attached its agent to that process, so
+    // the note says only what this one did.
     return foreground === appUser
-      ? `the app restarted as pid ${next.pid} without launch-app or restart-app, so that process runs without capture; restart-app attaches capture to the next process, or call network-capture-start`
+      ? `the app restarted as pid ${next.pid}, and this tool-server did not attach capture to that process; call network-capture-start to attach it`
       : `Android user ${foreground} is in the foreground now, and its process of ${packageName} runs without capture; restart-app attaches capture to it, or call network-capture-start`;
   }
 

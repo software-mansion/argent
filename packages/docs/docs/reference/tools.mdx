@@ -384,7 +384,7 @@ A process of the app can also start in a different way, for example from a launc
 - An earlier process had the in-app agent. When its connection closes, Argent checks the processes of the app. If the earlier process ended, the state is `not attached`.
 - The app did not run at the start. The state is `not armed`, and the `header` line says that the app was not running at the start.
 
-With `not attached`, the `header` line gives the pid of the new process when Argent saw it. An example is `android-native: not attached, 12 requests (the app restarted as pid 4711 without launch-app or restart-app, so that process runs without capture; restart-app attaches capture to the next process, or call network-capture-start)`. If no process of the app runs, the `header` line says that the app exited. To attach the in-app agent, call `restart-app` or `network-capture-start`.
+With `not attached`, the `header` line gives the pid of the new process when Argent saw it. An example is `android-native: not attached, 12 requests (the app restarted as pid 4711, and this tool-server did not attach capture to that process; call network-capture-start to attach it)`. If no process of the app runs, the `header` line says that the app exited. To attach the in-app agent, call `restart-app` or `network-capture-start`.
 
 Native network capture stays on until `network-capture-stop` stops it for the app, or until Argent stops the services of the device. These stops are different:
 
