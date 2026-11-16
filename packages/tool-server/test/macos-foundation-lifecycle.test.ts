@@ -1004,6 +1004,31 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid}; ${GAP})`);
     }, 20_000);
 
+    it("says the gap when the first start cannot reach a process that argent was connected to before", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // Another client takes the app's socket, then the app is paused.
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      process.kill(pid, "SIGSTOP");
+      let first: Capture;
+      try {
+        first = await start();
+      } finally {
+        process.kill(pid, "SIGCONT");
+      }
+      expect(first.layers).toEqual([
+        expect.objectContaining({
+          layer: "macos-native",
+          armed: false,
+          reason: expect.stringMatching(/^argent cannot reach /),
+        }),
+      ]);
+      await new Promise((r) => setTimeout(r, 300));
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid}; ${GAP})`);
+    }, 20_000);
+
     it("says that capture is off when stop-simulator-server comes while a start waits for a launch", async () => {
       const booting = run("boot-device", {
         macosAppPath: appPath,

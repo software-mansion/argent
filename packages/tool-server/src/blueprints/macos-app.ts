@@ -1442,12 +1442,15 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         ch = await ensureChannel();
       } catch (err) {
         if (disposed) return servicesStopped;
+        const notRunning = errorCode(err) === FAILURE_CODES.MACOS_APP_NOT_RUNNING;
+        // The app runs, so its requests before this start are not recorded, also
+        // when argent later reconnects to a process it was connected to before.
+        if (!notRunning && startedNow && !armedSinceLaunch) captureGap = true;
         return {
           armed: false,
-          reason:
-            errorCode(err) === FAILURE_CODES.MACOS_APP_NOT_RUNNING
-              ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
-              : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
+          reason: notRunning
+            ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
+            : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
         };
       }
       // A launch this start waited for armed its process from the start.
