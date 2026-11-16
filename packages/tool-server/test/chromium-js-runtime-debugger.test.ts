@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import * as fs from "node:fs";
 import { TypedEventEmitter } from "@argent/registry";
 import {
   chromiumJsRuntimeDebuggerBlueprint,
@@ -166,6 +167,31 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
     expect(reaped).toBeDefined();
     expect(reaped!.salvage).toContain("18 captured console entries");
+    expect(fs.existsSync(instance.api.logWriter.getFilePath())).toBe(false);
+  });
+
+  it("dispose after the CDP socket dropped keeps the log file and names it", async () => {
+    __resetReapedSessionsForTesting();
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    instance.api.logWriter.write({
+      id: 0,
+      timestamp: new Date(1710000000000).toISOString(),
+      level: "error",
+      message: "before the crash",
+    });
+    (fake.api.cdp as { isConnected: () => boolean }).isConnected = () => false;
+    await instance.dispose();
+
+    const file = instance.api.logWriter.getFilePath();
+    expect(fs.readFileSync(file, "utf-8")).toContain("before the crash");
+    const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
+    expect(reaped!.connectionLost).toBe(true);
+    expect(reaped!.salvage).toContain(`kept at ${file}`);
   });
 
   it("dispose leaves NO breadcrumb when there was no history to lose", async () => {

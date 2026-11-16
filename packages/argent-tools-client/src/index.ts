@@ -27,7 +27,7 @@ export {
 export {
   createToolsClient,
   errorBodyMessage,
-  ToolInvocationError,
+  secretsTransportRefusal,
   type ToolsClient,
   type ToolMeta,
   type ToolInvocationResult,
@@ -35,12 +35,15 @@ export {
   type CreateToolsClientOptions,
 } from "./tools-client.js";
 
+export { ToolInvocationError } from "./errors.js";
+
+export { canonicalToolId } from "@argent/registry";
+
 export {
   readLinkConfig,
   writeLinkConfig,
   clearLinkConfig,
   getResolvedToolsUrl,
-  isRemoteRouted,
   formatLinkUrl,
   parseLinkUrl,
   parseLinkTarget,

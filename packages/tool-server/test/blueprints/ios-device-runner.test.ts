@@ -15,6 +15,7 @@ import {
   isProfileMissingDeviceFailure,
   killRunnerProcess,
   launchRunner,
+  resolveRunnerSigningConfig,
   waitForRunnerListeningPort,
 } from "../../src/utils/ios-device/runner-build";
 import { readRunnerCrashSummary } from "../../src/utils/ios-device/runner-crash";
@@ -410,6 +411,11 @@ describe("ios-device-runner blueprint: dispose", () => {
   it("sends shutdown as the mutating command it is, so the send layer cannot resend it", async () => {
     const { child, clientRun } = stubLaunch();
     const instance = await callFactory();
+    // The runner ends its test after the shutdown reply, and xcodebuild exits.
+    clientRun.mockImplementationOnce(async () => {
+      setImmediate(() => child.emit("exit", 0));
+      return {};
+    });
 
     await instance.dispose();
 
@@ -417,7 +423,25 @@ describe("ios-device-runner blueprint: dispose", () => {
     // marking a mutating shutdown read-only both breaks the send-once contract
     // and turns the 3s into three attempts plus backoff.
     expect(clientRun).toHaveBeenCalledWith({ command: "shutdown" }, { timeoutMs: 3_000 });
-    expect(killRunnerProcess).toHaveBeenCalledWith(child);
+    // A clean exit lets the test pass, so XCTest deletes its on-device
+    // attachments; a kill would leave them on the phone.
+    expect(killRunnerProcess).not.toHaveBeenCalled();
+  });
+
+  it("kills the child when it accepts shutdown but does not exit in time", async () => {
+    vi.useFakeTimers();
+    try {
+      const { child } = stubLaunch();
+      const instance = await callFactory();
+
+      const disposed = instance.dispose();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await disposed;
+
+      expect(killRunnerProcess).toHaveBeenCalledWith(child);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("kills the child anyway when the graceful shutdown fails", async () => {
@@ -538,5 +562,13 @@ describe("ios-device-runner blueprint: failure signals", () => {
     expect(getFailureSignal(terminated[0])?.error_code).toBe(
       FAILURE_CODES.IOS_DEVICE_RUNNER_TERMINATED
     );
+  });
+});
+
+describe("ios-device-runner blueprint: signing", () => {
+  it("resolves the signing team for the phone it starts on", async () => {
+    await createInstance();
+
+    expect(resolveRunnerSigningConfig).toHaveBeenCalledWith(DEVICE_UDID);
   });
 });

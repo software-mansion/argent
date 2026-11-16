@@ -9,8 +9,7 @@ describe("advertised bundleId pattern", () => {
   const constrained = [...definitionsById(createRegistry())]
     .map(([id, definition]) => {
       const properties = advertisedSchema(definition)?.properties as
-        | Record<string, { pattern?: string } | undefined>
-        | undefined;
+        Record<string, { pattern?: string } | undefined> | undefined;
       const shape = (definition.zodSchema as ZodObject<Record<string, ZodTypeAny>> | undefined)
         ?.shape;
       return { id, pattern: properties?.bundleId?.pattern, field: shape?.bundleId };
@@ -24,6 +23,7 @@ describe("advertised bundleId pattern", () => {
       "reinstall-app",
       "restart-app",
       "settings-permissions",
+      "terminate-app",
     ]);
   });
 

@@ -25,21 +25,12 @@ import type {
 import { readViewport } from "./viewport";
 
 export type {
-  ButtonType,
-  DownscalerType,
   ChromiumServer,
-  FpsReport,
-  KeyDirection,
   MediaReady,
-  Point,
-  Rotation,
   ScreencastFrame,
   ScreencastOpts,
   ScreencastSession,
   ScreenshotOpts,
-  ServerEvents,
-  TouchType,
-  ViewportSize,
 } from "./types";
 
 interface CreateChromiumServerOpts {
@@ -169,7 +160,5 @@ export async function createChromiumServer(
 
 // Consumed by the chromium-cdp blueprint.
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
-export type { TabInfo, TabsManager } from "./tabs";
-export type { NetworkManager, NetworkRequestRecord } from "./network";
-
-export { setClipboardText } from "./clipboard";
+export type { TabInfo } from "./tabs";
+export type { NetworkRequestRecord } from "./network";

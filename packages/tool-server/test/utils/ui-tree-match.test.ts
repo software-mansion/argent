@@ -51,6 +51,17 @@ describe("ui-tree-match", () => {
     expect(hit?.label).toBe("Login");
   });
 
+  it("nodeAtPoint keeps an element of a front layer over a smaller one behind it", () => {
+    const sheet = node({
+      label: "Sheet",
+      layer: 1,
+      frame: { x: 0, y: 0, width: 0.5, height: 0.5 },
+    });
+    const behind = node({ label: "Behind", frame: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 } });
+    const tree = node({ frame: { x: 0, y: 0, width: 1, height: 1 }, children: [sheet, behind] });
+    expect(nodeAtPoint(tree, { x: 0.15, y: 0.15 })?.label).toBe("Sheet");
+  });
+
   it("nodeAtPoint returns undefined when nothing is under the point", () => {
     expect(nodeAtPoint(root, { x: 0.95, y: 0.95 })).toBeUndefined();
   });
@@ -209,6 +220,56 @@ describe("ui-tree-match", () => {
     expect(textMatches(undefined, optionalSaved, "matches")).toBe(false);
     expect(textMatches("", optionalSaved, "matches")).toBe(false);
     expect(textMatches("Saved", optionalSaved, "matches")).toBe(true);
+  });
+
+  it("a regex text condition reads an element with no text as an empty string", () => {
+    const field = node({
+      identifier: "email",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [field], "matches")).toBe(true);
+    expect(evaluateCondition("text", "^(?!.*@)", [field], "matches")).toBe(true);
+    expect(evaluateCondition("text", "@", [field], "matches")).toBe(false);
+    // contains and equals keep their behavior.
+    expect(evaluateCondition("text", "x", [field], "contains")).toBe(false);
+  });
+
+  it("a regex text condition does not read an iOS text field with no text as empty", () => {
+    // The simulator's view tree has no typed text: a field holding "Rex" reads "".
+    const field = node({
+      role: "AXTextField",
+      identifier: "name",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [field], "matches")).toBe(false);
+    expect(evaluateCondition("text", "^(?!.*Rex)", [field], "matches")).toBe(false);
+    // A Mac app's fields report their text, so there an empty field reads as empty,
+    // but a password field never does: argent never reads its text.
+    expect(evaluateCondition("text", "^$", [field], "matches", undefined, true)).toBe(true);
+    const secret = { ...field, password: true };
+    expect(evaluateCondition("text", "^$", [secret], "matches", undefined, true)).toBe(false);
+    // Every check reads only its value, also when its placeholder names it.
+    const named = { ...field, label: "Email" };
+    expect(evaluateCondition("text", "^$", [named], "matches", undefined, true)).toBe(true);
+    expect(evaluateCondition("text", ".+", [named], "matches", undefined, true)).toBe(false);
+    expect(evaluateCondition("text", "Email", [named], "contains", undefined, true)).toBe(false);
+    const filled = { ...named, value: "a@b.c" };
+    expect(evaluateCondition("text", "^$", [filled], "matches", undefined, true)).toBe(false);
+    expect(evaluateCondition("text", "^a@b\\.c$", [filled], "matches", undefined, true)).toBe(true);
+    expect(evaluateCondition("text", "A@B.C", [filled], "equals", undefined, true)).toBe(true);
+  });
+
+  it("a regex text condition does not read a container with hoisted text as empty", () => {
+    const container = node({
+      identifier: "status",
+      subtreeText: "user@example.com",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [container], "matches")).toBe(false);
+    expect(evaluateCondition("text", "^(?!.*@)", [container], "matches")).toBe(false);
   });
 
   it("regex text conditions retain non-empty own and hoisted text as additive evidence", () => {

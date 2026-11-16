@@ -69,7 +69,7 @@ function executedRequest(): Record<string, unknown> {
 }
 
 async function recordedSteps() {
-  return parseFlow(await fs.readFile(path.join(root, ".argent", "flows", "recorded.yaml"), "utf8"))
+  return parseFlow(await fs.readFile(path.join(root, ".argent", "e2e", "recorded.yaml"), "utf8"))
     .steps;
 }
 

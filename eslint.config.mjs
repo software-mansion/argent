@@ -26,6 +26,7 @@ export default tseslint.config(
       "packages/docs/.docusaurus/",
       "packages/docs/static/",
       "coverage/",
+      ".claude/",
     ],
   },
 

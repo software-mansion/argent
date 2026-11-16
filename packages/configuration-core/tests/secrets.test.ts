@@ -4,10 +4,16 @@ import * as path from "node:path";
 import * as os from "node:os";
 import {
   secretSources,
+  clientSecretSource,
+  decodeClientSecrets,
+  encodeClientSecrets,
+  lookupPlaceholderSecret,
+  placeholderNames,
   lookupSecret,
   secretNames,
   describeSecretSources,
   secretPlacementAdvice,
+  clientSecretPlacementAdvice,
   type SecretSourceOptions,
 } from "../src/secrets.js";
 
@@ -212,5 +218,74 @@ describe("diagnostics", () => {
     expect(advice).toContain(globalSecrets());
     expect(advice).toContain("ARGENT_SECRET_APP_PASSWORD");
     expect(advice).toContain("never ask the user for the secret value itself");
+    expect(advice).toContain(
+      "the user can instead define it on the client's machine and run `argent enable forward-secrets` there; `argent secrets` there lists the sources the client reads"
+    );
+  });
+
+  it("advises the client's machine for a secret a forwarding client lacks", () => {
+    const advice = clientSecretPlacementAdvice("APP_PASSWORD");
+    expect(advice).toContain(
+      "add `APP_PASSWORD=…` to ~/.argent/secrets.env on the client's machine (or to " +
+        "`.argent/secrets.env` in the project the client runs in), or to export " +
+        "ARGENT_SECRET_APP_PASSWORD before the client starts"
+    );
+    expect(advice).toContain("never ask the user for the secret value itself");
+    expect(advice).not.toContain(globalSecrets());
+  });
+});
+
+describe("client secrets", () => {
+  it("round-trip through the header form, multi-line and non-ASCII values included", () => {
+    const values = new Map([
+      ["APP_PASSWORD", "hunter2"],
+      ["CERT", "line one\nline two"],
+      ["PIN", "zażółć"],
+    ]);
+    const header = encodeClientSecrets(values);
+    expect(header).toMatch(/^[A-Za-z0-9+/=]+$/);
+    expect(decodeClientSecrets(header)).toEqual(values);
+  });
+
+  it("lead the chain as their own source and appear in diagnostics without a value", () => {
+    const sources = [
+      clientSecretSource(new Map([["APP_PASSWORD", "from-client"]])),
+      ...secretSources({ ...options, env: { ARGENT_SECRET_APP_PASSWORD: "from-env" } }),
+    ];
+    expect(lookupSecret("APP_PASSWORD", sources)).toBe("from-client");
+    const description = describeSecretSources(sources);
+    expect(description).toContain("1. secrets the argent client sent with this call — 1 secret");
+    expect(description).not.toContain("from-client");
+  });
+});
+
+describe("placeholders", () => {
+  it("lists every name in order, repeats included, and skips malformed ones", () => {
+    expect(
+      placeholderNames("{{secret:A}} {{secret:has-dash}} {secret:B} {{secret:C}}{{secret:A}}")
+    ).toEqual(["A", "C", "A"]);
+  });
+
+  it("resolves a redundant prefix only when the exact name misses", () => {
+    const sources = secretSources({
+      ...options,
+      env: {
+        ARGENT_SECRET_X: "bare",
+        ARGENT_SECRET_ARGENT_SECRET_Y: "literal",
+        ARGENT_SECRET_Y: "y",
+      },
+    });
+    expect(lookupPlaceholderSecret("argent_secret_X", sources)).toEqual({
+      name: "X",
+      value: "bare",
+    });
+    expect(lookupPlaceholderSecret("ARGENT_SECRET_Y", sources)).toEqual({
+      name: "ARGENT_SECRET_Y",
+      value: "literal",
+    });
+    expect(lookupPlaceholderSecret("ARGENT_SECRET_NOPE", sources)).toEqual({
+      name: "NOPE",
+      value: undefined,
+    });
   });
 });

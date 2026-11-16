@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -30,7 +31,7 @@ describe("LogFileWriter", () => {
 
   it("creates a flat log file in ~/.argent/tmp", () => {
     const filePath = writer.getFilePath();
-    expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+\.log$/);
+    expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+-p\d+\.log$/);
     expect(fs.existsSync(filePath)).toBe(true);
   });
 
@@ -199,6 +200,71 @@ describe("LogFileWriter", () => {
 
     writer.close();
     expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  const dayAgo = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
+  const twoDaysAgo = (Date.now() - 48 * 60 * 60 * 1000) / 1000;
+
+  it("a new writer deletes a dead process's argent-logs files idle for over 24h, keeping fresher ones", () => {
+    const dir = path.dirname(writer.getFilePath());
+    const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+    const stale = path.join(dir, `argent-logs-1-1-p${deadPid}.log`);
+    const fresh = path.join(dir, `argent-logs-2-2-p${deadPid}.log`);
+    fs.writeFileSync(stale, "");
+    fs.writeFileSync(fresh, "");
+    fs.utimesSync(stale, dayAgo - 60, dayAgo - 60);
+    fs.utimesSync(fresh, dayAgo + 60, dayAgo + 60);
+
+    new LogFileWriter(9998).close();
+
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it("a new writer's sweep spares a live writer's file however long it has been quiet", () => {
+    const filePath = writer.getFilePath();
+    fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
+
+    new LogFileWriter(9998).close();
+
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("a new writer's sweep spares quiet files of other live processes, signalable or not", () => {
+    const dir = path.dirname(writer.getFilePath());
+    // pid 1 refuses a non-root signal with EPERM.
+    const others = [process.ppid, 1].map((pid) => path.join(dir, `argent-logs-1-1-p${pid}.log`));
+    for (const other of others) {
+      fs.writeFileSync(other, "");
+      fs.utimesSync(other, twoDaysAgo, twoDaysAgo);
+    }
+
+    new LogFileWriter(9998).close();
+
+    expect(others.map((other) => fs.existsSync(other))).toEqual([true, true]);
+  });
+
+  it("a kept file outlives the sweep for 24h from the close, then is swept", () => {
+    const filePath = writer.getFilePath();
+    fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
+    writer.close({ keepFile: true });
+
+    new LogFileWriter(9998).close();
+    expect(fs.existsSync(filePath)).toBe(true);
+
+    fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
+    new LogFileWriter(9998).close();
+    expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  it("constructs when the log directory cannot be listed", () => {
+    const dir = path.dirname(writer.getFilePath());
+    fs.chmodSync(dir, 0o300);
+    try {
+      expect(() => new LogFileWriter(9998).close()).not.toThrow();
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
   });
 
   it("close() is idempotent", () => {

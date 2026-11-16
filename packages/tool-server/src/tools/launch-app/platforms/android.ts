@@ -1,6 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
+import { attachAndroidNetworkInspectorToLaunch } from "../../../blueprints/android-network-inspector";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 // `am start -W` always prints a `Status:` banner, so a positive match on
@@ -60,8 +61,7 @@ export async function resolveLauncherActivity(
   bundleId: string,
   isTv = false
 ): Promise<string> {
-  // Surfaced in the failure message: distinguishes empty output (app not
-  // installed) from a wrong component shape (only the system resolver matched).
+  // Surfaced in the failure message, e.g. to show only the system resolver matched.
   let lastRaw = "";
   const resolveFor = async (category?: string): Promise<string | null> => {
     const intent = category ? ` -c ${shellQuote(category)}` : "";
@@ -81,9 +81,12 @@ export async function resolveLauncherActivity(
   const launcher = await resolveFor();
   if (launcher) return launcher;
 
+  const pmPath = await adbShell(udid, `pm path ${shellQuote(bundleId)}; true`);
   throw new FailureError(
     `Could not resolve a ${isTv ? "LEANBACK_LAUNCHER or LAUNCHER" : "LAUNCHER"} activity for ${bundleId}. ` +
-      `Install the app first, or pass an explicit \`activity\`. ` +
+      (pmPath.includes("package:")
+        ? `It is installed but declares no such activity: pass an explicit \`activity\`. `
+        : `It is not installed on ${udid}: install it with \`reinstall-app\`. `) +
       `(resolve-activity output: ${lastRaw.trim() || "empty"})`,
     {
       error_code: FAILURE_CODES.ANDROID_LAUNCH_ACTIVITY_RESOLVE_FAILED,
@@ -92,6 +95,30 @@ export async function resolveLauncherActivity(
       error_kind: "subprocess",
     }
   );
+}
+
+/**
+ * Once `native-network-logs` has started native network capture for an app,
+ * the capture follows the app into each process that launch-app and
+ * restart-app start. The note in the launch result tells the caller whether
+ * the new process is instrumented, or why capture did not follow it. Best
+ * effort: a launch never fails because capture could not follow it.
+ */
+export async function followNativeNetworkCapture(
+  udid: string,
+  bundleId: string
+): Promise<{ networkCapture?: string }> {
+  try {
+    const note = await attachAndroidNetworkInspectorToLaunch(udid, bundleId);
+    return note ? { networkCapture: note } : {};
+  } catch (err) {
+    process.stderr.write(
+      `[${udid}:${bundleId}] native network capture did not follow the launch: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`
+    );
+    return {};
+  }
 }
 
 export const androidImpl: PlatformImpl<
@@ -116,6 +143,7 @@ export const androidImpl: PlatformImpl<
       timeoutMs: 30_000,
     });
     assertAmStartOk(out);
-    return { launched: true, bundleId: params.bundleId };
+    const capture = await followNativeNetworkCapture(params.udid, params.bundleId);
+    return { launched: true, bundleId: params.bundleId, ...capture };
   },
 };

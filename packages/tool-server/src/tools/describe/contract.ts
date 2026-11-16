@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const describeFrameSchema = z.object({
+const describeFrameSchema = z.object({
   x: z.number().finite().min(0).max(1),
   y: z.number().finite().min(0).max(1),
   width: z.number().finite().min(0).max(1),
@@ -14,12 +14,16 @@ export interface DescribeNode {
   frame: DescribeFrame;
   children: DescribeNode[];
   label?: string;
+  // The element's VoiceOver hint (iOS simulator). Not the same thing as the
+  // result-level `hint` on DescribeTreeData, which is a note about the read.
+  hint?: string;
   identifier?: string;
   value?: string;
   // Descendant text hoisted onto container leaves by the flow adapters'
   // flatten (`flow-tree-flatten`): the flat shape drops the child that renders
   // the text, so a flow `text` condition reads this for a testID container.
-  // The describe path leaves it unset.
+  // The describe tool leaves it unset; the tree the await tools judge on a Mac
+  // app carries the flow tree's value.
   subtreeText?: string;
   clickable?: boolean;
   longClickable?: boolean;
@@ -34,6 +38,10 @@ export interface DescribeNode {
   // Distinct on D-pad UIs: input focus vs. the visually highlighted item.
   focused?: boolean;
   selected?: boolean;
+  // A Mac app's stacking: 1 in a sheet, alert or popover, one more in each one
+  // attached over it, highest in an open menu, absent in a window. Of a
+  // selector's matches, the frontmost layer wins.
+  layer?: number;
 }
 
 export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
@@ -43,6 +51,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       frame: describeFrameSchema,
       children: z.array(describeNodeSchema),
       label: z.string().optional(),
+      hint: z.string().optional(),
       identifier: z.string().optional(),
       value: z.string().optional(),
       subtreeText: z.string().optional(),
@@ -56,6 +65,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       scrollHidden: z.number().int().nonnegative().optional(),
       focused: z.boolean().optional(),
       selected: z.boolean().optional(),
+      layer: z.number().int().nonnegative().optional(),
     })
     .passthrough()
 );
@@ -63,8 +73,9 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
 // Where the tree came from. "ax-service" / "native-devtools": iOS.
 // "uiautomator" / "android-devtools": Android. "cdp-dom": the Chromium DOM walk
 // over Chrome DevTools Protocol. "vega-automation": the Vega on-device
-// automation toolkit. "tv-focus": the focus-driven view for a TV target (Apple
-// TV / Android TV), which reports focused / focusable elements rather than a
+// automation toolkit. "harmony-uitest": the HarmonyOS device's own `uitest
+// dumpLayout`. "tv-focus": the focus-driven view for a TV target (Apple TV /
+// Android TV), which reports focused / focusable elements rather than a
 // tap-oriented tree.
 export type DescribeSource =
   | "ax-service"
@@ -73,9 +84,14 @@ export type DescribeSource =
   | "android-devtools"
   | "cdp-dom"
   | "vega-automation"
+  | "harmony-uitest"
   | "tv-focus"
   // Physical iOS: the XCUITest runner accessibility snapshot.
-  | "xcuitest-runner";
+  | "xcuitest-runner"
+  // A native Mac app: the in-app library's tree, and the one it reads while the
+  // Mac is locked.
+  | "macos-devtools"
+  | "macos-fallback";
 
 // Adapter-internal: `tree` is rendered by `format-tree.ts` and then dropped —
 // callers get `DescribeResult` below, i.e. only the rendered text.
@@ -86,6 +102,11 @@ export interface DescribeTreeData {
   // "degraded" means boot-state on the simulator path and a truncated snapshot on the device path.
   // Each path writes this hint once.
   hint?: string;
+  // Possibly not the live screen (a suspended HarmonyOS panel); `hint` says why.
+  stale?: boolean;
+  // Part of the screen was not read (an Apple TV hierarchy cut at its node cap),
+  // so an element's absence proves nothing; `hint` says why.
+  partial?: boolean;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set

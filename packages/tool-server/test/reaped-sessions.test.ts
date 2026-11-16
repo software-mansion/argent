@@ -63,6 +63,15 @@ describe("the reaped-session key", () => {
     expect(takeReapedSession("screen-recording", UDID)).toBeUndefined();
   });
 
+  it("spends a record filed under two ids by either, sparing a newer record on one", () => {
+    recordReapedSession("js-runtime-debugger", [UDID, "logical"], "old");
+    recordReapedSession("js-runtime-debugger", [UDID, "other"], "new");
+
+    expect(takeReapedSession("js-runtime-debugger", "logical")?.salvage).toBe("old");
+    expect(takeReapedSession("js-runtime-debugger", UDID)?.salvage).toBe("new");
+    expect(takeReapedSession("js-runtime-debugger", "other")).toBeUndefined();
+  });
+
   it("does not pin the teardown on one caller the disposer cannot have seen", () => {
     // A blueprint's dispose() is called by Registry._teardown with no caller, so
     // nothing that writes a breadcrumb knows which tool triggered it.

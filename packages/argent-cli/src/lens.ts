@@ -339,6 +339,7 @@ function parseArgs(argv: string[]): {
     if (positionals.length > 0) {
       throw new UsageError(`Unexpected argument "${positionals[0]}"`);
     }
+    if (options.agent === "") throw new UsageError("--agent requires a value");
     return {
       terminal: options.terminal as TerminalApp | undefined,
       agent: options.agent as string | undefined,

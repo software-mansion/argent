@@ -7,6 +7,7 @@ import { createRegistry } from "../src/utils/setup-registry";
 import { definitionsById, EXPECTED_TOOL_COUNT } from "./helpers/catalog";
 import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
+import { formatScreenshotDiffSummary } from "../src/tools/screenshot-diff/screenshot-diff-summary";
 
 const failureSignal: FailureSignal = {
   error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
@@ -97,40 +98,81 @@ describe("tool interaction messages", () => {
     ).toBe(`Failed to tap at (50%, 25%): ${failureSignal.error_code}`);
   });
 
+  it("does not claim a comparison for a dimension-mismatch screenshot-diff", () => {
+    const completedMsg =
+      definitionsById(createRegistry()).get("screenshot-diff")!.interaction!.completedMsg!;
+    const params = { udid: "device-1", baselinePath: "/a.png", currentPath: "/b.png" };
+
+    expect(
+      completedMsg({
+        params,
+        result: {
+          summary: formatScreenshotDiffSummary({
+            totalPixels: 288_000,
+            differentPixels: 0,
+            mismatchPercentage: 0,
+            dimensionMismatch: {
+              expected: { width: 360, height: 800 },
+              actual: { width: 800, height: 360 },
+            },
+            regions: [],
+          }),
+        },
+      })
+    ).toBe("Skipped comparison - screenshot dimensions differ");
+
+    expect(
+      completedMsg({
+        params,
+        result: {
+          summary: formatScreenshotDiffSummary({
+            totalPixels: 288_000,
+            differentPixels: 1_440,
+            mismatchPercentage: 0.5,
+            imageSize: { width: 360, height: 800 },
+            regions: [],
+          }),
+        },
+      })
+    ).toBe("Compared screenshots");
+  });
+
   it("names the flow from either source in flow-execute messages", () => {
     const definitions = definitionsById(createRegistry());
-    const interaction = definitions.get("flow-execute")!.interaction!;
+    const interaction = definitions.get("e2e-execute")!.interaction!;
 
     const byName = { name: "settings-explore", project_root: "/repo" };
-    expect(interaction.startedMsg!({ params: byName })).toBe("Running flow settings-explore");
+    expect(interaction.startedMsg!({ params: byName })).toBe("Running e2e test settings-explore");
     expect(interaction.completedMsg!({ params: byName, result: {} })).toBe(
-      "Ran flow settings-explore"
+      "Ran e2e test settings-explore"
     );
     expect(interaction.failedMsg!({ params: byName, error: new Error("raw"), failureSignal })).toBe(
-      `Failed to run flow settings-explore: ${failureSignal.error_code}`
+      `Failed to run e2e test settings-explore: ${failureSignal.error_code}`
     );
 
-    // A flow_path call has no name param — the messages derive the name from
+    // An e2e_test_path call has no name param — the messages derive the name from
     // the YAML basename instead of rendering "undefined".
-    const byPath = { flow_path: "/repo/flows/login.yaml", project_root: "/repo" };
-    expect(interaction.startedMsg!({ params: byPath })).toBe("Running flow login");
-    expect(interaction.completedMsg!({ params: byPath, result: {} })).toBe("Ran flow login");
+    const byPath = { e2e_test_path: "/repo/flows/login.yaml", project_root: "/repo" };
+    expect(interaction.startedMsg!({ params: byPath })).toBe("Running e2e test login");
+    expect(interaction.completedMsg!({ params: byPath, result: {} })).toBe("Ran e2e test login");
     expect(interaction.failedMsg!({ params: byPath, error: new Error("raw"), failureSignal })).toBe(
-      `Failed to run flow login: ${failureSignal.error_code}`
+      `Failed to run e2e test login: ${failureSignal.error_code}`
     );
 
     // Degenerate sources (these calls fail validation, but the started message
     // renders first) still say something honest — never "" or "undefined".
     expect(
-      interaction.startedMsg!({ params: { flow_path: "/repo/flows/.yaml", project_root: "/repo" } })
-    ).toBe("Running flow .yaml");
+      interaction.startedMsg!({
+        params: { e2e_test_path: "/repo/flows/.yaml", project_root: "/repo" },
+      })
+    ).toBe("Running e2e test .yaml");
     // Unlike the bare ".yaml" above, this path has an empty basename stem, so
     // the raw path — not the stem — is what names the flow here.
-    expect(interaction.startedMsg!({ params: { flow_path: "/", project_root: "/repo" } })).toBe(
-      "Running flow /"
+    expect(interaction.startedMsg!({ params: { e2e_test_path: "/", project_root: "/repo" } })).toBe(
+      "Running e2e test /"
     );
     expect(interaction.startedMsg!({ params: { project_root: "/repo" } })).toBe(
-      "Running flow (unspecified)"
+      "Running e2e test (unspecified)"
     );
   });
 
@@ -140,7 +182,7 @@ describe("tool interaction messages", () => {
     // count that was never actually obtained), an agent re-recording a flow
     // would have no way to notice it just destroyed prior work.
     const definitions = definitionsById(createRegistry());
-    const completedMsg = definitions.get("flow-start-recording")!.interaction!.completedMsg!;
+    const completedMsg = definitions.get("e2e-start-recording")!.interaction!.completedMsg!;
     const params = { name: "checkout", project_root: "/tmp/proj" };
 
     expect(
@@ -148,14 +190,14 @@ describe("tool interaction messages", () => {
         params,
         result: { message: "", flowFile: "", savedTo: "project" },
       })
-    ).toBe("Started recording flow checkout");
+    ).toBe("Started recording e2e test checkout");
 
     expect(
       completedMsg({
         params,
         result: { message: "", flowFile: "", savedTo: "project", restarted: true },
       })
-    ).toBe("Restarted recording flow checkout, discarding the previous take");
+    ).toBe("Restarted recording e2e test checkout, discarding the previous take");
 
     expect(
       completedMsg({
@@ -168,7 +210,7 @@ describe("tool interaction messages", () => {
           discardedSteps: 1,
         },
       })
-    ).toBe("Restarted recording flow checkout, discarding 1 step");
+    ).toBe("Restarted recording e2e test checkout, discarding 1 step");
 
     expect(
       completedMsg({
@@ -181,7 +223,7 @@ describe("tool interaction messages", () => {
           discardedSteps: 4,
         },
       })
-    ).toBe("Restarted recording flow checkout, discarding 4 steps");
+    ).toBe("Restarted recording e2e test checkout, discarding 4 steps");
   });
 
   it("names the flow in every recording-tool interaction line", () => {
@@ -200,23 +242,23 @@ describe("tool interaction messages", () => {
     // on add-step) instead. A fixture that misdescribes the contract is the one
     // that gets copied into a test that does.
     const results: Record<string, Record<string, unknown>> = {
-      "flow-start-recording": { message: "", flowFile: "", savedTo: "project" },
-      "flow-add-step": {
+      "e2e-start-recording": { message: "", flowFile: "", savedTo: "project" },
+      "e2e-add-step": {
         message: "",
         toolResult: {},
         stepCount: 1,
         recorded: "1. tap: (0.5, 0.3)",
         savedTo: "project",
       },
-      "flow-add-echo": { message: "", stepCount: 1, savedTo: "project" },
-      "flow-add-script": {
+      "e2e-add-echo": { message: "", stepCount: 1, savedTo: "project" },
+      "e2e-add-script": {
         message: "",
         status: "pass",
         stepCount: 1,
         recorded: "1. script: ../../scripts/seed.mjs",
         savedTo: "project",
       },
-      "flow-finish-recording": {
+      "e2e-finish-recording": {
         message: "",
         path: "/tmp/proj/.argent/flows/checkout.yaml",
         executionPrerequisite: "",
@@ -228,11 +270,11 @@ describe("tool interaction messages", () => {
     };
 
     for (const id of [
-      "flow-start-recording",
-      "flow-add-step",
-      "flow-add-echo",
-      "flow-add-script",
-      "flow-finish-recording",
+      "e2e-start-recording",
+      "e2e-add-step",
+      "e2e-add-echo",
+      "e2e-add-script",
+      "e2e-finish-recording",
     ]) {
       const i = definitions.get(id)!.interaction!;
       expect(i.startedMsg!({ params }), `${id}.startedMsg`).toContain(name);
@@ -248,18 +290,18 @@ describe("tool interaction messages", () => {
 
   it("does not announce a recorded step on the paths that record nothing", () => {
     const completedMsg =
-      definitionsById(createRegistry()).get("flow-add-step")!.interaction!.completedMsg!;
+      definitionsById(createRegistry()).get("e2e-add-step")!.interaction!.completedMsg!;
     const params = { name: "checkout", project_root: "/tmp/proj", command: "echo" };
 
     expect(
       completedMsg({ params, result: { message: "", toolResult: undefined, stepCount: 0 } })
-    ).toBe("Recorded no echo step in flow checkout");
+    ).toBe("Recorded no echo step in e2e test checkout");
     expect(
       completedMsg({
         params,
         result: { message: "", toolResult: undefined, stepCount: 1, recorded: "1. echo: hi" },
       })
-    ).toBe("Added echo step to flow checkout");
+    ).toBe("Added echo step to e2e test checkout");
   });
 
   it("joins the record-nothing RESULT to the line the registry actually logs", async () => {
@@ -282,7 +324,7 @@ describe("tool interaction messages", () => {
       });
 
       expect(result.recorded).toBeUndefined();
-      expect(completions).toEqual(["Recorded no echo step in flow checkout"]);
+      expect(completions).toEqual(["Recorded no echo step in e2e test checkout"]);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -311,7 +353,7 @@ describe("tool interaction messages", () => {
       // Recordings are keyed by `name` + `project_root`, so both are required
       // and the message names the flow. The echoed `message` is the sensitive
       // part — it is caller-authored free text — and stays out.
-      definitions.get("flow-add-echo")!.interaction!.completedMsg!({
+      definitions.get("e2e-add-echo")!.interaction!.completedMsg!({
         params: { name: "checkout", project_root: "/tmp/proj", message: secret },
         result: { message: secret, stepCount: 1, savedTo: "project" },
       }),
@@ -319,6 +361,6 @@ describe("tool interaction messages", () => {
 
     expect(messages.join("\n")).not.toContain(secret);
     expect(messages).toContain("Opening example.com");
-    expect(messages).toContain("Added note to flow checkout");
+    expect(messages).toContain("Added note to e2e test checkout");
   });
 });

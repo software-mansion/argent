@@ -186,6 +186,38 @@ export async function dragBetween(
   return { reactivated: repliedReactivated(data) };
 }
 
+/** One point on a finger's path: absolute points in the app's space, `tMs` since the gesture began. */
+interface RunnerTouchWaypoint {
+  x: number;
+  y: number;
+  tMs: number;
+}
+
+/** A finger touches down at its first waypoint, moves through the rest, and lifts after the last. */
+export interface RunnerTouchFinger {
+  points: RunnerTouchWaypoint[];
+}
+
+/**
+ * Play several fingers at once, each along its own timed path: pinches,
+ * rotations and any path with waypoints, which XCUICoordinate cannot draw.
+ * The runner answers once the last finger has lifted.
+ *
+ * @param fingers 1 to 5 paths. Times within a path must not decrease.
+ */
+export async function touchPaths(
+  api: IosDeviceRunnerApi,
+  bundleId: string,
+  fingers: RunnerTouchFinger[]
+): Promise<MutationReply> {
+  const data = await api.run(
+    { command: "touchPaths", appBundleId: bundleId, fingers },
+    { timeoutMs: GESTURE_TIMEOUT_MS }
+  );
+
+  return { reactivated: repliedReactivated(data) };
+}
+
 /**
  * Hardware buttons the runner's `button` command accepts.
  */

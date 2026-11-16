@@ -152,6 +152,12 @@ describe("getResolvedToolsUrl — precedence chain", () => {
     expect(resolved.shadowedLink).toBeUndefined();
   });
 
+  it("strips trailing slashes from ARGENT_TOOLS_URL, so `${url}/tools` has one slash", async () => {
+    process.env.ARGENT_TOOLS_URL = "http://override.example:9000/proxy//";
+    const resolved = await linkConfig.getResolvedToolsUrl();
+    expect(resolved.url).toBe("http://override.example:9000/proxy");
+  });
+
   it("env wins over link, AND reports the shadowed link so callers can warn", async () => {
     await linkConfig.writeLinkConfig(sampleConfig);
     process.env.ARGENT_TOOLS_URL = "http://override.example:9000";
@@ -185,27 +191,6 @@ describe("getResolvedToolsUrl — precedence chain", () => {
     writeFileSync(LINK_FILE, "{ not json", "utf8");
     const resolved = await linkConfig.getResolvedToolsUrl();
     expect(resolved).toEqual({ url: null, source: "none" });
-  });
-});
-
-describe("isRemoteRouted", () => {
-  it("returns false when neither env nor link is configured", async () => {
-    expect(await linkConfig.isRemoteRouted()).toBe(false);
-  });
-
-  it("returns true when a link file is configured", async () => {
-    await linkConfig.writeLinkConfig(sampleConfig);
-    expect(await linkConfig.isRemoteRouted()).toBe(true);
-  });
-
-  it("returns true when ARGENT_TOOLS_URL is set (regardless of link presence)", async () => {
-    process.env.ARGENT_TOOLS_URL = "http://override.example:9000";
-    expect(await linkConfig.isRemoteRouted()).toBe(true);
-  });
-
-  it("is gated on a *valid* link file — corrupt JSON does not count as routed", async () => {
-    writeFileSync(LINK_FILE, "{ not json", "utf8");
-    expect(await linkConfig.isRemoteRouted()).toBe(false);
   });
 });
 

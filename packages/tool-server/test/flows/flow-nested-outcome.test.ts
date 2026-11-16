@@ -62,7 +62,7 @@ async function run(tool: string, nestedResult: unknown) {
   const result = asRun(
     await createRunFlowTool(registry).execute(
       {},
-      { name: "outer", project_root: PROJECT_ROOT, flow_file: flowFile, device: "DEV" }
+      { name: "outer", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "DEV" }
     )
   );
   return { result, registry };
@@ -94,7 +94,7 @@ describe("a nested flow-execute reports its own verdict", () => {
     const { result, registry } = await run("flow-execute", FAILED_SUBFLOW);
 
     expect(result.steps[0].status).toBe("fail");
-    expect(result.steps[0].reason).toMatch(/flow "sub" failed/);
+    expect(result.steps[0].reason).toMatch(/e2e test "sub" failed/);
     expect(result.steps[0].reason).toMatch(/1 failed/);
     // The sub-flow's own reason is surfaced, so the CLI — which renders only
     // `reason` — says what actually went wrong rather than just "it failed".
@@ -221,6 +221,19 @@ describe("the check is deliberately scoped to the two orchestrator tools", () =>
       nestedOrchestratorOutcome("flow-execute", { ok: false, steps: [null, 7, { status: "fail" }] })
     ).not.toThrow();
     expect(() => nestedOrchestratorOutcome("run-sequence", { steps: "nope" })).not.toThrow();
+  });
+
+  it("names the unrun e2e test from e2eTest, or from flow when only that is sent", () => {
+    const notice = { notice: "has a prerequisite", executionPrerequisite: "" };
+    expect(
+      nestedOrchestratorOutcome("e2e-execute", { ...notice, e2eTest: "new", flow: "old" })?.reason
+    ).toMatch(/^e2e test "new" did not run/);
+    expect(nestedOrchestratorOutcome("e2e-execute", { ...notice, e2eTest: "new" })?.reason).toMatch(
+      /^e2e test "new" did not run/
+    );
+    expect(nestedOrchestratorOutcome("e2e-execute", { ...notice, flow: "old" })?.reason).toMatch(
+      /^e2e test "old" did not run/
+    );
   });
 
   it("says which step failed even when the sub-report is partly malformed", () => {

@@ -22,7 +22,7 @@ function hasAllowedExtension(filePath: string): boolean {
   return ALLOWED_SOURCE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
-export interface SourceLocation {
+interface SourceLocation {
   file: string;
   line: number;
   column: number;

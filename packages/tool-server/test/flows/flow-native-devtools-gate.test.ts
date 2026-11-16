@@ -73,7 +73,7 @@ async function runGated(
       {
         name,
         project_root: PROJECT_ROOT,
-        flow_file: flowFile,
+        e2e_test_file: flowFile,
         device: "00000000-0000-0000-0000-0000000000ab",
       }
     )
@@ -96,8 +96,8 @@ describe("a flow step whose native-devtools precheck blocked", () => {
       message,
     });
 
-    // The gate ran; the trailing tap did NOT.
-    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    // The gate ran, then the failure screenshot; the trailing tap did NOT.
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
     const gate = run.steps[0];
     expect(gate.tool).toBe("native-full-hierarchy");
     expect(gate.status).toBe("fail");

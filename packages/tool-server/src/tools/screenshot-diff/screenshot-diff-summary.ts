@@ -17,11 +17,7 @@ type TextSummaryChange = TextChange & {
  * gate matching `includes("status: unchanged")` would read it as a plain pass.
  */
 type SummaryStatus =
-  | "unchanged"
-  | "changed"
-  | "resized_no_change"
-  | "dimension_mismatch"
-  | "unknown";
+  "unchanged" | "changed" | "resized_no_change" | "dimension_mismatch" | "unknown";
 type CoordinateSpace = { imageSize: Size } | undefined;
 
 export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput): string {
@@ -35,7 +31,7 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   const coordinateSpace = coordinateSpaceForSummary(result.imageSize);
 
   const lines: string[] = ["Screenshot diff summary", "", "Overall:"];
-  lines.push(`- status: ${status}`);
+  lines.push(statusLine(status));
 
   if (result.sizeNormalization) {
     // Placed directly under the status so it frames every figure below it; the
@@ -107,6 +103,15 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   }
 
   return lines.join("\n");
+}
+
+function statusLine(status: SummaryStatus): string {
+  return `- status: ${status}`;
+}
+
+// The result carries its status only inside the summary text.
+export function summaryReportsDimensionMismatch(summary: string): boolean {
+  return summary.split("\n").includes(statusLine("dimension_mismatch"));
 }
 
 function screenshotDiffStatus(result: ScreenshotDiffSummaryInput): SummaryStatus {

@@ -14,7 +14,7 @@ jobs:
         with:
           ref: main
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
@@ -73,6 +73,11 @@ jobs:
       - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
+      # Native Mac app library and launch helper: without them boot-device
+      # cannot start a Mac app.
+      - run: test -f packages/argent/dylibs/macos/libNativeDevtoolsMacos.dylib
+      - run: test -f packages/argent/dylibs/macos/libArgentInjectionBootstrap.dylib
+      - run: test -x packages/argent/bin/darwin/argent-macos-helper
       - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj/project.pbxproj
       - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj/xcshareddata/xcschemes/ArgentRunner.xcscheme
       - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunnerUITests/ArgentRunnerSession.swift

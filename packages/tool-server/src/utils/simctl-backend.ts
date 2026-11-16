@@ -19,7 +19,7 @@ import { simctlLaunch, simctlTerminate } from "./sim-remote";
  * Merging the two branches means changing that `services()` first.
  */
 export interface SimctlBackend {
-  launch(udid: string, bundleId: string): Promise<void>;
+  launch(udid: string, bundleId: string, args?: string[]): Promise<void>;
   terminate(udid: string, bundleId: string): Promise<void>;
 }
 
@@ -27,3 +27,21 @@ export const remoteSimctl: SimctlBackend = {
   launch: simctlLaunch,
   terminate: simctlTerminate,
 };
+
+// simctl answers the same for an app that is not running and one that is not installed.
+export const SIMCTL_NOTHING_TO_TERMINATE = /found nothing to terminate/i;
+
+/** Resolves false when `terminate` rejects with `nothingToTerminate`, rethrows any other failure. */
+export async function tolerateNothingToTerminate(
+  terminate: Promise<unknown>,
+  nothingToTerminate: RegExp
+): Promise<boolean> {
+  try {
+    await terminate;
+    return true;
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    if (nothingToTerminate.test(`${e.stderr ?? ""} ${e.message ?? ""}`)) return false;
+    throw err;
+  }
+}

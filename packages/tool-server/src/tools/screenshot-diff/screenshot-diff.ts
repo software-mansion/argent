@@ -28,7 +28,7 @@ export interface DiffBounds {
   height: number;
 }
 
-export interface DominantColorChange {
+interface DominantColorChange {
   channel: "red" | "green" | "blue" | "luminance" | "none";
   direction: "increase" | "decrease" | "none";
   magnitude: number;

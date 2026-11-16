@@ -13,13 +13,16 @@ set -euo pipefail
 #
 # Built and checksummed in argent-private CI, shipped as a single
 # trace-processor-wasm.tar.gz (+ .sha256) release asset. The blobs are unsigned,
-# so a sha256 mismatch is fatal: it means a corrupt or tampered download.
+# so a sha256 mismatch is fatal: it means a corrupt or incomplete download. The
+# checksum comes from the same release as the tarball, so it proves integrity
+# only: whoever can replace the tarball there can replace the checksum too.
 #
 # Usage: ./scripts/download-trace-processor.sh [release-tag]
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
 #
 # Requires:
-#   - gh CLI (no authentication needed — the repo is public)
+#   - gh CLI, logged in with `gh auth login` (the repo is public, but the
+#     `gh release view` pre-check still needs auth)
 
 REPO="software-mansion-labs/argent-private-releases"
 TAG="${1:-argent-main}"
@@ -38,7 +41,7 @@ else
 fi
 
 if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
-  echo "Error: release '${TAG}' not found in ${REPO}." >&2
+  echo "Error: release '${TAG}' not found in ${REPO}, or gh is not logged in (gh auth login)." >&2
   echo "Build and publish the trace-processor WASM bundle for this version first, then retry." >&2
   exit 1
 fi

@@ -5,8 +5,12 @@ import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
-import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
+import {
+  buildHeartbeatScript,
+  FIBER_ROOT_TRACKER_SCRIPT,
+} from "../../../utils/react-profiler/scripts";
 import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-profiler-start";
+import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const HOOK_MISSING_ERROR = "no __REACT_DEVTOOLS_GLOBAL_HOOK__";
@@ -105,34 +109,36 @@ const zodSchema = z.object({
     .int()
     .positive()
     .default(10)
-    .describe("Maximum tree depth to traverse (default 10)"),
+    .describe("Maximum tree depth to traverse"),
   filter: z.string().optional().describe("Regex string to filter component names"),
 });
 
 export const reactProfilerFiberTreeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown> = {
   id: "react-profiler-fiber-tree",
+  description: `Inspect the React fiber tree and return a JSON representation of the component hierarchy.
+Use when tracing the ancestry of a library component.
+Returns a nested JSON tree of fiber nodes with name, tag, actualDuration, selfBaseDuration, and children.
+Fails if the React DevTools hook is not present or no fiber roots have been committed yet.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: () => "Reading React fiber tree",
     completedMsg: () => "Read React fiber tree",
     failedMsg: ({ failureSignal }) =>
       `Failed to read React fiber tree: ${failureSignal.error_code}`,
   },
-  description: `Inspect the React fiber tree and return a JSON representation of the component hierarchy.
-Use when tracing ancestry of a library component or checking for useMemoCache hook (confirms React Compiler is active on a component).
-Returns a nested JSON tree of fiber nodes with name, tag, actualDuration, selfBaseDuration, and children.
-Fails if the React DevTools hook is not present or no fiber roots have been committed yet.`,
-  zodSchema,
   // RN-only: walks the fiber tree via the React DevTools backend hook.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${params.device_id}`,
+    // Same key as react-profiler-start, so a forwarded logicalDeviceId reads its run.
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
 
-    if (api.profilingActive && api.ownerToolServerPid === process.pid) {
-      await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
+    if (api.profilingActive && api.sessionId && api.ownerToolServerPid === process.pid) {
+      await cdp.evaluate(buildHeartbeatScript(api.sessionId)).catch(() => {});
     }
 
     const script = buildFiberTreeScript(params.max_depth, params.filter ?? "");

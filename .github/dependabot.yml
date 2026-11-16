@@ -31,6 +31,30 @@ updates:
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-major"
+      # The docs theme @swmansion/t-rex-ui pins Docusaurus 3.9.2 exactly and
+      # imports theme-common internals 3.10 removed (`useKeyboardNavigation`).
+      # Drop this once t-rex-ui moves to a newer Docusaurus.
+      - dependency-name: "@docusaurus/*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      # Docusaurus 3.9.2's webpackbar options fail validation in webpack
+      # 5.112.0's ProgressPlugin, breaking the docs build. Moves with Docusaurus.
+      - dependency-name: "webpack"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      # @swmansion/argent-cloud-sdk 0.3.1 peer-requires @moq/net ^0.3.5, so a
+      # 0.4 spec leaves the lock on 0.3.5. Moves with the SDK.
+      - dependency-name: "@moq/net"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      # TypeScript 7 ships no JS compiler API, which ts-node, typescript-eslint
+      # and knip all load.
+      - dependency-name: "typescript"
+        versions:
+          - ">=7"
     groups:
       # Batch all minor + patch updates into one PR per week to cut noise.
       npm-minor-patch:

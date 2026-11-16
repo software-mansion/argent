@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getFailureSignal, FAILURE_CODES } from "@argent/registry";
 import { discoverMetro } from "../../src/utils/debugger/discovery";
 
@@ -42,6 +45,46 @@ describe("discoverMetro", () => {
     expect(info.projectRoot).toBe("/Users/dev/myapp");
     expect(info.targets).toHaveLength(1);
     expect(info.targets[0].id).toBe("page1");
+  });
+
+  describe("project root header encoding", () => {
+    const target = {
+      id: "page1",
+      title: "React Native",
+      description: "some desc",
+      webSocketDebuggerUrl: "ws://localhost:8081/inspector/debug?device=0&page=1",
+    };
+    async function rootFor(header: string): Promise<string> {
+      mockFetch
+        .mockResolvedValueOnce(statusResponse(header))
+        .mockResolvedValueOnce(targetsResponse([target]));
+      return (await discoverMetro(8081)).projectRoot;
+    }
+
+    // Expo CLI sends encodeURI(projectRoot); RN CLI 20.2 sends a file URL pathname.
+    it("decodes a space", async () => {
+      expect(await rootFor("/Users/dev/My%20App")).toBe("/Users/dev/My App");
+    });
+
+    it("decodes non-ASCII letters", async () => {
+      expect(await rootFor("/Users/dev/%C5%BB%C3%B3%C5%82w%20App")).toBe("/Users/dev/Żółw App");
+    });
+
+    // Older RN CLIs send process.cwd() as is.
+    it("keeps a raw path that exists on disk with a literal escape in its name", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "argent-discovery-"));
+      try {
+        const raw = join(dir, "My%20App");
+        mkdirSync(raw);
+        expect(await rootFor(raw)).toBe(raw);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps a raw path whose percent sign is not an escape", async () => {
+      expect(await rootFor("/Users/dev/100%done")).toBe("/Users/dev/100%done");
+    });
   });
 
   it("throws when Metro is not running", async () => {

@@ -1,5 +1,6 @@
 export { run, type RunCommandOptions } from "./run.js";
-export { flow, type FlowCommandOptions } from "./flow.js";
+// `flow` is the former name of `e2e`, kept as a silent alias.
+export { e2e, e2e as flow, type E2eCommandOptions, type FlowCommandOptions } from "./e2e.js";
 export { tools, type ToolsCommandOptions } from "./tools.js";
 export { server } from "./server.js";
 export { lens, type LensCommandOptions } from "./lens.js";

@@ -158,6 +158,36 @@ describe("resolveFileInputs", () => {
     expect(fileInputs!.input).toMatchObject({ presentOnHost: false, viaUpload: true });
   });
 
+  it("uses uploaded content even when a host file at that path matches the client's stat", async () => {
+    // A mirrored copy (cp -p, tar) keeps size and mtime, so a matching stat
+    // does not prove the bytes are the client's.
+    const filePath = path.join(tmpDir, "input.yaml");
+    await fs.writeFile(filePath, "stale!");
+    const st = await fs.stat(filePath);
+    const content = Buffer.from("fresh!");
+
+    const { args, fileInputs, cleanup } = await resolveFileInputs(
+      { fileInputs: FILE_SPEC },
+      {
+        input: wire({
+          path: filePath,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+          content: content.toString("base64"),
+        }),
+      }
+    );
+    cleanups.push(cleanup);
+
+    expect(args.input).not.toBe(filePath);
+    expect(await fs.readFile(args.input as string, "utf8")).toBe("fresh!");
+    expect(fileInputs!.input).toEqual({
+      clientPath: filePath,
+      presentOnHost: true,
+      viaUpload: true,
+    });
+  });
+
   it("materializes uploaded content for a path that does not exist here", async () => {
     const clientPath = path.join(tmpDir, "not-here", "flow.yaml");
     const content = Buffer.from("steps: []\n");

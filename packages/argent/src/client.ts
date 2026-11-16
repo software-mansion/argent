@@ -32,6 +32,93 @@ export interface ArgentToolResult<T = unknown> {
   data: T;
   /** Optional advisory note the tool attached to the result. */
   note?: string;
+  /**
+   * Why the call did not do its job though it returned, such as an e2e test
+   * that does not pass. See the tool-server API reference for the list.
+   */
+  failure?: string;
+}
+
+/**
+ * A node of the `ui-tree` result. A flag is set only when true; a field named in
+ * `UiTree.unsupportedFields` is unknown when absent.
+ */
+export interface UiTreeNode {
+  role: string;
+  label?: string;
+  value?: string;
+  identifier?: string;
+  checked?: boolean;
+  disabled?: boolean;
+  password?: boolean;
+  focused?: boolean;
+  selected?: boolean;
+  /** Normalized to `screen` like gesture-tap, but not clamped: it can fall outside 0..1. */
+  frame?: { x: number; y: number; width: number; height: number };
+  /** Android: the view class. iOS: the XCUIElementType name, e.g. `TextField`. */
+  type?: string;
+  /** iOS: the accessibility trait names. */
+  traits?: string[];
+  roleDescription?: string;
+  /** Android: the raw content-desc. */
+  contentDescription?: string;
+  /** Roots: the app's bundle id (iOS) or package (Android). */
+  bundleId?: string;
+  editable?: boolean;
+  heading?: boolean;
+  /** On screen, but behind an in-app presentation (iOS) or a system alert. */
+  covered?: boolean;
+  placeholder?: string;
+  /** The input shows its placeholder: it holds no text, and `value` is unset. */
+  hintShowing?: boolean;
+  /** No part of the frame is on screen inside its ancestors: scrolled out or clipped. */
+  hidden?: boolean;
+  children: UiTreeNode[];
+}
+
+export interface UiTree {
+  schemaVersion: 1;
+  source: "ax-service" | "android-devtools";
+  /** Native units: iOS points, Android pixels. */
+  screen?: { width: number; height: number };
+  /**
+   * iOS: while a system alert shows, the system app first and the app it covers
+   * second. Android: one root per window, topmost first.
+   */
+  roots: UiTreeNode[];
+  truncated: boolean;
+  alertVisible?: boolean;
+  keyboardVisible?: boolean;
+  /**
+   * The bundle id or package of the app in front, under any system alert.
+   * Android: unset when the alert hides the app's window.
+   */
+  foregroundApp?: string;
+  /**
+   * Fields this source cannot report. On Android they depend on the API level:
+   * `placeholder` and `hintShowing` need 26, `heading` 28.
+   */
+  unsupportedFields: string[];
+}
+
+/** The `foreground-app` result: which app is in front, as `UiTree.foregroundApp` reports it. */
+export interface ForegroundApp {
+  /** iOS bundle id or Android package of the app in front; under a system alert, the app it covers. Unset when unknown. */
+  bundleId?: string;
+  /** iOS: the app's display name. */
+  name?: string;
+  /** A system alert or dialog covers the app. Unset when unknown. */
+  alertVisible?: boolean;
+}
+
+/**
+ * The `fill` result. It never carries the field's text or the text that was
+ * asked for: either may be a credential. A field that does not read back the
+ * text fails with FILL_NOT_VERIFIED instead.
+ */
+export interface FillResult {
+  /** The field was read back and holds the text. False on a physical iPhone, where nothing can read it back. */
+  verified: boolean;
 }
 
 export interface CallToolOptions {
@@ -108,7 +195,10 @@ export function createArgentClient(): ArgentClient {
 
   async function listTools(options?: { signal?: AbortSignal }): Promise<ArgentTool[]> {
     const tools = await client.fetchTools({ signal: options?.signal });
-    return tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+    // A former tool id stays callable but is not listed.
+    return tools
+      .filter((tool) => tool.aliasOf === undefined)
+      .map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
   }
 
   async function callTool<T>(
@@ -132,7 +222,11 @@ export function createArgentClient(): ArgentClient {
       });
       // An aborted download reads as a missing file; report the abort instead.
       options?.signal?.throwIfAborted();
-      return { data: result as T, note: response.note };
+      return {
+        data: result as T,
+        note: response.note,
+        ...(response.failure !== undefined ? { failure: response.failure } : {}),
+      };
     } catch (err) {
       if (err instanceof ToolInvocationError) {
         throw new ArgentToolError(err.message, {

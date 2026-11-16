@@ -228,10 +228,9 @@ describe("debugger-log-registry not-connected results", () => {
 
   it("dead-socket asymmetry: NO gate, NO dispose — stats and the on-disk log file survive", async () => {
     // Deliberate asymmetry with debugger-status: captured logs are readable
-    // over a dead socket, and a status-style gate would dispose the node —
-    // whose dispose closes the LogFileWriter and UNLINKS the log file — i.e.
-    // destroy exactly the post-crash logs the caller came for, while also
-    // dropping `file` from the result. This pin makes that regression loud.
+    // over a dead socket, and a status-style gate would dispose the node,
+    // dropping these stats and `file` from the result. This pin makes that
+    // regression loud.
     const metro = await startMockMetroCdp();
     const factorySpy = vi.fn(jsRuntimeDebuggerBlueprint.factory);
     const setup = makeSetup({ ...jsRuntimeDebuggerBlueprint, factory: factorySpy });

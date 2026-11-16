@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { FailureError, FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { readdirSync, readFileSync } from "node:fs";
+import * as path from "node:path";
+import { FailureError, FAILURE_CODES, Registry, getFailureSignal } from "@argent/registry";
 import {
   buildAppStateMessage,
   isInjectableBundleId,
@@ -31,9 +33,11 @@ import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-de
 import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
 import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
-import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
+
+const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 
 function makeNativeApi(options: {
   envSetup?: boolean;
@@ -91,6 +95,34 @@ function makeNativeApi(options: {
 }
 
 describe("native-devtools-status tool", () => {
+  // Agents get the disabled and selected states and the VoiceOver hint from
+  // describe; the SDK still calls the tool directly.
+  it("hides native-describe-screen from MCP", () => {
+    expect(nativeDescribeScreenTool.hideFromMcp).toBe(true);
+  });
+
+  // An MCP agent does not have the tool, so no description, warning or error may
+  // send it there. Its own file and the two references that are code are exempt.
+  it("names native-describe-screen nowhere an MCP agent can read it", () => {
+    const srcRoot = path.resolve(__dirname, "../src");
+    const sources = readdirSync(srcRoot, { recursive: true, encoding: "utf8" })
+      .filter((file) => file.endsWith(".ts") && !file.endsWith("/native-describe-screen.ts"))
+      .map((file) => path.join(srcRoot, file));
+    const mentions = sources.filter((file) =>
+      readFileSync(file, "utf8")
+        .replace(/^ +"native-describe-screen",$/m, "") // NATIVE_DEVTOOLS_PRECHECK_TOOLS
+        .replace(/from "[^"]*\/native-describe-screen";/, "") // setup-registry.ts
+        .includes("native-describe-screen")
+    );
+    expect(mentions.map((file) => path.relative(srcRoot, file))).toEqual([]);
+  });
+
+  // Agents get the same status from every native-* tool; the SDK still calls it
+  // directly.
+  it("is hidden from MCP", () => {
+    expect(nativeDevtoolsStatusTool.hideFromMcp).toBe(true);
+  });
+
   it("reports a running uninjected app as needing restart", async () => {
     const { api, ensureEnvReady } = makeNativeApi({ appRunning: true, connected: false });
 
@@ -1205,7 +1237,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     expect(line, "description has no requiresRestart rule").toBeTypeOf("string");
     expect(line!).toBe(
       "If requiresRestart is true: call restart-app once, then proceed with the native feature. " +
-        "Read state before acting on a second such reading — indeterminate reaches this rule too, " +
+        "Read state before acting on a second such reading. Indeterminate reaches this rule too, " +
         "and its line below bounds it at that one restart."
     );
   });
@@ -1315,7 +1347,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     // still contains "do not restart it".
     for (const tool of tools) {
       expect(tool.description!, `${tool.id} qualifies the connecting prohibition`).toContain(
-        "do not restart it, wait"
+        "Do not restart it, wait"
       );
     }
   });
@@ -1462,15 +1494,15 @@ describe("native-* tool descriptions document every precheck outcome", () => {
   it.each([
     [
       "connecting",
-      "If state is connecting: do NOT restart the app — launching it is what starts the connection, so a relaunch discards the one in progress and returns this same state. Wait a few seconds and repeat this call.",
+      "If state is connecting: do NOT restart the app. Launching it is what starts the connection, so a relaunch discards the one in progress and returns this same state. Wait a few seconds and repeat this call.",
     ],
     [
       "unregistered",
-      "If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
+      "If state is unregistered: do NOT restart the app again: it already launched under the terms a restart would recreate. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it. Treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
     ],
     [
       "indeterminate",
-      "If state is indeterminate: the process could not be inspected, so restart-app is worth one attempt. If this call still reports it after that restart, do NOT restart the app again — the service is stale rather than the app uninjected, so restart the tool-server (`argent server stop && argent server start --detach`) and retry. Remote simulators can never inspect the process, so this is the only unconnected state a running app reaches there.",
+      "If state is indeterminate: the process could not be inspected, so restart-app is worth one attempt. If this call still reports it after that restart, do NOT restart the app again: the service is stale rather than the app uninjected, so restart the tool-server (`argent server stop && argent server start --detach`) and retry. Remote simulators can never inspect the process, so this is the only unconnected state a running app reaches there.",
     ],
   ] as const)("routes %s in the description exactly as written", (state, line) => {
     expect(guidanceLine(state)).toBe(line);
@@ -1479,11 +1511,11 @@ describe("native-* tool descriptions document every precheck outcome", () => {
   it.each([
     [
       "connect_pending",
-      "If status is connect_pending: the app is injected and still connecting — do not restart it, wait a few seconds and retry.",
+      "If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry.",
     ],
     [
       "service_stale",
-      "If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (`argent server stop && argent server start --detach`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback.",
+      "If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (`argent server stop && argent server start --detach`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback.",
     ],
   ])("routes %s identically on all six native-* tools", (status, clause) => {
     for (const tool of tools) {

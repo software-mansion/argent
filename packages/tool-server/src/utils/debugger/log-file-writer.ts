@@ -47,11 +47,14 @@ interface ClusterState {
 }
 
 const MAX_ENTRIES = 50_000;
+const STALE_LOG_MS = 24 * 60 * 60 * 1000;
 const CLUSTER_KEY_LENGTH = 80;
 const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
+
+const liveLogFiles = new Set<string>();
 
 export class LogFileWriter {
   private filePath: string;
@@ -67,7 +70,9 @@ export class LogFileWriter {
     const timestamp = Date.now();
     const dir = path.join(os.homedir(), ".argent", "tmp");
     fs.mkdirSync(dir, { recursive: true });
-    this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}.log`);
+    pruneStaleLogs(dir);
+    this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}-p${process.pid}.log`);
+    liveLogFiles.add(this.filePath);
     this.open();
   }
 
@@ -190,9 +195,11 @@ export class LogFileWriter {
     return { entries: filtered, total };
   }
 
-  close(): void {
+  /** `keepFile` leaves the log to the sweep, 24h after the close. */
+  close({ keepFile = false }: { keepFile?: boolean } = {}): void {
     if (this.closed) return;
     this.closed = true;
+    liveLogFiles.delete(this.filePath);
     if (this.fd !== null) {
       try {
         fs.closeSync(this.fd);
@@ -201,11 +208,50 @@ export class LogFileWriter {
       }
       this.fd = null;
     }
+    if (keepFile) {
+      try {
+        const now = new Date();
+        fs.utimesSync(this.filePath, now, now);
+      } catch {
+        // no file
+      }
+      return;
+    }
     try {
       fs.unlinkSync(this.filePath);
     } catch {
       // file may already be gone
     }
+  }
+}
+
+function pruneStaleLogs(dir: string): void {
+  const cutoff = Date.now() - STALE_LOG_MS;
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const pid = Number(/^argent-logs-.*-p(\d+)\.log$/.exec(name)?.[1]);
+    if (!pid) continue;
+    const file = path.join(dir, name);
+    if (pid === process.pid ? liveLogFiles.has(file) : isAlive(pid)) continue;
+    try {
+      if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file);
+    } catch {
+      // already gone
+    }
+  }
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 

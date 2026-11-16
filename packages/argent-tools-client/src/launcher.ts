@@ -322,6 +322,7 @@ export function spawnToolsServer(
       // No-op off Windows.
       windowsHide: true,
     });
+    fs.closeSync(logFd);
 
     child.unref();
 

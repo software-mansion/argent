@@ -17,6 +17,12 @@ interface PendingRequest {
 
 const DEFAULT_RPC_TIMEOUT_MS = 5_000;
 const LONG_RPC_TIMEOUT_MS = 15_000;
+/**
+ * `setText` waits up to 1 s for focus (searching up to 3000 nodes under a
+ * host view), clears the node cache, then reads back for up to about 1.2 s;
+ * the helper's own worker gives up at 12 s and answers. This outlasts that.
+ */
+const SET_TEXT_RPC_TIMEOUT_MS = 14_000;
 
 /**
  * Connect to the helper over the adb-forwarded TCP socket. `onTerminated` fires
@@ -108,7 +114,11 @@ export function connectAndroidDevtoolsClient(
             }
             const id = nextId++;
             const timeoutMs =
-              method === "getHierarchy" ? LONG_RPC_TIMEOUT_MS : DEFAULT_RPC_TIMEOUT_MS;
+              method === "getHierarchy"
+                ? LONG_RPC_TIMEOUT_MS
+                : method === "setText"
+                  ? SET_TEXT_RPC_TIMEOUT_MS
+                  : DEFAULT_RPC_TIMEOUT_MS;
             return new Promise<T>((resolveReq, rejectReq) => {
               const timer = setTimeout(() => {
                 pending.delete(id);
