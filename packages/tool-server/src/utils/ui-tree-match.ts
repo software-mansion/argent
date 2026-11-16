@@ -120,8 +120,8 @@ export function nodeText(node: DescribeNode): string {
 // Text a `text` condition reads (and its failure messages quote). Prefers
 // `subtreeText` — hoisted from descendants by the flow adapters — so a check
 // against a testID container reads the text it visibly wraps rather than its
-// own (empty) label. Selector matching stays on `nodeText`, so `tap`/`{ text }`
-// targeting is unaffected.
+// own (empty) label. Selector matching tests the label and the value one at a
+// time and never reads `subtreeText`.
 export function assertText(node: DescribeNode): string {
   return node.subtreeText ?? nodeText(node);
 }
