@@ -69,6 +69,13 @@ const decodeJson = JSON.parse;
 
 const runnerListeners = [];
 
+/**
+ * The CommonJS loader's entry point, which is how plain `node` starts a main
+ * module. Node's types do not carry it, and a Node without it leaves the entry
+ * to Node. See `loadEntryAsPlainNodeDoes`.
+ */
+const commonJsLoad = /** @type {{ _load?: unknown }} */ (/** @type {unknown} */ (Module))._load;
+
 async function prepare() {
   const raw = await nextRequest();
   const request = parseRequest(raw);
@@ -227,7 +234,7 @@ function reportWhenEntrySettled(scriptUrl) {
  * either way, and `claimMainModuleIdentity` covers what differs.
  */
 function entryForCommonJsLoader(scriptUrl) {
-  if (typeof Module._load !== "function") return undefined;
+  if (typeof commonJsLoad !== "function") return undefined;
   let entryPath;
   try {
     entryPath = fileURLToPath(scriptUrl);
@@ -279,7 +286,7 @@ function nearestPackageType(file) {
  */
 function loadEntryAsPlainNodeDoes(entryPath) {
   try {
-    Module._load(entryPath, null, true);
+    /** @type {Function} */ (commonJsLoad).call(Module, entryPath, null, true);
   } catch (err) {
     entryThrew = true;
     queueMicrotask(() => {
@@ -287,6 +294,7 @@ function loadEntryAsPlainNodeDoes(entryPath) {
     });
     return never();
   }
+  return undefined;
 }
 
 /**
