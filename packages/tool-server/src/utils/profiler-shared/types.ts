@@ -67,7 +67,7 @@ export interface UiHang {
   severity: "RED" | "YELLOW";
   /**
    * Mac apps only: ms of the hang's span during which macOS held the app
-   * suspended, such as for a leak check. `durationMs` leaves this time out.
+   * suspended, such as for a leak check. `durationMs` includes this time.
    */
   suspendedMs?: number;
   /** Android-only: Perfetto jank_type, e.g. "App Deadline Missed". */
