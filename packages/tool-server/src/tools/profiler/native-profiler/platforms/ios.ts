@@ -677,6 +677,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     api.exportSkipReason = diagnostics.skipped ?? null;
     api.recordedMs = null;
     api.appSuspensions = suspensionSpans(suspensions, diagnostics);
+    anchorAtTraceStart(api, diagnostics);
 
     let warning = wasTimeout
       ? "Recording timed out at 10 min cap; exported the partial trace. " +
@@ -790,6 +791,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   api.exportSkipReason = diagnostics.skipped ?? null;
   api.recordedMs = api.platform === "macos" && api.wallClockStartMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
+  anchorAtTraceStart(api, diagnostics);
   if (ended) {
     // xctrace keeps recording when the app crashes, and the trace then lacks
     // most of what came before.
@@ -810,6 +812,18 @@ function endSuspensionWatch(api: NativeProfilerSessionApi): AppSuspensionWindow[
   const watch = api.suspensionWatch;
   api.suspensionWatch = null;
   return watch ? watch.end() : null;
+}
+
+/**
+ * A Mac app's start returns, and stamps wallClockStartMs, only after it waited
+ * for tracing to start and then ARM_SETTLE_MS: about 2 s after the trace's time
+ * 0, from which the hangs count. The combined report places the hangs on the
+ * wall clock from this anchor, so it takes the trace's `<start-date>` instead.
+ */
+function anchorAtTraceStart(api: NativeProfilerSessionApi, diagnostics: ExportDiagnostics): void {
+  if (api.platform === "macos" && diagnostics.traceStartMs !== undefined) {
+    api.wallClockStartMs = diagnostics.traceStartMs;
+  }
 }
 
 function suspensionSpans(

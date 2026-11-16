@@ -372,6 +372,43 @@ describe("the app's suspensions during a recording", () => {
   });
 });
 
+describe("the wall-clock start of a Mac recording", () => {
+  it("is the trace's start date, which the hangs count from, not the return of the start", async () => {
+    vi.mocked(runningTrackedApp).mockResolvedValue(tracked);
+    vi.mocked(getTrackedMacosApp).mockReturnValue(tracked);
+    // The start returns after its settle, about 2 s after the trace's time 0.
+    const traceStartMs = Date.now() - 2_000;
+    vi.mocked(exportIosTraceData).mockResolvedValue({
+      files: writeExports(debugDir.path),
+      diagnostics: { tocSchemas: [], cpuSchemaUsed: null, errors: {}, traceStartMs },
+    } as never);
+
+    expect((await call("native-profiler-start", { device_id: MAC })).status).toBe(200);
+    const session = await macSession();
+    expect(session.wallClockStartMs).toBeGreaterThan(traceStartMs + 1_000);
+    expect((await call("native-profiler-stop", { device_id: MAC })).status).toBe(200);
+    expect((await call("native-profiler-analyze", { device_id: MAC })).status).toBe(200);
+    expect(session.parsedData!.wallClockStartMs).toBe(traceStartMs);
+  });
+
+  it("stays the return of the start when the export found no start date", async () => {
+    vi.mocked(runningTrackedApp).mockResolvedValue(tracked);
+    vi.mocked(getTrackedMacosApp).mockReturnValue(tracked);
+    vi.mocked(exportIosTraceData).mockResolvedValue({
+      files: writeExports(debugDir.path),
+      diagnostics: { tocSchemas: [], cpuSchemaUsed: null, errors: {} },
+    } as never);
+
+    expect((await call("native-profiler-start", { device_id: MAC })).status).toBe(200);
+    const session = await macSession();
+    const startedMs = session.wallClockStartMs;
+    expect(startedMs).not.toBeNull();
+    expect((await call("native-profiler-stop", { device_id: MAC })).status).toBe(200);
+    expect((await call("native-profiler-analyze", { device_id: MAC })).status).toBe(200);
+    expect(session.parsedData!.wallClockStartMs).toBe(startedMs);
+  });
+});
+
 describe("an app that ended during the recording", () => {
   it("makes the stop warn and the report say so at the top", async () => {
     // macOS pids stay below 100000, so no process has this one.
