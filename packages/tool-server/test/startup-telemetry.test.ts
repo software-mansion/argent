@@ -89,6 +89,7 @@ import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { pauseJsCapturesOf } from "../src/blueprints/network-inspector";
 import { shutdownOwnedDevices } from "../src/utils/device-shutdown";
 import { variantProposalStore } from "../src/utils/variant-proposals";
+import { withCaptureLock } from "../src/tools/network/network-capture";
 
 describe("tool-server startup telemetry", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
@@ -192,6 +193,57 @@ describe("tool-server startup telemetry", () => {
     expect(pauseJsCapturesOf).toHaveBeenCalledWith(registryMock);
     expect(order).toEqual(["pause", "dispose"]);
   });
+
+  it.each([
+    { until: "until the start ends", ends: true, order: ["start ended", "pause", "dispose"] },
+    { until: "for at most 2 s", ends: false, order: ["pause", "dispose"] },
+  ])(
+    "waits for a network capture start under way before it pauses capture, $until",
+    async ({ ends, order: expected }) => {
+      vi.mocked(startSimulatorWatcher).mockReturnValueOnce({
+        stop: watcherMock.stop,
+        ready: new Promise<void>(() => {}),
+      });
+      const order: string[] = [];
+      vi.mocked(pauseJsCapturesOf).mockImplementationOnce(async () => {
+        order.push("pause");
+        return new Set<string>();
+      });
+      registryMock.dispose.mockImplementationOnce(async () => {
+        order.push("dispose");
+      });
+      let release!: () => void;
+      const underWay = withCaptureLock(
+        "emulator-5554",
+        "com.example.shop",
+        () => new Promise<void>((resolve) => (release = resolve))
+      );
+      const { start } = await import("../src/index");
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        start();
+        process.emit("SIGTERM");
+        await vi.advanceTimersByTimeAsync(1_900);
+        expect(order).toEqual([]);
+
+        if (ends) {
+          order.push("start ended");
+          release();
+          await underWay;
+        }
+        await vi.advanceTimersByTimeAsync(100);
+        await vi.waitFor(() => {
+          expect(exitSpy).toHaveBeenCalledWith(0);
+        });
+      } finally {
+        vi.useRealTimers();
+        release();
+        await underWay;
+      }
+      expect(order).toEqual(expected);
+    }
+  );
 
   it("stops the watcher before it waits for the owned devices to shut down", async () => {
     // The watcher's simctl calls run in their own process groups, so only the

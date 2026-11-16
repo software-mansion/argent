@@ -85,12 +85,12 @@ export function withCaptureLock<T>(
 /**
  * Runs `fn`, a teardown of the devices (every device without them), once each
  * start and stop of their apps under way has ended, or once `signal` aborts,
- * which `fn` then checks. A start or stop of their apps called meanwhile waits
- * until `fn` ends.
+ * which `fn` then checks, or once `maxMs` has passed. A start or stop of their
+ * apps called meanwhile waits until `fn` ends.
  */
 export async function withCaptureSweep<T>(
   devices: readonly string[] | undefined,
-  wait: { signal?: AbortSignal },
+  wait: { signal?: AbortSignal; maxMs?: number },
   fn: () => Promise<T>
 ): Promise<T> {
   const covered = devices && new Set(devices.map(lockDevice));
@@ -102,7 +102,7 @@ export async function withCaptureSweep<T>(
   const sweep = { devices: covered, done: new Promise<void>((resolve) => (end = resolve)) };
   captureSweeps.add(sweep);
   try {
-    await settleWithin(Promise.all(underWay), undefined, wait.signal);
+    await settleWithin(Promise.all(underWay), wait.maxMs, wait.signal);
     return await fn();
   } finally {
     captureSweeps.delete(sweep);

@@ -33,9 +33,16 @@ import {
 } from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
 import { pauseJsCapturesOf } from "./blueprints/network-inspector";
+import { withCaptureSweep } from "./tools/network/network-capture";
 import { renderFlagGated } from "./utils/flag-gated-text";
 
 const PROCESS_TIMEOUT_MS = 5_000;
+/**
+ * How long the exit waits for a network capture start or stop under way, so
+ * the teardown after it still ends within PROCESS_TIMEOUT_MS, the time a stop
+ * of the tool-server gives it before it kills the process.
+ */
+const EXIT_CAPTURE_WAIT_MS = 2_000;
 const DEFAULT_PORT = "3001";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_IDLE_TIMEOUT_MINUTES = "0";
@@ -340,19 +347,24 @@ export function start(): void {
     updateChecker.dispose();
     httpHandle.dispose();
 
-    // The JS network interceptor lives in the app, so the dispose below alone
-    // leaves it recording. Pause it and empty its log, as the native layers end
-    // their capture at their dispose. Each runtime gets at most 1 s.
-    await pauseJsCapturesOf(registry).catch(() => {});
+    // A network capture start or stop under way ends first, as at
+    // stop-all-simulator-servers, but the exit waits for it only briefly.
+    await withCaptureSweep(undefined, { maxMs: EXIT_CAPTURE_WAIT_MS }, async () => {
+      // The JS network interceptor lives in the app, so the dispose below alone
+      // leaves it recording. Pause it and empty its log, as the native layers end
+      // their capture at their dispose. Each runtime gets at most 1 s.
+      await pauseJsCapturesOf(registry).catch(() => {});
 
-    // Dispose BEFORE recording toolserver:stop, so a crash escalating mid-teardown
-    // is reflected in the stop event's reason instead of being lost behind an
-    // already-sent reason:"signal". Guarded so a dispose failure cannot skip it.
-    try {
-      await registry.dispose();
-    } catch (err) {
-      process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
-    }
+      // Dispose BEFORE recording toolserver:stop, so a crash escalating mid-teardown
+      // is reflected in the stop event's reason instead of being lost behind an
+      // already-sent reason:"signal". Guarded so a dispose failure cannot skip it.
+      try {
+        await registry.dispose();
+      } catch (err) {
+        process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
+      }
+    });
+
     try {
       await eventLog?.dispose();
     } catch (err) {
