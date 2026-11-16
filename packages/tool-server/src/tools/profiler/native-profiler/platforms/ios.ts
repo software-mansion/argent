@@ -627,9 +627,9 @@ async function startIosRecording(
     await settleAfterStart(api, started.child);
   } catch (err) {
     // The malloc path terminated the running app; if the capture never started,
-    // relaunch it. The attach path never terminates, so only this path needs this.
-    // Not after a teardown, as for one that the commit below reports.
-    if (mallocRelaunchBundleId && !api.disposed) {
+    // relaunch it, also after a teardown. The attach path never terminates, so
+    // only this path needs this.
+    if (mallocRelaunchBundleId) {
       try {
         execFileSync(
           "xcrun",

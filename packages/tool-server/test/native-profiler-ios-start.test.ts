@@ -238,7 +238,7 @@ describe("startNativeProfilerIos and a teardown during the readiness wait", () =
     expect(api.captureProcess).toBeNull();
   });
 
-  it("with malloc_stack_logging, does not launch the app again", async () => {
+  it("with malloc_stack_logging, launches the app that it terminated again", async () => {
     vi.mocked(resolveIosCaptureStrategy).mockReturnValueOnce({
       strategy: { name: "device" },
       reason: { kind: "default" },
@@ -263,7 +263,8 @@ describe("startNativeProfilerIos and a teardown during the readiness wait", () =
       );
       const calls = simctl.mock.calls.map(([, args]) => (args as string[]).join(" "));
       expect(calls).toContain(`terminate ${iosDevice.id} ${app.CFBundleIdentifier}`);
-      expect(calls).not.toContain(`launch ${iosDevice.id} ${app.CFBundleIdentifier}`);
+      // The teardown leaves the simulator running, so the app must not stay terminated.
+      expect(calls).toContain(`launch ${iosDevice.id} ${app.CFBundleIdentifier}`);
     } finally {
       simctl.mockImplementation(() => {
         throw new Error("simctl unavailable in this test");
