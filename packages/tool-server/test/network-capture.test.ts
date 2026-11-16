@@ -756,6 +756,24 @@ describe("network-capture-start", () => {
       expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
     });
 
+    it("does not take an earlier start that installed nothing for an installed interceptor when a later start does not reach the runtime, so a stop says nothing records", async () => {
+      serve(PORT, IOS_UDID, new FakeRuntime(APP, { loaded: false }));
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
+      expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ installed: false });
+
+      await reconnect(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      await start(IOS_UDID, APP);
+
+      expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "started", installed: false });
+      expect(layer(await stop(IOS_UDID, APP), "js")).toEqual({
+        layer: "js",
+        armed: false,
+        total: 0,
+        reason: `no app is connected to Metro on port ${PORT} yet; while capture is stopped, the app's JS runtime gets no interceptor`,
+      });
+    });
+
     it("lets view-network-request-details say that capture stopped recording at a reload, in the runtime the reload left without the interceptor", async () => {
       serve(PORT, IOS_UDID, new FakeRuntime(APP));
       ios.connected.add(APP);
