@@ -6,22 +6,21 @@ sidebar_custom_props:
   icon: gauge
 ---
 
-Argent can measure an iOS app launch and record an Xcode Instruments App Launch trace. Select a connected iPhone for device measurements.
+Argent can measure and profile app launch performance on iOS. Measurements can be used to establish a baseline and detect regressions after code changes. Launch profiles help the agent find performance bottlenecks.
 
-Argent does not build or install the app. Each project has its own build steps, so the agent builds the app in Release with the build flow of the project. Then the agent installs the build on the device and gives Argent the bundle ID of the app. A Debug build gives launch times that are not useful, and Argent cannot detect a Debug build. After a change to native code or JavaScript, the agent builds and installs the app again before the next measurement.
+## How it works
 
-The launch measurement uses an Argent UI test runner. The runner measures five launches with Apple's application launch metric.
+The agent builds the app in Release mode and installs it on the selected device. The agent prefers a connected physical iPhone and can fall back to a simulator with your permission.
 
-The Instruments recording shows the launch phases up to the first frame. Argent returns these phases and keeps the CPU samples of the launch as a native profiler session. The agent then uses the profiler query tools to find the functions that delay the first frame.
+For measurement, Argent uses a scripted XCUITest runner and Apple's launch metric. XCTest discards an initial launch to warm the app, then measures five launches. This follows the approach described in Apple's [Optimizing App Launch talk at WWDC 2019](https://developer.apple.com/videos/play/wwdc2019/423/).
 
-In a React Native app, the launch ends at the first frame, but React Native startup can continue after it. Some React Native work, such as runtime creation, can run before the first frame. The launch profile shows this work. The launch time is a part of the time to interactive (TTI), not the full TTI. Measure the native launch as one part of TTI, together with the React Native startup.
+For profiling, Xcode Instruments records launch phases and CPU samples with the App Launch template. Argent stores these CPU samples in a native profiler session. The agent queries this session to find functions that use the most CPU time before the first frame.
 
-Before each task, Argent runs the app once and then stops it. The next launch starts a new app process. Usually this is a warm launch, because parts of the app are still in memory. iOS can remove the app from memory at any time, so Argent cannot guarantee a warm launch. Argent does not measure a cold launch after a restart or a resume from the background.
+## Common pitfalls
 
-Measure on a physical iPhone when you need device performance. A simulator uses Mac hardware, so its timings can differ from iPhone timings. Argent uses a simulator only when you allow it. On a simulator, the Instruments recording has no lifecycle phases and runs slower than a normal launch. Use it for relative CPU analysis only. Xcode 26.4.x cannot record a launch on a simulator, so Argent stops before the launch with that Xcode.
-
-On iPhones with iOS 18, the measurement can return fewer than five samples, because XCTest loses some launch measurements. Argent reports how many samples it collected. Run the measurement again for a full set.
-
-Argent saves each run in the temporary directory of the system, together with the traces of the other native profiler tools. The measurement keeps its Xcode result and logs. The Instruments run keeps the trace and its lifecycle and dyld exports. On a simulator, it also keeps the signpost export. Argent keeps the CPU samples of the launch in the native profiler session.
-
-See the [tools reference](/docs/reference/tools#ios-launch-analysis) for parameters and build commands.
+- **Debug builds:** Measure a Release build. Debug build timings do not represent production performance, and Argent cannot detect the build configuration of an installed app.
+- **Outdated builds:** After a native code or JavaScript change, the agent must build and install the app again before the next measurement.
+- **Time to interactive:** The launch profile covers work up to the first frame. React Native startup or content loading can continue after this point, so launch time does not represent the full time to interactive (TTI). It is for the developer to define. 
+- **Simulator results:** A simulator uses Mac hardware, so its timings do not represent iPhone performance. Argent uses a simulator only with your permission. Simulator launch profiles have no lifecycle phases.
+- **Xcode 26.4.x:** Simulator launch recording stalls with this Xcode version. Argent stops before it launches the app. Use Xcode 27 or a physical iPhone.
+- **Missing samples:** On iOS 18 iPhones, XCTest can return fewer than five launch measurements. Argent reports the sample count. Run the measurement again for a full set.
