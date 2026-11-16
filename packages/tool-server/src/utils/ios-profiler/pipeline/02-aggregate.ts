@@ -36,8 +36,10 @@ function findDominantFrame(stack: StackFrame[]): StackFrame | null {
 
 /**
  * The app's entry point: `main`, the `$main()` of a Swift `@main` type, or the stub that
- * calls it in a debug build. The main run loop runs under it, so it is in every stack of
- * the main thread, also when only system code (drawing, layout, animation) runs.
+ * calls it in a debug build. The launch of the app and then the main run loop run under it,
+ * so it is in every stack of the main thread after dyld calls it, also when only system code
+ * (loading libraries, drawing, layout, animation) runs. Before that call, the main thread's
+ * stacks (dyld's own launch work) have no app frame.
  */
 export function isEntryPoint(name: string): boolean {
   return (

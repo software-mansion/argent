@@ -479,7 +479,7 @@ function renderFullReport(
         // in its advice, which the report gives for every hotspot.
         lines.push(
           isEntryPoint(b.dominantFunction)
-            ? `Only the entry point of the app is in these stacks: below it, the main run loop ran system code.`
+            ? `Only the entry point of the app is in these stacks: below it, only system code ran.`
             : `No function of the app is in these stacks: only system code ran in them.`
         );
         lines.push(``);
@@ -661,8 +661,11 @@ function renderFullReport(
           ? `Emulator/kernel overhead (GPU-transport pipe or syscall), not app code — it does not appear on a physical device, so it is not directly actionable. Re-profile on a real device to see the app's own CPU cost.`
           : b.systemCode
             ? isEntryPoint(b.dominantFunction)
-              ? `Not a function of the app: system frameworks (${systemFrameworks(b)}) did this work for the main run loop, such as drawing, layout or animation. Look for what in the app makes them work: an animation or timer that runs also when the app is idle, or views that redraw or change layout often.`
-              : `Not a function of the app: only system code (${systemFrameworks(b)}) ran in these stacks, with no function of the app in them. Look for what in the app starts this work, such as a call that the system completes on a thread of its own.`
+              ? `Not a function of the app: system frameworks (${systemFrameworks(b)}) did this work below the entry point of the app, such as drawing, layout or animation for the main run loop, or loading libraries while the app launched. For work of the run loop, look for what in the app makes them work: an animation or timer that runs also when the app is idle, or views that redraw or change layout often. A recording that launched the app (malloc_stack_logging) holds the launch at its start.`
+              : `Not a function of the app: only system code (${systemFrameworks(b)}) ran in these stacks, with no function of the app in them. ` +
+                (b.thread === "Main Thread"
+                  ? `On the main thread, this can be the launch of the app, before its entry point.`
+                  : `Look for what in the app starts this work, such as a call that the system completes on a thread of its own.`)
             : `High CPU in this function — inspect what calls it with \`function_callers\`, then move the heavy work off the main thread or memoize/throttle it.`;
       lines.push(
         `- ${severityEmoji(b.severity)} ${hotspotName(b)} on ${b.thread} (${b.weightPercentage}%): ${advice}`

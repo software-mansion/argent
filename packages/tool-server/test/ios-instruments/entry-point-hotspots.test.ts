@@ -254,7 +254,7 @@ describe("system code under the app's entry point", () => {
       "| 1 | system code under `static ExampleApp.$main()` | Main Thread | 80 | 80% |"
     );
     expect(report).toContain(
-      "### system code under `static ExampleApp.$main()` (Main Thread)\n\nOnly the entry point of the app is in these stacks: below it, the main run loop ran system code.\n"
+      "### system code under `static ExampleApp.$main()` (Main Thread)\n\nOnly the entry point of the app is in these stacks: below it, only system code ran.\n"
     );
     expect(report).not.toMatch(
       /`static ExampleApp\.\$main\(\)` on Main Thread \(80%\): High CPU in this function/
@@ -866,6 +866,45 @@ describe("system code under the app's entry point", () => {
     expect(report).toContain(
       "No function of the app is in these stacks: only system code ran in them.\n"
     );
+  });
+
+  it("names the launch of the app as a cause of system code on the main thread", async () => {
+    // A recording that launched the app (malloc_stack_logging) on an iOS 27 simulator: UIKit
+    // loads bundles under the entry point before the run loop runs, and dyld loads the app
+    // before the entry point.
+    const loadDependents = runtime(
+      "dyld4::JustInTimeLoader::loadDependents(Diagnostics&, dyld4::RuntimeState&, dyld4::Loader::LoadOptions const&)",
+      "dyld_sim"
+    );
+    const launch = backtrace(4, [
+      loadDependents,
+      runtime("dyld4::APIs::dlopen_from(char const*, int, void*)", "dyld_sim"),
+      fw("-[NSBundle loadAndReturnError:]", "Foundation"),
+      fw("UIApplicationMain", "UIKitCore"),
+      app("main"),
+      runtime("start", "dyld"),
+    ]);
+    const beforeMain = backtrace(5, [
+      loadDependents,
+      runtime("dyld4::prepare(dyld4::APIs&, mach_o::Header const*)", "dyld_sim"),
+      runtime("start", "dyld"),
+    ]);
+    const { report } = await analyze([
+      row(1, launch),
+      ...Array.from({ length: 59 }, (_, i) => row(2 + i, `<backtrace ref="4"/>`)),
+      row(100, beforeMain),
+      ...Array.from({ length: 39 }, (_, i) => row(101 + i, `<backtrace ref="5"/>`)),
+    ]);
+
+    expect(report).toContain(
+      "system code under `main` on Main Thread (60%): Not a function of the app: system frameworks (dyld_sim 100%) did this work below the entry point of the app, such as drawing, layout or animation for the main run loop, or loading libraries while the app launched."
+    );
+    expect(report).not.toContain("did this work for the main run loop");
+    expect(report).not.toContain("the main run loop ran system code");
+    expect(report).toContain(
+      "system code under `start` on Main Thread (40%): Not a function of the app: only system code (dyld_sim 100%) ran in these stacks, with no function of the app in them. On the main thread, this can be the launch of the app, before its entry point."
+    );
+    expect(report).not.toContain("a call that the system completes on a thread of its own");
   });
 
   it("gives function_callers of the entry point its heaviest system stack", async () => {
