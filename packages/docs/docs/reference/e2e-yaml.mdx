@@ -546,13 +546,15 @@ A frame in a failed step has the line and the column of the TypeScript source. A
 
 ### Imported files
 
-The `.mts` and `.mjs` extensions set the module type of one file. An imported `.mts` or `.mjs` file is an ES module too. An imported `.ts` or `.js` file takes its module type from the `type` field of the nearest `package.json`:
+The `.mts` and `.mjs` extensions set the module type of one file. An imported `.mts` or `.mjs` file is an ES module too. An imported `.ts` or `.js` file takes its module type from the `type` field of the nearest `package.json`, as a `.ts` or `.js` script does. See [Module type](#module-type).
 
-| `type`     | An imported `.ts` or `.js` file that has an `export` statement                                                               |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `module`   | Node loads the file as an ES module                                                                                          |
-| `commonjs` | The step fails. The reason says that the file does not provide the export, or that the file is a CommonJS module             |
-| Not set    | Node loads the file as an ES module. Node writes a `MODULE_TYPELESS_PACKAGE_JSON` warning to the log of the step in each run |
+| `type`     | An imported `.ts` or `.js` file that has an `export` statement                                                                    |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `module`   | Node loads the file as an ES module                                                                                               |
+| `commonjs` | The step fails. The reason says that the file does not provide the export, or that the file is a CommonJS module                  |
+| Not set    | Node loads the file as an ES module. On a Node version that does not examine the syntax, the step fails as it does for `commonjs` |
+
+When `type` is not set, Node has a `MODULE_TYPELESS_PACKAGE_JSON` warning for a file that it loads as an ES module. Argent turns this warning off, so the log of the step does not hold it.
 
 Give a file the `.mts` or `.mjs` extension when a script imports it and the project does not set `type` to `module`.
 
@@ -576,11 +578,11 @@ Node does not check the types of a TypeScript script. To check the types, run `t
 | Option                       | Effect                                                            |
 | ---------------------------- | ----------------------------------------------------------------- |
 | `noEmit`                     | `tsc` checks the files and writes no output                       |
-| `allowImportingTsExtensions` | `tsc` accepts an import that ends in `.mts`                       |
+| `allowImportingTsExtensions` | `tsc` accepts an import that ends in `.ts` or `.mts`              |
 | `erasableSyntaxOnly`         | `tsc` reports the syntax that Node cannot remove                  |
 | `verbatimModuleSyntax`       | `tsc` reports an import of a type that does not use `import type` |
 
-Without these options, `tsc` rejects an import that ends in `.mts`, and accepts an `enum` that Node rejects.
+Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and accepts an `enum` that Node rejects.
 
 <a id="the-argent-flow-command" />
 

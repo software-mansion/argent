@@ -44,8 +44,8 @@ jobs:
         run: npm run test:scripts
 
   # A `script:` step runs TypeScript only from Node 22.18, so the job above, on
-  # Node 20, skips every test that executes an `.mts` file. This job runs them,
-  # on a Node that runs TypeScript.
+  # Node 20, skips every test that executes an `.mts` or `.ts` file. This job
+  # runs them, on a Node that runs TypeScript.
   script-steps-typescript:
     name: TypeScript script steps (Node 24)
     runs-on: ubuntu-latest

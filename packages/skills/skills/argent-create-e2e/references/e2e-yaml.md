@@ -262,7 +262,7 @@ Node runs `.mts` and `.ts` by stripping types. It does no type check and ignores
 - Write the extension in each relative import: `./helpers.mts`.
 - Import a type with `import type`.
 - Import no TypeScript from `node_modules`.
-- Import shared code from `.mts` or `.mjs` files. An imported `.ts` or `.js` file takes its module type from `package.json`: under `"type": "commonjs"` its exports are missing, and with no `type` Node logs a warning in each run.
+- Import shared code from `.mts` or `.mjs` files. An imported `.ts` or `.js` file takes its module type from `package.json`, as a `.ts` or `.js` script does: under `"type": "commonjs"` its exports are missing, and with no `type` Node older than 20.19 or 22.7 reads it as CommonJS too.
 
 TypeScript needs Node 22.18+ on the tool-server, but not 23.0 to 23.5, and not a Node build without TypeScript support such as the Debian or Ubuntu `nodejs` package. This also applies to an `.mjs` or `.js` script that imports TypeScript. Otherwise the test is rejected before step 1, or the step errors, and the reason names the Node version. Then use JavaScript files (`.mjs` for `.mts`; `.js` for `.ts`, or `.mjs` if the file is an ES module), or stop the tool-server with `argent server stop` and run Argent on another Node.
 
