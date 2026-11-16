@@ -137,7 +137,7 @@ An e2e test member has these fields:
 | `state`       | `missing` when no file is at `canonical`. `refused` when the client does not send the file. `listed` when the client sends only the name of a baseline. Not set when the member has its bytes                                                                             |
 | `error`       | The reason, when `state` is `refused`                                                                                                                                                                                                                                     |
 
-The client puts the members in the call body until they are 256 KiB in total. The client sends each other member to `POST /upload` as one compressed tar, as for an input of kind `tar-upload`. Thus the body limit of a reverse proxy applies to the e2e test file with up to 256 KiB of members, and to one member at a time. The tar is zstd when the `uploadFormats` list of `GET /tools` has `zstd`, and gzip otherwise. When a proxy refuses an upload with the status 413, the client does not send the call. The error gives the body size that the proxy must accept on `POST /upload`, for example with `client_max_body_size` in nginx.
+The client puts the members in the call body until they are 256 KiB in total. The client sends each other member to `POST /upload` as one compressed tar, as for an input of kind `tar-upload`. Thus the body limit of a reverse proxy applies to the e2e test file with up to 256 KiB of members, and to one member at a time. The tar is zstd or gzip, as [Archive formats](#archive-formats) shows. When a proxy refuses an upload with the status 413, the client does not send the call. The error gives the body size that the proxy must accept on `POST /upload`, for example with `client_max_body_size` in nginx.
 
 ### Spelling
 
@@ -299,6 +299,25 @@ x-argent-client-secrets: eyJBUFBfUEFTU1dPUkQiOiJodW50ZXIyIn0=
 The object is empty when the client does not define any of the names. The tool-server then knows that the client forwards secrets. When a name resolves nowhere, the error says that the client did not provide the secret.
 
 The tool-server resolves each placeholder of the call with these values first, then with its own sources. A sub-tool call of `run-sequence` or `e2e-execute` uses the same values. The tool-server accepts 16 KiB of request headers in total. The tool-server answers `400` and runs no tool when the header is not base64 text of a JSON object, a key is not a valid secret name, or a value is not a string.
+
+## Archive formats
+
+A bundle moves between the client and the tool-server as one compressed tar. The client uploads an input of kind `tar-upload` and each e2e test member that is not in the call body to `POST /upload`. The client downloads a directory artifact, for example a `.trace` bundle, from `GET /artifacts/<id>`. The compression is zstd or gzip:
+
+| Transfer                            | The sender uses zstd when                                 | Otherwise |
+| ----------------------------------- | --------------------------------------------------------- | --------- |
+| Upload to `POST /upload`            | The `uploadFormats` list of `GET /tools` has `zstd`       | gzip      |
+| Download from `GET /artifacts/<id>` | The `Accept` header of the request has `application/zstd` | gzip      |
+
+`GET /tools` lists the formats that `POST /upload` reads, the preferred format first:
+
+```json
+{ "tools": [], "uploadFormats": ["zstd", "gzip"] }
+```
+
+The `Content-Type` of the tar is `application/zstd` or `application/gzip`. The receiver finds the format from the first bytes of the tar, not from the `Content-Type`. The download of a directory artifact has the header `Vary: Accept`.
+
+A tool-server that does not list `uploadFormats` gets gzip uploads. A client that does not ask for `application/zstd` gets gzip downloads. A sender without zstd in its Node.js uses gzip. All versions of the client and the tool-server read gzip.
 
 ## Older clients and tool-servers
 
