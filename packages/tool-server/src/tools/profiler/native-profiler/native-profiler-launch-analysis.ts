@@ -22,7 +22,7 @@ const zodSchema = z
     mode: z
       .enum(["measure", "profile"])
       .describe(
-        "measure: time five launches with XCTest. profile: record one Instruments App Launch trace. See Modes in the tool description."
+        "measure: time five launches with XCTest. profile: record one Instruments App Launch trace."
       ),
     bundle_id: z
       .string()
@@ -79,14 +79,10 @@ export function createNativeProfilerLaunchAnalysisTool(
       failedMsg: ({ params, failureSignal }) =>
         `${launchAnalysisMode[params.mode].failed}: ${failureSignal.error_code}`,
     },
-    description: `Profile or measure the launch of an iOS app up to its first frame. Use when the user asks how long the app takes to launch, or why the launch is slow.
-The tool does not build or install the app. Before calling it, build the app in Release with the project's own build flow (for example \`npx expo run:ios --configuration Release --device <udid>\`), install it on the device and pass its \`bundle_id\`. Timings of a Debug build are not meaningful, and the tool cannot tell the configuration from the installed app. After a change to native code or JS, rebuild and reinstall before measuring again.
-Both modes run the app once first, so the measured launch is usually warm; iOS can still evict the app from memory. Set \`allow_simulator\` only when timings from the host machine are acceptable.
-Modes:
-- measure: five launches measured with XCTApplicationLaunchMetric by Argent's UI test runner. Use to set a baseline before an optimization and to verify a fix. The metric ends at the first frame, or later if the app registers extended launch tasks. On iOS 18 iPhones XCTest can drop some of the five measurements; the result then has fewer samples and a warning, and a run that loses the first one fails with no samples, so rerun. Returns { metric, averageMs, medianMs, samplesMs, samplesCollected, samplesExpected, device, bundleId, resultPath, metricsPath, logPath, warning }.
-- profile: one launch recorded with the Instruments App Launch template. Use to find which phases and functions run before the first frame, e.g. static initializers, dylib loading or didFinishLaunching work. \`duration_seconds\` applies to this mode only. On an iPhone, launchMs runs from the first lifecycle phase after Process Creation to the end of the first frame; phases keeps Process Creation, which under xctrace includes the recording's attach time, and warning says so. On a simulator there are no phases or launchMs, the first frame comes from a system signpost, and simulatorLaunchEstimateMs is a rough estimate. cpuSamples counts the samples of running threads in the session and differs between runs because the sampling period varies from 1 to 5 ms. Returns { launchMs, simulatorLaunchEstimateMs (simulator only), device, bundleId, firstFrameEndMs, phases, tracePath, exports, profilerSession: { sessionId, cpuXml, cpuSamples, next }, exportErrors (when an optional lifecycle, dyld or signpost export failed), warning (null when there is nothing to note) }. profilerSession holds the CPU samples up to the first frame (the whole recording when firstFrameEndMs is null); follow its \`next\` to profiler-load and profiler-stack-query.
-Results, traces, exports and logs go to a new launch-analysis-<datetime> directory next to the other native-profiler traces, in the system temp directory; the CPU samples go to the session file profilerSession.cpuXml instead.
-Fails if no iPhone is connected by USB cable or the app is not installed on the device. measure also fails if Argent's device runner is active on the iPhone. profile also fails if xctrace cannot record the launch, or cannot export the trace table of contents, the CPU samples or, on an iPhone, the lifecycle phases; that error names the recorded tracePath, which opens in Instruments. Argent runs each xctrace export up to 3 times when xctrace crashes, as Xcode 26.4.1 xctrace does in most attempts; a crashed dyld or signpost export is named in warning. With Xcode 26.4.x on a simulator, profile fails before it launches the app, because that Xcode stalls recording launches on simulators.`,
+    description: `Profile or measure iOS app startup. Use measure for launch timings and profile to investigate slow launches.
+Build and install a Release build before calling; this tool does not build or install the app. Rebuild and reinstall after code changes. Pass the installed app's bundle_id and the USB-connected iPhone's device_id. Use allow_simulator only when timings from the host machine are acceptable. Both modes open the app before collecting data, then measure subsequent process launches.
+- measure: collect five XCTest launch measurements to establish a baseline or verify a fix. The metric includes the first frame and any extended launch tasks. Returns average, median and individual times in milliseconds, sample counts, result paths and warnings.
+- profile: record one Instruments App Launch trace to investigate phases and CPU work before the first frame. Returns launch timing, phases, trace paths and a CPU session. On a simulator, phases are unavailable and launch timing is a rough estimate. Follow profilerSession.next to load the session with profiler-load and inspect it with profiler-stack-query.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, ctx) {
