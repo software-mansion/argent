@@ -804,7 +804,7 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
       const note = await api.networkCaptureAfterLaunch(APP);
 
       expect(note).toBe(
-        `native network capture is on for ${APP}, but its running process (pid ${PID}) was launched without argent's injection for this simulator, so capture cannot be armed in it; call restart-app to start a process that is armed`
+        `native network capture is on for ${APP}, but its running process (pid ${PID}) was launched without argent's injection for this simulator, so capture cannot be armed in it; call restart-app to start a process that is armed, then network-capture-start again, since a relaunch ends the JS layer's capture`
       );
     });
   });
@@ -822,7 +822,7 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
       const note = await api.networkCaptureAfterLaunch(APP);
 
       expect(note).toBe(
-        `native network capture is on for ${APP}, but its running process (pid ${PID}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed`
+        `native network capture is on for ${APP}, but its running process (pid ${PID}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed, then network-capture-start again, since a relaunch ends the JS layer's capture`
       );
     });
   });

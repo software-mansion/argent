@@ -78,7 +78,7 @@ If native network capture is unavailable, use the JS runtime layer for the reque
 
 The native `NSURLProtocol` layer captures the `URLSession` requests of an app on an iOS simulator. On a simulator without a [device provider](/docs/reference/device-providers), the start of the capture waits until the app acknowledges the capture, for at most 5 seconds. Thus the start for a connected app usually reports that the capture is ready. Argent does not capture the requests from before the start. Repeat the action that sends the request.
 
-On a simulator without a device provider, the app can run before the capture starts. Then the header line of the first result tells that Argent did not record the launch. To capture the launch, ask the agent to restart the app.
+On a simulator without a device provider, the app can run before the capture starts. Then the header line of the first result tells that Argent did not record the launch. To capture the launch, ask the agent to restart the app. The restart ends the capture of the JS runtime layer, so the agent then starts the capture again.
 
 On a simulator without a device provider, the capture follows the app until the agent stops it. Argent starts the capture in each new process of the app when the process connects. If the simulator is local, the result of a launch or a restart tells the agent if the capture is ready in the new process. The launch steps of an e2e test do the same.
 

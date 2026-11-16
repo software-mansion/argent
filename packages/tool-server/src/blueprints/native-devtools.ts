@@ -1486,10 +1486,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         const running = inspection?.process;
         if (running && !ofLaunch()) {
           if (!processCarriesInjection(running.env, endpoint)) {
-            return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) was launched without argent's injection for this simulator, so capture cannot be armed in it; call restart-app to start a process that is armed`;
+            return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) was launched without argent's injection for this simulator, so capture cannot be armed in it; call restart-app to start a process that is armed, then network-capture-start again, since a relaunch ends the JS layer's capture`;
           }
           if (running.ageMs > Date.now() - listeningSince + NATIVE_DEVTOOLS_AGE_SLOP_MS) {
-            return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed`;
+            return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed, then network-capture-start again, since a relaunch ends the JS layer's capture`;
           }
         }
         // A launch is a next call too, so it asks again after a failed ask.
