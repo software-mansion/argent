@@ -74,8 +74,8 @@ export interface UiHang {
   hangThreadRanMs?: number;
   /**
    * With `hangThreadRanMs`: other threads ran during the hang, so the suspects and call
-   * chains are what all threads ran. Without it, no other thread ran, and the hang has
-   * no suspects.
+   * chains are what all threads ran. Without it, no other thread ran, so they are what
+   * the hang's thread ran: none when it did not run in the hang.
    */
   suspectsFromOtherThreads?: boolean;
   /**
