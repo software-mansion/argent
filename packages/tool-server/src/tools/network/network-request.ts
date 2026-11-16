@@ -539,9 +539,10 @@ async function readNativeBody(
     return inlineBody(body.body, body.inlineChars, mimeType, framing);
   }
   if (!body.base64Encoded) {
+    const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
     return body.truncated
-      ? cutByAgent(body.body, mimeType, Buffer.byteLength(body.body), framing)
-      : truncateBody(body.body, mimeType);
+      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing)
+      : truncateBody(text, mimeType);
   }
 
   const kept = Buffer.from(body.body, "base64");
@@ -558,6 +559,17 @@ async function readNativeBody(
   return body.truncated
     ? cutByAgent(text, mimeType, kept.length, framing)
     : truncateBody(text, mimeType);
+}
+
+/**
+ * A body the agent sent as text, because its bytes are valid UTF-8. UTF-16
+ * bytes with no BOM often are. Its UTF-8 bytes are the body's own, so they
+ * decode in the declared charset, as the bytes of a base64 body do.
+ */
+function inDeclaredCharset(text: string, contentType: string, truncated: boolean): string {
+  const charset = charsetOf(contentType);
+  if (!charset || /^utf-?8$/i.test(charset)) return text;
+  return decodeText(Buffer.from(text, "utf8"), charset, truncated) ?? text;
 }
 
 /**
