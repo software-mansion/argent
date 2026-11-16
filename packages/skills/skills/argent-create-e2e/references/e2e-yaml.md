@@ -252,7 +252,17 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-`path` is relative to the test file that contains the step. Include the extension (`.mjs`, or `.mts` for TypeScript) and match the file name's letter case. `.js` and `.ts` are invalid. Node runs `.mts` by stripping types: it needs Node 22.18+ on the tool-server, does no type check, ignores `tsconfig.json`, and rejects `enum`, runtime `namespace` and parameter properties. `timeout` is in milliseconds, as in `e2e-add-script`.
+`path` is relative to the test file that contains the step. Include the extension (`.mjs`, or `.mts` for TypeScript) and match the file name's letter case. `.js` and `.ts` are invalid. `timeout` is in milliseconds, as in `e2e-add-script`.
+
+Node runs `.mts` by stripping types. It does no type check and ignores `tsconfig.json`, so a `paths` alias does not resolve. Write the script so that stripping is enough:
+
+- Use no `enum`, runtime `namespace` or parameter property.
+- Write the extension in each relative import: `./helpers.mts`.
+- Import a type with `import type`.
+- Import no TypeScript from `node_modules`.
+- Import shared code from `.mts` or `.mjs` files. An imported `.ts` or `.js` file takes its module type from `package.json`: under `"type": "commonjs"` its exports are missing, and with no `type` Node logs a warning in each run.
+
+TypeScript needs Node 22.18+ on the tool-server, but not 23.0 to 23.5, and not a Node build without TypeScript support such as the Debian or Ubuntu `nodejs` package. This also applies to an `.mjs` script that imports TypeScript. Otherwise the test is rejected before step 1, or the step errors, and the reason names the Node version. Then use `.mjs` files, or stop the tool-server with `argent server stop` and run Argent on another Node.
 
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
 

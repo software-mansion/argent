@@ -451,7 +451,7 @@ A failed step stops the e2e test. The verdict names the side that caused the fai
 | Verdict | Cause      | Examples                                                                                                                                                                             |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Failed  | The script | A missing file, a load error, a thrown error, or a non-zero exit code                                                                                                                |
-| Errored | The host   | A time limit, a heap limit, a signal, a process that did not start, a full queue, a cancelled run, a mis-cased filename, or a TypeScript script on a Node version that cannot run it |
+| Errored | The host   | A time limit, a heap limit, a signal, a process that did not start, a full queue, a cancelled run, a mis-cased filename, or a TypeScript file on a Node that does not run TypeScript |
 
 A step that a thrown error stopped reports the message of the error and the frames of the script. Argent gives each frame a path relative to the project root. Argent removes the frames of Node and of its own runner, and keeps at most six.
 
@@ -463,26 +463,86 @@ Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node proce
 
 `scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
+On iOS, Android, Vega and macOS, a `script` step above the `launch` step runs before Argent restarts the app.
+
+On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone, or the `requires` block allows only `chromium`. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform` and the `requires` block does not allow only `chromium`.
+
 ### TypeScript scripts
 
 Node runs an `.mts` script without a build step. Node removes the type annotations and runs the code that remains. Argent adds no compiler.
 
-The tool-server must run on Node 22.18 or later. On an older Node, the step is errored and the script does not start. Use an `.mjs` file when you cannot upgrade Node.
+The tool-server must run on a Node release that runs TypeScript:
+
+- Node 22.18 or a later release of Node 22
+- Node 23.6 or a later release of Node 23
+- Node 24 or later
+
+The Node build must also include TypeScript support. The `nodejs` package of Debian and of Ubuntu does not include it. On such a host, use a Node build from nodejs.org.
+
+A script that imports a TypeScript file has the same requirement, also when the script is an `.mjs` file.
+
+When the Node of the tool-server does not run TypeScript, the result depends on the place of the TypeScript file:
+
+| Place                                   | Result                                                                                                                           |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| An `.mts` step of the e2e test          | Argent rejects the e2e test before step 1, also when the step is in a `when` block. `argent e2e run` prints `not run (rejected)` |
+| An `.mts` step of a `run:` fragment     | The `run` step is errored, and no step of the fragment runs                                                                      |
+| An `.mts` file for `e2e-add-script`     | The script does not start, and the tool records no step                                                                          |
+| A TypeScript file that a script imports | The step is errored when Node loads the file                                                                                     |
+
+The reason names the Node version of the tool-server. A tool-server that runs keeps its Node version. To change the Node version, stop the tool-server with `argent server stop`. Then run Argent on the other Node version. Use `.mjs` files when you cannot change the Node version.
+
+On Node 23.6 to 24.2, type stripping is experimental. Node writes a warning to the log of each step that loads a TypeScript file.
 
 These limits apply:
 
-- Node does not check the types. Run `tsc --noEmit` on the script to check them.
+- Node does not check the types. See [Type check](#type-check).
 - Node does not read `tsconfig.json`. A path alias from `paths` does not resolve.
 - Node accepts only the syntax that it can remove. An `enum`, a `namespace` that holds code, or a parameter property makes the step fail.
 - Each relative import needs the file extension, for example `./helpers.mts`.
 - An import of a type needs `import type`.
 - Node does not run a TypeScript file from `node_modules`.
+- An imported `.ts` or `.js` file can have a different module type. See [Imported files](#imported-files).
 
-A frame in a failed step has the line and the column of the TypeScript source.
+A frame in a failed step has the line and the column of the TypeScript source. A step that fails on syntax that Node cannot remove reports the file and the line of that syntax. On Node 23, that step reports the line but not the file.
 
-On iOS, Android, Vega and macOS, a `script` step above the `launch` step runs before Argent restarts the app.
+### Imported files
 
-On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone, or the `requires` block allows only `chromium`. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform` and the `requires` block does not allow only `chromium`.
+The `.mts` and `.mjs` extensions set the module type of one file. An imported `.mts` or `.mjs` file is an ES module too. An imported `.ts` or `.js` file takes its module type from the `type` field of the nearest `package.json`:
+
+| `type`     | An imported `.ts` or `.js` file that has an `export` statement                                                               |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `module`   | Node loads the file as an ES module                                                                                          |
+| `commonjs` | The step fails. The reason says that the file does not provide the export, or that the file is a CommonJS module             |
+| Not set    | Node loads the file as an ES module. Node writes a `MODULE_TYPELESS_PACKAGE_JSON` warning to the log of the step in each run |
+
+Give a file the `.mts` or `.mjs` extension when a script imports it and the project does not set `type` to `module`.
+
+### Type check
+
+Node does not check the types of a TypeScript script. To check the types, run `tsc` with a `tsconfig.json` that has these options. `erasableSyntaxOnly` needs TypeScript 5.8 or later.
+
+```json
+{
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "nodenext",
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["scripts"]
+}
+```
+
+| Option                       | Effect                                                            |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `noEmit`                     | `tsc` checks the files and writes no output                       |
+| `allowImportingTsExtensions` | `tsc` accepts an import that ends in `.mts`                       |
+| `erasableSyntaxOnly`         | `tsc` reports the syntax that Node cannot remove                  |
+| `verbatimModuleSyntax`       | `tsc` reports an import of a type that does not use `import type` |
+
+Without these options, `tsc` rejects an import that ends in `.mts`, and accepts an `enum` that Node rejects.
 
 <a id="the-argent-flow-command" />
 
