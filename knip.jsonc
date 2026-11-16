@@ -96,7 +96,6 @@
         "@opentelemetry/resources",
         "@opentelemetry/sdk-logs",
         "picocolors",
-        "semver",
         "smol-toml",
         "yaml",
       ],

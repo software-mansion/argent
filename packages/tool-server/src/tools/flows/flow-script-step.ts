@@ -150,10 +150,9 @@ function isTypeScriptScript(base: string): boolean {
  * The JavaScript extension a refusal names for a script this host cannot run
  * as TypeScript. `.mts` and `.mjs` are both ES modules, so `.mjs` stands in for
  * either. A `.ts` or `.js` script has whatever module type Node gives a `.js`
- * file in its directory, so `.js` is its twin — but the releases that cannot
- * strip types are also, mostly, the ones that do not read the syntax of a `.js`
- * file under a package.json with no `type`, and there only `.mjs` runs an
- * `import`.
+ * file in its directory, so `.js` is its twin — but a Node older than the floor
+ * may also not read the syntax of a `.js` file under a package.json with no
+ * `type`, and there only `.mjs` runs an `import`.
  */
 function javaScriptSpelling(target: string): string {
   return /\.m[jt]s$/.test(target) ? ".mjs" : ".js, or .mjs for an ES module";
@@ -178,56 +177,22 @@ function cjsRenameNote(failure: FlowScriptResult["failure"], canonical: string):
 
 const NODE_CJS_RENAME_ADVICE = /rename it to use the '\.cjs' file extension/;
 
-/** The first release of the oldest line that runs TypeScript with no flag. */
-const TYPESCRIPT_MIN_NODE = "22.18";
-
 /**
- * Whether this Node release runs a TypeScript file as it stands: 22.18 on the
- * 22 line, 23.6 on the 23 line, and every release after. Older ones either
- * cannot or need `--experimental-strip-types`.
+ * Whether a script process on this host cannot run TypeScript. `strips` is the
+ * executor's answer from a process started the way a script's is
+ * (`FlowScriptExecutor.stripsTypes`). Only a `false` refuses: `undefined` means
+ * the binary could not be asked, and a refusal has to rest on an answer.
  *
- * The release is not the whole answer — see {@link typeScriptGap}, which asks
- * the binary — but it is the one that says WHY a host cannot, and the one left
- * when the binary could not be asked.
- *
- * Exported for its test.
+ * Every Node release that `engines` admits runs TypeScript with no flag, so
+ * the release is not asked. Two hosts still answer `false`. Debian and Ubuntu
+ * build their `nodejs` package without the stripper, whatever the release. And
+ * npm installs past `engines`, so the tool-server can be up on a Node older
+ * than the floor. Either fails an `.mts` with `ERR_UNKNOWN_FILE_EXTENSION` —
+ * which reads as the script's own load failure and names nothing the author
+ * can change. Refusing up front is what makes it a host error.
  */
-export function nodeStripsTypes(version: string = process.versions.node): boolean {
-  const [major = 0, minor = 0] = version.split(".").map(Number);
-  if (major >= 24) return true;
-  if (major === 23) return minor >= 6;
-  return major === 22 && minor >= 18;
-}
-
-/**
- * Why a script process on this host cannot run TypeScript: its Node release
- * does not, or the release does and this build of it was compiled without the
- * support. Undefined when it can.
- */
-type TypeScriptGap = "release" | "build";
-
-/**
- * `strips` is the executor's answer from a process started the way a script's
- * is (`FlowScriptExecutor.stripsTypes`), and it decides: a `true` runs the
- * script whatever the release table says. The release only explains a host
- * that cannot, and stands in when the binary could not be asked.
- *
- * The binary is asked because the release is not enough. Debian and Ubuntu
- * build their `nodejs` package without the stripper, so a 22.22 or a 24 from
- * `apt` reports `process.features.typescript` as `false` and fails an `.mts`
- * with `ERR_UNKNOWN_FILE_EXTENSION` — which reads as the script's own load
- * failure and names nothing the author can change. Refusing up front is what
- * makes either gap a host error.
- *
- * Exported for its test.
- */
-export function typeScriptGap(
-  strips: boolean | undefined,
-  version: string = process.versions.node
-): TypeScriptGap | undefined {
-  if (strips === true) return undefined;
-  if (!nodeStripsTypes(version)) return "release";
-  return strips === false ? "build" : undefined;
+function cannotRunTypeScript(strips: boolean | undefined): boolean {
+  return strips === false;
 }
 
 /**
@@ -242,25 +207,22 @@ export function typeScriptGap(
  */
 export function typeScriptRefusalReason(
   subject: string,
-  gap: TypeScriptGap,
   version: string = process.versions.node,
   javaScript: string = ".mjs"
 ): string {
-  const host =
-    gap === "release"
-      ? `the tool-server runs on Node.js ${version}, which cannot run it. Node.js runs ` +
-        `TypeScript from ${TYPESCRIPT_MIN_NODE}, except on 23.0 to 23.5. Stop the tool-server ` +
-        `with \`argent server stop\`, then run Argent on such a Node.js,`
-      : `the tool-server runs on a build of Node.js ${version} that cannot run it: the build ` +
-        `has no TypeScript support, like the nodejs package of Debian and Ubuntu. Stop the ` +
-        `tool-server with \`argent server stop\`, then run Argent on a Node.js from nodejs.org,`;
-  return `${subject}, and ${host} or use JavaScript (${javaScript}) for the script and for the files it imports.`;
+  return (
+    `${subject}, and the tool-server runs on Node.js ${version}, which cannot run it: this ` +
+    `Node.js has no TypeScript support. A release older than Argent supports has none, and ` +
+    `neither has the nodejs package of Debian and Ubuntu. Stop the tool-server with ` +
+    `\`argent server stop\`, then run Argent on a current Node.js from nodejs.org, or use ` +
+    `JavaScript (${javaScript}) for the script and for the files it imports.`
+  );
 }
 
 /**
  * Why this host cannot run the script a `script:` step names, or undefined: a
- * TypeScript file, on a host with a {@link TypeScriptGap}. A script that is not
- * TypeScript costs nothing to ask about.
+ * TypeScript file, on a host that {@link cannotRunTypeScript}. A script that is
+ * not TypeScript costs nothing to ask about.
  *
  * The answer is fixed before a run's first step, so the runner asks it of every
  * script step up front — a refusal that waited for the step would land after
@@ -268,15 +230,11 @@ export function typeScriptRefusalReason(
  */
 export async function typeScriptScriptRefusal(target: string): Promise<string | undefined> {
   if (!isTypeScriptScript(path.posix.basename(target))) return undefined;
-  const gap = typeScriptGap(await flowScriptExecutor().stripsTypes());
-  return (
-    gap &&
-    typeScriptRefusalReason(
-      `Script "${target}" is TypeScript`,
-      gap,
-      undefined,
-      javaScriptSpelling(target)
-    )
+  if (!cannotRunTypeScript(await flowScriptExecutor().stripsTypes())) return undefined;
+  return typeScriptRefusalReason(
+    `Script "${target}" is TypeScript`,
+    undefined,
+    javaScriptSpelling(target)
   );
 }
 
@@ -286,8 +244,8 @@ const UNKNOWN_TYPESCRIPT_FILE_RE = /^Unknown file extension "\.[mc]?ts" for (.+)
 /**
  * The same refusal, for TypeScript the step's own name does not show: a file
  * the script loads. Nothing before the run can see it, so it is read back from
- * Node's failure, on a host with a {@link TypeScriptGap}. Left as it came, that
- * is the host's limit reported as the script's fault.
+ * Node's failure, on a host that {@link cannotRunTypeScript}. Left as it came,
+ * that is the host's limit reported as the script's fault.
  */
 async function typeScriptLoadRefusal(
   target: string,
@@ -297,15 +255,11 @@ async function typeScriptLoadRefusal(
   if (result.ok || !result.failure) return undefined;
   const file = unloadedTypeScriptFile(result.failure);
   if (file === undefined) return undefined;
-  const gap = typeScriptGap(await flowScriptExecutor().stripsTypes());
-  return (
-    gap &&
-    typeScriptRefusalReason(
-      `Script "${target}" loads the TypeScript file "${readablePath(file, roots)}"`,
-      gap,
-      undefined,
-      javaScriptSpelling(target)
-    )
+  if (!cannotRunTypeScript(await flowScriptExecutor().stripsTypes())) return undefined;
+  return typeScriptRefusalReason(
+    `Script "${target}" loads the TypeScript file "${readablePath(file, roots)}"`,
+    undefined,
+    javaScriptSpelling(target)
   );
 }
 
@@ -320,7 +274,7 @@ async function typeScriptLoadRefusal(
  * would refuse: it compiles the file as JavaScript, and the first type in it is
  * a `SyntaxError`. Only the stack names the file, in the place it opens with
  * (see `STACK_PLACE_RE`). On a host that runs TypeScript the same shape is the
- * file's own fault — an `enum`, say — which is why the caller asks for the gap
+ * file's own fault — an `enum`, say — which is why the caller asks the host
  * before it believes either.
  */
 function unloadedTypeScriptFile(failure: FlowScriptFailure): string | undefined {

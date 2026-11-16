@@ -15,48 +15,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Node 22 is the oldest line Argent supports, and runs every test. Node 24 is
+  # what most users run, and the two differ where the tool-server's tests can
+  # see it: how Node loads the script of a `script:` step, and how TextDecoder
+  # reads windows-1252. So Node 24 runs the tool-server's tests.
   unit-tests:
-    name: Unit tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "20"
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-      - name: Fix rollup native bindings
-        run: npm install @rollup/rollup-linux-x64-gnu --no-save
-
-      - name: Build workspace dependencies
-        run: npm run build
-
-      - name: Run tests
-        run: npm test --workspaces --if-present
-
-      - name: Test root scripts
-        run: npm run test:scripts
-
-  # A `script:` step runs TypeScript only from Node 22.18, so the job above, on
-  # Node 20, skips every test that executes an `.mts` or `.ts` file. This job
-  # runs them, on a Node that runs TypeScript.
-  #
-  # Node 22 and Node 24, because they load a CommonJS `.ts` script differently:
-  # behind a preload, 22 gives it a reduced `require` and 24.18 and later do
-  # not. The runner covers that gap, and only Node 22 shows if it stops.
-  script-steps-typescript:
-    name: TypeScript script steps (Node ${{ matrix.node }})
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node: ["22", "24"]
+        include:
+          - node: "22"
+            name: Unit tests
+            tests: npm test --workspaces --if-present
+          - node: "24"
+            name: Unit tests (tool-server, Node 24)
+            tests: npm test --workspace @argent/tool-server
 
     steps:
       - name: Checkout
@@ -76,13 +51,12 @@ jobs:
       - name: Build workspace dependencies
         run: npm run build
 
-      - name: Run the script step tests
-        working-directory: packages/tool-server
-        run: >-
-          npx vitest run
-          test/flows/script/flow-script-step-run.test.ts
-          test/flows/script/flow-script-typescript.test.ts
-          test/flows/script/flow-script-run.test.ts
+      - name: Run tests
+        run: ${{ matrix.tests }}
+
+      - name: Test root scripts
+        if: matrix.node == '22'
+        run: npm run test:scripts
 
   # Typechecking needs the same install and build as the tests but none of their
   # output, so running it alongside them takes its ~60s off the critical path
@@ -98,7 +72,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
 
       - name: Install dependencies

@@ -272,6 +272,12 @@ export interface FlowScriptExecutorOptions {
   maxTimeoutMs?: number;
   heapLimitMb?: number;
   queueWaitMs?: number;
+  /**
+   * More Node options for each script process, and for the probe that asks
+   * what one can run. For tests: `--no-experimental-strip-types` stands in a
+   * Node build that has no TypeScript support.
+   */
+  nodeOptions?: readonly string[];
 }
 
 interface ResolvedBounds {
@@ -365,7 +371,7 @@ export class FlowScriptExecutor {
    * life of the process.
    */
   stripsTypes(): Promise<boolean | undefined> {
-    this.typeStripping ??= probeTypeStripping();
+    this.typeStripping ??= probeTypeStripping(this.options.nodeOptions ?? []);
     return this.typeStripping;
   }
 
@@ -545,7 +551,8 @@ export class FlowScriptExecutor {
           `--max-old-space-size=${bounds.heapLimitMb}`,
           "--import",
           pathToFileURL(runnerPath).href,
-          ...typelessPackageWarningFlags(),
+          TYPELESS_PACKAGE_WARNING_FLAG,
+          ...(this.options.nodeOptions ?? []),
         ],
         // Index 3 is a sink, and the protocol channel sits above it. The
         // channel is inherited by the script, Node parses it inside its own
@@ -1096,19 +1103,8 @@ function realPathOrSelf(candidate: string): string {
  * React Native layout — makes Node print it on every run, into the step's log,
  * and what it advises is setting `type` on the whole project for the sake of
  * one e2e script.
- *
- * Only where Node knows the flag. `--disable-warning` arrived in 20.11 and
- * 21.3, and Node exits on an option it does not know, so on 21.0 to 21.2 —
- * which the package's `engines` admit — the flag would fail every script step
- * before the runner started. Those releases never read a `.js` file's syntax,
- * so they have no such warning to silence. Asked of the binary rather than of
- * a version table: the script's process is this same binary.
  */
-function typelessPackageWarningFlags(): string[] {
-  return process.allowedNodeEnvironmentFlags.has("--disable-warning")
-    ? ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON"]
-    : [];
-}
+const TYPELESS_PACKAGE_WARNING_FLAG = "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON";
 
 /**
  * The three layouts the runner can be in — the published bundle (beside
@@ -1130,11 +1126,11 @@ function resolveRunnerPath(runnerDir: string | undefined): string {
 
 /**
  * `process.features.typescript`, read in a process started the way a script's
- * is: this binary, the environment {@link buildChildEnv} leaves, and none of
- * this process's own flags. Any failure to ask is `undefined`, never `false`:
+ * is: this binary, the environment {@link buildChildEnv} leaves, the executor's
+ * `nodeOptions`, and none of this process's own flags. Any failure to ask is `undefined`, never `false`:
  * a refusal has to rest on an answer.
  */
-function probeTypeStripping(): Promise<boolean | undefined> {
+function probeTypeStripping(nodeOptions: readonly string[]): Promise<boolean | undefined> {
   return new Promise((resolve) => {
     let env: NodeJS.ProcessEnv;
     try {
@@ -1148,7 +1144,7 @@ function probeTypeStripping(): Promise<boolean | undefined> {
     try {
       execFile(
         process.execPath,
-        ["-p", "process.features.typescript"],
+        [...nodeOptions, "-p", "process.features.typescript"],
         { env, timeout: TYPE_STRIPPING_PROBE_TIMEOUT_MS, windowsHide: true },
         (err, stdout) => {
           const answer = err ? "" : stdout.trim();
