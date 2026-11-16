@@ -5,6 +5,7 @@ import {
   clientSecretSource,
   describeSecretSources,
   lookupPlaceholderSecret,
+  placeholderNames,
   secretNames,
   secretPlacementAdvice,
   secretSources,
@@ -90,6 +91,35 @@ export function resolveSecretPlaceholders(
     return value;
   });
   return { text: resolved, secrets };
+}
+
+/**
+ * The secrets that the placeholders in `text` name, without those no source
+ * defines. For a caller that hands the text to a text-entry tool and must know
+ * which values that tool puts on the screen: the tool rejects an unknown name
+ * before it types, so a name left out here is one nothing was typed for.
+ */
+export function resolvableSecrets(
+  text: string,
+  options: SecretSourceOptions & { clientSecrets?: ReadonlyMap<string, string> } = {}
+): Array<{ name: string; value: string }> {
+  const secrets: Array<{ name: string; value: string }> = [];
+  for (const rawName of new Set(placeholderNames(text))) {
+    let resolved: ResolvedSecretText["secrets"];
+    try {
+      // One name per call, so one unknown name does not hide the others.
+      resolved = resolveSecretPlaceholders(
+        `${SECRET_PLACEHOLDER_MARKER}${rawName}}}`,
+        options
+      ).secrets;
+    } catch {
+      continue;
+    }
+    for (const secret of resolved) {
+      if (!secrets.some((s) => s.name === secret.name)) secrets.push(secret);
+    }
+  }
+  return secrets;
 }
 
 /**

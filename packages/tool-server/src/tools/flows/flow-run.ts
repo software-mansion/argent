@@ -125,7 +125,11 @@ import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
 import { getTrackedMacosApp, otherWorktreeOfBuild } from "../../utils/macos-apps";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import type { ArtifactHandle } from "../../artifacts";
-import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
+import {
+  resolvableSecrets,
+  scrubSecretValues,
+  SECRET_PLACEHOLDER_MARKER,
+} from "../../utils/secrets";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -1097,6 +1101,13 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   secretTyped?: boolean;
   /**
+   * The value of each `{{secret:…}}` placeholder the steps run so far carry.
+   * A field that is not secure shows what was typed into it, so the tree a
+   * later `text` check reads holds the value, and the reason of a failed check
+   * quotes that text: {@link pushReport} puts the placeholder back.
+   */
+  typedSecrets: Array<{ name: string; value: string }>;
+  /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as a single-instance lock
    * suspect for every later lock-shaped boot failure, even after the run moves
@@ -1840,6 +1851,7 @@ Without a link, every step kind runs.`,
         ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
+        typedSecrets: [],
         projectRoot: params.project_root,
         scriptLogBudget: createScriptLogBudget(),
         networkCaptureNoted: new Map(),
@@ -2355,6 +2367,15 @@ function summarize(
  */
 function pushReport(state: ExecState, report: StepReport): void {
   if (report.e2eTest !== undefined) report.flow = report.e2eTest;
+  // Before the report leaves the run, as a step of the result or as progress.
+  if (state.typedSecrets.length > 0) {
+    if (report.reason !== undefined) {
+      report.reason = scrubSecretValues(report.reason, state.typedSecrets);
+    }
+    if (report.warning !== undefined) {
+      report.warning = scrubSecretValues(report.warning, state.typedSecrets);
+    }
+  }
   state.reports.push(report);
   state.onStepReport?.(report);
 }
@@ -2542,7 +2563,11 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       startedAt -= state.hoistedBootMs;
       state.hoistedBootMs = undefined;
     }
-    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
+    const stepText = JSON.stringify(step);
+    if (stepText.includes(SECRET_PLACEHOLDER_MARKER)) {
+      state.secretTyped = true;
+      noteTypedSecrets(state, stepText);
+    }
     const report = await execLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
@@ -2551,6 +2576,23 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     }
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
+  }
+}
+
+/**
+ * Remember the secrets a step's placeholders name, as the text-entry tool that
+ * runs for the step resolves them: with the secrets the client sent first. The
+ * runner never types the values. It needs them to keep them out of the reasons
+ * it writes (see {@link ExecState.typedSecrets}).
+ */
+function noteTypedSecrets(state: ExecState, stepText: string): void {
+  const secrets = resolvableSecrets(stepText, { clientSecrets: state.ctx?.clientSecrets });
+  for (const secret of secrets) {
+    // By value too: a secrets file can change between two steps, and the
+    // earlier value of a name can still be in a field.
+    if (!state.typedSecrets.some((s) => s.name === secret.name && s.value === secret.value)) {
+      state.typedSecrets.push(secret);
+    }
   }
 }
 

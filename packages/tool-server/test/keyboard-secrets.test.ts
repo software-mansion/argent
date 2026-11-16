@@ -7,6 +7,7 @@ import { createPasteTool } from "../src/tools/paste";
 import {
   availableSecretNames,
   redactSecretsFromError,
+  resolvableSecrets,
   resolveSecretPlaceholders,
   type SecretSourceOptions,
 } from "../src/utils/secrets";
@@ -184,6 +185,29 @@ describe("resolveSecretPlaceholders", () => {
     expect(caught!.message).toContain('Unknown secret "ARGENT_SECRET_NOPE"');
     expect(caught!.message).toContain("export ARGENT_SECRET_NOPE");
     expect(caught!.message).not.toContain("ARGENT_SECRET_ARGENT_SECRET_NOPE");
+  });
+});
+
+describe("resolvableSecrets", () => {
+  it("returns each defined secret once and leaves out a name no source defines", () => {
+    // An unknown name between two known ones: it must not hide the one after.
+    const step = JSON.stringify({
+      text: "{{secret:APP_PASSWORD}}{{secret:NOPE}}{{secret:TOTP_SEED}}{{secret:APP_PASSWORD}}",
+    });
+
+    expect(resolvableSecrets(step, opts())).toEqual([
+      { name: "APP_PASSWORD", value: "hunter2" },
+      { name: "TOTP_SEED", value: "JBSWY3DP" },
+    ]);
+    expect(resolvableSecrets("plain text", opts())).toEqual([]);
+  });
+
+  it("resolves a name with the secrets the client sent first", () => {
+    const clientSecrets = new Map([["APP_PASSWORD", "from-client"]]);
+
+    expect(resolvableSecrets("{{secret:APP_PASSWORD}}", { ...opts(), clientSecrets })).toEqual([
+      { name: "APP_PASSWORD", value: "from-client" },
+    ]);
   });
 });
 
