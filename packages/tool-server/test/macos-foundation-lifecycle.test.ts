@@ -49,6 +49,12 @@ vi.mock("../src/utils/macos-apps", async (importOriginal) => {
   };
 });
 
+// The waits argent hands the pid poll, which no test can time on a busy machine.
+vi.mock("../src/utils/process-kill", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/process-kill")>();
+  return { ...actual, pollPidsUntilGone: vi.fn(actual.pollPidsUntilGone) };
+});
+
 // list-devices: only the Mac branch is under test, so the other platforms'
 // discovery returns nothing instead of running simctl, adb or the Vega CLI.
 vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
@@ -99,6 +105,7 @@ import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { resolveDevice } from "../src/utils/device-info";
+import { pollPidsUntilGone } from "../src/utils/process-kill";
 import { PROCESS_ENDED } from "../src/utils/native-network-record";
 import { MACOS_CONNECTION_DROPPED, MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
 import {
@@ -856,9 +863,13 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       await start();
       await request("https://example.com/held", { hold: true });
       const app = await macosApp();
+      vi.mocked(pollPidsUntilGone).mockClear();
       await app.call("Net.drop");
       await waitUntil(() => !app.isConnected());
-      // argent waits for the process to exit, then fails the request as cut off by the drop.
+      // argent waits 2 s for the process to exit, then fails the request as cut off by the drop.
+      expect(vi.mocked(pollPidsUntilGone).mock.calls).toEqual([
+        [[pid], { timeoutMs: 2_000, pollIntervalMs: 100 }],
+      ]);
       const log = await readUntil((l) => l.requests[0]?.state === "failed");
       expect(log.requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
         ["https://example.com/held", "failed", MACOS_CONNECTION_DROPPED],
