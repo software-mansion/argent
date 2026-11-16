@@ -2,6 +2,8 @@
 // next to the compiled executor and resolves its watchdogs against its own URL.
 
 import fs from "node:fs";
+import { Module } from "node:module";
+import { fileURLToPath } from "node:url";
 import { isMainThread, Worker } from "node:worker_threads";
 
 const LIFELINE_WATCHDOG = "flow-script-watchdog-lifeline.mjs";
@@ -129,6 +131,7 @@ async function prepare() {
   });
 
   closeChannelToScript();
+  claimMainModuleIdentity(request.scriptUrl);
 
   // Registered here rather than at module scope: Node references the IPC
   // channel while a `message` or `disconnect` listener exists, and in the
@@ -210,6 +213,55 @@ function reportWhenEntrySettled(scriptUrl) {
     );
   };
   import(scriptUrl).then(report, report);
+}
+
+/**
+ * Under plain `node` a CommonJS entry is the main module three ways:
+ * `require.main === module`, `module.id === "."` and `module.parent === null`.
+ * This preload rides in on `--import`, which sends the entry through the ESM
+ * loader, and there Node sets only the first: `id` is the file's path and
+ * `parent` is `undefined`. A script that guards its body with either of the
+ * other two would skip it, and the step would pass having done nothing.
+ *
+ * Node builds the entry's module object and runs the script with no hook in
+ * between, so the values go in from inside the constructor: its first statement
+ * is `this.id = id`, which a setter on the prototype receives. `parent` is an
+ * accessor on that same prototype, so an own property answers for it.
+ *
+ * The setter is spent on the first module built, whichever it is. For a
+ * CommonJS entry that is the entry. An ES module entry never builds one for
+ * itself, so the first is some dependency's and comes out as Node made it —
+ * unless the script calls `createRequire` on its own path first, whose hidden
+ * parent module then carries the entry's identity, which is what it stands for.
+ *
+ * `.mjs` and `.mts` are skipped: neither can be CommonJS.
+ */
+function claimMainModuleIdentity(scriptUrl) {
+  let entryPath;
+  try {
+    entryPath = fileURLToPath(scriptUrl);
+  } catch {
+    return;
+  }
+  if (/\.m[jt]s$/.test(entryPath)) return;
+  const own = (target, key, value, enumerable) =>
+    Object.defineProperty(target, key, { value, writable: true, enumerable, configurable: true });
+  Object.defineProperty(Module.prototype, "id", {
+    configurable: true,
+    enumerable: false,
+    get() {
+      return undefined;
+    },
+    set(value) {
+      delete Module.prototype.id;
+      if (value !== entryPath) {
+        this.id = value;
+        return;
+      }
+      own(this, "id", ".", true);
+      own(this, "parent", null, false);
+    },
+  });
 }
 
 function keepListener(event, handler) {

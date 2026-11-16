@@ -242,6 +242,64 @@ describe("a script step that fails", () => {
     expect(reason).not.toContain("flow-script-runner");
   });
 
+  it("names a CommonJS script's frames the way it names an ES module's", async () => {
+    // A CommonJS frame carries a bare absolute path where an ES module's has a
+    // `file:` URL, and Node loads the script through `node:diagnostics_channel`,
+    // which is not under `node:internal`. Left alone, the step line holds the
+    // path of the machine it ran on and a frame the author cannot open.
+    await write("package.json", `{ "type": "commonjs" }`);
+    await write(
+      "scripts/fail.js",
+      `function seed() {\n  throw new Error("backend said 500");\n}\nseed();\n`
+    );
+    await flow("cjsfail", "steps:\n  - script: { path: ../../scripts/fail.js }\n");
+
+    const { result } = await runFlow("cjsfail");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(reason).toContain("backend said 500");
+    expect(reason).toContain("at seed (scripts/fail.js:2:9)");
+    expect(reason).toMatch(/\(scripts\/fail\.js:4:1\)$/);
+    // Neither spelling of the project root, and nothing of Node's.
+    expect(reason).not.toContain(root);
+    expect(reason).not.toContain("node:");
+  });
+
+  it("leaves Node's own frames out of a CommonJS load failure", async () => {
+    await write("package.json", `{ "type": "commonjs" }`);
+    await write("scripts/lost.js", `require("./missing-helper");\n`);
+    await flow("cjslost", "steps:\n  - script: { path: ../../scripts/lost.js }\n");
+
+    const { result } = await runFlow("cjslost");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(reason).toContain("Cannot find module './missing-helper'");
+    expect(reason).toContain(`at Object.<anonymous> (scripts/lost.js:1:1)`);
+    expect(reason).not.toMatch(/\bat [^\\]*node:/);
+  });
+
+  it("keeps the absolute path of a frame outside the project root", async () => {
+    // A `..` chain says less than the path does, for either kind of frame.
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-outside-"));
+    try {
+      const helper = path.join(await fs.realpath(outside), "helper.js");
+      await fs.writeFile(helper, `module.exports = () => { throw new Error("from outside"); };`);
+      await write("package.json", `{ "type": "commonjs" }`);
+      await write("scripts/far.js", `require(${JSON.stringify(helper)})();\n`);
+      await flow("cjsfar", "steps:\n  - script: { path: ../../scripts/far.js }\n");
+
+      const { result } = await runFlow("cjsfar");
+
+      const reason = result.steps[0]!.reason!;
+      expect(reason).toContain(`(${helper}:1:`);
+      expect(reason).toContain(`at Object.<anonymous> (scripts/far.js:1:`);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("caps the frames it folds in and says how many it left out", async () => {
     await write(
       "scripts/recurse.mjs",
@@ -351,12 +409,47 @@ describe("a script whose module type the project decides", () => {
     { ext: "ts", runs: nodeStripsTypes() },
   ];
 
+  it("answers Node's advice to rename a .js script to .cjs, which the parser refuses", async () => {
+    const step = await runScript("seed.js", cjs, "module");
+
+    expect(step).toMatchObject({ kind: "script", status: "fail" });
+    expect(step.reason).toContain(
+      "rename it to use the '.cjs' file extension. " +
+        "A script step does not accept a .cjs file: use import in the script instead.\\n" +
+        `    at scripts/seed.js:1:`
+    );
+  });
+
+  it("leaves that advice alone for a file the script loads, which can be renamed", async () => {
+    await write("scripts/lib.js", cjs);
+    const step = await runScript("seed.js", `import "./lib.js";`, "module");
+
+    expect(step).toMatchObject({ kind: "script", status: "fail" });
+    expect(step.reason).toContain("rename it to use the '.cjs' file extension.");
+    expect(step.reason).not.toContain("A script step does not accept");
+  });
+
+  it.runIf(nodeStripsTypes())("runs a type-only import as CommonJS", async () => {
+    // Node picks the module type from what is left once the types are gone,
+    // and a type-only import leaves nothing.
+    const step = await runScript(
+      "seed.ts",
+      `import type { Stats } from "node:fs";\nconst stats: Stats = require("node:fs").statSync(".");\nconsole.log("ran " + typeof stats);`,
+      "commonjs"
+    );
+
+    expect(step).toMatchObject({ kind: "script", status: "pass" });
+    expect(step.scriptLog).toContain("ran object");
+  });
+
   for (const { ext, runs } of extensions) {
     const typed = (source: string) =>
       ext === "ts" ? `const label: string = "typed";\nvoid label;\n${source}` : source;
 
     describe.runIf(runs)(`.${ext}`, () => {
       it("runs ES module syntax once when package.json sets no type", async () => {
+        // Every Node this suite starts on reads the syntax of such a file.
+        // Node 20.12 to 20.18 and 21.0 to 22.6 do not, and fail it instead.
         const step = await runScript(`seed.${ext}`, typed(esm), undefined);
 
         expect(step).toMatchObject({ kind: "script", status: "pass" });
@@ -364,6 +457,19 @@ describe("a script whose module type the project decides", () => {
         // Node would otherwise advise setting `type` on the whole project.
         expect(step.scriptLog).not.toContain("MODULE_TYPELESS_PACKAGE_JSON");
         expect(step.scriptLog).not.toContain("Warning");
+      });
+
+      it("reads an export alone as ES module syntax", async () => {
+        // No `import` and no top-level `await`, and still an ES module: in a
+        // TypeScript file `export {}` is the usual way to say so.
+        const step = await runScript(
+          `seed.${ext}`,
+          typed(`console.log("require is " + typeof require);\nexport {};`),
+          undefined
+        );
+
+        expect(step).toMatchObject({ kind: "script", status: "pass" });
+        expect(step.scriptLog).toContain("require is undefined");
       });
 
       it("runs CommonJS once when package.json sets no type", async () => {
@@ -401,6 +507,57 @@ describe("a script whose module type the project decides", () => {
 
         expect(step).toMatchObject({ kind: "script", status: "fail" });
         expect(step.reason).toMatch(/require is not defined/);
+      });
+
+      it("is the main module by each test a CommonJS script may use", async () => {
+        // `--import` sends the entry through the ESM loader, where Node sets
+        // `require.main` and nothing else. A body behind either of the other
+        // two guards would not run, and the step would pass with an empty log.
+        await write(
+          "scripts/helper.js",
+          `module.exports = [module.id === __filename, require.main === module].join();`
+        );
+        const step = await runScript(
+          `seed.${ext}`,
+          typed(
+            [
+              `if (require.main === module) console.log("by require.main");`,
+              `if (module.id === ".") console.log("by module.id");`,
+              `if (module.parent === null) console.log("by module.parent");`,
+              // What plain `node` gives a module, and no more: `parent` is not
+              // among its enumerable keys there either.
+              `console.log("keys " + Object.keys(module).join());`,
+              // Only the entry is the main module.
+              `console.log("helper " + require("./helper.js"));`,
+            ].join("\n")
+          ),
+          "commonjs"
+        );
+
+        expect(step).toMatchObject({ kind: "script", status: "pass" });
+        const log = step.scriptLog!;
+        expect(log).toContain("by require.main");
+        expect(log).toContain("by module.id");
+        expect(log).toContain("by module.parent");
+        expect(log).toContain("keys id,path,exports,filename,loaded,children,paths\n");
+        expect(log).toContain("helper true,false");
+      });
+
+      it("leaves the modules of an ES module script as Node made them", async () => {
+        // The script is not a CommonJS module, so nothing is the main one and
+        // the first module Node builds is the dependency's own.
+        await write(
+          "scripts/helper.cjs",
+          `module.exports = [module.id === __filename, typeof require.main].join();`
+        );
+        const step = await runScript(
+          `seed.${ext}`,
+          typed(`import helper from "./helper.cjs";\nconsole.log("helper " + helper);`),
+          "module"
+        );
+
+        expect(step).toMatchObject({ kind: "script", status: "pass" });
+        expect(step.scriptLog).toContain("helper true,undefined");
       });
     });
   }
@@ -507,6 +664,13 @@ describe("a TypeScript script step", () => {
           `Script "../../scripts/seed.${ext}" is TypeScript, and the tool-server runs on Node.js ${process.versions.node}`
         );
         expect(result.steps[0]!.reason).toContain("Node.js 22.18 or later");
+        // The JavaScript spelling with the same module type: `.mjs` would
+        // break a `.ts` script that is CommonJS.
+        expect(result.steps[0]!.reason).toMatch(
+          ext === "mts"
+            ? /or write the script as a \.mjs file\.$/
+            : /or write the script as a \.js file, or a \.mjs file if it is an ES module\.$/
+        );
         expect(fsSync.existsSync(marker)).toBe(false);
       }
     );

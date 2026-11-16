@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   canonicalFlowPath,
   resolveFlowRelativeFile,
@@ -102,7 +102,8 @@ export async function runFlowScriptStep(
         reason:
           `Script "${target}" is TypeScript, and the tool-server runs on Node.js ` +
           `${process.versions.node}, which cannot run it. Start the tool-server on Node.js ` +
-          `${TYPESCRIPT_MIN_NODE} or later, or write the script as a .mjs file.`,
+          `${TYPESCRIPT_MIN_NODE} or later, or write the script as ` +
+          `${javaScriptSpelling(suppliedBase)}.`,
       },
     };
   }
@@ -126,10 +127,11 @@ export async function runFlowScriptStep(
         request.projectRoot,
         await canonicalFlowPath(request.projectRoot),
       ]);
+  const tail = (result.ok ? "" : cjsRenameNote(result.failure, canonical)) + frames;
   return {
     outcome: {
       ...verdict,
-      ...(frames && verdict.reason !== undefined ? { reason: verdict.reason + frames } : {}),
+      ...(tail && verdict.reason !== undefined ? { reason: verdict.reason + tail } : {}),
       ...(result.log ? { scriptLog: result.log } : {}),
       ...(result.logTruncated ? { scriptLogTruncated: true } : {}),
     },
@@ -141,6 +143,37 @@ export async function runFlowScriptStep(
 function isTypeScriptScript(base: string): boolean {
   return base.endsWith(".ts") || base.endsWith(".mts");
 }
+
+/**
+ * What a TypeScript script is rewritten as on a Node that cannot run it. An
+ * `.mts` file is an ES module and so is `.mjs`. A `.ts` file has whatever
+ * module type Node gives a `.js` file beside it, so `.js` is its twin — but
+ * the releases that cannot strip types are also, mostly, the ones that do not
+ * read the syntax of a `.js` file under a package.json with no `type`, and
+ * there only `.mjs` runs an `import`.
+ */
+function javaScriptSpelling(base: string): string {
+  return base.endsWith(".mts") ? "a .mjs file" : "a .js file, or a .mjs file if it is an ES module";
+}
+
+/**
+ * Node ends its error for a `require` in a `.js` file it read as an ES module
+ * with advice to rename the file `.cjs` — an extension the parser refuses
+ * (`SCRIPT_FILE_EXTENSIONS`), so on a step line the advice leads straight into
+ * a second failure. The note says so, and what does work.
+ *
+ * Only for the script itself: the same error from a file the script loads is
+ * about a file that may be renamed, and Node's advice holds for it. The top
+ * frame says which, and an ES module's frame names its file as a URL.
+ */
+function cjsRenameNote(failure: FlowScriptResult["failure"], canonical: string): string {
+  if (!failure?.stack || !NODE_CJS_RENAME_ADVICE.test(failure.message)) return "";
+  const top = failure.stack.split("\n").find((line) => line.trim().startsWith("at "));
+  if (!top?.includes(`${pathToFileURL(canonical).href}:`)) return "";
+  return " A script step does not accept a .cjs file: use import in the script instead.";
+}
+
+const NODE_CJS_RENAME_ADVICE = /rename it to use the '\.cjs' file extension/;
 
 /** The first release of the oldest line that runs TypeScript with no flag. */
 const TYPESCRIPT_MIN_NODE = "22.18";
@@ -178,20 +211,34 @@ export function nodeStripsTypes(version: string = process.versions.node): boolea
  */
 const SCRIPT_REASON_MAX_FRAMES = 6;
 
-/** A frame in the host's own machinery, not in anything the author wrote. */
+/**
+ * A frame in the host's own machinery, not in anything the author wrote: the
+ * runner, and every frame Node's own code is at. The second is not only
+ * `node:internal` — a CommonJS script is loaded through
+ * `node:diagnostics_channel`, which puts that frame under every one of its
+ * failures, and a callback reaches the script through `node:events` or
+ * `node:timers`.
+ */
 function isHostFrame(frame: string): boolean {
   return (
+    NODE_FRAME_RE.test(frame) ||
     frame.includes("node:internal") ||
     frame.includes("flow-script-runner.mjs") ||
     frame.includes("flow-script-watchdog")
   );
 }
 
+/** A frame whose location is a `node:` builtin: `at f (node:x:1:2)` or `at node:x:1:2`. */
+const NODE_FRAME_RE = /(?:^at (?:async )?|\()node:[^\s()]+\)?$/;
+
 /**
  * `file:///abs/path/seed.mjs:1:30` reads as `scripts/seed.mjs:1:30`. The frames
  * go on ONE step line, so the anchor is the run's own `project_root` — the
  * directory the script also ran in. A script outside it keeps its absolute
  * path, because a `..` chain says less than the path does.
+ *
+ * An ES module's frame names its file as that URL and a CommonJS module's as
+ * the bare path, `/abs/path/seed.js:1:30`. Both come out the same.
  *
  * `roots` is that directory both as given and canonicalized, because only one
  * of the two ever matches: Node resolves a module to its REAL path, so every
@@ -200,7 +247,7 @@ function isHostFrame(frame: string): boolean {
  * of the two differing.
  */
 function readableFrame(frame: string, roots: readonly string[]): string {
-  return frame.replace(/file:\/\/[^\s)]+/g, (match) => {
+  const withoutUrls = frame.replace(/file:\/\/[^\s)]+/g, (match) => {
     const split = /^(.*?)(:\d+:\d+)$/.exec(match);
     const url = split ? split[1]! : match;
     const position = split ? split[2]! : "";
@@ -218,6 +265,22 @@ function readableFrame(frame: string, roots: readonly string[]): string {
     }
     return `${file}${position}`;
   });
+  return roots.reduce(withoutRoot, withoutUrls);
+}
+
+/**
+ * Drops `root` from the front of each bare path in a frame. A path starts a
+ * frame's location, so it follows `at ` or an opening parenthesis; anchoring
+ * there keeps one root from matching inside the other, which it does whenever
+ * the canonical one only adds a prefix (`/private/var/…` over `/var/…`).
+ */
+function withoutRoot(frame: string, root: string): string {
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Windows compares paths without case, and a drive letter's case is whatever
+  // the caller typed.
+  const flags = process.platform === "win32" ? "gi" : "g";
+  return frame.replace(new RegExp(`(^at (?:async )?|\\()${escaped}`, flags), "$1");
 }
 
 /**
