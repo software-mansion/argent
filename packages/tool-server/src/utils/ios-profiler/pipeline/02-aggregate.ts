@@ -56,10 +56,19 @@ function isAppFrame(frame: StackFrame): boolean {
 }
 
 /**
+ * The functions that a thread other than the main thread starts in. No frame calls them:
+ * for a worker that has just started, xctrace gives the stack `start_wqthread` <
+ * `qos_class_main`, where `qos_class_main` is the function before `start_wqthread` in
+ * libsystem_pthread (the start address minus one), not a caller.
+ */
+const THREAD_START_FUNCTIONS = new Set(["start_wqthread", "thread_start"]);
+
+/**
  * The frame that a sample's CPU time is reported under: findDominantFrame, but the app's
  * entry point only when no other app frame is below it (a frame of React Native there is
  * more actionable than `main`), and the root of the stack (such as `start_wqthread`) when
- * no frame is the app's, not a system function picked from the middle of it.
+ * no frame is the app's, not a system function picked from the middle of it. The root is
+ * the thread's start function when the stack has one, else the outermost named frame.
  *
  * `systemCode` is, for a sample of system code, the named system frames that did the work,
  * and null for any other sample. No function of the app did the work of such a sample:
@@ -74,7 +83,10 @@ function reportedFrame(
   if (!stack.some(isAppFrame)) {
     const named = stack.filter((f) => !isHexAddress(f.name));
     return {
-      frame: named[named.length - 1] ?? dominant,
+      frame:
+        named.find((f) => THREAD_START_FUNCTIONS.has(f.name)) ??
+        named[named.length - 1] ??
+        dominant,
       systemCode: named.length > 0 ? named : null,
     };
   }

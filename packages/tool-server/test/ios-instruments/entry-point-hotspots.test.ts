@@ -970,6 +970,25 @@ describe("the frame reported for a stack with the entry point", () => {
     });
   });
 
+  it("is the thread's start function, also in a worker stack that xctrace cut after it", () => {
+    // Food Truck for macOS (Xcode 27.2): 43 samples of `start_wqthread` < `qos_class_main`, on
+    // the worker threads that also have full stacks under `start_wqthread`.
+    const cut = [
+      sys("start_wqthread", "libsystem_pthread.dylib"),
+      sys("qos_class_main", "libsystem_pthread.dylib"),
+    ];
+    const full = [
+      sys("__workq_kernreturn", "libsystem_kernel.dylib"),
+      sys("_pthread_wqthread", "libsystem_pthread.dylib"),
+      sys("start_wqthread", "libsystem_pthread.dylib"),
+    ];
+    expect(findDominantFunction(cut)).toBe("start_wqthread");
+    const hotspots = aggregateCpuHotspots([sample(1, cut), sample(2, full)]);
+    expect(hotspots.map((h) => [h.dominantFunction, h.sampleCount])).toEqual([
+      ["start_wqthread", 2],
+    ]);
+  });
+
   it("is not system code when no frame has a symbol", () => {
     const stack: StackFrame[] = [
       { name: "0x1e643d281", isSystemLibrary: true, library: "libdispatch.dylib" },
