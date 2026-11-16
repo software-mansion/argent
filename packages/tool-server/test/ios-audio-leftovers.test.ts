@@ -26,8 +26,6 @@ function inRing(name: string, write: number, read: number): string {
 
 const input = (ring: string, owner?: number) =>
   `source=stream\nring=${ring}\n${owner ? `host=${owner}\n` : ""}`;
-const rec = (ring: string, owner?: number) =>
-  `id=abc\nring=${ring}\nmute=1\n${owner ? `host=${owner}\n` : ""}`;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-audio-leftovers-"));
@@ -52,18 +50,9 @@ describe("clearAudioLeftovers", () => {
     expect(fs.readdirSync(dir)).toEqual(["st.com.example.app"]);
   });
 
-  it("removes the recording request of a tool-server that is gone, and its ring", async () => {
-    write("out-com.example.app-abc.ring");
-    write("rec.com.example.app", rec(file("out-com.example.app-abc.ring"), DEAD));
-    await clearAudioLeftovers(dir);
-    expect(fs.readdirSync(dir)).toEqual([]);
-  });
-
   it("keeps everything a live tool-server owns", async () => {
     write("input", input(inRing(`in-${LIVE}-aaaa.ring`, 0, 0), LIVE));
     write(`clip-${LIVE}-1.wav`);
-    write("out-com.example.app-abc.ring");
-    write("rec.com.example.app", rec(file("out-com.example.app-abc.ring"), LIVE));
     const before = fs.readdirSync(dir).sort();
     await clearAudioLeftovers(dir);
     expect(fs.readdirSync(dir).sort()).toEqual(before);
@@ -73,8 +62,6 @@ describe("clearAudioLeftovers", () => {
     write("input", input(inRing(`in-${LIVE}-aaaa.ring`, 0, 0), LIVE));
     inRing(`in-${DEAD}-bbbb.ring`, 0, 0);
     write(`clip-${DEAD}-1.wav`);
-    write("out-com.other-abc.ring");
-    write("rec.com.other", rec(file("out-com.other-abc.ring"), DEAD));
     await clearAudioLeftovers(dir);
     expect(fs.readdirSync(dir).sort()).toEqual(["in-" + LIVE + "-aaaa.ring", "input"].sort());
   });
@@ -93,18 +80,10 @@ describe("clearAudioLeftovers", () => {
   });
 
   describe("files without an owner (written before the marker)", () => {
-    it("removes a request whose ring is gone", async () => {
+    it("removes an input whose ring is gone", async () => {
       write("input", input(file("in-aaaa.ring")));
-      write("rec.com.example.app", rec(file("out-com.example.app-abc.ring")));
       await clearAudioLeftovers(dir);
       expect(fs.readdirSync(dir)).toEqual([]);
-    });
-
-    it("keeps a recording request whose ring is in place", async () => {
-      write("out-com.example.app-abc.ring");
-      write("rec.com.example.app", rec(file("out-com.example.app-abc.ring")));
-      await clearAudioLeftovers(dir);
-      expect(exists("rec.com.example.app")).toBe(true);
     });
 
     it("keeps an input whose ring is still ahead of the app, with its ring and clip", async () => {

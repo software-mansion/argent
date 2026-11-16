@@ -33,7 +33,6 @@ export type ArtifactKind =
   | "screenshot-diff"
   | "screenshot-diff-context"
   | "screen-recording"
-  | "audio-recording"
   | "native-profile-trace"
   | "native-profile-cpu"
   | "native-profile-hangs"
@@ -109,7 +108,6 @@ const MIME_BY_EXT: Record<string, string> = {
   ".html": "text/html",
   ".mp4": "video/mp4",
   ".mov": "video/quicktime",
-  ".wav": "audio/wav",
 };
 
 function inferMimeType(filePath: string): string {

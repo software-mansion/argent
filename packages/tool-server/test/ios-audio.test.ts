@@ -80,7 +80,6 @@ vi.mock("@argent/native-devtools-ios", () => ({
 
 import {
   armAudio,
-  assertBundleId,
   audioDir,
   clearAudioInput,
   createAudioSession,
@@ -94,8 +93,6 @@ import {
   readAppHook,
   readAppStatus,
   setAudioInput,
-  startRecording,
-  stopRecording,
 } from "../src/utils/ios-audio";
 
 const BUNDLE = "com.example.app";
@@ -113,11 +110,7 @@ function statusText(fields: Record<string, string | number>): string {
     streams: 1,
     input: "mic",
     inputActive: 0,
-    recording: 0,
-    recId: "",
-    recFrames: 0,
     underruns: 0,
-    recDone: 0,
     error: "",
     ...fields,
   };
@@ -128,44 +121,6 @@ function statusText(fields: Record<string, string | number>): string {
 
 function writeStatus(fields: Record<string, string | number>, bundle = BUNDLE): void {
   fs.writeFileSync(path.join(dir, `st.${bundle}`), statusText(fields));
-}
-
-/** Plays the part of the hook in the app: answers rec.<bundle> requests the way it does. */
-function fakeGuest(opts: { failWith?: string } = {}): () => void {
-  const recFile = path.join(dir, `rec.${BUNDLE}`);
-  let seen = "";
-  const timer = setInterval(() => {
-    if (!fs.existsSync(recFile)) {
-      if (seen) {
-        writeStatus({ recId: seen, recording: 0, recDone: 1, recFrames: 4_800 });
-        seen = "";
-      }
-      return;
-    }
-    const text = fs.readFileSync(recFile, "utf8");
-    const id = /^id=(.*)$/m.exec(text)![1];
-    const ring = /^ring=(.*)$/m.exec(text)![1];
-    if (id === seen) return;
-    seen = id;
-    if (opts.failWith) {
-      writeStatus({ recId: id, error: opts.failWith });
-      return;
-    }
-    // The app plays 100 ms of stereo 0.5 into the ring.
-    const fd = fs.openSync(ring, "r+");
-    const frame = Buffer.alloc(8);
-    frame.writeFloatLE(0.5, 0);
-    frame.writeFloatLE(0.5, 4);
-    for (let i = 0; i < 4_800; i++) fs.writeSync(fd, frame, 0, 8, 128 + i * 8);
-    const counters = Buffer.alloc(12);
-    counters.writeUInt32LE(2, 0);
-    counters.writeUInt32LE(48_000, 4);
-    counters.writeUInt32LE(4_800, 8);
-    fs.writeSync(fd, counters, 0, 12, 16);
-    fs.closeSync(fd);
-    writeStatus({ recId: id, recording: 1 });
-  }, 10);
-  return () => clearInterval(timer);
 }
 
 beforeEach(() => {
@@ -182,19 +137,14 @@ afterEach(() => {
 
 describe("parseAppStatus", () => {
   it("maps the guest's key=value file", () => {
-    const status = parseAppStatus(
-      statusText({ input: "stream", inputActive: 1, recording: 1, recId: "ab12", recFrames: 480 })
-    );
+    const status = parseAppStatus(statusText({ input: "stream", inputActive: 1, underruns: 3 }));
     expect(status).toMatchObject({
       pid: process.pid,
       sampleRate: 48000,
       streams: 1,
       input: "stream",
       inputActive: true,
-      recording: true,
-      recordingId: "ab12",
-      recordedFrames: 480,
-      recordingDone: false,
+      underruns: 3,
     });
   });
 
@@ -229,18 +179,6 @@ describe("hook protocol", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
     expect((err as Error).message).toContain(`protocol ${shown}`);
     expect((err as Error).message).toContain("restart-app");
-  });
-
-  it("fails a recording at once, without writing a request, for an app on an older hook", async () => {
-    fs.writeFileSync(path.join(dir, `st.${BUNDLE}`), statusText({}).replace(/^proto=1\n/, ""));
-    const t0 = Date.now();
-    const err = await startRecording(session, BUNDLE, path.join(dir, "out.wav"), false).catch(
-      (e: unknown) => e
-    );
-    expect(Date.now() - t0).toBeLessThan(500);
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
-    expect((err as Error).message).toContain("older audio hook");
-    expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
   });
 });
 
@@ -279,32 +217,6 @@ describe("hook state", () => {
     } finally {
       runningPid = process.pid;
     }
-  });
-
-  it("refuses to record an app whose status is not its running process's", async () => {
-    writeStatus({ state: "active" });
-    runningPid = process.pid + 1;
-    try {
-      const err = await startRecording(session, BUNDLE, path.join(dir, "out.wav"), false).catch(
-        (e: unknown) => e
-      );
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
-      expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
-    } finally {
-      runningPid = process.pid;
-    }
-  });
-
-  it("queues a recording for a dormant hook without waiting for an acknowledgement", async () => {
-    writeStatus({ state: "dormant" });
-    const t0 = Date.now();
-    await startRecording(session, BUNDLE, path.join(dir, "out.wav"), true);
-    expect(Date.now() - t0).toBeLessThan(500);
-    expect(fs.readFileSync(path.join(dir, `rec.${BUNDLE}`), "utf8")).toMatch(
-      /^id=\w+\nring=.*\nmute=1\nhost=\d+\n$/
-    );
-    const done = await stopRecording(session, BUNDLE); // never opened audio: an empty recording, at once
-    expect(done.durationMs).toBe(0);
   });
 });
 
@@ -565,141 +477,5 @@ describe("setAudioInput", () => {
     clearAudioInput(session);
     await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
     expect(inputRing()).not.toBe(first);
-  });
-});
-
-describe("assertBundleId", () => {
-  it("accepts bundle ids and rejects anything that could leave the control directory", () => {
-    expect(() => assertBundleId("com.example.My-App")).not.toThrow();
-    for (const bad of ["", "../x", "a/b", "a b", "a\nb"]) {
-      expect(() => assertBundleId(bad)).toThrow("Invalid bundleId");
-    }
-  });
-});
-
-describe("recording", () => {
-  const wav = () => path.join(dir, "out.wav");
-
-  it("starts and stops against a guest that answers", async () => {
-    writeStatus({});
-    const stopGuest = fakeGuest();
-    try {
-      await startRecording(session, BUNDLE, wav(), true);
-      expect(fs.readFileSync(path.join(dir, `rec.${BUNDLE}`), "utf8")).toMatch(
-        new RegExp(
-          `^id=.+\nring=.+out-com\\.example\\.app-.+\\.ring\nmute=1\nhost=${process.pid}\n$`
-        )
-      );
-      const finished = await stopRecording(session, BUNDLE);
-      expect(finished).toEqual({
-        path: wav(),
-        durationMs: 100,
-        sampleRate: 48000,
-        channels: 2,
-        droppedFrames: 0,
-      });
-      expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
-      expect(fs.readdirSync(dir).filter((n) => n.endsWith(".ring"))).toEqual([]);
-      const samples = fs.readFileSync(wav());
-      expect(samples.length).toBe(44 + 4_800 * 2 * 2);
-      expect(samples.readInt16LE(44)).toBe(16384); // 0.5
-    } finally {
-      stopGuest();
-    }
-  });
-
-  it("refuses when the app has no live hook", async () => {
-    const err = await startRecording(session, BUNDLE, wav(), false).catch((e: unknown) => e);
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
-    expect((err as Error).message).toContain("restart-app");
-    expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
-  });
-
-  it("refuses a second recording of the same app", async () => {
-    writeStatus({ recording: 1, recId: "x" });
-    const err = await startRecording(session, BUNDLE, wav(), false).catch((e: unknown) => e);
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_RECORDING_ALREADY_ACTIVE);
-  });
-
-  it("surfaces the guest's error, withdraws the request and removes the ring", async () => {
-    writeStatus({});
-    const stopGuest = fakeGuest({ failWith: "cannot open ring: /nope" });
-    try {
-      const err = await startRecording(session, BUNDLE, wav(), false).catch((e: unknown) => e);
-      expect((err as Error).message).toContain("cannot open ring: /nope");
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_RECORDING_START_FAILED);
-      expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
-      expect(fs.readdirSync(dir).filter((n) => n.endsWith(".ring"))).toEqual([]);
-    } finally {
-      stopGuest();
-    }
-  });
-
-  it("stop without a recording fails and leaves no request behind", async () => {
-    writeStatus({});
-    fs.writeFileSync(path.join(dir, `rec.${BUNDLE}`), "id=stale\nring=/tmp/x.ring\nmute=0\n");
-    const err = await stopRecording(session, BUNDLE).catch((e: unknown) => e);
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_NO_ACTIVE_RECORDING);
-    expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
-  });
-
-  it("stops a recording this process does not know, says its audio is lost and removes its ring", async () => {
-    writeStatus({ recording: 1, recId: "earlier" });
-    fs.writeFileSync(path.join(dir, `out-${BUNDLE}-earlier.ring`), "");
-    const err = await stopRecording(session, BUNDLE).catch((e: unknown) => e);
-    expect((err as Error).message).toContain("tool-server that has since stopped");
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_NO_ACTIVE_RECORDING);
-    expect(fs.readdirSync(dir).filter((n) => n.endsWith(".ring"))).toEqual([]);
-  });
-
-  it("keeps what an app played before it was relaunched mid-recording, with a warning", async () => {
-    writeStatus({});
-    const stopGuest = fakeGuest();
-    try {
-      await startRecording(session, BUNDLE, wav(), false);
-      await new Promise((resolve) => setTimeout(resolve, 50)); // the guest fills the ring
-      stopGuest();
-      writeStatus({ recording: 0, recId: "" }); // the relaunched process, not recording
-      const finished = await stopRecording(session, BUNDLE);
-      expect(finished).toMatchObject({ path: wav(), durationMs: 100, channels: 2 });
-      expect(finished.warning).toContain("relaunched");
-      expect(fs.statSync(wav()).size).toBe(44 + 4_800 * 2 * 2);
-    } finally {
-      stopGuest();
-    }
-  });
-
-  it("returns the file with a warning when the app does not confirm the end in time", async () => {
-    writeStatus({});
-    const stopGuest = fakeGuest();
-    try {
-      await startRecording(session, BUNDLE, wav(), false);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      stopGuest(); // the guest hangs: recDone never comes
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
-      const stopping = stopRecording(session, BUNDLE);
-      await vi.advanceTimersByTimeAsync(5_000);
-      const finished = await stopping;
-      expect(finished.path).toBe(wav());
-      expect(finished.warning).toContain("did not confirm the end");
-      expect(fs.existsSync(wav())).toBe(true);
-    } finally {
-      vi.useRealTimers();
-      stopGuest();
-    }
-  });
-
-  it("releaseAudio drops a recording this process owns", async () => {
-    writeStatus({});
-    const stopGuest = fakeGuest();
-    try {
-      await startRecording(session, BUNDLE, wav(), false);
-      releaseAudio(session);
-      expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
-      expect(fs.readdirSync(dir).filter((n) => n.endsWith(".ring"))).toEqual([]);
-      expect(fs.existsSync(wav())).toBe(false);
-    } finally {
-      stopGuest();
-    }
   });
 });

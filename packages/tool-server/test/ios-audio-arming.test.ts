@@ -133,16 +133,12 @@ describe("arming inserts the audio hook per the ios-audio-always-inserted flag",
         `source=stream\nring=${dir}/in-${dead}-a.ring\nhost=${dead}\n`
       );
       fs.writeFileSync(path.join(dir, `in-${dead}-a.ring`), "");
-      fs.writeFileSync(
-        path.join(dir, "rec.com.live"),
-        `id=a\nring=${dir}/out-com.live-a.ring\nhost=${process.pid}\n`
-      );
-      fs.writeFileSync(path.join(dir, "out-com.live-a.ring"), "");
+      fs.writeFileSync(path.join(dir, `clip-${process.pid}-1.wav`), "");
       await localIosHost.setupNativeDevtoolsEnv(UDID, {
         transport: "unix",
         socketPath: "/tmp/x.sock",
       });
-      expect(fs.readdirSync(dir).sort()).toEqual(["out-com.live-a.ring", "rec.com.live"]);
+      expect(fs.readdirSync(dir)).toEqual([`clip-${process.pid}-1.wav`]);
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

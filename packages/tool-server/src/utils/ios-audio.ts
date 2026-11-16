@@ -11,50 +11,37 @@ import { InvalidToolInputError } from "./capability";
 import { appendDyldInsertLibrary, audioDir, runningAppPid } from "./ios-host";
 import { externalNativeId } from "./external-devices";
 import type { NativeDevtoolsApi } from "../blueprints/native-devtools";
-import {
-  InputFeeder,
-  OutputRecorder,
-  readClipInfo,
-  type FinishedWav,
-  STREAM_RATE,
-  type FeederSource,
-} from "./ios-audio-rings";
+import { InputFeeder, readClipInfo, STREAM_RATE, type FeederSource } from "./ios-audio-rings";
 import { OWNER_LINE, processAlive } from "./ios-audio-leftovers";
 
 const execFileAsync = promisify(execFile);
 
 /**
  * Host side of the iOS Simulator audio mock. The other side is the audio hook in argent-private, a
- * dylib injected into the app that replaces the microphone samples it reads and copies out the
- * speaker samples it plays. The two sides talk through plain files in a per-simulator directory
- * that the hook polls (simulator processes share the host filesystem):
+ * dylib injected into the app that replaces the microphone samples it reads. The two sides talk
+ * through plain files in a per-simulator directory that the hook polls (simulator processes share
+ * the host filesystem):
  *
  *   input           host -> app   source=stream  ring=<in ring>   (absent: the real microphone)
- *   rec.<bundleId>  host -> app   id=<s>  ring=<out ring>  mute=0|1  (present: record the app's output)
  *   st.<bundleId>   app -> host   key=value status the app rewrites when it changes
  *
  * The host's files carry its pid (`host=<pid>`, or in the name), so a later tool-server can clear what a killed one
  * left behind without touching what a live one owns (`ios-audio-leftovers.ts`).
  *
- * The samples travel through the two ring files of `ios-audio-rings.ts`: this process feeds the in
- * ring and drains the out ring, so the hook only copies. Every control write is a temp file plus
- * rename, so the hook never reads a half-written file.
+ * The samples travel through the ring file of `ios-audio-rings.ts`: this process feeds it, so the
+ * hook only copies. Every control write is a temp file plus rename, so the hook never reads a
+ * half-written file.
  */
 
 /** Set in the simulator's launchd environment to arm the guest hook in apps launched afterwards. */
 const AUDIO_DIR_ENV = "ARGENT_AUDIO_DIR";
 /**
  * Contract version the hook reports as `proto` in its status file (ArgentAudio.c `PROTO`). A hook with another
- * version, or none (built before it existed), is refused at once instead of waiting for acknowledgements it may
- * not give.
+ * version, or none (built before it existed), is refused at once.
  */
 export const AUDIO_HOOK_PROTO = 1;
-const POLL_INTERVAL_MS = 50;
-/** The guest polls every 50 ms and reacts to a request within a couple of polls. */
-const ACK_TIMEOUT_MS = 4_000;
 /** Clips are streamed from disk, so this only bounds the converted copy: 10 minutes is about 115 MB. */
 const MAX_CLIP_SECONDS = 600;
-const BUNDLE_ID_PATTERN = /^[A-Za-z0-9.-]+$/;
 
 export { audioDir };
 
@@ -66,10 +53,6 @@ export interface AudioSession {
   readonly dir: string;
   /** Feeds the in ring while an input source is set. */
   feeder: InputFeeder | null;
-  /** One per app being recorded, by bundle id. */
-  readonly recorders: Map<string, OutputRecorder>;
-  /** Recordings requested from a dormant hook, not acknowledged yet: their id, by bundle id. */
-  readonly pendingIds: Map<string, string>;
   /** This process verified the simulator's launchd environment; a reboot wipes it, which {@link armAudio} re-checks. */
   envVerified: boolean;
 }
@@ -79,33 +62,14 @@ export function createAudioSession(udid: string): AudioSession {
     udid,
     dir: audioDir(externalNativeId(udid)),
     feeder: null,
-    recorders: new Map(),
-    pendingIds: new Map(),
     envVerified: false,
   };
-}
-
-export function assertBundleId(bundleId: string): void {
-  if (!BUNDLE_ID_PATTERN.test(bundleId)) {
-    throw new InvalidToolInputError(
-      `Invalid bundleId '${bundleId}': expected letters, digits, dots and hyphens only.`
-    );
-  }
 }
 
 function writeAtomic(file: string, text: string): void {
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
   fs.writeFileSync(tmp, text);
   fs.renameSync(tmp, file);
-}
-
-async function waitFor<T>(poll: () => T | undefined, timeoutMs: number): Promise<T | undefined> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const value = poll();
-    if (value !== undefined || Date.now() >= deadline) return value;
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-  }
 }
 
 /**
@@ -222,11 +186,6 @@ interface AppAudioStatus {
   inputActive: boolean;
   /** Callbacks that found the in ring empty and played silence: this process did not keep up. */
   underruns: number;
-  recording: boolean;
-  recordingId: string;
-  recordedFrames: number;
-  /** The app stopped writing to the recording's ring. */
-  recordingDone: boolean;
   error: string;
 }
 
@@ -247,10 +206,6 @@ export function parseAppStatus(text: string): AppAudioStatus {
     input: input === "stream" ? input : "microphone",
     inputActive: num("inputActive") === 1,
     underruns: num("underruns"),
-    recording: num("recording") === 1,
-    recordingId: kv.get("recId") ?? "",
-    recordedFrames: num("recFrames"),
-    recordingDone: num("recDone") === 1,
     error: kv.get("error") ?? "",
   };
 }
@@ -458,174 +413,10 @@ export function assertHookProto(status: AppAudioStatus | null, bundleId: string)
   );
 }
 
-function noHookError(bundleId: string): FailureError {
-  return new FailureError(
-    `The audio hook is not live in ${bundleId}. Apps that were running before the first audio tool call ` +
-      `(or after a simulator reboot) were launched without it: call restart-app for ${bundleId} and retry. ` +
-      `If it still is not live after a restart, the app was launched by a tool that injects its own libraries ` +
-      `(Xcode run, Detox, XCUITest), which replaces Argent's; launch it with launch-app instead.`,
-    {
-      error_code: FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE,
-      failure_stage: "audio_hook_status",
-      failure_area: "tool_server",
-      error_kind: "not_found",
-    }
-  );
-}
-
-/** Starts recording the app's speaker output into `outputPath`; resolves once the app confirms. */
-export async function startRecording(
-  session: AudioSession,
-  bundleId: string,
-  outputPath: string,
-  muteOutput: boolean
-): Promise<void> {
-  assertBundleId(bundleId);
-  const hook = await readAppHook(session, bundleId);
-  if (hook.state === "old-proto") assertHookProto(hook.status, bundleId);
-  if (hook.state === "none" || hook.state === "stale") throw noHookError(bundleId);
-  const status = hook.status;
-  // A dormant hook acknowledges nothing until the app opens audio; it reads the request when it does.
-  const dormant = hook.state === "dormant";
-  const { recorders, pendingIds } = session;
-  if (status?.recording || recorders.has(bundleId)) {
-    throw new FailureError(
-      `${bundleId} is already being recorded${recorders.has(bundleId) ? ` to ${recorders.get(bundleId)!.wavPath}` : ""}. Call audio-record-stop first.`,
-      {
-        error_code: FAILURE_CODES.AUDIO_RECORDING_ALREADY_ACTIVE,
-        failure_stage: "audio_record_start",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
-  }
-  const id = randomUUID().slice(0, 8);
-  const { dir } = session;
-  // A ring of an earlier tool-server's recording of this app is nobody's now.
-  removeFiles(dir, `out-${bundleId}-`);
-  const recorder = new OutputRecorder(path.join(dir, `out-${bundleId}-${id}.ring`), outputPath);
-  const recFile = path.join(dir, `rec.${bundleId}`);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeAtomic(
-    recFile,
-    `id=${id}\nring=${recorder.ringPath}\nmute=${muteOutput ? 1 : 0}\n${OWNER_LINE}`
-  );
-  if (dormant) {
-    pendingIds.set(bundleId, id);
-    recorders.set(bundleId, recorder);
-    return;
-  }
-  const ack = await waitFor(() => {
-    const s = readAppStatus(session, bundleId);
-    return s && s.recordingId === id && (s.recording || s.error) ? s : undefined;
-  }, ACK_TIMEOUT_MS);
-  if (ack?.recording) {
-    recorders.set(bundleId, recorder);
-    return;
-  }
-  fs.rmSync(recFile, { force: true });
-  recorder.abort();
-  throw new FailureError(
-    ack?.error
-      ? `${bundleId} could not start recording: ${ack.error}`
-      : `${bundleId} did not confirm the recording within ${ACK_TIMEOUT_MS / 1000}s. The app may be suspended or its process hung.`,
-    {
-      error_code: FAILURE_CODES.AUDIO_RECORDING_START_FAILED,
-      failure_stage: "audio_record_start",
-      failure_area: "tool_server",
-      error_kind: ack ? "subprocess" : "timeout",
-    }
-  );
-}
-
-interface FinishedRecording {
-  path: string;
-  durationMs: number;
-  sampleRate: number;
-  channels: number;
-  droppedFrames: number;
-  /** The file is complete as far as the host can tell, but the app did not end it cleanly. */
-  warning?: string;
-}
-
-function finishedRecording(finished: FinishedWav, warning?: string): FinishedRecording {
-  return {
-    path: finished.path,
-    durationMs: finished.sampleRate
-      ? Math.round((finished.frames * 1000) / finished.sampleRate)
-      : 0,
-    sampleRate: finished.sampleRate,
-    channels: finished.channels,
-    droppedFrames: finished.droppedFrames,
-    ...(warning ? { warning } : {}),
-  };
-}
-
-/** Stops the app's recording and resolves once the WAV is finalized. */
-export async function stopRecording(
-  session: AudioSession,
-  bundleId: string
-): Promise<FinishedRecording> {
-  assertBundleId(bundleId);
-  const { recorders, pendingIds } = session;
-  const recorder = recorders.get(bundleId);
-  const status = readAppStatus(session, bundleId);
-  const pendingId = pendingIds.get(bundleId);
-  pendingIds.delete(bundleId);
-  const recFile = path.join(session.dir, `rec.${bundleId}`);
-  fs.rmSync(recFile, { force: true });
-  if (recorder && pendingId && !(status?.recording && status.recordingId === pendingId)) {
-    // Requested from a dormant hook that never opened audio (or did and already stopped): what reached the ring is
-    // the recording.
-    recorders.delete(bundleId);
-    return finishedRecording(recorder.finish());
-  }
-  if (recorder && !status?.recording) {
-    // The app quit or was relaunched while it was recorded: what it played until then reached the ring.
-    recorders.delete(bundleId);
-    return finishedRecording(
-      recorder.finish(),
-      `${bundleId} quit or was relaunched while it was recorded. The file holds what it played until then.`
-    );
-  }
-  if (!recorder || !status) {
-    removeFiles(session.dir, `out-${bundleId}-`);
-    throw new FailureError(
-      status?.recording
-        ? `${bundleId} was recorded by a tool-server that has since stopped, so its audio is lost. The recording has now been stopped; start a new one.`
-        : `${bundleId} is not being recorded. Call audio-record-start first${status ? "" : " (the app is not running or its audio hook is not live)"}.`,
-      {
-        error_code: FAILURE_CODES.AUDIO_NO_ACTIVE_RECORDING,
-        failure_stage: "audio_record_stop",
-        failure_area: "tool_server",
-        error_kind: "not_found",
-      }
-    );
-  }
-  const done = await waitFor(() => {
-    const s = readAppStatus(session, bundleId);
-    return s && s.recordingId === status.recordingId && s.recordingDone ? s : undefined;
-  }, ACK_TIMEOUT_MS);
-  recorders.delete(bundleId);
-  return finishedRecording(
-    recorder.finish(),
-    done
-      ? undefined
-      : `${bundleId} did not confirm the end of the recording within ${ACK_TIMEOUT_MS / 1000}s. The file may miss its last moments.`
-  );
-}
-
 /**
- * Gives the simulator its microphone back and drops every recording this process owns. Run when the session
- * is disposed (tool-server exit, stop-all-simulator-servers): a ring nobody feeds would leave the apps silent
- * until the next tool call.
+ * Gives the simulator its microphone back. Run when the session is disposed (tool-server exit,
+ * stop-all-simulator-servers): a ring nobody feeds would leave the apps silent until the next tool call.
  */
 export function releaseAudio(session: AudioSession): void {
   if (session.feeder) clearAudioInput(session);
-  for (const [bundleId, recorder] of session.recorders) {
-    fs.rmSync(path.join(session.dir, `rec.${bundleId}`), { force: true });
-    recorder.abort();
-  }
-  session.recorders.clear();
-  session.pendingIds.clear();
 }
