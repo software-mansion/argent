@@ -16,8 +16,10 @@ import {
   createArchiveFile,
   createCompressor,
   createTarArgs,
+  isContainedPath,
   pickArchiveFormat,
   safeExtractArchive,
+  tarEnv,
   type ArchiveFormat,
 } from "../src/index.js";
 
@@ -144,6 +146,57 @@ describe("format negotiation", () => {
     expect(archiveFormatsFromAccept("application/gzip")).toEqual(["gzip"]);
     expect(archiveFormatsFromAccept("*/*")).toEqual([]);
     expect(archiveFormatsFromAccept(undefined)).toEqual([]);
+  });
+
+  it("reads an Accept header by whole content types and their q-values", () => {
+    // `q=0` says the sender cannot read the type.
+    expect(archiveFormatsFromAccept("application/gzip, application/zstd;q=0")).toEqual(["gzip"]);
+    expect(archiveFormatsFromAccept("Application/ZSTD; q=0.5")).toEqual(
+      ARCHIVE_FORMATS.filter((f) => f === "zstd")
+    );
+    expect(archiveFormatsFromAccept("application/zstd-compressed, text/gzip")).toEqual([]);
+  });
+});
+
+describe("the locale tar runs in", () => {
+  it("leaves a UTF-8 locale as it is", () => {
+    // An older Linux has no C.UTF-8: forced there, tar would fall to the C
+    // locale although the host's own UTF-8 locale works.
+    for (const env of [
+      { LANG: "en_US.UTF-8" },
+      { LANG: "C", LC_CTYPE: "ja_JP.utf8" },
+      { LANG: "C", LC_ALL: "en_US.UTF-8" },
+    ]) {
+      expect(tarEnv(env)).toBe(env);
+    }
+  });
+
+  it("sets a UTF-8 locale where the character type is not UTF-8", () => {
+    for (const env of [{}, { LANG: "C" }, { LANG: "en_US.UTF-8", LC_ALL: "C" }, { LC_ALL: "" }]) {
+      expect(tarEnv(env).LC_ALL).toMatch(/UTF-8$/);
+    }
+    // The variables tar needs besides the locale stay.
+    expect(tarEnv({ PATH: "/usr/bin" }).PATH).toBe("/usr/bin");
+  });
+});
+
+describe("a path inside the extract directory", () => {
+  it("refuses an absolute path, a drive path and a `..` segment on every receiver", () => {
+    for (const windows of [true, false]) {
+      for (const unsafe of ["/etc", "\\Windows", "C:/Windows", "C:\\Windows", "a/../b", ".."]) {
+        expect(isContainedPath(unsafe, windows), unsafe).toBe(false);
+      }
+      expect(isContainedPath("Bundle.app/a..b/c", windows)).toBe(true);
+    }
+  });
+
+  it("reads a drive with no separator as a path only on a Windows receiver", () => {
+    // `C:x` is a path on drive C to Windows. Elsewhere it is a file name:
+    // macOS stores the Finder name `A/B.app` as `A:B.app`.
+    for (const name of ["C:x", "A:B.app", "C:escaped"]) {
+      expect(isContainedPath(name, true), name).toBe(false);
+      expect(isContainedPath(name, false), name).toBe(true);
+    }
   });
 });
 
@@ -714,7 +767,7 @@ describe.each(ARCHIVE_FORMATS)("safeExtractArchive hardening (%s)", (format) => 
   });
 
   // `a/../../escaped` normalizes to `escaped`; `./././` is the extract dir.
-  it.each(["../escaped", "Bundle.app/a/../../escaped", "C:escaped", "./././"])(
+  it.each(["../escaped", "Bundle.app/a/../../escaped", "C:/escaped", "./././"])(
     "rejects a member named %s before extracting anything",
     async (name) => {
       const tar = Buffer.concat([
@@ -734,7 +787,7 @@ describe.each(ARCHIVE_FORMATS)("safeExtractArchive hardening (%s)", (format) => 
   );
 
   // Absolute or outside the bundle on a Windows receiver.
-  it.each(["..\\..\\Windows", "C:\\Windows", "\\Windows", "C:x"])(
+  it.each(["..\\..\\Windows", "C:\\Windows", "\\Windows"])(
     "rejects a symlink to %s",
     async (target) => {
       const src = path.join(tmpDir, "winlink");
@@ -747,6 +800,26 @@ describe.each(ARCHIVE_FORMATS)("safeExtractArchive hardening (%s)", (format) => 
       await expect(safeExtractArchive(tarPath, dest, "winlink")).rejects.toThrow(
         "Archive contains a symlink whose target could not be confirmed safe"
       );
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "extracts a bundle whose name starts with a letter and a colon",
+    async () => {
+      const app = path.join(tmpDir, "A:B.app");
+      await fs.mkdir(app);
+      await fs.writeFile(path.join(app, "f"), "x");
+      await fs.symlink("C:x", path.join(app, "l"));
+      const tarPath = path.join(tmpDir, "colon.archive");
+      await createArchiveFile(app, tarPath, format);
+
+      const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+      const member = await safeExtractArchive(tarPath, dest, "A:B.app");
+      // bsdtar extracts the bundle as `B.app`: it drops what it reads as a
+      // drive letter from a member's name. GNU tar keeps the name.
+      expect(path.basename(member)).toMatch(/^(A:)?B\.app$/);
+      expect(await fs.readFile(path.join(member, "f"), "utf8")).toBe("x");
+      expect(await fs.readlink(path.join(member, "l"))).toBe("C:x");
     }
   );
 

@@ -46,8 +46,18 @@ export function pickArchiveFormat(peerFormats: readonly string[] | undefined): A
   return ARCHIVE_FORMATS.find((f) => peerFormats?.includes(f)) ?? "gzip";
 }
 
+/**
+ * The formats an `Accept` header names by their exact content type. A type
+ * with `q=0` is one the sender refuses.
+ */
 export function archiveFormatsFromAccept(accept: string | undefined): ArchiveFormat[] {
-  return ARCHIVE_FORMATS.filter((f) => accept?.includes(ARCHIVE_CONTENT_TYPES[f]));
+  const accepted = new Set<string>();
+  for (const range of accept?.split(",") ?? []) {
+    const [type = "", ...params] = range.split(";").map((part) => part.trim().toLowerCase());
+    const q = params.find((param) => param.startsWith("q="));
+    if (q === undefined || Number(q.slice(2)) > 0) accepted.add(type);
+  }
+  return ARCHIVE_FORMATS.filter((f) => accepted.has(ARCHIVE_CONTENT_TYPES[f]));
 }
 
 // zlib's default 16 KiB chunks slow zstd decompression up to 2x.
@@ -249,13 +259,24 @@ interface Archive {
 const TAR_LOCALE = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
 
 /**
+ * The environment `tar` runs in: `env` as it is when its character type is
+ * already UTF-8, else with {@link TAR_LOCALE}. An older Linux has no `C.UTF-8`,
+ * and forcing it there would take tar out of a UTF-8 locale that works.
+ */
+export function tarEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // The order in which the C library reads them.
+  const characterType = env.LC_ALL || env.LC_CTYPE || env.LANG || "";
+  return /utf-?8/i.test(characterType) ? env : { ...env, LC_ALL: TAR_LOCALE };
+}
+
+/**
  * Run `tar <args>` over `archive`, decompressed here and piped in, returning
  * stdout. A listing past {@link MAX_LISTING_BYTES} or {@link MAX_LISTING_LINES}
  * stops tar and throws.
  */
 async function runTar(archive: Archive, args: string[]): Promise<string> {
   const child = spawn("tar", [...args, "-f", "-"], {
-    env: { ...process.env, LC_ALL: TAR_LOCALE },
+    env: tarEnv(process.env),
   });
   const exited = new Promise<number | null>((res, rej) => {
     child.on("error", rej);
@@ -313,14 +334,20 @@ function normalizeTarMemberPath(memberPath: string): string {
 
 /**
  * True for a relative path with no `..` segment, reading `\` as a separator
- * and `C:` as a drive. Not normalized: in `a/..`, `..` applies where a link
+ * and `C:/` as a drive. Not normalized: in `a/..`, `..` applies where a link
  * `a` points.
+ *
+ * `C:x` with no separator is a path on drive C only to Windows, so only a
+ * Windows receiver refuses it. Elsewhere it is a file name: macOS stores the
+ * Finder name `A/B.app` as `A:B.app`. bsdtar extracts such a member without
+ * the two characters, which leaves it inside the extract dir.
+ *
+ * Exported for its test, which asks for both receivers.
  */
-function isContainedPath(path: string): boolean {
+export function isContainedPath(path: string, windows = process.platform === "win32"): boolean {
   const slashed = path.replace(/\\/g, "/");
-  return (
-    !slashed.startsWith("/") && !/^[A-Za-z]:/.test(slashed) && !slashed.split("/").includes("..")
-  );
+  const drive = windows ? /^[A-Za-z]:/ : /^[A-Za-z]:\//;
+  return !slashed.startsWith("/") && !drive.test(slashed) && !slashed.split("/").includes("..");
 }
 
 /** Reject tar-slip paths, and an entry for `destDir` itself, which would set its mode. */

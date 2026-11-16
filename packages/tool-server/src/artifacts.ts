@@ -120,6 +120,9 @@ function streamDirectoryAsArchive(
   });
   child.on("error", (err) => {
     if (!res.headersSent) {
+      // The answer is an error now, not the archive the headers above name.
+      res.removeHeader("Content-Disposition");
+      res.type("json");
       res.status(500).json({ error: `Failed to archive artifact "${id}": ${err.message}` });
     } else {
       res.destroy();
@@ -140,8 +143,11 @@ function streamDirectoryAsArchive(
   // destroy into a clean end.
   compressor.on("error", () => res.destroy());
   child.on("close", (code) => {
-    if (code === 0) compressor.end();
-    else res.destroy();
+    if (code === 0) return void compressor.end();
+    compressor.destroy();
+    // A tar that never started also closes, after the `error` handler above
+    // answered: leave that answer whole.
+    if (!res.writableEnded) res.destroy();
   });
   child.stdout.pipe(compressor, { end: false }).pipe(res);
 }

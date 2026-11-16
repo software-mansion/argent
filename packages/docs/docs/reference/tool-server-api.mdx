@@ -342,7 +342,8 @@ The receiver refuses a tar that has one of these:
 
 - No entries, or more than 262,144 entries.
 - A list of entries larger than 32 MiB, as `tar -tv` shows it.
-- An entry or a symlink target with an absolute path, a drive such as `C:`, or a `..` segment.
+- An entry or a symlink target with an absolute path, a drive path such as `C:/`, or a `..` segment.
+- On Windows, an entry or a symlink target that starts with a drive such as `C:`.
 - An entry for the directory that the receiver extracts into, such as `./`.
 - A symlink whose name or target contains `->`.
 - An entry that is not a file, a directory or a symlink, for example a hardlink.

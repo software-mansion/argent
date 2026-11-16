@@ -492,6 +492,37 @@ describe("GET /artifacts/:id", () => {
     60_000
   );
 
+  it("answers 500 when tar cannot start, and leaves that answer whole", async () => {
+    const root = await mkdtemp(join(tmpdir(), "artifact-notar-"));
+    const realPath = process.env.PATH;
+    try {
+      const bundle = join(root, "B.trace");
+      await mkdir(bundle);
+      await writeFile(join(bundle, "a"), "a");
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: bundle,
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      // No `tar` on this PATH. The spawn fails, and the child still emits
+      // `close` with a non-zero code after the `error` that answered.
+      process.env.PATH = root;
+      const res = await supertest(handle.app).get(`/artifacts/${artifact.id}`);
+
+      expect(res.status).toBe(500);
+      // An error, so not labelled as the archive download it replaces.
+      expect(res.headers["content-type"]).toMatch(/^application\/json/);
+      expect(res.headers["content-disposition"]).toBeUndefined();
+      expect(res.body.error).toContain(`Failed to archive artifact "${artifact.id}"`);
+      // The child closes after the answer went out.
+      await vi.waitFor(() => expect(compressors.at(-1)!.destroyed).toBe(true));
+    } finally {
+      process.env.PATH = realPath;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("404s an unknown artifact id", async () => {
     handle = createHttpApp(stubRegistry());
     const res = await supertest(handle.app).get("/artifacts/does-not-exist");
