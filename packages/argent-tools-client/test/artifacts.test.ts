@@ -308,7 +308,7 @@ describe("materializeArtifacts local short-circuit", () => {
   });
 });
 
-// ── directory bundles (e.g. .trace) delivered as tar.gz ──────────────
+// ── directory bundles (e.g. .trace) delivered as a compressed tar ────
 
 function fakeFetchBuffer(map: Record<string, Buffer>): typeof fetch {
   return (async (url: string) => {
@@ -338,8 +338,9 @@ describe("materializeArtifacts directory bundles", () => {
     await rm(hostDir, { recursive: true, force: true });
   });
 
-  // Build a real .trace-like bundle and a gzipped tar of it (as the server would
-  // stream on demand), so the client extraction runs against genuine tar output.
+  // Build a real .trace-like bundle and a gzipped tar of it (as a server streams
+  // it when zstd isn't asked for), so the client extraction runs against genuine
+  // tar output.
   async function makeBundle(): Promise<{ bundlePath: string; tarGz: Buffer }> {
     const bundlePath = join(hostDir, "session.trace");
     await mkdir(join(bundlePath, "sub"), { recursive: true });

@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Transform } from "node:stream";
-import { safeExtractArchive } from "@argent/archive";
+import { ARCHIVE_CONTENT_TYPES, ARCHIVE_FORMATS, safeExtractArchive } from "@argent/archive";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { ArtifactStore } from "@argent/registry";
 import type { Registry } from "@argent/registry";
@@ -325,7 +325,7 @@ describe("GET /artifacts/:id", () => {
     }
   });
 
-  describe("when tar exits non-zero", () => {
+  describe.each(ARCHIVE_FORMATS)("when tar exits non-zero (%s)", (format) => {
     let root: string;
     const realPath = process.env.PATH;
 
@@ -361,7 +361,7 @@ describe("GET /artifacts/:id", () => {
       handle = createHttpApp(registry);
       return supertest(handle.app)
         .get(`/artifacts/${artifact.id}`)
-        .set("Accept", "application/zstd")
+        .set("Accept", ARCHIVE_CONTENT_TYPES[format])
         .buffer(true)
         .parse(binaryParser as never);
     }
@@ -378,37 +378,42 @@ describe("GET /artifacts/:id", () => {
     });
   });
 
-  it("stops tar and the compressor when the client aborts mid-download", async () => {
-    const root = await mkdtemp(join(tmpdir(), "artifact-abort-"));
-    const server = createServer();
-    try {
-      const bundle = join(root, "big.trace");
-      await mkdir(bundle);
-      await writeFile(join(bundle, "blob"), randomBytes(8 << 20));
-      const registry = stubRegistry();
-      const artifact = await registry.artifacts.register({
-        hostPath: bundle,
-        kind: "native-profile-trace",
-      });
-      handle = createHttpApp(registry);
-      server.on("request", handle.app);
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-      const { port } = server.address() as AddressInfo;
+  it.each(ARCHIVE_FORMATS)(
+    "stops tar and the %s compressor when the client aborts mid-download",
+    async (format) => {
+      const root = await mkdtemp(join(tmpdir(), "artifact-abort-"));
+      const server = createServer();
+      try {
+        const bundle = join(root, "big.trace");
+        await mkdir(bundle);
+        await writeFile(join(bundle, "blob"), randomBytes(8 << 20));
+        const registry = stubRegistry();
+        const artifact = await registry.artifacts.register({
+          hostPath: bundle,
+          kind: "native-profile-trace",
+        });
+        handle = createHttpApp(registry);
+        server.on("request", handle.app);
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const { port } = server.address() as AddressInfo;
 
-      const abort = new AbortController();
-      const res = await fetch(`http://127.0.0.1:${port}/artifacts/${artifact.id}`, {
-        signal: abort.signal,
-      });
-      await res.body!.getReader().read();
-      abort.abort();
-      await vi.waitFor(() => expect(compressors.at(-1)?.destroyed).toBe(true));
-      await vi.waitFor(() => expect(tarChildren.at(-1)?.signalCode).toBe("SIGTERM"));
-    } finally {
-      server.closeAllConnections();
-      server.close();
-      await rm(root, { recursive: true, force: true });
+        const abort = new AbortController();
+        const res = await fetch(`http://127.0.0.1:${port}/artifacts/${artifact.id}`, {
+          headers: { Accept: ARCHIVE_CONTENT_TYPES[format] },
+          signal: abort.signal,
+        });
+        expect(res.headers.get("content-type")).toBe(ARCHIVE_CONTENT_TYPES[format]);
+        await res.body!.getReader().read();
+        abort.abort();
+        await vi.waitFor(() => expect(compressors.at(-1)?.destroyed).toBe(true));
+        await vi.waitFor(() => expect(tarChildren.at(-1)?.signalCode).toBe("SIGTERM"));
+      } finally {
+        server.closeAllConnections();
+        server.close();
+        await rm(root, { recursive: true, force: true });
+      }
     }
-  });
+  );
 
   it("404s an unknown artifact id", async () => {
     handle = createHttpApp(stubRegistry());
