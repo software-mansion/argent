@@ -14,18 +14,18 @@ vi.mock("../src/blueprints/android-network-inspector", async (importActual) => (
   liveAndroidNetworkCaptureSerials: () => liveSerials(),
 }));
 
+type ProbeOptions = { awaitSerials?: readonly string[]; waitSerials?: readonly string[] };
+
 // Where the profiled runtime is found, for a logicalDeviceId session.
 const { NOT_FOUND, foundOn } = vi.hoisted(() => ({
   NOT_FOUND: { found: [] as string[], unresolved: [] as string[] },
   foundOn: (...found: string[]) => ({ found, unresolved: [] as string[] }),
 }));
 const findRuntimeDevices = vi.fn(
-  async (_cdp: unknown, _opts?: { awaitSerials?: readonly string[] }): Promise<RuntimeDevices> =>
-    NOT_FOUND
+  async (_cdp: unknown, _opts?: ProbeOptions): Promise<RuntimeDevices> => NOT_FOUND
 );
 vi.mock("../src/utils/debugger/runtime-device", () => ({
-  findRuntimeDevices: (cdp: unknown, opts?: { awaitSerials?: readonly string[] }) =>
-    findRuntimeDevices(cdp, opts),
+  findRuntimeDevices: (cdp: unknown, opts?: ProbeOptions) => findRuntimeDevices(cdp, opts),
 }));
 
 vi.mock("../src/utils/check-deps", () => ({
@@ -583,6 +583,7 @@ describe("react-profiler-start", () => {
 
         expect(findRuntimeDevices).toHaveBeenCalledWith(expect.anything(), {
           awaitSerials: [WIRELESS],
+          waitSerials: [],
         });
         expect(result.warning).toContain(
           `Native network capture is on for ${PKG} on ${WIRELESS}, which may also be the device this profile runs on`
@@ -591,7 +592,7 @@ describe("react-profiler-start", () => {
 
       // A provider's emulator drives its simulator-server by its `ext:` id, which
       // adb does not list, although adb read the device under its serial.
-      it("does not name a driven id the probe could not read, which only capture serials are", async () => {
+      it("asks the probe to wait for a driven id's serial without reporting it", async () => {
         const PROVIDER_ID = "ext:acme-3f2a9c:emulator-5556";
         const unregister = registerCaptureOnDemandSender(
           PROVIDER_ID,
@@ -599,15 +600,14 @@ describe("react-profiler-start", () => {
           () => {}
         );
         try {
-          findRuntimeDevices.mockResolvedValue({ found: [SERIAL], unresolved: [PROVIDER_ID] });
-          live.mockImplementation((deviceId) => (deviceId === PROVIDER_ID ? [PKG] : []));
+          findRuntimeDevices.mockResolvedValue(foundOn(SERIAL));
 
-          const result = await start(ANDROID_APP);
+          await start(ANDROID_APP);
 
           expect(findRuntimeDevices).toHaveBeenCalledWith(expect.anything(), {
-            awaitSerials: [PROVIDER_ID],
+            awaitSerials: [],
+            waitSerials: ["emulator-5556"],
           });
-          expect(result).not.toHaveProperty("warning");
         } finally {
           unregister();
         }
@@ -641,7 +641,10 @@ describe("react-profiler-start", () => {
 
         const result = await start(ANDROID_APP);
 
-        expect(findRuntimeDevices).toHaveBeenCalledWith(expect.anything(), { awaitSerials: [] });
+        expect(findRuntimeDevices).toHaveBeenCalledWith(expect.anything(), {
+          awaitSerials: [],
+          waitSerials: [],
+        });
         expect(result.started_at).toBe(new Date(1_000).toISOString());
       });
     });

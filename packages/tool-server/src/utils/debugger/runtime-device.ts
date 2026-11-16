@@ -16,8 +16,8 @@ const RETRY_DELAY_MS = 300;
  * How long the other adb serials get to answer once one holds the marker. A
  * device reachable over two transports answers on both, and a slow or hung one
  * must not hold up every start for the full read timeout. Serials the caller
- * names in `awaitSerials` are not cut off, unless their serial shows they are
- * another device (see {@link anotherDevice}).
+ * names in `awaitSerials` or `waitSerials` are not cut off, unless their serial
+ * shows they are another device (see {@link anotherDevice}).
  */
 export const OTHER_TRANSPORTS_GRACE_MS = 500;
 
@@ -29,13 +29,11 @@ export interface RuntimeDevices {
    */
   found: string[];
   /**
-   * Ids from `awaitSerials` whose logcat could not be read, so they may be this
-   * device too: the read failed or timed out, or `adb devices` does not list
-   * the serial as ready (offline, unauthorized or disconnected). Only set
-   * alongside an Android `found`, and never an id whose serial shows it is
-   * another device than a found one. Any other id adb does not list is
-   * reported, even one that names a device read under another id, such as a
-   * provider's `ext:` id, so a caller keeps only the ids it can act on.
+   * Serials from `awaitSerials` whose logcat could not be read, so they may be
+   * this device too: the read failed or timed out, or `adb devices` does not
+   * list the serial as ready (offline, unauthorized or disconnected). Only set
+   * alongside an Android `found`, and never a serial that shows it is another
+   * device than a found one.
    */
   unresolved: string[];
 }
@@ -60,8 +58,10 @@ const NOT_FOUND: RuntimeDevices = { found: [], unresolved: [] };
  * keys by serial, such as native network capture, may sit under any of them.
  * `awaitSerials` are the serials such state sits under: their reads are waited
  * for in full, and one that cannot be read is reported in `unresolved`, since
- * it cannot be told apart from this device. Neither holds for a serial that by
- * itself names another device than a found one, such as a second emulator.
+ * it cannot be told apart from this device. `waitSerials` are waited for in
+ * full too, but never reported. Neither wait holds, nor the report, for a
+ * serial that by itself names another device than a found one, such as a
+ * second emulator.
  *
  * Nothing is found when the runtime has no native logger, or when no device
  * argent can read the log of holds the marker (a physical iPhone, a provider's
@@ -69,7 +69,10 @@ const NOT_FOUND: RuntimeDevices = { found: [], unresolved: [] };
  */
 export async function findRuntimeDevices(
   cdp: Pick<CDPClient, "evaluate">,
-  { awaitSerials = [] }: { awaitSerials?: readonly string[] } = {}
+  {
+    awaitSerials = [],
+    waitSerials = [],
+  }: { awaitSerials?: readonly string[]; waitSerials?: readonly string[] } = {}
 ): Promise<RuntimeDevices> {
   const marker = `argent-device-probe:${randomUUID()}`;
   const logged = await cdp
@@ -85,7 +88,7 @@ export async function findRuntimeDevices(
 
   // Android does not wait for the simulator list, the slower of the two.
   const checks = [
-    async () => androidDevices(await androidSerials(), marker, awaitSerials),
+    async () => androidDevices(await androidSerials(), marker, awaitSerials, waitSerials),
     async () => {
       const udids = await bootedSimulators();
       const udid = await firstFound(udids.map((udid) => () => simulatorLogHolds(udid, marker)));
@@ -122,19 +125,23 @@ function firstFound<T>(checks: Array<() => Promise<T | undefined>>): Promise<T |
  * The serials whose logcat holds the marker. It reads every listed serial at
  * once and stops once all have answered, or once
  * {@link OTHER_TRANSPORTS_GRACE_MS} has passed since the first hit and every
- * listed serial in `awaitSerials` has answered or is {@link anotherDevice}
- * than a serial that holds the marker. Undefined when none holds it.
+ * listed serial in `awaitSerials` or `waitSerials` has answered or is
+ * {@link anotherDevice} than a serial that holds the marker. Undefined when
+ * none holds it.
  */
 async function androidDevices(
   serials: readonly string[],
   marker: string,
-  awaitSerials: readonly string[]
+  awaitSerials: readonly string[],
+  waitSerials: readonly string[]
 ): Promise<RuntimeDevices | undefined> {
   // adb lists one line per transport, so two devices that report one serial
   // number list it twice. `answers` is keyed by serial, so a repeat would keep
   // it from ever counting every serial as answered.
   const listed = [...new Set(serials)];
-  const awaited = listed.filter((serial) => awaitSerials.includes(serial));
+  const awaited = listed.filter(
+    (serial) => awaitSerials.includes(serial) || waitSerials.includes(serial)
+  );
   const answers = new Map<string, LogRead>();
   await new Promise<void>((resolve) => {
     let graceOver = false;
@@ -187,9 +194,9 @@ function heldSerials(answers: ReadonlyMap<string, LogRead>): string[] {
  * and a loopback transport names its console port too (see
  * `consolePortFromAdbSerial`), so two emulator ports are two devices. A USB
  * serial (no `:`, and not an mDNS name such as
- * `adb-<serial>._adb-tls-connect._tcp`) names one physical device, which is neither an emulator nor another USB
- * serial. A wireless `ip:port` or mDNS name can be any device, so it is never
- * told apart.
+ * `adb-<serial>._adb-tls-connect._tcp`) names one physical device, which is
+ * neither an emulator nor another USB serial. A wireless `ip:port` or mDNS
+ * name can be any device, so it is never told apart.
  */
 function anotherDevice(a: string, b: string): boolean {
   if (a === b) return false;
@@ -197,9 +204,7 @@ function anotherDevice(a: string, b: string): boolean {
   const portB = consolePortFromAdbSerial(b);
   if (portA !== null && portB !== null) return portA !== portB;
   if (isUsbSerial(a) && isUsbSerial(b)) return true;
-  return (
-    (a.startsWith("emulator-") && isUsbSerial(b)) || (b.startsWith("emulator-") && isUsbSerial(a))
-  );
+  return (portA !== null && isUsbSerial(b)) || (portB !== null && isUsbSerial(a));
 }
 
 function isUsbSerial(serial: string): boolean {

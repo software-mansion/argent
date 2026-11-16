@@ -35,6 +35,7 @@ import { canonicalDeviceId, isLogicalKeyedDevice } from "../../../utils/debugger
 import { findRuntimeDevices, type RuntimeDevices } from "../../../utils/debugger/runtime-device";
 import type { CDPClient } from "../../../utils/debugger/cdp-client";
 import { simulatorServerDeviceIds, trackProfilingRun } from "../../../utils/profiling-devices";
+import { externalNativeId } from "../../../utils/external-devices";
 import { RESULT_NOTE_KEY } from "../../screenshot/dropped-geometry";
 import {
   bootstrapFailureMessage,
@@ -158,25 +159,31 @@ function failedTakeoverText({ session_id, reason }: TakeoverReport): string {
  * full for two kinds of id, which a slow transport of the profiled device must
  * not miss:
  * - Serials with native network capture for any app: the warning names every
- *   app captured on the device. These alone are kept in `unresolved`, as
+ *   app captured on the device. These alone are reported in `unresolved`, as
  *   capture under a serial the probe could not read may be on this device.
- * - Ids with a simulator-server, which the agent drives devices by, so that a
- *   transport answering late is still tracked (capture on demand, and the
- *   `profiling` flag on that id's calls). One whose read fails is not tracked,
- *   as it may be another device. Nor is a provider's `ext:` id, which adb does
- *   not list under that name.
+ * - The serials of the ids with a simulator-server, which the agent drives
+ *   devices by, so that a transport answering late is still tracked (see
+ *   {@link trackedIds}). One whose read fails is not tracked, as it may be
+ *   another device.
  * A lookup that fails adds nothing, not a throw, like the warning it feeds.
  */
-async function findProfiledDevices(cdp: Pick<CDPClient, "evaluate">): Promise<RuntimeDevices> {
-  const captured = idsOf(liveAndroidNetworkCaptureSerials);
-  const driven = idsOf(simulatorServerDeviceIds);
-  const devices = await findRuntimeDevices(cdp, {
-    awaitSerials: [...new Set([...captured, ...driven])],
+function findProfiledDevices(cdp: Pick<CDPClient, "evaluate">): Promise<RuntimeDevices> {
+  return findRuntimeDevices(cdp, {
+    awaitSerials: idsOf(liveAndroidNetworkCaptureSerials),
+    waitSerials: idsOf(simulatorServerDeviceIds).map(externalNativeId),
   });
-  return {
-    found: devices.found,
-    unresolved: devices.unresolved.filter((id) => captured.includes(id)),
-  };
+}
+
+/**
+ * The ids a run found on `found` is tracked under (capture on demand, and the
+ * `profiling` flag on that id's calls): every found serial, and every id with a
+ * simulator-server that names one, such as a provider's `ext:<provider>:<serial>`.
+ */
+function trackedIds(found: readonly string[]): string[] {
+  const driven = idsOf(simulatorServerDeviceIds).filter((id) =>
+    found.includes(externalNativeId(id))
+  );
+  return [...new Set([...found, ...driven])];
 }
 
 function idsOf(lookup: () => string[]): string[] {
@@ -592,7 +599,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.sessionId = sessionId;
       api.ownerToolServerPid = process.pid;
       trackProfilingRun(api.deviceId, api);
-      for (const device of runtimeDevices.found) trackProfilingRun(device, api);
+      for (const device of trackedIds(runtimeDevices.found)) trackProfilingRun(device, api);
 
       const warning = nativeNetworkCaptureWarning(api.deviceId, api.runtimeApp, runtimeDevices);
       return {

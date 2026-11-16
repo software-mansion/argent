@@ -309,16 +309,17 @@ export function liveAndroidNetworkCaptures(deviceId: string): string[] {
 
 /** Adb serials with live native network capture for any app. */
 export function liveAndroidNetworkCaptureSerials(): string[] {
-  const serials = allHandles()
-    .filter((handle) => handle.isLive())
-    .map((handle) => handle.serial);
-  return [...new Set(serials)].sort();
+  return liveCaptureSerials(() => true);
 }
 
 /** Adb serials of the devices with live native network capture for the app. */
 export function liveAndroidNetworkCaptureDevices(packageName: string): string[] {
+  return liveCaptureSerials((handle) => handle.packageName === packageName);
+}
+
+function liveCaptureSerials(matches: (handle: InspectorHandle) => boolean): string[] {
   const serials = allHandles()
-    .filter((handle) => handle.packageName === packageName && handle.isLive())
+    .filter((handle) => matches(handle) && handle.isLive())
     .map((handle) => handle.serial);
   return [...new Set(serials)].sort();
 }

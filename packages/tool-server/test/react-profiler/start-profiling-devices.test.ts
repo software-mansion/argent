@@ -15,7 +15,7 @@ import {
 import { createReactProfilerStartTool } from "../../src/tools/profiler/react/react-profiler-start";
 import type { RuntimeDevices } from "../../src/utils/debugger/runtime-device";
 
-type ProbeOptions = { awaitSerials?: readonly string[] };
+type ProbeOptions = { awaitSerials?: readonly string[]; waitSerials?: readonly string[] };
 const findRuntimeDevicesMock = vi.hoisted(() =>
   vi.fn(async (_cdp?: unknown, _opts?: ProbeOptions): Promise<RuntimeDevices> => ({
     found: [],
@@ -136,7 +136,7 @@ describe("react-profiler-start registers the run where the device's calls look",
       sends.push(onDemand)
     );
     findRuntimeDevicesMock.mockImplementation(async (_cdp, opts) => ({
-      found: opts?.awaitSerials?.includes(WIRELESS) ? ["R58M123ABC", WIRELESS] : ["R58M123ABC"],
+      found: opts?.waitSerials?.includes(WIRELESS) ? ["R58M123ABC", WIRELESS] : ["R58M123ABC"],
       unresolved: [],
     }));
     const { registry } = fakeSession(LOGICAL_ID);
@@ -164,6 +164,30 @@ describe("react-profiler-start registers the run where the device's calls look",
 
     expect(isProfiling("emulator-5554")).toBe(true);
     expect(result).not.toHaveProperty("__argentNote");
+  });
+
+  // A provider's device is driven by its `ext:` id, while adb finds it by the
+  // serial behind it.
+  it("registers the run under a provider's id for the found serial", async () => {
+    const PROVIDER_ID = "ext:acme-3f2a9c:emulator-5556";
+    rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
+    const sends: boolean[] = [];
+    registerCaptureOnDemandSender(PROVIDER_ID, "ws://127.0.0.1:9000", (onDemand) =>
+      sends.push(onDemand)
+    );
+    registerCaptureOnDemandSender("ext:acme-3f2a9c:emulator-5558", "ws://127.0.0.1:9001", () => {});
+    findRuntimeDevicesMock.mockResolvedValue({ found: ["emulator-5556"], unresolved: [] });
+    const { registry } = fakeSession(LOGICAL_ID);
+    const tool = createReactProfilerStartTool(registry);
+
+    await tool.execute(
+      {},
+      { device_id: LOGICAL_ID, port: 8081, sample_interval_us: 100, force: false }
+    );
+
+    expect(isProfiling(PROVIDER_ID)).toBe(true);
+    expect(sends).toEqual([true]);
+    expect(isProfiling("ext:acme-3f2a9c:emulator-5558")).toBe(false);
   });
 
   it("notes that captures go on when the device cannot be found", async () => {

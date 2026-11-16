@@ -208,7 +208,7 @@ describe("findRuntimeDevices", () => {
       adb.serials = ["R58M123ABC"];
       await expect(
         findRuntimeDevices(runtimeOn("R58M123ABC"), {
-          awaitSerials: ["emulator-5556", "R58M999XYZ"],
+          awaitSerials: ["emulator-5556", "127.0.0.1:5557", "R58M999XYZ"],
         })
       ).resolves.toEqual(foundOn("R58M123ABC"));
     });
@@ -295,6 +295,19 @@ describe("findRuntimeDevices", () => {
 
       await expect(
         findRuntimeDevices(runtimeOn(USB, WIRELESS), { awaitSerials: [OTHER] })
+      ).resolves.toEqual(foundOn(USB));
+    });
+
+    it("waits in full for a serial it is asked to wait for, but never reports it", async () => {
+      adb.readDelayMs.set(WIRELESS, OTHER_TRANSPORTS_GRACE_MS + 300);
+      await expect(
+        findRuntimeDevices(runtimeOn(USB, WIRELESS), { waitSerials: [WIRELESS] })
+      ).resolves.toEqual(foundOn(USB, WIRELESS));
+
+      adb.readDelayMs.clear();
+      adb.failing.add(WIRELESS);
+      await expect(
+        findRuntimeDevices(runtimeOn(USB, WIRELESS), { waitSerials: [WIRELESS, "10.0.0.9:5555"] })
       ).resolves.toEqual(foundOn(USB));
     });
 
