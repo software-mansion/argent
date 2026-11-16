@@ -749,7 +749,9 @@ describe("native-devtools body reads", () => {
       params: { requestId: "upload" },
     });
     await vi.advanceTimersByTimeAsync(5_000);
-    const stillSending = noBody("the app is still sending this request body; read it again later");
+    const stillSending = noBody(
+      "the app may still be sending this request body; read it again after the request ends"
+    );
     await expect(first).resolves.toEqual(stillSending);
 
     const second = records.requestPostData(id);

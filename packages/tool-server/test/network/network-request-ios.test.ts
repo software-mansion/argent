@@ -393,14 +393,16 @@ describe("view-network-request-details: iOS bodies that cannot be read", () => {
   it("shows the store's reason for a request body and a response body it cannot give", async () => {
     serve(post({ "Content-Type": "application/json" }));
     requestPostData.mockResolvedValue(
-      unavailable("the app is still sending this request body; read it again later")
+      unavailable(
+        "the app may still be sending this request body; read it again after the request ends"
+      )
     );
     responseBody.mockResolvedValue(unavailable("the agent no longer holds this body"));
 
     const result = await details();
 
     expect(result.request.postData).toBe(
-      "[unavailable: the app is still sending this request body; read it again later]"
+      "[unavailable: the app may still be sending this request body; read it again after the request ends]"
     );
     expect(result.response.body).toBe("[unavailable: the agent no longer holds this body]");
   });

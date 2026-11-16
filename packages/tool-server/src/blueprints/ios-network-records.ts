@@ -53,7 +53,8 @@ const RESPONSE_BODY_TIMEOUT_MS = 10_000;
  */
 export const KEPT_BODY_CHARS_BUDGET = 64 * 1024 * 1024;
 
-const STILL_SENDING = "the app is still sending this request body; read it again later";
+const STILL_SENDING =
+  "the app may still be sending this request body; read it again after the request ends";
 /** A request body read of a request that has ended, which the app did not answer in time. */
 const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; read it again later`;
 /** A response body read that waited behind a read the app did not answer in time. */

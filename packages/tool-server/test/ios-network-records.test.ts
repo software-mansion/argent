@@ -167,7 +167,8 @@ function refused(reason: string): NativeNetworkBody {
   return { available: false, body: "", base64Encoded: false, truncated: false, reason };
 }
 
-const STILL_SENDING = "the app is still sending this request body; read it again later";
+const STILL_SENDING =
+  "the app may still be sending this request body; read it again after the request ends";
 const NO_ANSWER = "the app did not answer within 5 s; read it again later";
 const NO_RESPONSE_ANSWER =
   "the app did not answer an earlier body read within 10 s; read it again later";
@@ -1279,7 +1280,7 @@ describe("iOS native network records: request body still being sent", () => {
     expect(app.request).toHaveBeenCalledTimes(1);
   });
 
-  it("says the app is still sending, not that the agent holds no body, when the agent holds no request still uploading", async () => {
+  it("says the app may still be sending, not that the agent holds no body, when the agent holds no request still uploading", async () => {
     const { app, store, agent, id } = uploading();
     const during = store.requestPostData(id);
     await settle();
