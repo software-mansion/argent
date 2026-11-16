@@ -291,6 +291,53 @@ describe("a `tool: e2e-execute` step in saved YAML", () => {
   });
 });
 
+describe("an e2e-add-step whose step sets both names of one param", () => {
+  it.each([
+    ["e2e-execute", "e2e-execute", false],
+    ["e2e-execute", "e2e-execute", true],
+    ["flow-execute", "e2e-execute", false],
+    ["e2e-read-prerequisite", "e2e-read-prerequisite", false],
+    ["e2e-read-prerequisite", "e2e-read-prerequisite", true],
+  ])(
+    "is refused for %s by %s itself (linked: %s), recording nothing",
+    async (command, tool, linked) => {
+      const test = await writeTest("frag", "steps:\n  - echo: hi\n");
+      const registry = e2eRegistry();
+      await registry.invokeTool("e2e-start-recording", { name: "rec", project_root: root });
+      const failed: string[] = [];
+      registry.events.on("toolFailed", (id) => void failed.push(id));
+
+      const err = await registry
+        .invokeTool(
+          "e2e-add-step",
+          {
+            name: "rec",
+            project_root: root,
+            command,
+            args: JSON.stringify({
+              flow_path: test,
+              e2e_test_path: test,
+              project_root: root,
+              ...(tool === "e2e-execute" ? { device: DEVICE } : {}),
+            }),
+          },
+          { linked }
+        )
+        .catch((e: unknown) => e);
+
+      // The step's own tool refuses it, in its own words, and logs the refusal.
+      expect((err as Error).message).toBe(
+        `[Tool:e2e-add-step] [Tool:${tool}] Invalid params for tool "${tool}": ` +
+          "Pass e2e_test_path or its former name flow_path, not both."
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+      expect(failed).toEqual([tool, "e2e-add-step"]);
+      const yaml = await fs.readFile(path.join(e2eDir, "rec.yaml"), "utf8");
+      expect(parseFlow(yaml).steps).toEqual([]);
+    }
+  );
+});
+
 describe("a recorded e2e-execute of a sibling test by its former param name", () => {
   it.each(["flow_path", "e2e_test_path"])("records %s as a run: of the sibling", async (param) => {
     const sibling = await writeTest("frag", "steps:\n  - echo: hi\n");

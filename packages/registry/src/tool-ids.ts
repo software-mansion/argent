@@ -39,9 +39,16 @@ export const TOOL_PARAM_ALIASES: Readonly<Record<string, Readonly<Record<string,
 
 /** A call that sets a param under both its former and its current name. */
 export class ToolParamAliasError extends Error {
+  /**
+   * The refusal as the issue list of a schema rejection, one issue about the
+   * whole call. The tool-server answers it in `issues`, and the client throws
+   * it in `issues`, so a caller reads it as a rejected input.
+   */
+  readonly issues: readonly [{ code: "custom"; path: []; message: string }];
   constructor(former: string, current: string) {
     super(`Pass ${current} or its former name ${former}, not both.`);
     this.name = "ToolParamAliasError";
+    this.issues = [{ code: "custom", path: [], message: this.message }];
   }
 }
 

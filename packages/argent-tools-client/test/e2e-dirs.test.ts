@@ -11,6 +11,7 @@ import {
   type FileInputWire,
 } from "../src/file-inputs.js";
 import { createToolsClient, type ToolMeta } from "../src/tools-client.js";
+import { ToolInvocationError } from "../src/errors.js";
 
 let root: string;
 
@@ -313,13 +314,23 @@ describe("a test named by its path", () => {
   it("is refused before anything is sent when the call sets both names", async () => {
     const { client, posts } = stubServer(newerTools);
 
-    await expect(
-      client.callTool("e2e-execute", {
+    const err = await client
+      .callTool("e2e-execute", {
         flow_path: e2e("a.yaml"),
         e2e_test_path: e2e("b.yaml"),
         project_root: root,
       })
-    ).rejects.toThrow("Pass e2e_test_path or its former name flow_path, not both.");
+      .catch((e: unknown) => e);
+
+    // The message and `issues` the tool-server answers the same call with, so
+    // `argent run` and the Node client report it as a rejected input.
+    const message = "Pass e2e_test_path or its former name flow_path, not both.";
+    expect(err).toBeInstanceOf(ToolInvocationError);
+    expect(err).toMatchObject({
+      message,
+      errorKind: "validation",
+      issues: [{ code: "custom", path: [], message }],
+    });
     expect(posts).toEqual([]);
   });
 });

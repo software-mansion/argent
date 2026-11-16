@@ -2,7 +2,8 @@
  * A tool invocation the SERVER answered with an error — an HTTP error status or
  * the NDJSON stream's terminal `error` line — or one whose connection closed
  * after the call was sent, so that the tool may have run. A file input whose
- * upload was refused fails the same way, before the call is sent.
+ * upload was refused fails the same way, before the call is sent, and so does
+ * a call the client refuses as the tool-server would.
  * `errorKind`/`errorCode` carry the server's failure signal (e.g. kind
  * "validation") when it sent one.
  *
