@@ -1357,6 +1357,46 @@ describe("network-capture-start", () => {
       expect(ios.calls).toEqual([]);
     });
 
+    it("fails with Xcode's refusal only once the JS layer ends, and holds a stop of the app until then", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.envError = new XcodeFirstLaunchPendingError("simctl");
+      // The JS layer is still at the read of the mark when the iOS layer throws.
+      let releaseMark!: () => void;
+      const markHeld = new Promise<void>((resolve) => (releaseMark = resolve));
+      let markAsked = false;
+      const evaluate = rt.evaluate.bind(rt);
+      rt.evaluate = async (expr: string, timeout?: number) => {
+        if (scriptName(expr) === "mark") {
+          markAsked = true;
+          await markHeld;
+        }
+        return evaluate(expr, timeout);
+      };
+
+      let failed = false;
+      const starting = start(IOS_UDID, APP).then(
+        () => undefined,
+        (e: unknown) => {
+          failed = true;
+          return e as Error;
+        }
+      );
+      await vi.waitFor(() => expect(markAsked).toBe(true));
+      const stopping = stop(IOS_UDID, APP);
+      await settle();
+
+      expect(failed).toBe(false);
+      expect(rt.evaluated).toEqual([]);
+
+      releaseMark();
+      const err = await starting;
+      await stopping;
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(rt.evaluated.indexOf("pause")).toBeGreaterThan(rt.evaluated.indexOf("install"));
+    });
+
     it("fails while Xcode's first launch is pending before the JS layer reaches the app's runtime", async () => {
       const rt = new FakeRuntime(APP);
       serve(PORT, IOS_UDID, rt);
