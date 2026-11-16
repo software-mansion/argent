@@ -471,15 +471,31 @@ An `.mjs` or `.mts` script is an ES module in every project.
 
 A `.js` or `.ts` script has the module type that Node gives each `.js` file in the same directory. Node reads the `type` field of the nearest `package.json`:
 
-| `type`     | Result                                                                                                                                   |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `module`   | The script is an ES module. A call to `require` makes the step fail                                                                      |
-| `commonjs` | The script is a CommonJS module. An `import` statement or a top-level `await` makes the step fail                                        |
-| Not set    | Node reads a script with an `import` statement or a top-level `await` as an ES module. Node reads each other script as a CommonJS module |
+| `type`     | Result                                                                                                             |
+| ---------- | ------------------------------------------------------------------------------------------------------------------ |
+| `module`   | The script is an ES module. A call to `require` makes the step fail                                                |
+| `commonjs` | The script is a CommonJS module. ES module syntax makes the step fail                                              |
+| Not set    | Node reads a script that holds ES module syntax as an ES module. Node reads each other script as a CommonJS module |
 
-A React Native project usually does not set `type`. Node 20.12 to 20.18 does not examine the syntax. There, Node reads such a script as a CommonJS module, and an `import` statement makes the step fail.
+Node counts each of these as ES module syntax:
+
+- An `import` statement or an `export` statement. An `export {}` statement alone is sufficient.
+- A reference to `import.meta`.
+- An `await` at the top level of the script.
+- A `const` or `let` declaration at the top level with the name `require`, `module`, `exports`, `__dirname` or `__filename`.
+
+A call to `import()` is not ES module syntax. In a `.ts` script, Node looks for the syntax after it removes the types. Thus an `import type` statement is not ES module syntax.
+
+A React Native project usually does not set `type`. When `type` is not set, the Node version of the tool-server decides if Node examines the syntax:
+
+| Node version                                  | Result when `type` is not set                                                                                          |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 20.19 or a later 20 version, or 22.7 or later | Node examines the syntax                                                                                               |
+| 20.12 to 20.18, 21, or 22.0 to 22.6           | Node does not examine the syntax. Node reads the script as a CommonJS module, and ES module syntax makes the step fail |
 
 When `type` is not set, Node usually prints a warning for a script that it reads as an ES module. Argent turns this warning off, so the log of the step does not hold it.
+
+When `type` is `module`, the error of Node for a call to `require` in a `.js` script tells you to rename the script to `.cjs`. Parsing rejects a `.cjs` file and a `.cts` file. Use an `import` statement in place of the call to `require`.
 
 Use the `.mjs` or `.mts` extension for a script that must behave the same in every project.
 
@@ -487,7 +503,7 @@ Use the `.mjs` or `.mts` extension for a script that must behave the same in eve
 
 Node runs a `.ts` or `.mts` script without a build step. Node removes the type annotations and runs the code that remains. Argent adds no compiler.
 
-The tool-server must run on Node 22.18 or later. On an older Node, the step is errored and the script does not start. Use an `.mjs` or `.js` file when you cannot upgrade Node.
+The tool-server must run on Node 22.18 or later. On an older Node, the step is errored and the script does not start. When you cannot upgrade Node, write the script in JavaScript. Use an `.mjs` file in place of an `.mts` file. Use a `.js` file in place of a `.ts` file, or an `.mjs` file when the script is an ES module.
 
 These limits apply:
 
