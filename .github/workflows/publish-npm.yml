@@ -226,7 +226,7 @@ jobs:
       - run: test -f packages/argent/assets/manifest.json
       - run: test -f packages/argent/assets/trace-processor/trace_processor.wasm
       - run: test -f packages/argent/assets/trace-processor/engine_bundle.node.js
-      - run: test -f packages/argent/assets/trace-processor/engine.mjs
+      - run: test ! -e packages/argent/assets/trace-processor/engine.mjs
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk

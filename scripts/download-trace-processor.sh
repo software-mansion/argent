@@ -8,8 +8,10 @@ set -euo pipefail
 #
 #   - trace_processor.wasm     Google's prebuilt memory32 wasm
 #   - engine_bundle.node.js    Google's emscripten glue, one Node edit baked in
-#   - engine.mjs               @lynx-js/trace-processor's EngineBase decoder
 #   - LICENSE                  Perfetto license (compliance)
+#
+# Only these files are copied into place. The tarball may hold more (older
+# releases also carry an engine.mjs RPC decoder that argent no longer uses).
 #
 # Built and checksummed in argent-private CI, shipped as a single
 # trace-processor-wasm.tar.gz (+ .sha256) release asset. The blobs are unsigned,
@@ -29,7 +31,7 @@ TAG="${1:-argent-main}"
 DEST="packages/native-devtools-android/assets/trace-processor"
 TARBALL="trace-processor-wasm.tar.gz"
 CHECKSUM="${TARBALL}.sha256"
-FILES=(trace_processor.wasm engine_bundle.node.js engine.mjs LICENSE)
+FILES=(trace_processor.wasm engine_bundle.node.js LICENSE)
 
 if command -v sha256sum &>/dev/null; then
   sha256() { sha256sum "$@"; }
@@ -68,17 +70,22 @@ if [[ -z "${EXPECTED}" || "${EXPECTED}" != "${ACTUAL}" ]]; then
 fi
 echo "sha256 OK (${TARBALL})"
 
-mkdir -p "${DEST}"
-tar -xzf "${TMP_DIR}/${TARBALL}" -C "${DEST}"
+EXTRACT_DIR="${TMP_DIR}/extract"
+mkdir -p "${EXTRACT_DIR}"
+tar -xzf "${TMP_DIR}/${TARBALL}" -C "${EXTRACT_DIR}"
 
 # Defense in depth: the tarball checksum already passed.
-( cd "${DEST}" && sha256 -c SHA256SUMS )
+( cd "${EXTRACT_DIR}" && sha256 -c SHA256SUMS )
 
+mkdir -p "${DEST}"
+# Drop files that an older download left behind.
+rm -f "${DEST}/engine.mjs" "${DEST}/SHA256SUMS"
 for f in "${FILES[@]}"; do
-  if [[ ! -f "${DEST}/${f}" ]]; then
-    echo "Error: expected artifact missing after extract: ${DEST}/${f}" >&2
+  if [[ ! -f "${EXTRACT_DIR}/${f}" ]]; then
+    echo "Error: expected artifact missing after extract: ${f}" >&2
     exit 1
   fi
+  cp "${EXTRACT_DIR}/${f}" "${DEST}/${f}"
 done
 
 echo "Downloaded + verified trace-processor WASM bundle to ${DEST}/"

@@ -4,6 +4,12 @@ import { z } from "zod";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import type { Registry } from "@argent/registry";
 
+// A runtime without zstd, so GET /tools has to list what this one reads.
+vi.mock("@argent/archive", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/archive")>()),
+  ARCHIVE_FORMATS: ["gzip"],
+}));
+
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(() => ({
     updateAvailable: false,
@@ -162,6 +168,11 @@ describe("GET /tools progressive-loading metadata", () => {
 
     expect(byName.get("always-tool")).toMatchObject({ longRunning: true });
     expect(byName.get("plain-tool")).not.toHaveProperty("longRunning");
+  });
+
+  it("lists the archive formats POST /upload accepts", async () => {
+    const res = await request(handle.app).get("/tools").expect(200);
+    expect(res.body.uploadFormats).toEqual(["gzip"]);
   });
 
   it("lists a hideFromMcp tool with the flag set, and still runs it", async () => {

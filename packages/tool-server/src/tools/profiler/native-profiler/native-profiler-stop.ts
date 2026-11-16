@@ -25,7 +25,7 @@ import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 export interface IosStopArtifacts {
   /**
    * The Instruments `.trace` bundle: a directory, so a remote client downloads
-   * it as a gzipped tar while a local one uses it in place.
+   * it as a compressed tar while a local one uses it in place.
    */
   traceFile: ArtifactHandle;
   exportedFiles: Record<IosExportKey, ArtifactHandle | null>;
