@@ -16,7 +16,7 @@ describe("package manifest", () => {
     expect(pkg.files).toContain("skills/");
   });
 
-  it("admits only Node releases with zstd in node:zlib, in both published packages", () => {
+  it("admits only Node releases that run TypeScript and have zstd, in both published packages", () => {
     const engines = (dir: string) =>
       (
         JSON.parse(
@@ -29,11 +29,13 @@ describe("package manifest", () => {
     const range = engines("argent");
 
     expect(engines("argent-alias")).toBe(range);
-    // zstd landed in 22.15.0 and 23.8.0.
-    for (const v of ["22.15.0", "22.99.0", "23.8.0", "24.0.0", "26.0.0"]) {
+    // Node runs TypeScript with no flag from 22.18.0 and 23.6.0, which a
+    // `script:` step of an e2e test needs. zstd in node:zlib landed in 22.15.0
+    // and 23.8.0.
+    for (const v of ["22.18.0", "22.99.0", "23.8.0", "24.0.0", "26.0.0"]) {
       expect(semver.satisfies(v, range), v).toBe(true);
     }
-    for (const v of ["20.19.0", "22.14.0", "23.0.0", "23.7.0"]) {
+    for (const v of ["20.19.0", "22.14.0", "22.17.1", "23.0.0", "23.7.0"]) {
       expect(semver.satisfies(v, range), v).toBe(false);
     }
   });

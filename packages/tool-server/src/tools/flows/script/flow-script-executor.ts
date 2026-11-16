@@ -1099,8 +1099,8 @@ function realPathOrSelf(candidate: string): string {
  *
  * Only where Node knows the flag. `--disable-warning` arrived in 20.11 and
  * 21.3, and Node exits on an option it does not know, so on 21.0 to 21.2 —
- * which the package's `engines` admit — the flag would fail every script step
- * before the runner started. Those releases never read a `.js` file's syntax,
+ * below `engines`, which npm does not enforce — the flag would fail every
+ * script step before the runner started. Those releases never read a `.js` file's syntax,
  * so they have no such warning to silence. Asked of the binary rather than of
  * a version table: the script's process is this same binary.
  */

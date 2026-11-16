@@ -6,7 +6,6 @@ import * as path from "node:path";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
 import { stepRequiresDevice } from "../../../src/tools/flows/flow-device";
-import { nodeStripsTypes } from "../../../src/tools/flows/flow-script-step";
 import { hostRunsTypeScript } from "../../helpers/host-typescript";
 
 /**
@@ -463,8 +462,7 @@ describe("a script whose module type the project decides", () => {
 
     describe.runIf(runs)(`.${ext}`, () => {
       it("runs ES module syntax once when package.json sets no type", async () => {
-        // Every Node this suite starts on reads the syntax of such a file.
-        // Node 20.12 to 20.18 and 21.0 to 22.6 do not, and fail it instead.
+        // Every Node that `engines` admits reads the syntax of such a file.
         const step = await runScript(`seed.${ext}`, typed(esm), undefined);
 
         expect(step).toMatchObject({ kind: "script", status: "pass" });
@@ -653,23 +651,14 @@ describe("a script whose module type the project decides", () => {
 /**
  * The suite runs on whichever Node it is given, and only some run TypeScript.
  * Each side of that line is covered by the tests it can reach, and which side
- * this host is on is Node's own answer, never the product's: gated on
- * `nodeStripsTypes`, a change that refused every TypeScript script would skip
- * the tests below instead of failing them. What the gate does with either
+ * this host is on is Node's own answer, never the product's: gated on the
+ * product's own check, a change that refused every TypeScript script would
+ * skip the tests below instead of failing them. What the gate does with either
  * answer is covered on every Node in flow-script-typescript.test.ts.
  */
 const stripsTypes = hostRunsTypeScript;
 
 describe("a TypeScript script step", () => {
-  it("knows which Node releases run TypeScript with no flag", () => {
-    for (const version of ["22.18.0", "22.23.2", "23.6.0", "24.0.0", "25.8.0"]) {
-      expect(nodeStripsTypes(version), version).toBe(true);
-    }
-    for (const version of ["20.19.5", "22.6.0", "22.17.1", "23.5.0"]) {
-      expect(nodeStripsTypes(version), version).toBe(false);
-    }
-  });
-
   it.runIf(stripsTypes)("runs a .mts file with its types stripped", async () => {
     await write(
       "scripts/seed.mts",

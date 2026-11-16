@@ -254,7 +254,7 @@ Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
 `path` is relative to the test file that contains the step. Use an `.mjs` or `.js` file, or an `.mts` or `.ts` file for TypeScript, and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
 
-`.mjs` and `.mts` are always ES modules. `.js` and `.ts` take their module type from the project's `package.json` `type` field; with no `type`, Node 20.19+ and 22.7+ read a file with `import`, `export` or top-level `await` as an ES module, and older Node reads every such file as CommonJS. So prefer `.mjs` or `.mts` for a new script and use `.js` or `.ts` for a script the project already has. `.cjs` and `.cts` are invalid: under `"type": "module"`, use `import` in the script, not `require`.
+`.mjs` and `.mts` are always ES modules. `.js` and `.ts` take their module type from the project's `package.json` `type` field; with no `type`, Node reads a file with `import`, `export` or top-level `await` as an ES module, and each other file as CommonJS. So prefer `.mjs` or `.mts` for a new script and use `.js` or `.ts` for a script the project already has. `.cjs` and `.cts` are invalid: under `"type": "module"`, use `import` in the script, not `require`.
 
 Node runs `.mts` and `.ts` by removing the types, and it does not read `tsconfig.json`. In an `.mts` or `.ts` script:
 

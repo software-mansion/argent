@@ -254,8 +254,8 @@ export const FLOW_FILE_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}\\.yaml$`
  * (`cjsRenameNote`) both say to use `import` instead.
  *
  * Node runs the two TypeScript ones by stripping the types, with no type check
- * and no `tsconfig.json`, and only from the releases `nodeStripsTypes` names
- * (flow-script-step.ts in the tool-server).
+ * and no `tsconfig.json`, and only where its build has the support
+ * (`cannotRunTypeScript`, flow-script-step.ts in the tool-server).
  */
 export const SCRIPT_FILE_EXTENSIONS = [".mjs", ".mts", ".js", ".ts"] as const;
 

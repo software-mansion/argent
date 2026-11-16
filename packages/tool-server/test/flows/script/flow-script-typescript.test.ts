@@ -7,20 +7,16 @@ import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry
 import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
 import { flowStartRecordingTool } from "../../../src/tools/flows/flow-start-recording";
 import { flowAddScriptTool } from "../../../src/tools/flows/flow-add-script";
-import {
-  nodeStripsTypes,
-  typeScriptGap,
-  typeScriptRefusalReason,
-} from "../../../src/tools/flows/flow-script-step";
+import { typeScriptRefusalReason } from "../../../src/tools/flows/flow-script-step";
 import { __resetRecordingsForTesting, parseFlow } from "../../../src/tools/flows/flow-utils";
 import type { FlowScriptResult } from "../../../src/tools/flows/script/flow-script-executor";
 
 /**
  * Whether a host runs a TypeScript script, and what a run does on each side of
  * that line. The host's answer is put in by hand, so both sides are covered on
- * every Node the suite runs on — the one CI pins runs no TypeScript at all, and
- * left to the real answer it would only ever see the refusal. The scripts that
- * really execute are in flow-script-step-run.test.ts.
+ * every Node the suite runs on — the one CI pins runs TypeScript, and left to
+ * the real answer it would never see the refusal. The scripts that really
+ * execute are in flow-script-step-run.test.ts.
  */
 
 const { executeMock, stripsTypesMock } = vi.hoisted(() => ({
@@ -57,7 +53,8 @@ const PASSED = outcome({ ok: true, output: {} });
 
 /**
  * What a CommonJS script's `require("./helpers.ts")` fails with where Node
- * compiles the file as JavaScript: Node 20.19 and 22.17 write this stack.
+ * compiles the file as JavaScript: a Node with no TypeScript support writes
+ * this stack.
  */
 function requiredTypeScriptFailure(projectRoot: string): FlowScriptResult["failure"] {
   const helper = path.join(projectRoot, "scripts", "helpers.ts");
@@ -133,81 +130,43 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-describe("whether a host runs TypeScript", () => {
-  it("runs it when the script process says it strips types, whatever the release", () => {
-    for (const version of ["20.19.5", "22.17.1", "23.5.0", "24.9.0"]) {
-      expect(typeScriptGap(true, version), version).toBeUndefined();
-    }
-  });
-
-  it("blames the release when the release cannot", () => {
-    for (const version of ["20.19.5", "22.6.0", "22.17.1", "23.0.0", "23.5.0"]) {
-      expect(typeScriptGap(false, version), version).toBe("release");
-      // A host that could not be asked is still one the release rules out.
-      expect(typeScriptGap(undefined, version), version).toBe("release");
-    }
-  });
-
-  it("blames the build when the release can and the binary cannot", () => {
-    // The `nodejs` package of Debian and Ubuntu: configured --without-amaro.
-    for (const version of ["22.18.0", "22.22.1", "23.6.0", "24.0.0", "24.22.2", "26.13.0"]) {
-      expect(typeScriptGap(false, version), version).toBe("build");
-    }
-  });
-
-  it("goes by the release when the binary could not be asked", () => {
-    for (const version of ["22.18.0", "23.6.0", "24.9.0"]) {
-      expect(typeScriptGap(undefined, version), version).toBeUndefined();
-    }
-  });
-
-  it("reads this process's release in the form the table is written in", () => {
-    // `process.version` carries a leading "v", which parses to no release at
-    // all: every host would then be one whose release cannot.
-    for (const strips of [true, false, undefined]) {
-      expect(typeScriptGap(strips)).toBe(typeScriptGap(strips, process.versions.node));
-    }
-    expect(nodeStripsTypes()).toBe(nodeStripsTypes(process.versions.node));
-    expect(typeScriptRefusalReason("Script", "release")).toContain(
-      `Node.js ${process.versions.node}, which`
-    );
-  });
-});
-
 describe("the refusal a host that cannot run TypeScript gives", () => {
   const subject = 'Script "scripts/seed.mts" is TypeScript';
 
-  it("names the release, the releases that can, and the tool-server to stop", () => {
-    const reason = typeScriptRefusalReason(subject, "release", "20.19.5");
+  it("names the Node, the hosts with no support, and the tool-server to stop", () => {
+    const reason = typeScriptRefusalReason(subject, "22.22.1");
 
     expect(reason).toContain(
-      'Script "scripts/seed.mts" is TypeScript, and the tool-server runs on Node.js 20.19.5, which cannot run it.'
+      'Script "scripts/seed.mts" is TypeScript, and the tool-server runs on Node.js 22.22.1, which cannot run it'
     );
-    expect(reason).toContain("Node.js runs TypeScript from 22.18, except on 23.0 to 23.5.");
+    // The two hosts that answer no: a Node below `engines`, which npm installs
+    // past, and a build compiled without the stripper.
+    expect(reason).toContain("A release older than Argent supports has none");
+    expect(reason).toContain("the nodejs package of Debian and Ubuntu");
     // A tool-server that is already up is reused whatever Node the next command
     // runs on, so switching Node alone brings the same refusal back.
     expect(reason).toContain("Stop the tool-server with `argent server stop`");
+    expect(reason).toContain("a current Node.js from nodejs.org");
     expect(reason).toContain(
       "or use JavaScript (.mjs) for the script and for the files it imports"
     );
   });
 
-  it("does not send a 23.5 host to a minimum it already meets", () => {
-    const reason = typeScriptRefusalReason(subject, "release", "23.5.0");
-
-    expect(reason).toContain("runs on Node.js 23.5.0, which cannot run it");
-    expect(reason).toContain("except on 23.0 to 23.5");
-    expect(reason).not.toMatch(/22\.18 or later/);
+  it("reads this process's release in the form a user knows it", () => {
+    // `process.version` carries a leading "v".
+    expect(typeScriptRefusalReason("Script")).toContain(`Node.js ${process.versions.node}, which`);
   });
+});
 
-  it("sends a build without the support to another build, not to another release", () => {
-    const reason = typeScriptRefusalReason(subject, "build", "22.22.1");
+describe("a run with a TypeScript script on a host that could not be asked", () => {
+  it("hands the script to Node: a refusal has to rest on an answer", async () => {
+    stripsTypesMock.mockResolvedValue(undefined);
+    await flow("unasked", "steps:\n  - script: { path: ../../scripts/seed.mts }\n");
 
-    expect(reason).toContain("runs on a build of Node.js 22.22.1 that cannot run it");
-    expect(reason).toContain("the build has no TypeScript support");
-    expect(reason).toContain("Stop the tool-server with `argent server stop`");
-    expect(reason).toContain("a Node.js from nodejs.org");
-    expect(reason).not.toContain("22.18");
+    const result = await runFlow("unasked");
+
+    expect(result.ok).toBe(true);
+    expect(executed()).toEqual(["seed.mts"]);
   });
 });
 

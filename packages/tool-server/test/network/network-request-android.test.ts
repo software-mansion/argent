@@ -339,7 +339,7 @@ describe("view-network-request-details: request bodies and charsets", () => {
   );
 
   it("decodes windows-1252 on a Node whose TextDecoder reads it as ISO-8859-1", async () => {
-    // 22.15.0 is one such Node; CI's is not, so stand one in.
+    // 24.9.0 is one such Node; CI's is not, so stand one in.
     class Iso88591Decoder extends TextDecoder {
       override decode(...args: Parameters<TextDecoder["decode"]>): string {
         if (this.encoding !== "windows-1252") return super.decode(...args);
