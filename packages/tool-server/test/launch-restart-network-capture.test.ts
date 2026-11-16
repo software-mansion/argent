@@ -42,6 +42,8 @@ const sim = vi.hoisted(() => ({
   launchctlList: "",
   /** `launchctl list` fails, as on a simulator that stopped answering. */
   launchctlFails: false,
+  /** While set, `launchctl list` answers only once it resolves, as a slow simulator does. */
+  launchctlHeld: null as Promise<void> | null,
   /** What `ps` prints for the app's process. */
   psOutput: "",
   /** While set, `ps` answers only once it resolves, as a slow read of a process does. */
@@ -65,14 +67,18 @@ vi.mock("node:child_process", async () => {
         return;
       }
       if (argv.includes("launchctl list")) {
-        if (sim.launchctlFails) {
-          callback(new Error("Invalid device: the simulator did not answer"), {
-            stdout: "",
-            stderr: "",
-          });
-          return;
-        }
-        callback(null, { stdout: sim.launchctlList, stderr: "" });
+        const answer = () => {
+          if (sim.launchctlFails) {
+            callback(new Error("Invalid device: the simulator did not answer"), {
+              stdout: "",
+              stderr: "",
+            });
+            return;
+          }
+          callback(null, { stdout: sim.launchctlList, stderr: "" });
+        };
+        if (sim.launchctlHeld) void sim.launchctlHeld.then(answer);
+        else answer();
         return;
       }
       if (argv.includes("simctl list")) {
@@ -226,6 +232,7 @@ function resetSimulator(): void {
   sim.calls.length = 0;
   sim.launchctlList = runningRow(PID);
   sim.launchctlFails = false;
+  sim.launchctlHeld = null;
   sim.psOutput = psLine();
   sim.psHeld = null;
   sim.onLaunch = null;
@@ -744,6 +751,45 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
       expect(settled).toEqual({ note: undefined });
     });
   });
+
+  /**
+   * stop-all-simulator-servers can also land while the host reads the launched
+   * process, before the wait starts. Capture has ended then, so no note fits.
+   */
+  it.each([
+    ["no process of the app runs", () => (sim.launchctlList = "")],
+    [
+      "its running process lacks the injection",
+      () => (sim.psOutput = psLine("10:00", { injected: false })),
+    ],
+    ["its new process has not connected yet", () => {}],
+  ])(
+    "answers nothing, at once, when the service is disposed while the host reads the launch and %s",
+    async (_case, arrange) => {
+      await withService(async (api, dispose) => {
+        await api.activateNetworkInspection(APP);
+        arrange();
+        let readLaunch!: () => void;
+        sim.launchctlHeld = new Promise((resolve) => (readLaunch = resolve));
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const probes = probeCalls().length;
+        const note = api.networkCaptureAfterLaunch(APP);
+        await vi.waitFor(() => expect(probeCalls().length).toBeGreaterThan(probes));
+
+        await dispose();
+        readLaunch();
+
+        // The fake clock never reaches the 5 s, so only the dispose can end the wait.
+        const deadline = performance.now() + 2_000;
+        let settled: unknown = "still waiting";
+        void note.then((value) => (settled = { note: value }));
+        while (settled === "still waiting" && performance.now() < deadline) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        expect(settled).toEqual({ note: undefined });
+      });
+    }
+  );
 
   /**
    * A new process can acknowledge Network.enable before the host has read its
