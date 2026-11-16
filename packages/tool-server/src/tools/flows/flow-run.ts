@@ -68,7 +68,7 @@ import {
   type ToolFileFix,
 } from "./flow-tool-inputs";
 import { RECORDING_TOOL_IDS } from "./flow-add-step";
-import { runFlowScriptStep } from "./flow-script-step";
+import { runFlowScriptStep, typeScriptScriptRefusal } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
@@ -1314,20 +1314,41 @@ function retiredArgReason(use: RetiredArgUse): string {
 }
 
 /**
+ * The refusal for the first `script:` step in these steps that this host cannot
+ * run, or undefined: a TypeScript file, on a Node.js that does not run
+ * TypeScript (see `typeScriptScriptRefusal`).
+ *
+ * Nothing a step does changes that answer, so it is asked before any of them
+ * runs, a `when:` block's included. Left to the step, the refusal lands after
+ * earlier steps have seeded data and driven the device, and a step under a
+ * `when:` guard passes or errors by the branch the device happens to take.
+ */
+async function findUnrunnableScript(steps: FlowStep[]): Promise<string | undefined> {
+  for (const { step } of walkSteps(steps)) {
+    if (step.kind !== "script") continue;
+    const refusal = await typeScriptScriptRefusal(step.path);
+    if (refusal !== undefined) return refusal;
+  }
+  return undefined;
+}
+
+/**
  * Why a loaded `run:` fragment is refused before any of its steps runs, or
- * undefined: the root flow's load-time gate, applied to the fragment at the
+ * undefined: the root flow's load-time gates, applied to the fragment at the
  * only moment its steps exist. One function for both callers:
  * {@link execRunStep}, which charges the refusal to the `run:` step, and
  * {@link scanLeadingLaunch}, which must not follow a launch into a fragment
  * the executor refuses.
  */
-function fragmentLoadRefusal(
+async function fragmentLoadRefusal(
   registry: Registry,
   fragment: FlowFile,
   target: string
-): string | undefined {
+): Promise<string | undefined> {
   const retiredArg = findRetiredToolArg(registry, fragment.steps);
-  return retiredArg ? `fragment "${target}" ${retiredArgReason(retiredArg)}` : undefined;
+  if (retiredArg) return `fragment "${target}" ${retiredArgReason(retiredArg)}`;
+  const unrunnableScript = await findUnrunnableScript(fragment.steps);
+  return unrunnableScript ? `fragment "${target}" cannot run. ${unrunnableScript}` : undefined;
 }
 
 /**
@@ -1661,6 +1682,18 @@ Without a link, every step kind runs.`,
       if (retiredArg) {
         throw new FailureError(`E2E test "${flowName}" ${retiredArgReason(retiredArg)}`, {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_run_validate",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
+      }
+      // Refused here for the same reason, though the file is sound: it is this
+      // host that cannot run the step (see findUnrunnableScript). A validation
+      // failure all the same, so a directory run goes on to its next e2e test.
+      const unrunnableScript = await findUnrunnableScript(flow.steps);
+      if (unrunnableScript) {
+        throw new FailureError(`E2E test "${flowName}" was not run. ${unrunnableScript}`, {
+          error_code: FAILURE_CODES.FLOW_SCRIPT_TYPESCRIPT_UNSUPPORTED,
           failure_stage: "flow_run_validate",
           failure_area: "tool_server",
           error_kind: "validation",
@@ -2155,7 +2188,7 @@ async function scanLeadingLaunch(
     } catch {
       return null;
     }
-    if (fragmentLoadRefusal(env.registry, nested, step.flow) !== undefined) return null;
+    if ((await fragmentLoadRefusal(env.registry, nested, step.flow)) !== undefined) return null;
     const inner = await scanLeadingLaunch(
       nested,
       [...stack, { canonical, display: runDisplayFor(step.flow, rootDisplay) }],
@@ -2822,7 +2855,7 @@ async function execRunStep(
 
   // Charged to the run: step, so the fragment is refused whole rather than
   // part-executed up to the offending step.
-  const refusal = fragmentLoadRefusal(state.registry, fragment, target);
+  const refusal = await fragmentLoadRefusal(state.registry, fragment, target);
   if (refusal !== undefined) return fail(refusal);
 
   // A failure, not a skip: a fragment that silently did not run would leave a green report.

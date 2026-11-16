@@ -93,19 +93,14 @@ export async function runFlowScriptStep(
   // Asked of the name the flow spells, not of `canonical`: Node picks a module's
   // format from the real path's extension, but a symlink that renames a file
   // across the TypeScript line is not a layout worth a second rule, and the
-  // load failure Node reports for it names the file.
-  if (isTypeScriptScript(suppliedBase) && !nodeStripsTypes()) {
-    return {
-      ran: "no",
-      outcome: {
-        status: "error",
-        reason:
-          `Script "${target}" is TypeScript, and the tool-server runs on Node.js ` +
-          `${process.versions.node}, which cannot run it. Start the tool-server on Node.js ` +
-          `${TYPESCRIPT_MIN_NODE} or later, or write the script as ` +
-          `${javaScriptSpelling(suppliedBase)}.`,
-      },
-    };
+  // load failure Node reports for it is read below.
+  //
+  // A run asks this of every script step before its first one (see
+  // `typeScriptScriptRefusal`); asked again here for the callers that have no
+  // such gate — a recorded step, and a step of a `run:` fragment.
+  const refusal = await typeScriptScriptRefusal(target);
+  if (refusal !== undefined) {
+    return { ran: "no", outcome: { status: "error", reason: refusal } };
   }
 
   const result = await flowScriptExecutor().execute({
@@ -120,14 +115,20 @@ export async function runFlowScriptStep(
     ...(request.signal ? { signal: request.signal } : {}),
   });
 
-  const verdict = scriptVerdict(result);
-  const frames = result.ok
-    ? ""
-    : scriptFrames(result.failure?.stack, [
-        request.projectRoot,
-        await canonicalFlowPath(request.projectRoot),
-      ]);
-  const tail = (result.ok ? "" : cjsRenameNote(result.failure, canonical)) + frames;
+  const roots = result.ok
+    ? []
+    : [request.projectRoot, await canonicalFlowPath(request.projectRoot)];
+  const hostLimit = await typeScriptLoadRefusal(target, result, roots);
+  const verdict: Pick<FlowScriptStepOutcome, "status" | "reason"> =
+    hostLimit !== undefined
+      ? { status: "error", reason: [hostLimit, ...result.notes].join(" ") }
+      : scriptVerdict(result);
+  // A host limit has no frame of the script's to show: Node stopped in its own
+  // loader, before a line of the file it could not read.
+  const tail =
+    result.ok || hostLimit !== undefined
+      ? ""
+      : cjsRenameNote(result.failure, canonical) + scriptFrames(result.failure?.stack, roots);
   return {
     outcome: {
       ...verdict,
@@ -145,15 +146,16 @@ function isTypeScriptScript(base: string): boolean {
 }
 
 /**
- * What a TypeScript script is rewritten as on a Node that cannot run it. An
- * `.mts` file is an ES module and so is `.mjs`. A `.ts` file has whatever
- * module type Node gives a `.js` file beside it, so `.js` is its twin — but
- * the releases that cannot strip types are also, mostly, the ones that do not
- * read the syntax of a `.js` file under a package.json with no `type`, and
- * there only `.mjs` runs an `import`.
+ * The JavaScript extension a refusal names for a script this host cannot run
+ * as TypeScript. `.mts` and `.mjs` are both ES modules, so `.mjs` stands in for
+ * either. A `.ts` or `.js` script has whatever module type Node gives a `.js`
+ * file in its directory, so `.js` is its twin — but the releases that cannot
+ * strip types are also, mostly, the ones that do not read the syntax of a `.js`
+ * file under a package.json with no `type`, and there only `.mjs` runs an
+ * `import`.
  */
-function javaScriptSpelling(base: string): string {
-  return base.endsWith(".mts") ? "a .mjs file" : "a .js file, or a .mjs file if it is an ES module";
+function javaScriptSpelling(target: string): string {
+  return /\.m[jt]s$/.test(target) ? ".mjs" : ".js, or .mjs for an ES module";
 }
 
 /**
@@ -179,18 +181,13 @@ const NODE_CJS_RENAME_ADVICE = /rename it to use the '\.cjs' file extension/;
 const TYPESCRIPT_MIN_NODE = "22.18";
 
 /**
- * Whether this Node runs a TypeScript file as it stands: 22.18 on the 22 line,
- * 23.6 on the 23 line, and every release after. Older ones either cannot or
- * need `--experimental-strip-types`.
+ * Whether this Node release runs a TypeScript file as it stands: 22.18 on the
+ * 22 line, 23.6 on the 23 line, and every release after. Older ones either
+ * cannot or need `--experimental-strip-types`.
  *
- * Read from the version rather than from `process.features.typescript`: the
- * script's process is this same binary, but the executor gives it its own
- * `execArgv` and drops `NODE_OPTIONS`, so a flag that turned stripping on or
- * off for the tool-server says nothing about the child.
- *
- * Refusing up front is what makes this a host error. Left to Node, an old
- * release reports `ERR_UNKNOWN_FILE_EXTENSION` from the loader, which reads as
- * the script's own load failure and names nothing the author can change.
+ * The release is not the whole answer — see {@link typeScriptGap}, which asks
+ * the binary — but it is the one that says WHY a host cannot, and the one left
+ * when the binary could not be asked.
  *
  * Exported for its test.
  */
@@ -199,6 +196,117 @@ export function nodeStripsTypes(version: string = process.versions.node): boolea
   if (major >= 24) return true;
   if (major === 23) return minor >= 6;
   return major === 22 && minor >= 18;
+}
+
+/**
+ * Why a script process on this host cannot run TypeScript: its Node release
+ * does not, or the release does and this build of it was compiled without the
+ * support. Undefined when it can.
+ */
+type TypeScriptGap = "release" | "build";
+
+/**
+ * `strips` is the executor's answer from a process started the way a script's
+ * is (`FlowScriptExecutor.stripsTypes`), and it decides: a `true` runs the
+ * script whatever the release table says. The release only explains a host
+ * that cannot, and stands in when the binary could not be asked.
+ *
+ * The binary is asked because the release is not enough. Debian and Ubuntu
+ * build their `nodejs` package without the stripper, so a 22.22 or a 24 from
+ * `apt` reports `process.features.typescript` as `false` and fails an `.mts`
+ * with `ERR_UNKNOWN_FILE_EXTENSION` — which reads as the script's own load
+ * failure and names nothing the author can change. Refusing up front is what
+ * makes either gap a host error.
+ *
+ * Exported for its test.
+ */
+export function typeScriptGap(
+  strips: boolean | undefined,
+  version: string = process.versions.node
+): TypeScriptGap | undefined {
+  if (strips === true) return undefined;
+  if (!nodeStripsTypes(version)) return "release";
+  return strips === false ? "build" : undefined;
+}
+
+/**
+ * The refusal for a script this host cannot run. `subject` opens the sentence
+ * with what the flow asked for.
+ *
+ * The recovery names `argent server stop` because switching Node alone changes
+ * nothing: a tool-server that is already up is reused whatever Node the next
+ * command runs on, so the same refusal would come back naming the old release.
+ *
+ * Exported for its test.
+ */
+export function typeScriptRefusalReason(
+  subject: string,
+  gap: TypeScriptGap,
+  version: string = process.versions.node,
+  javaScript: string = ".mjs"
+): string {
+  const host =
+    gap === "release"
+      ? `the tool-server runs on Node.js ${version}, which cannot run it. Node.js runs ` +
+        `TypeScript from ${TYPESCRIPT_MIN_NODE}, except on 23.0 to 23.5. Stop the tool-server ` +
+        `with \`argent server stop\`, then run Argent on such a Node.js,`
+      : `the tool-server runs on a build of Node.js ${version} that cannot run it: the build ` +
+        `has no TypeScript support, like the nodejs package of Debian and Ubuntu. Stop the ` +
+        `tool-server with \`argent server stop\`, then run Argent on a Node.js from nodejs.org,`;
+  return `${subject}, and ${host} or use JavaScript (${javaScript}) for the script and for the files it imports.`;
+}
+
+/**
+ * Why this host cannot run the script a `script:` step names, or undefined: a
+ * TypeScript file, on a host with a {@link TypeScriptGap}. A script that is not
+ * TypeScript costs nothing to ask about.
+ *
+ * The answer is fixed before a run's first step, so the runner asks it of every
+ * script step up front — a refusal that waited for the step would land after
+ * earlier steps had seeded data or driven the device.
+ */
+export async function typeScriptScriptRefusal(target: string): Promise<string | undefined> {
+  if (!isTypeScriptScript(path.posix.basename(target))) return undefined;
+  const gap = typeScriptGap(await flowScriptExecutor().stripsTypes());
+  return (
+    gap &&
+    typeScriptRefusalReason(
+      `Script "${target}" is TypeScript`,
+      gap,
+      undefined,
+      javaScriptSpelling(target)
+    )
+  );
+}
+
+/** Node's load failure for a TypeScript file it has no loader for, with the file. */
+const UNKNOWN_TYPESCRIPT_FILE_RE = /^Unknown file extension "\.[mc]?ts" for (.+)$/;
+
+/**
+ * The same refusal, for TypeScript the step's own name does not show: a file
+ * the script imports. Nothing before the run can see it, so it is read back
+ * from Node's failure — `ERR_UNKNOWN_FILE_EXTENSION` for a TypeScript
+ * extension, on a host with a {@link TypeScriptGap}. Left as it came, that is
+ * the host's limit reported as the script's fault.
+ */
+async function typeScriptLoadRefusal(
+  target: string,
+  result: FlowScriptResult,
+  roots: readonly string[]
+): Promise<string | undefined> {
+  if (result.ok || result.failure?.kind !== "load") return undefined;
+  const file = UNKNOWN_TYPESCRIPT_FILE_RE.exec(result.failure.message)?.[1];
+  if (file === undefined) return undefined;
+  const gap = typeScriptGap(await flowScriptExecutor().stripsTypes());
+  return (
+    gap &&
+    typeScriptRefusalReason(
+      `Script "${target}" loads the TypeScript file "${readablePath(file, roots)}"`,
+      gap,
+      undefined,
+      javaScriptSpelling(target)
+    )
+  );
 }
 
 /**
@@ -248,7 +356,9 @@ const NODE_FRAME_RE = /(?:^at (?:async )?|\()node:[^\s()]+\)?$/;
  */
 function readableFrame(frame: string, roots: readonly string[]): string {
   const withoutUrls = frame.replace(/file:\/\/[^\s)]+/g, (match) => {
-    const split = /^(.*?)(:\d+:\d+)$/.exec(match);
+    // The column is optional: the place Node names for a syntax error is a
+    // line alone (see `STACK_PLACE_RE`).
+    const split = /^(.*?)(:\d+(?::\d+)?)$/.exec(match);
     const url = split ? split[1]! : match;
     const position = split ? split[2]! : "";
     let file: string;
@@ -257,13 +367,7 @@ function readableFrame(frame: string, roots: readonly string[]): string {
     } catch {
       return match;
     }
-    for (const root of roots) {
-      const relative = path.relative(root, file);
-      if (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-        return `${relative}${position}`;
-      }
-    }
-    return `${file}${position}`;
+    return `${readablePath(file, roots)}${position}`;
   });
   return roots.reduce(withoutRoot, withoutUrls);
 }
@@ -283,18 +387,43 @@ function withoutRoot(frame: string, root: string): string {
   return frame.replace(new RegExp(`(^at (?:async )?|\\()${escaped}`, flags), "$1");
 }
 
+/** `file` relative to the first of `roots` that holds it, else as it stands. */
+function readablePath(file: string, roots: readonly string[]): string {
+  for (const root of roots) {
+    const relative = path.relative(root, file);
+    if (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      return relative;
+    }
+  }
+  return file;
+}
+
+/**
+ * The place a stack opens with when Node refused the SOURCE rather than ran
+ * it: `file:///abs/svc.mts:2`, then the line and a caret under it, then the
+ * error. Node writes it for TypeScript syntax it cannot strip — an `enum`, a
+ * parameter property — and for an import of a name the other module does not
+ * export. Every `at` line under it is the loader's own, so without this line
+ * the reason names no file at all.
+ */
+const STACK_PLACE_RE = /^file:\/\/\S+:\d+$/;
+
 /**
  * The frames of a failed script, as a block appended to its message. Newline
  * separated on purpose: `oneLineReason` escapes them, so the block reads as
  * `\n    at …` on the step's own line and a reader can still tell one frame
  * from the next. The stack's first line is dropped — it only repeats the
- * message the reason already opens with.
+ * message the reason already opens with — unless it is the place of a syntax
+ * error, which then leads the block as a frame of its own.
  */
 function scriptFrames(stack: string | undefined, roots: readonly string[]): string {
   if (!stack) return "";
   const frames: string[] = [];
   let dropped = 0;
-  for (const line of stack.split("\n")) {
+  const lines = stack.split("\n");
+  const place = lines[0]!.trim();
+  if (STACK_PLACE_RE.test(place)) frames.push(`    at ${readableFrame(place, roots)}`);
+  for (const line of lines) {
     const frame = line.trim();
     if (!frame.startsWith("at ") || isHostFrame(frame)) continue;
     if (frames.length >= SCRIPT_REASON_MAX_FRAMES) {
