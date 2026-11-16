@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ARCHIVE_FORMATS, safeExtractArchive } from "../src/index.js";
 
-// A runtime without zstd in zlib, as Node 23.0-23.7 is.
+// A runtime without zstd in zlib, as Node before 22.15 and 23.0-23.7 is.
 vi.mock("node:zlib", async (importOriginal) => {
   const actual = await importOriginal<{ default: typeof import("node:zlib") }>();
   const zlib: Partial<typeof actual.default> = { ...actual.default };

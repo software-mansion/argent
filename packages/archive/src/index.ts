@@ -2,8 +2,8 @@
  * Shared archive helpers for the file boundary: a bundle (an iOS `.app`, an
  * `.apk`/`.vpkg`, a `.trace`) moves between client and tool-server as a tar
  * compressed with zstd or gzip. The system `tar` (present on macOS/Linux and
- * Windows 10+) packs, unpacks and reads gzip; writing either format and reading
- * zstd run in `node:zlib`, since stock `tar` builds can't read zstd.
+ * Windows 10+) packs and unpacks; compression runs in `node:zlib`, since stock
+ * `tar` builds can't read zstd and bsdtar skips gzip's CRC.
  *
  * The archive carries the source's basename as its single top-level member, so
  * extraction recreates `<destDir>/<basename>`. Extraction is tar-slip hardened
@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
 import { open, rm, readdir } from "node:fs/promises";
 import { basename, dirname, join, posix, resolve, sep } from "node:path";
+import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import zlib from "node:zlib";
 
@@ -25,7 +26,8 @@ export type ArchiveFormat = "zstd" | "gzip";
 
 /**
  * Formats this runtime can write and read, preferred first. zstd is missing
- * from Node 23.0-23.7, which `engines` excludes but npm only warns about.
+ * before Node 22.15 and from 23.0-23.7, which `engines` excludes but npm only
+ * warns about.
  */
 export const ARCHIVE_FORMATS: readonly ArchiveFormat[] =
   typeof zlib.createZstdCompress === "function" ? ["zstd", "gzip"] : ["gzip"];
@@ -66,32 +68,65 @@ export function createCompressor(format: ArchiveFormat): zlib.Gzip | zlib.ZstdCo
  * archive's single top-level member, to stdout.
  */
 export function createTarArgs(sourcePath: string): string[] {
-  return ["-cf", "-", "-C", dirname(sourcePath), basename(sourcePath)];
+  return ["-cf", "-", "-C", dirname(sourcePath), "--", basename(sourcePath)];
+}
+
+// Far past any real bundle's listing, far below V8's ~512 MiB string limit.
+const MAX_LISTING_BYTES = 16 << 20;
+// tar prints a line per failed member; the first ones say what went wrong.
+const MAX_STDERR_BYTES = 16 << 10;
+
+/**
+ * Keep the first `limit` bytes of `stream`. `onOverflow` runs once when more
+ * arrive; `text()` then ends in `…`.
+ */
+function collect(stream: Readable, limit: number, onOverflow?: () => void) {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  stream.on("data", (chunk: Buffer) => {
+    if (size < limit) chunks.push(chunk.subarray(0, limit - size));
+    if (size <= limit && size + chunk.length > limit) onOverflow?.();
+    size += chunk.length;
+  });
+  return {
+    overflowed: () => size > limit,
+    text: () => Buffer.concat(chunks).toString("utf8") + (size > limit ? "…" : ""),
+  };
 }
 
 /**
  * Archive `sourcePath` (file or directory) into `archivePath`. Removes the
- * partial archive on failure.
+ * partial archive on failure, including an abort through `signal`.
  */
 export async function createArchiveFile(
   sourcePath: string,
   archivePath: string,
-  format: ArchiveFormat
+  format: ArchiveFormat,
+  signal?: AbortSignal
 ): Promise<void> {
-  try {
-    const child = spawn("tar", createTarArgs(sourcePath), { stdio: ["ignore", "pipe", "pipe"] });
-    let stderr = "";
-    child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
-    const exited = new Promise<number | null>((res, rej) => {
-      child.on("error", rej);
-      child.on("close", res);
-    });
-    const [, code] = await Promise.all([
-      pipeline(child.stdout, createCompressor(format), createWriteStream(archivePath)),
-      exited,
-    ]);
-    if (code !== 0) throw new Error(`tar exited with code ${code}: ${stderr.trim()}`);
-  } catch (err) {
+  const child = spawn("tar", createTarArgs(sourcePath), {
+    stdio: ["ignore", "pipe", "pipe"],
+    signal,
+  });
+  const stderr = collect(child.stderr, MAX_STDERR_BYTES);
+  const exited = new Promise<number | null>((res, rej) => {
+    child.on("error", rej);
+    child.on("close", res);
+  });
+  // Both settle before the rm, so no late write recreates the archive.
+  const [written, closed] = await Promise.allSettled([
+    pipeline(child.stdout, createCompressor(format), createWriteStream(archivePath)),
+    exited,
+  ]);
+  const err =
+    closed.status === "rejected"
+      ? closed.reason
+      : written.status === "rejected"
+        ? written.reason
+        : closed.value !== 0
+          ? new Error(`tar exited with code ${closed.value}: ${stderr.text().trim()}`)
+          : null;
+  if (err) {
     await rm(archivePath, { force: true }).catch(() => {});
     throw err;
   }
@@ -177,36 +212,34 @@ function isClosedPipe(err: NodeJS.ErrnoException): boolean {
 }
 
 /**
- * Run `tar <args>` over `archive`, returning stdout. gzip goes to `tar -z`;
- * zstd is decompressed here and piped in, since stock `tar` can't read it.
+ * Run `tar <args>` over `archive`, decompressed here and piped in, returning
+ * stdout. A listing past {@link MAX_LISTING_BYTES} stops tar and throws.
  */
 async function runTar(archive: Archive, args: string[]): Promise<string> {
-  const gzip = archive.format === "gzip";
-  const child = spawn("tar", [...args, ...(gzip ? ["-zf", archive.path] : ["-f", "-"])]);
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (d: string) => (stdout += d));
-  child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+  const child = spawn("tar", [...args, "-f", "-"]);
+  const stdout = collect(child.stdout, MAX_LISTING_BYTES, () => child.kill());
+  const stderr = collect(child.stderr, MAX_STDERR_BYTES);
   const exited = new Promise<number | null>((res, rej) => {
     child.on("error", rej);
     child.on("close", res);
   });
-  if (gzip) child.stdin.end();
-  const fed = gzip
-    ? null
-    : pipeline(
-        createReadStream(archive.path, { highWaterMark: CHUNK_BYTES }),
-        zlib.createZstdDecompress({ chunkSize: CHUNK_BYTES }),
-        child.stdin
-      ).then(
-        () => null,
-        (err: NodeJS.ErrnoException) => err
-      );
+  const fed = pipeline(
+    createReadStream(archive.path, { highWaterMark: CHUNK_BYTES }),
+    archive.format === "zstd"
+      ? zlib.createZstdDecompress({ chunkSize: CHUNK_BYTES })
+      : zlib.createGunzip({ chunkSize: CHUNK_BYTES }),
+    child.stdin
+  ).then(
+    () => null,
+    (err: NodeJS.ErrnoException) => err
+  );
   const [code, feedError] = await Promise.all([exited, fed]);
+  if (stdout.overflowed())
+    throw new Error(`tar ${args.join(" ")} printed more than ${MAX_LISTING_BYTES >> 20} MiB`);
   if (feedError && !isClosedPipe(feedError)) throw feedError;
   if (code !== 0)
-    throw new Error(`tar ${args.join(" ")} exited with code ${code}: ${stderr.trim()}`);
-  return stdout;
+    throw new Error(`tar ${args.join(" ")} exited with code ${code}: ${stderr.text().trim()}`);
+  return stdout.text();
 }
 
 function normalizeTarMemberPath(memberPath: string): string {

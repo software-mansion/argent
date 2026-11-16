@@ -33,6 +33,41 @@ const gnuTar = ["gtar", "tar"]
   })
   .find(Boolean);
 
+function compress(tar: Buffer, format: ArchiveFormat): Buffer {
+  return format === "zstd" ? zlib.zstdCompressSync(tar) : zlib.gzipSync(tar);
+}
+
+function ustarHeader(name: string, type: string, size: number): Buffer {
+  const h = Buffer.alloc(512);
+  h.write(name, 0);
+  h.write("0000644\0", 100);
+  h.write("0000000\0", 108);
+  h.write("0000000\0", 116);
+  h.write(`${size.toString(8).padStart(11, "0")}\0`, 124);
+  h.write("00000000000\0", 136);
+  h.write(type, 156);
+  h.write("ustar\u000000", 257);
+  h.fill(" ", 148, 156);
+  const sum = h.reduce((a, b) => a + b, 0);
+  h.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148);
+  return h;
+}
+
+/** A tar of empty files whose names (set by pax headers) can pass PATH_MAX. */
+function paxTar(names: string[]): Buffer {
+  const parts: Buffer[] = [];
+  for (const name of names) {
+    const body = ` path=${name}\n`;
+    let len = body.length + 1;
+    while (`${len}`.length + body.length !== len) len = `${len}`.length + body.length;
+    const record = Buffer.from(`${len}${body}`);
+    parts.push(ustarHeader("PaxHeader", "x", record.length), record);
+    parts.push(Buffer.alloc((512 - (record.length % 512)) % 512), ustarHeader("f", "0", 0));
+  }
+  parts.push(Buffer.alloc(1024));
+  return Buffer.concat(parts);
+}
+
 let tmpDir: string;
 
 beforeEach(async () => {
@@ -45,7 +80,7 @@ afterEach(async () => {
 
 describe("createTarArgs", () => {
   it("archives the source's basename as the single top-level member", () => {
-    expect(createTarArgs("/a/b/MyApp.app")).toEqual(["-cf", "-", "-C", "/a/b", "MyApp.app"]);
+    expect(createTarArgs("/a/b/MyApp.app")).toEqual(["-cf", "-", "-C", "/a/b", "--", "MyApp.app"]);
   });
 });
 
@@ -91,6 +126,68 @@ describe.each(ARCHIVE_FORMATS)("createArchiveFile (%s)", (format) => {
     ).rejects.toThrow();
     await expect(fs.stat(tarPath)).rejects.toThrow();
   });
+
+  it("archives a source whose name starts with a dash", async () => {
+    const src = path.join(tmpDir, "-v.apk");
+    await fs.writeFile(src, "apk");
+    const archivePath = path.join(tmpDir, "dash.archive");
+    await createArchiveFile(src, archivePath, format);
+    const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+    expect(await fs.readFile(await safeExtractArchive(archivePath, dest, "-v.apk"), "utf8")).toBe(
+      "apk"
+    );
+  });
+
+  it("removes the archive when aborted before archiving", async () => {
+    const src = path.join(tmpDir, "a.txt");
+    await fs.writeFile(src, "x");
+    const archivePath = path.join(tmpDir, "aborted.archive");
+    await expect(
+      createArchiveFile(src, archivePath, format, AbortSignal.abort())
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(fs.stat(archivePath)).rejects.toThrow();
+  });
+
+  describe("with a stand-in tar", () => {
+    const realPath = process.env.PATH;
+    afterEach(() => {
+      process.env.PATH = realPath;
+    });
+
+    async function tarOnPath(script: string): Promise<string> {
+      const bin = await fs.mkdtemp(path.join(tmpDir, "bin-"));
+      await fs.writeFile(path.join(bin, "tar"), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+      process.env.PATH = `${bin}${path.delimiter}${realPath}`;
+      const src = path.join(tmpDir, "a.txt");
+      await fs.writeFile(src, "x");
+      return src;
+    }
+
+    it("stops tar and removes the archive when aborted while archiving", async () => {
+      const src = await tarOnPath("head -c 4096 /dev/zero\nexec sleep 30");
+      const archivePath = path.join(tmpDir, "aborted.archive");
+      const started = performance.now();
+      await expect(
+        createArchiveFile(src, archivePath, format, AbortSignal.timeout(200))
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(performance.now() - started).toBeLessThan(5_000);
+      await expect(fs.stat(archivePath)).rejects.toThrow();
+    });
+
+    // GNU tar prints a line per unreadable member and goes on.
+    it("keeps a bounded error", async () => {
+      const src = await tarOnPath(
+        'yes "tar: x: Cannot open: Permission denied" | head -c 1000000 >&2\nexit 2'
+      );
+      const err: Error = await createArchiveFile(src, path.join(tmpDir, "l.archive"), format).then(
+        () => new Error("archived"),
+        (e: Error) => e
+      );
+      expect(err.message).toMatch(/^tar exited with code 2: tar: x: Cannot open/);
+      expect(err.message.length).toBeLessThan(20_000);
+      expect(err.message.endsWith("…")).toBe(true);
+    });
+  });
 });
 
 describe("safeExtractArchive input", () => {
@@ -104,6 +201,32 @@ describe("safeExtractArchive input", () => {
     await fs.mkdir(dest);
     const member = await safeExtractArchive(tarPath, dest, "Legacy.app");
     expect(await fs.readFile(path.join(member, "Info.plist"), "utf8")).toBe("<plist/>");
+  });
+
+  it("rejects a listing past 16 MiB, stopping before extraction", async () => {
+    const names = Array.from({ length: 2200 }, (_, i) => `Big.app/${"a".repeat(8000)}${i}`);
+    const archivePath = path.join(tmpDir, "long.archive");
+    await fs.writeFile(archivePath, compress(paxTar(names), "zstd"));
+    const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+    await expect(safeExtractArchive(archivePath, dest, "Big.app")).rejects.toThrow(
+      "Could not read archive: tar -t printed more than 16 MiB"
+    );
+    expect(await fs.readdir(dest)).toEqual([]);
+  });
+
+  it("keeps a bounded error when every member fails to extract", async () => {
+    // A name component past NAME_MAX (255) can't be created.
+    const names = Array.from({ length: 1000 }, (_, i) => `Bundle.app/${"n".repeat(300)}${i}`);
+    const archivePath = path.join(tmpDir, "unextractable.archive");
+    await fs.writeFile(archivePath, compress(paxTar(names), "zstd"));
+    const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+    const err: Error = await safeExtractArchive(archivePath, dest, "Bundle.app").then(
+      () => new Error("extracted"),
+      (e: Error) => e
+    );
+    expect(err.message).toMatch(/^tar -x -C .* exited with code [1-9]/);
+    expect(err.message.length).toBeLessThan(20_000);
+    expect(err.message.endsWith("…")).toBe(true);
   });
 
   it("rejects an uncompressed tar without extracting it", async () => {
@@ -135,21 +258,53 @@ describe("safeExtractArchive input", () => {
   });
 });
 
-describe("createArchiveFile (zstd)", () => {
-  it("writes a checksum, so extraction reports corruption", async () => {
+describe.each(ARCHIVE_FORMATS)("safeExtractArchive integrity (%s)", (format) => {
+  it("rejects a flipped payload byte by the format's checksum", async () => {
     const dir = path.join(tmpDir, "C.app");
     await fs.mkdir(dir);
     // Incompressible, so the payload is stored verbatim and only a checksum
     // notices a flipped byte.
     await fs.writeFile(path.join(dir, "random.bin"), randomBytes(4 * 1024 * 1024));
     const archivePath = path.join(tmpDir, "c.archive");
-    await createArchiveFile(dir, archivePath, "zstd");
+    await createArchiveFile(dir, archivePath, format);
     const bytes = await fs.readFile(archivePath);
     bytes[bytes.length >> 1] ^= 1;
     await fs.writeFile(archivePath, bytes);
     await expect(
       safeExtractArchive(archivePath, await fs.mkdtemp(path.join(tmpDir, "dest-")), "C.app")
-    ).rejects.toThrow(/checksum|corruption/);
+    ).rejects.toThrow(/doesn't match checksum|incorrect data check/);
+  });
+});
+
+// bsdtar's `tar -czf -`, which older tool-servers stream, pads the gzip data
+// with zeros to whole 10240-byte records.
+describe.each([
+  ["the system tar", undefined],
+  ["GNU tar", gnuTar],
+])("safeExtractArchive of zero-padded gzip with %s", (_, tarBin) => {
+  const realPath = process.env.PATH;
+  afterEach(() => {
+    process.env.PATH = realPath;
+  });
+
+  it.skipIf(tarBin === undefined && _ === "GNU tar")("extracts it", async () => {
+    await fs.mkdir(path.join(tmpDir, "P.app"));
+    await fs.writeFile(path.join(tmpDir, "P.app", "f"), "padded");
+    const tar = await execFileAsync("tar", ["-cf", "-", "-C", tmpDir, "P.app"], {
+      encoding: "buffer",
+    });
+    const archivePath = path.join(tmpDir, "padded.tar.gz");
+    await fs.writeFile(archivePath, Buffer.concat([zlib.gzipSync(tar.stdout), Buffer.alloc(9000)]));
+    if (tarBin) {
+      const bin = await fs.mkdtemp(path.join(tmpDir, "bin-"));
+      await fs.writeFile(path.join(bin, "tar"), `#!/bin/sh\nexec "${tarBin}" "$@"\n`, {
+        mode: 0o755,
+      });
+      process.env.PATH = `${bin}${path.delimiter}${realPath}`;
+    }
+    const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+    const member = await safeExtractArchive(archivePath, dest, "P.app");
+    expect(await fs.readFile(path.join(member, "f"), "utf8")).toBe("padded");
   });
 });
 
@@ -255,6 +410,14 @@ describe("safeExtractArchive zstd framing", () => {
     const tar = await plainTar();
     const bytes = Buffer.concat([zlib.zstdCompressSync(tar), zlib.zstdCompressSync(tar)]);
     await expect(extract(bytes)).rejects.toThrow("Could not read archive: multi-frame zstd");
+  });
+
+  it("rejects bytes after the frame that aren't a frame", async () => {
+    const bytes = Buffer.concat([
+      zlib.zstdCompressSync(await plainTar()),
+      Buffer.from("JUNKJUNK!"),
+    ]);
+    await expect(extract(bytes)).rejects.toThrow("Could not read archive: bad zstd frame");
   });
 
   it("rejects a data frame after an empty one", async () => {
@@ -378,28 +541,35 @@ describe.each(ARCHIVE_FORMATS)(
 );
 
 describe.each(ARCHIVE_FORMATS)("safeExtractArchive hardening (%s)", (format) => {
+  /** `tar -c <args>`, compressed in `format`, at `archivePath`. */
+  async function writeTar(archivePath: string, args: string[]): Promise<void> {
+    const { stdout } = await execFileAsync("tar", ["-cf", "-", ...args], { encoding: "buffer" });
+    await fs.writeFile(archivePath, compress(stdout, format));
+  }
+
   it("rejects an archive with an escaping (absolute) member path", async () => {
     const abs = path.join(tmpDir, "innocent.txt");
     await fs.writeFile(abs, "x");
-    const tarPath = path.join(tmpDir, "slip.tar.gz");
+    const tarPath = path.join(tmpDir, "slip.archive");
     // -P keeps the absolute member name (portable across GNU and bsd tar); an
     // absolute path escapes the extract dir and must be rejected before extraction.
-    await execFileAsync("tar", ["-c", "-z", "-P", "-f", tarPath, abs]);
+    await writeTar(tarPath, ["-P", abs]);
 
     const dest = path.join(tmpDir, "dest");
     await fs.mkdir(dest);
-    await expect(safeExtractArchive(tarPath, dest, "innocent.txt")).rejects.toBeInstanceOf(
-      ArchiveError
+    await expect(safeExtractArchive(tarPath, dest, "innocent.txt")).rejects.toThrow(
+      `Archive contains an unsafe path "${abs}"`
     );
+    expect(await fs.readdir(dest)).toEqual([]);
   });
 
   it("rejects an empty archive", async () => {
-    const tarPath = path.join(tmpDir, "empty.tar.gz");
-    await execFileAsync("tar", ["-czf", tarPath, "-T", "/dev/null"]);
+    const tarPath = path.join(tmpDir, "empty.archive");
+    await writeTar(tarPath, ["-T", "/dev/null"]);
     const dest = path.join(tmpDir, "dest");
     await fs.mkdir(dest);
-    await expect(safeExtractArchive(tarPath, dest, "whatever")).rejects.toBeInstanceOf(
-      ArchiveError
+    await expect(safeExtractArchive(tarPath, dest, "whatever")).rejects.toThrow(
+      "Archive is empty."
     );
   });
 
@@ -465,8 +635,8 @@ describe.each(ARCHIVE_FORMATS)("safeExtractArchive hardening (%s)", (format) => 
     // Two top-level entries, neither matching the expected name → ambiguous.
     await fs.mkdir(path.join(tmpDir, "one"));
     await fs.mkdir(path.join(tmpDir, "two"));
-    const tarPath = path.join(tmpDir, "multi.tar.gz");
-    await execFileAsync("tar", ["-czf", tarPath, "-C", tmpDir, "one", "two"]);
+    const tarPath = path.join(tmpDir, "multi.archive");
+    await writeTar(tarPath, ["-C", tmpDir, "one", "two"]);
 
     const dest = path.join(tmpDir, "dest-multi");
     await fs.mkdir(dest);
