@@ -148,7 +148,7 @@ describe("http dependency gate", () => {
     expect(JSON.stringify(recordFailure.mock.calls)).not.toContain("secret_user_key");
   });
 
-  it("records every issue code a multi-code rejection raises", async () => {
+  it("passes a multi-code result to recordFailure untruncated", async () => {
     stubProbe([]);
     const recordFailure = vi.fn();
     const registry = new Registry();

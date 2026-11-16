@@ -191,8 +191,9 @@ interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
   invalid_params?: string[];
   /**
    * The rejection's zod issue codes, deduped across the call, with "missing"
-   * for a parameter the call left out. Tells e.g. `too_big` from
-   * `invalid_type`, which `invalid_params` cannot.
+   * for a required field the call left out, at any depth (a custom rule on it
+   * keeps "custom"). Tells e.g. `too_big` from `invalid_type`, which
+   * `invalid_params` cannot.
    */
   invalid_param_issues?: InvalidParamIssue[];
 }

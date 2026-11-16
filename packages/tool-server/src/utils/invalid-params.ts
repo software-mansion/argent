@@ -28,9 +28,13 @@ function collectIssueCodes(issues: ZodError["issues"], into: Set<string>): void 
     into.add(issue.code);
     if (issue.code !== "invalid_union") continue;
     // Skip branches that rejected the value's type outright (a string against
-    // z.array()), or an unknown enum name would also read as invalid_type.
+    // z.array()), or an unknown enum name would also read as invalid_type. A
+    // non-integer number is not one: zod reports it as invalid_type "int".
     const typed = issue.errors.filter(
-      (branch) => !branch.some((i) => i.code === "invalid_type" && i.path.length === 0)
+      (branch) =>
+        !branch.some(
+          (i) => i.code === "invalid_type" && i.expected !== "int" && i.path.length === 0
+        )
     );
     (typed.length ? typed : issue.errors).forEach((branch) => collectIssueCodes(branch, into));
   }
@@ -40,7 +44,7 @@ function collectIssueCodes(issues: ZodError["issues"], into: Set<string>): void 
  * The deduped issue codes, in INVALID_PARAM_ISSUES order so one set always
  * serializes the same. A field `params` left out reads "missing", not zod's
  * code for it (see isOmittedParamIssue). A union adds the codes of its branches
- * with no root invalid_type, or of every branch when all have one. Codes
+ * that did not reject the value's type, or of every branch when all did. Codes
  * outside INVALID_PARAM_ISSUES are dropped: the telemetry allowlist would void
  * the whole array for one.
  */

@@ -163,6 +163,19 @@ describe("deriveInvalidParamIssues", () => {
     ]);
   });
 
+  it("keeps a union branch that rejected a non-integer number", () => {
+    // view-network-logs' pageIndex schema.
+    const schema = z.object({
+      pageIndex: z.union([z.coerce.number().int().nonnegative(), z.literal("latest")]),
+    });
+    expect(codesFor(schema, { pageIndex: 1.5 })).toEqual([
+      "invalid_type",
+      "invalid_union",
+      "invalid_value",
+    ]);
+    expect(codesFor(schema, { pageIndex: "abc" })).toEqual(["invalid_union", "invalid_value"]);
+  });
+
   it("reports invalid_type when every union branch rejected the value's type", () => {
     const schema = z.object({ tag: z.union([z.string(), z.array(z.string())]) });
     expect(codesFor(schema, { tag: 7 })).toEqual(["invalid_type", "invalid_union"]);

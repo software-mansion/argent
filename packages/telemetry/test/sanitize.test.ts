@@ -686,7 +686,7 @@ describe("sanitize", () => {
       expect(out.invalid_param_issues).toEqual(all);
     });
 
-    it("drops the whole property when a value is not a zod issue code", () => {
+    it("drops the whole property when a value is outside INVALID_PARAM_ISSUES", () => {
       const out = sanitize("tool:fail", {
         ...base,
         // Identifier-shaped, so only the closed vocabulary rejects it.

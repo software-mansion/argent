@@ -222,6 +222,26 @@ describe("a call that names its test by the former param name", () => {
     );
   });
 
+  it("records a bad value sent under the former name as its own code, not missing", async () => {
+    const recordFailure = vi.fn();
+    const { app } = createHttpApp(e2eRegistry(), { recordFailure });
+
+    const res = await request(app)
+      .post("/tools/e2e-execute")
+      .send({ flow_path: 123, project_root: root });
+
+    expect(res.status).toBe(400);
+    expect(recordFailure).toHaveBeenCalledWith(
+      "e2e-execute",
+      expect.objectContaining({
+        invalid_params: ["e2e_test_path"],
+        invalid_param_issues: ["invalid_type"],
+      }),
+      expect.objectContaining({ failure_stage: "http_zod_validation" }),
+      expect.any(Number)
+    );
+  });
+
   it("is refused by invokeTool when it sets both names", async () => {
     const call = e2eRegistry().invokeTool("e2e-execute", {
       name: "demo",
