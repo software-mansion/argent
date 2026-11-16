@@ -1364,6 +1364,37 @@ describe("iOS native network records: request body still being sent", () => {
     expect(app.request).toHaveBeenCalledTimes(2);
   });
 
+  it("asks nothing again when the replaced read brings the body while the read asked again waits its turn", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(during.value).toEqual(refused(STILL_SENDING));
+    agent.responseReceived("upload", "https://api.example.com/upload", { status: 413 });
+    agent.loadingFinished("upload", 2);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    // Another body read holds the connection, so the read asked again waits.
+    agent.complete("other", "https://e.com/other");
+    const other = store.responseBody(idOf(store, "other"));
+    await settle();
+    const again = track(store.requestPostData(id));
+    await settle();
+    expect(app.sent.map((read) => read.method)).toEqual([
+      "Network.getRequestPostData",
+      "Network.getResponseBody",
+    ]);
+    app.sent[0]!.reply({ postData: "late", base64Encoded: false });
+    await settle();
+    app.sent[1]!.reply({ body: "other", base64Encoded: false, wasTruncated: false });
+    await other;
+    await settle();
+
+    expect(again.value).toEqual(body("late"));
+    expect(await store.requestPostData(id)).toEqual(body("late"));
+    expect(app.request).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the body of a read asked again when the read it replaced fails later, as at a relaunch", async () => {
     const { app, store, agent, id } = uploading();
     const during = track(store.requestPostData(id));

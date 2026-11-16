@@ -334,6 +334,11 @@ export function createIosNetworkRecords(
     });
     const askedAt = performance.now();
     void withKeyedLock(bodyReads, String(record.connection), () => {
+      // The replaced read brought the body while this one waited its turn.
+      if (read.settled) {
+        markSent();
+        return answer;
+      }
       if (kind === "response" && (stalls.get(record.connection) ?? -Infinity) > askedAt) {
         adoptAnswer(unavailable(NO_EARLIER_ANSWER));
         markSent();
