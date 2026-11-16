@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeProfilerSessionApi } from "../../src/blueprints/native-profiler-session";
 import { recorderNsIn } from "../../src/utils/ios-profiler/recorder-hangs";
-import { removeSuspendedTime } from "../../src/utils/ios-profiler/app-suspensions";
+import { hangsToReport } from "../../src/utils/ios-profiler/app-suspensions";
 import { runIosProfilerPipeline } from "../../src/utils/ios-profiler/pipeline/index";
 import { correlateHangsWithCpu } from "../../src/utils/ios-profiler/pipeline/01-correlate";
 import { analyzeNativeProfilerIos } from "../../src/tools/profiler/native-profiler/platforms/ios";
@@ -59,13 +59,13 @@ function samples(
   }));
 }
 
-/** removeSuspendedTime with the recorder's time of each hang, as the pipeline calls it. */
+/** hangsToReport with the recorder's time of each hang, as the pipeline calls it. */
 function withoutRecorder(
   hangs: RawHang[],
   cpu: CpuSample[],
   suspensions: { startNs: number; endNs: number }[] = []
 ) {
-  return removeSuspendedTime(hangs, suspensions, recorderNsIn(hangs, cpu));
+  return hangsToReport(hangs, suspensions, recorderNsIn(hangs, cpu));
 }
 
 describe("taking the recorder's time out of the hangs", () => {
@@ -97,23 +97,18 @@ describe("taking the recorder's time out of the hangs", () => {
     expect(out.recorderSummary).toEqual({ removedHangs: 0, adjustedHangs: 0, recorderMs: 0 });
   });
 
-  it("takes the recorder's time out after the app's suspended time", () => {
+  it("takes only the recorder's time out of a hang that a suspension overlapped", () => {
     const cpu = samples(1_000, 200, RECORDER);
     const suspended = (ms: number) => [{ startNs: (2_000 - ms) * MS, endNs: 2_000 * MS }];
-    // 1000 ms: 500 suspended + 200 recorder leaves 300 ms.
-    const kept = withoutRecorder([rawHang(1_000, 1_000)], cpu, suspended(500));
-    expect(kept.hangs).toHaveLength(1);
-    expect([kept.suspendedNs, kept.recorderNs]).toEqual([[500 * MS], [200 * MS]]);
-    // 600 suspended + 200 recorder leaves 200 ms: the recorder's part leaves the hang out.
-    const left = withoutRecorder([rawHang(1_000, 1_000)], cpu, suspended(600));
-    expect(left.hangs).toHaveLength(0);
-    expect(left.summary).toMatchObject({ removedHangs: 0, adjustedHangs: 1 });
-    expect(left.recorderSummary).toEqual({ removedHangs: 1, adjustedHangs: 0, recorderMs: 200 });
-    // 800 suspended leaves 200 ms: the suspensions leave the hang out, and the recorder's
-    // time in it counts nowhere.
-    const gone = withoutRecorder([rawHang(1_000, 1_000)], cpu, suspended(800));
-    expect(gone.summary).toMatchObject({ removedHangs: 1, adjustedHangs: 0 });
-    expect(gone.recorderSummary).toEqual({ removedHangs: 0, adjustedHangs: 0, recorderMs: 0 });
+    // 1000 ms with 600 or 800 suspended and 200 of the recorder: 800 ms left without the
+    // recorder. A suspension leaves out no hang.
+    for (const ms of [600, 800]) {
+      const out = withoutRecorder([rawHang(1_000, 1_000)], cpu, suspended(ms));
+      expect(out.hangs).toHaveLength(1);
+      expect([out.suspendedNs, out.recorderNs]).toEqual([[ms * MS], [200 * MS]]);
+      expect(out.summary).toMatchObject({ overlappedHangs: 1 });
+      expect(out.recorderSummary).toEqual({ removedHangs: 0, adjustedHangs: 1, recorderMs: 200 });
+    }
   });
 
   it("changes nothing without the recorder", () => {

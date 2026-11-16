@@ -164,8 +164,8 @@ async function startMacosRecording(
 
   // Before xctrace attaches, which suspends the app for a moment too. Instruments
   // suspends the whole app at each leak check; while argent watches, a call
-  // waits for the app instead of timing out, and analyze takes the suspensions
-  // out of the hangs.
+  // waits for the app instead of timing out, and analyze gives each hang its
+  // suspended part.
   const suspensionWatch = await macosApp.watchSuspensions(pid);
   let recording = false;
   try {

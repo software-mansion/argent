@@ -565,7 +565,7 @@ async function startIosRecording(
   }
 
   // The leak check of the Argent template suspends the whole app, as on a Mac
-  // app, and analyze takes the suspensions out of the hangs. The all-processes
+  // app, and analyze gives each hang its suspended part. The all-processes
   // fallback records no leak check. A pid known now is watched from before
   // xctrace attaches. The pid of an app that xctrace launches, or attaches to by
   // name, is known only after the start.
@@ -1000,27 +1000,31 @@ function hangChanges(
 }
 
 /**
- * Says what the pipeline took out of the hangs when argent watched the app's
- * suspensions (a Mac app or an iOS simulator app), in place of LEAK_CHECK_HANG_NOTE. Each leak check suspended the
- * whole app, so a hang that began before or during one included it. Null when
- * no hang changed.
+ * Says how the app's suspensions bear on the hangs when argent watched them (a Mac app
+ * or an iOS simulator app), in place of LEAK_CHECK_HANG_NOTE. Each leak check suspended
+ * the whole app, so a hang that a check overlapped holds its pause, and the app's own
+ * hang is between the recorded length less the pause and the recorded length
+ * (app-suspensions.ts). Null when no hang overlapped a suspension.
  */
 function suspensionNote(adjustment: SuspensionAdjustment, leaksRecorded: boolean): string | null {
-  const { pauses, pausedMs, removedHangs, adjustedHangs } = adjustment;
-  if (removedHangs === 0 && adjustedHangs === 0) return null;
+  const { pauses, pausedMs, overlappedHangs } = adjustment;
+  if (overlappedHangs === 0) return null;
   const seconds = `${(pausedMs / 1000).toFixed(1)} s`;
   const times = pauses === 1 ? `once (${seconds})` : `${pauses} times (${seconds} in all)`;
-  const thesePauses = pauses === 1 ? "this pause" : "these pauses";
-  const changes = hangChanges(
-    removedHangs,
-    `that ${removedHangs === 1 ? "was" : "were"} only ${thesePauses}`,
-    adjustedHangs,
-    pauses === 1 ? "the pause" : "the pauses"
-  );
+  const overlap =
+    `${pauses === 1 ? "This pause overlaps" : "These pauses overlap"} ${overlappedHangs} ` +
+    `${overlappedHangs === 1 ? "hang" : "hangs"}. Such a hang keeps the length that ` +
+    `Instruments recorded, and the report gives the part of it when the app was suspended. ` +
+    `A pause makes a hang of fixed work longer. It does not make a hang longer when the main ` +
+    `thread waits for something that goes on during the pause, such as a sleep, a deadline, ` +
+    `I/O or another process. So the app's own hang is between the recorded length less the ` +
+    `suspended part and the recorded length.`;
   return leaksRecorded
-    ? `> ℹ️ **Leak-check pauses:** Instruments held the app suspended ${times} to check it for ` +
-        `leaks. argent ${changes}.`
-    : `> ℹ️ **App pauses:** macOS held the app suspended ${times}. argent ${changes}.`;
+    ? `> ⚠️ **Leak-check pauses:** Instruments held the app suspended ${times} to check it for ` +
+        `leaks. ${overlap} To measure such a hang, record the same actions again with ` +
+        `\`template_path: "Time Profiler"\`, which does not check for leaks.`
+    : `> ⚠️ **App pauses:** macOS held the app suspended ${times}. ${overlap} To measure such ` +
+        `a hang, record the same actions again while nothing suspends the app, such as a debugger.`;
 }
 
 /**
@@ -1152,7 +1156,7 @@ export async function analyzeNativeProfilerIos(
     checkExportFileMissing(api.exportedFiles.leaks ?? null),
   ]);
 
-  // Null when argent did not watch the app: the hangs stay as recorded.
+  // Null when argent did not watch the app: no hang gets a suspended part.
   const appSuspensions = api.appSuspensions;
   const {
     bottlenecks,

@@ -10,8 +10,8 @@ import type { AppSuspensionWindow } from "./ios-profiler/app-suspensions";
  * each, an iOS simulator app every 12 to 15 s. A debugger or a stop signal
  * suspends it too. Nothing in the app runs then, argent's library included. A
  * call to a Mac app waits until the app runs again, and a call to an iOS app
- * does not wait. On both, the native profiler takes the suspended time out of
- * the hangs.
+ * does not wait. On both, the native profiler gives each hang the part of it
+ * when the app was suspended.
  *
  * `argent-macos-helper watch-suspension --pid <pid>` reads the app's suspend
  * count from outside every 10 ms and prints `{"suspended":bool,"at":ms}` at

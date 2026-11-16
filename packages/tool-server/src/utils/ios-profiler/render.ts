@@ -100,18 +100,23 @@ function systemFrameworks(b: CpuHotspot): string {
 }
 
 /**
- * Follows a hang's duration when macOS held the app suspended during the hang, or
- * Instruments' recorder ran on the main thread, time the duration leaves out. Empty otherwise.
+ * Follows a hang's duration: when macOS held the app suspended during the hang, the
+ * suspended part of the duration and the range of the app's own hang (app-suspensions.ts),
+ * and the time of Instruments' recorder on the main thread, which the duration leaves out.
+ * Empty otherwise.
  */
 export function hangSuspendedNote(hang: UiHang): string {
-  const parts: string[] = [];
+  let note = "";
   if (hang.suspendedMs !== undefined && hang.suspendedMs > 0) {
-    parts.push(`${hang.suspendedMs}ms when the app was suspended`);
+    const ownMs = Math.max(0, hang.durationMs - hang.suspendedMs);
+    note +=
+      `, ${hang.suspendedMs}ms of it while the app was suspended ` +
+      `(the app's own hang: ${ownMs} to ${hang.durationMs}ms)`;
   }
   if (hang.recorderMs !== undefined && hang.recorderMs > 0) {
-    parts.push(`${hang.recorderMs}ms of Instruments' recorder`);
+    note += `, not counting ${hang.recorderMs}ms of Instruments' recorder`;
   }
-  return parts.length > 0 ? `, not counting ${parts.join(" or ")}` : "";
+  return note;
 }
 
 /**

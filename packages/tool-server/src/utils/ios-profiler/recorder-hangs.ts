@@ -11,7 +11,7 @@ import { normalizeThreadName } from "../profiler-shared/thread";
 
 /** What taking the recorder's main-thread time out of the hangs changed. */
 export interface RecorderAdjustment {
-  /** Hangs left out: under 250 ms of each was not the recorder (nor a suspension). */
+  /** Hangs left out: under 250 ms of each was not the recorder. */
   removedHangs: number;
   /** Hangs kept with the recorder's time taken out of their length. */
   adjustedHangs: number;
@@ -21,8 +21,7 @@ export interface RecorderAdjustment {
 
 /**
  * The recorder's main-thread CPU time in each hang's span, from the CPU samples.
- * removeSuspendedTime (app-suspensions.ts) takes it out of the hangs, after the
- * app's suspensions.
+ * hangsToReport (app-suspensions.ts) takes it out of the hangs.
  */
 export function recorderNsIn(hangs: readonly RawHang[], samples: readonly CpuSample[]): number[] {
   const recorder = samples

@@ -564,7 +564,7 @@ describe("system code under the app's entry point", () => {
       expect(weighted.out.uiHangs[0]!.suspectsFromOtherThreads).toBeUndefined();
     });
 
-    it("take the hang's length without the time when the app was suspended", async () => {
+    it("are measured against the hang's length without the time when the app was suspended", async () => {
       // A 2000 ms hang with 1700 ms suspended: 40 ms of the main thread is 13% of its 300 ms.
       const long =
         `<trace-query-result><node><row><start-time>400000000</start-time><duration>2000000000</duration>` +
@@ -577,7 +577,7 @@ describe("system code under the app's entry point", () => {
         { cpu, hangs, leaks: null },
         { appSuspensions: [{ startNs: 700_000_000, endNs: 2_400_000_000 }] }
       );
-      expect(out.uiHangs[0]).toMatchObject({ durationMs: 300, suspendedMs: 1700 });
+      expect(out.uiHangs[0]).toMatchObject({ durationMs: 2000, suspendedMs: 1700 });
       expect(out.uiHangs[0]!.suspectedFunctions).toEqual(["static ExampleApp.$main()"]);
       expect(out.uiHangs[0]!.suspectsFromOtherThreads).toBeUndefined();
     });
@@ -761,12 +761,12 @@ describe("system code under the app's entry point", () => {
             "### Suspected Functions (by sample frequency)\n\n1. `profFixtureSpinMain()`\n"
         );
 
-        // With the pause known, the hang is the spin's own 1000 ms.
+        // With the pause known, the main thread ran for all of the 1000 ms when the app ran.
         const known = await analyze(spin, severe(12_000), {
           leaksXml,
           appSuspensions: [{ startNs: 1_400_000_000, endNs: 12_400_000_000 }],
         });
-        expect(known.out.uiHangs[0]).toMatchObject({ durationMs: 1000, suspendedMs: 11_000 });
+        expect(known.out.uiHangs[0]).toMatchObject({ durationMs: 12_000, suspendedMs: 11_000 });
         expect(known.out.uiHangs[0]!.hangThreadRanMs).toBeUndefined();
         expect(adviceAt400(known.report)).toContain("Likely caused by: `profFixtureSpinMain()`.");
       });
@@ -787,7 +787,7 @@ describe("system code under the app's entry point", () => {
           appSuspensions: [{ startNs: 800_000_000, endNs: 5_400_000_000 }],
         });
 
-        expect(out.uiHangs[0]).toMatchObject({ durationMs: 400, suspendedMs: 4600 });
+        expect(out.uiHangs[0]).toMatchObject({ durationMs: 5000, suspendedMs: 4600 });
         expect(out.uiHangs[0]!.suspectedFunctions).toEqual(["static ExampleApp.$main()"]);
         expect(out.uiHangs[0]!.hangThreadRanMs).toBeUndefined();
         expect(out.uiHangs[0]!.mayHoldLeakCheck).toBeUndefined();

@@ -26,9 +26,9 @@ interface CorrelationResult {
 
 /**
  * `excludedNs` is the time of each hang that is not the hang's own: when the app was
- * suspended, and Instruments' recorder (removeSuspendedTime). The report leaves it out of
- * the hang's length. `leakPausesUnknown`: the trace checked the app for leaks, and when
- * the app was suspended is not known, so a hang's length can hold a check's pause.
+ * suspended, and Instruments' recorder (hangsToReport). The report leaves the recorder's
+ * time out of the hang's length. `leakPausesUnknown`: the trace checked the app for leaks,
+ * and when the app was suspended is not known, so a hang's length can hold a check's pause.
  */
 export function correlateHangsWithCpu(
   hangs: RawHang[],
