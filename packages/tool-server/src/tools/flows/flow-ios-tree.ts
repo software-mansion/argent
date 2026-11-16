@@ -63,6 +63,8 @@ interface RawViewNode {
   className?: string;
   identifier?: string;
   label?: string;
+  /** The view's `accessibilityValue`: for a text input, the text it holds. */
+  value?: string;
   frame?: RawRect;
   windowFrame?: RawRect;
   /** The view in the screen's fixed (portrait-native) point space. */
@@ -112,6 +114,7 @@ function asViewNode(v: unknown): RawViewNode | null {
     className: nonEmptyString(r.className),
     identifier: nonEmptyString(r.identifier),
     label: nonEmptyString(r.label),
+    value: nonEmptyString(r.value),
     frame: asRect(r.frame),
     windowFrame: asRect(r.windowFrame),
     screenFrame: asRect(r.screenFrame),
@@ -122,13 +125,15 @@ function asViewNode(v: unknown): RawViewNode | null {
   };
 }
 
+const TEXT_INPUT_ROLE = "AXTextField";
+
 // Role guessed from the UIView class name — the full hierarchy carries no
 // accessibility traits. Selectors lean on text/identifier, so a coarse mapping
 // is enough.
 function roleFromClassName(cn: string | undefined): string {
   if (!cn) return "AXGroup";
   if (/Button/i.test(cn)) return "AXButton";
-  if (/(TextField|TextView|SearchField)/i.test(cn)) return "AXTextField";
+  if (/(TextField|TextView|SearchField)/i.test(cn)) return TEXT_INPUT_ROLE;
   if (/(Label|Text)/i.test(cn)) return "AXStaticText";
   if (/Image/i.test(cn)) return "AXImage";
   if (/(Slider|Stepper|Switch|ProgressView)/i.test(cn)) return "AXAdjustable";
@@ -159,6 +164,12 @@ function normalizeFrame(rect: RawRect, screenW: number, screenH: number): Descri
  * `label`, or a specific semantic role — or is the first responder, which the
  * type directive's focus wait reads — and has an on-screen frame. An identified
  * node shields its text, scoping hoisting to the nearest identified ancestor.
+ *
+ * Only a text input carries its `value`: the text it holds, which no label in
+ * the hierarchy repeats, so without it a filled field reads as empty. An empty
+ * field reports its placeholder there, and a secure field reports nothing.
+ * Every other view's value stays out: a switch's "1" would hoist into the text
+ * of the row around it and break an `equals` check on what that row shows.
  */
 function projectIosNode(
   node: RawViewNode,
@@ -167,6 +178,7 @@ function projectIosNode(
 ): FlatNode<RawViewNode> {
   const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
   const role = roleFromClassName(node.className);
+  const value = role === TEXT_INPUT_ROLE && node.value !== node.label ? node.value : undefined;
 
   // Scroll-clip inputs (see `flattenHoisting`). Screen (or window) space only:
   // `frame` is parent-local, so falling back to it (as the leaf frame does)
@@ -186,6 +198,7 @@ function projectIosNode(
         frame,
         children: [],
         label: node.label,
+        value,
         identifier: node.identifier,
         focused: node.firstResponder || undefined,
       };
@@ -198,8 +211,10 @@ function projectIosNode(
     // Text hoists only from on-screen nodes (frame is null when the view is
     // scrolled off or zero-area) — otherwise a text assert against an ancestor
     // would pass on content the screen doesn't show. A label makes a node
-    // leaf-eligible, so `frame` was computed for any node with text.
-    ownText: frame ? (node.label ?? "") : "",
+    // leaf-eligible, and so does the text input role a value needs, so `frame`
+    // was computed for any node with text. Mirrors what `nodeText` reads off
+    // the leaf: the label plus a distinct value.
+    ownText: frame ? [node.label, value].filter(Boolean).join(" ") : "",
     leaf,
     shield: Boolean(node.identifier),
     rect,
@@ -301,6 +316,9 @@ const FULL_HIERARCHY_FIELDS = [
   "className",
   "identifier",
   "label",
+  // A text input's text; an injected framework that omits it leaves a filled
+  // field reading as empty.
+  "value",
   "frame",
   "windowFrame",
   "screenFrame",

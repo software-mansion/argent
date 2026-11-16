@@ -578,4 +578,164 @@ describe("describe full-hierarchy adapter", () => {
     expect(findAll(tree, { identifier: "inner" })[0]!.subtreeText).toBe("42");
     expect(findAll(tree, { identifier: "outer" })[0]!.subtreeText).toBeUndefined();
   });
+
+  // A UITextField's text is in no label of the hierarchy: the views under the
+  // field draw it. The framework serves it as the field's `value`.
+  function withFields(...fields: unknown[]) {
+    return {
+      windows: [{ className: "UIWindow", frame: SCREEN, windowFrame: SCREEN, children: fields }],
+    };
+  }
+
+  it("reads the text a text field holds", () => {
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "RCTUITextField",
+        identifier: "search-input",
+        value: "linda",
+        windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+        children: [{ className: "_UITextLayoutCanvasView", windowFrame: SCREEN, children: [] }],
+      })
+    );
+    const field = findAll(tree, { identifier: "search-input" });
+
+    expect(field[0]!.value).toBe("linda");
+    expect(evaluateCondition("text", "linda", field, "equals")).toBe(true);
+    expect(evaluateCondition("text", "lin", field, "contains")).toBe(true);
+    expect(evaluateCondition("text", "^$", field, "matches")).toBe(false);
+    // A text selector finds the field by what it holds, as on Android.
+    expect(findAll(tree, { text: "linda" })).toHaveLength(1);
+  });
+
+  it("hoists a text field's text into the identified view around it", () => {
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "RCTView",
+        identifier: "search-box",
+        windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+        children: [
+          {
+            className: "UITextView",
+            value: "two\nlines",
+            windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+            children: [],
+          },
+        ],
+      })
+    );
+    const box = findAll(tree, { identifier: "search-box" });
+
+    expect(box[0]!.subtreeText).toBe("two\nlines");
+    expect(evaluateCondition("text", "two\nlines", box, "equals")).toBe(true);
+  });
+
+  it("reads an empty text field's placeholder once", () => {
+    // UIKit reports the placeholder as an empty field's value, and the label
+    // view that draws it carries the same text.
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "UITextField",
+        identifier: "search-input",
+        value: "Search",
+        windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+        children: [
+          {
+            className: "UITextFieldLabel",
+            label: "Search",
+            windowFrame: { x: 27, y: 111, width: 286, height: 22 },
+            children: [],
+          },
+        ],
+      })
+    );
+    const field = findAll(tree, { identifier: "search-input" });
+
+    expect(assertText(field[0]!)).toBe("Search");
+    expect(evaluateCondition("text", "Search", field, "equals")).toBe(true);
+  });
+
+  it("drops a text field's value that repeats its label", () => {
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "UITextField",
+        identifier: "name",
+        label: "Name",
+        value: "Name",
+        windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+        children: [],
+      })
+    );
+    const field = findAll(tree, { identifier: "name" });
+
+    expect(field[0]!.value).toBeUndefined();
+    expect(evaluateCondition("text", "Name", field, "equals")).toBe(true);
+  });
+
+  it("reads a text field that serves no value as holding no text", () => {
+    // A secure field: the framework never serves what it holds.
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "UITextField",
+        identifier: "password",
+        windowFrame: { x: 20, y: 100, width: 300, height: 44 },
+        children: [],
+      })
+    );
+    const field = findAll(tree, { identifier: "password" });
+
+    expect(field[0]!.value).toBeUndefined();
+    expect(assertText(field[0]!)).toBe("");
+    // Not proof that the field is empty.
+    expect(evaluateCondition("text", "^$", field, "matches")).toBe(false);
+  });
+
+  it("keeps the value of a view that is not a text input out of the tree", () => {
+    // A switch's "1" would turn the row's text into "Wi-Fi 1".
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "RCTView",
+        identifier: "wifi-row",
+        windowFrame: { x: 0, y: 100, width: 400, height: 44 },
+        children: [
+          {
+            className: "UILabel",
+            label: "Wi-Fi",
+            windowFrame: { x: 16, y: 110, width: 100, height: 24 },
+            children: [],
+          },
+          {
+            className: "UISwitch",
+            identifier: "wifi-switch",
+            value: "1",
+            windowFrame: { x: 330, y: 106, width: 51, height: 31 },
+            children: [],
+          },
+        ],
+      })
+    );
+    const row = findAll(tree, { identifier: "wifi-row" });
+
+    expect(findAll(tree, { identifier: "wifi-switch" })[0]!.value).toBeUndefined();
+    expect(evaluateCondition("text", "Wi-Fi", row, "equals")).toBe(true);
+  });
+
+  it("does not hoist the text of a text field scrolled off screen", () => {
+    const tree = adaptFullHierarchyToDescribeResult(
+      withFields({
+        className: "RCTView",
+        identifier: "form",
+        windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+        children: [
+          {
+            className: "UITextField",
+            value: "linda",
+            windowFrame: { x: 20, y: 900, width: 300, height: 44 },
+            children: [],
+          },
+        ],
+      })
+    );
+
+    expect(findAll(tree, { identifier: "form" })[0]!.subtreeText).toBeUndefined();
+  });
 });

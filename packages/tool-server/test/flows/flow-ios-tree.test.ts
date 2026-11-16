@@ -13,7 +13,7 @@ import {
   MAX_TARGETING_REASON_CHARS,
   queryFullHierarchyTree,
 } from "../../src/tools/flows/flow-ios-tree";
-import { evaluateCondition, selectorToFrame } from "../../src/utils/ui-tree-match";
+import { evaluateCondition, findAll, selectorToFrame } from "../../src/utils/ui-tree-match";
 import { resolveNativeTargetApp } from "../../src/utils/native-target-app";
 import {
   __resetDeviceSetCacheForTesting,
@@ -273,6 +273,34 @@ describe("flow iOS full-hierarchy source", () => {
     await queryFullHierarchyTree(registryFor(api), DEVICE).catch(() => undefined);
     const params = vi.mocked(api.queryViewHierarchy).mock.calls[0]![2] as { fields: string[] };
     expect(params.fields).toEqual(expect.arrayContaining(["screenFrame", "windowFrame"]));
+  });
+
+  it("asks the framework for a view's value and reads a filled text field by it", async () => {
+    const raw = {
+      screen: { width: 400, height: 800 },
+      windows: [
+        {
+          className: "UIWindow",
+          screenFrame: { x: 0, y: 0, width: 400, height: 800 },
+          children: [
+            {
+              className: "UITextField",
+              identifier: "search-input",
+              value: "linda",
+              screenFrame: { x: 20, y: 100, width: 300, height: 44 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const api = apiServing(raw);
+    const { tree } = await queryFullHierarchyTree(registryFor(api), DEVICE);
+
+    const params = vi.mocked(api.queryViewHierarchy).mock.calls[0]![2] as { fields: string[] };
+    expect(params.fields).toContain("value");
+    const field = findAll(tree, { identifier: "search-input" });
+    expect(evaluateCondition("text", "linda", field, "equals")).toBe(true);
   });
 
   it("adapts and resolves a view buried deeper than the old 40-level cap", async () => {
