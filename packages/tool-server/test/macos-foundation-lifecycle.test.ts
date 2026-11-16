@@ -1311,6 +1311,16 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(log.armed).toBe(false);
     });
 
+    it("gives a second network-capture-stop the requests it keeps, without Metro's own", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("http://localhost:8081/status");
+      await request("https://example.com/a");
+      const kept = [{ layer: "macos-native", armed: false, total: 1 }];
+      expect((await stop()).layers).toEqual(kept);
+      expect((await stop()).layers).toEqual(kept);
+    });
+
     it("refuses another app's bundle id", async () => {
       const refusal = async (tool: string) =>
         codeOf(
