@@ -35,6 +35,17 @@ vi.mock("@argent/tools-client", async (importOriginal) => ({
   materializeArtifacts: materializeArtifactsMock,
 }));
 
+// The help lists `macos` from this flag, the host and the link, and reads the
+// link only with the flag on, off macOS. Off here, so no test depends on the
+// host or on the developer's flags files: test/e2e-help-platform.test.ts covers
+// that line. Every other flag reads as it does in production.
+vi.mock("@argent/configuration-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/configuration-core")>();
+  const isFeatureEnabled: typeof actual.isFeatureEnabled = (name, ...rest) =>
+    name === "macos-apps" ? false : actual.isFeatureEnabled(name, ...rest);
+  return { ...actual, isFeatureEnabled };
+});
+
 interface StepFixture {
   index: number;
   kind: string;

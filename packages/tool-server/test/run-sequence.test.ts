@@ -13,6 +13,7 @@ import { gestureTapTool } from "../src/tools/gesture-tap";
 import { gestureRotateTool } from "../src/tools/gesture-rotate";
 import { assertSupported } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
+import { renderFlagGated } from "../src/utils/flag-gated-text";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -138,6 +139,16 @@ describe("run-sequence", () => {
     expect(tool.services({ udid: TVOS_UDID, steps: [] } as any)).toEqual({});
   });
 
+  it("keeps the await-ui-element row inside the 4096 chars Claude Code shows, with macos-apps on", () => {
+    const text = renderFlagGated(
+      createRunSequenceTool(mockRegistry()).description ?? "",
+      (flag) => flag === "macos-apps"
+    );
+    const row = text.indexOf("  await-ui-element:");
+    expect(row).toBeGreaterThan(0);
+    expect(text.indexOf("\n", row)).toBeLessThanOrEqual(4096);
+  });
+
   it("runs each step in order, injecting the shared udid", async () => {
     const registry = mockRegistry();
     const tool = createRunSequenceTool(registry);
@@ -216,6 +227,33 @@ describe("run-sequence", () => {
     expect(last.error).toMatch(/no element matched/i);
     expect(result.completed).toBe(1);
     expect(result.total).toBe(3);
+  });
+
+  it("says a wait that stopped the sequence without judging its condition was not judged", async () => {
+    const registry = mockRegistry((id: string) =>
+      id === "await-ui-element"
+        ? { success: false, elapsed: 5000, cause: "unreadable", note: "tree source down" }
+        : { tapped: true }
+    );
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { text: "Continue" } },
+          },
+        ],
+      }
+    );
+
+    expect(result.steps[0]).toEqual({
+      tool: "await-ui-element",
+      error: "await-ui-element condition not judged (unreadable): tree source down",
+    });
   });
 
   it("continues past an await-ui-element step whose condition is met", async () => {

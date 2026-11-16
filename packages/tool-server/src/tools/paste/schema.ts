@@ -5,7 +5,7 @@ export const pasteZodSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Target device id from `list-devices` (iOS simulator UDID or Android emulator serial)."
+      "Target device id from `list-devices` (iOS simulator UDID or Android emulator serial<flag:macos-apps>, or Mac app id</flag:macos-apps>)."
     ),
   text: z
     .string()

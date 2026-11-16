@@ -75,7 +75,7 @@ Returns { envSetup, appRunning, connected, requiresRestart, state, message, next
 - nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place (always false for a non-injectable app)
 - injectable: false for Apple system apps (bundle ids under com.apple.), which the native tools refuse to read.
 
-If injectable is false: treat this as TERMINAL. The app is not a supported native-devtools target, and no relaunch changes that. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point): they run the same injection precheck and fail with the same non-injectable error.
+If injectable is false: treat this as TERMINAL. The app is not a supported native-devtools target, and no relaunch changes that. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point): they run the same injection precheck and fail with the same non-injectable error.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app once, then proceed with the native feature. Read state before acting on a second such reading. Indeterminate reaches this rule too, and its line below bounds it at that one restart.
 If state is unregistered: do NOT restart the app again: it already launched under the terms a restart would recreate. Restart the tool-server (\`argent server stop && argent server start --detach\`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it. Treat native devtools as unavailable, then use \`describe\` or \`screenshot\` and drive by coordinate.
@@ -85,6 +85,13 @@ Returns { status: "init_failed", message, attempts } instead when the simulator'
 Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   readOnly: true,
+  // When the app is not connected, the native-* tools that use native devtools
+  // run the same precheck and return the same `message` (buildAppStateMessage),
+  // so agents need no separate status call. Their `status` names the remedy,
+  // where this tool gives `state`. They fail instead for an Apple system app and
+  // for an app that a device provider did not lend. The SDK and the e2e-full
+  // suite still call it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: ({ params }) => `Checking native inspection for ${params.bundleId}`,
     completedMsg: ({ params }) => `Checked native inspection for ${params.bundleId}`,

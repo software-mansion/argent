@@ -177,7 +177,7 @@ export const gestureCustomTool: ToolDefinition<Params, Result> = {
   id: "gesture-custom",
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
-For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.
+For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.<flag:macos-apps> Not supported on a Mac app: use gesture-tap, gesture-drag and gesture-scroll there.</flag:macos-apps>
 For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
 All x/y values are fractions of the screen width/height (not pixels).
 Physical iOS: a Down, any Moves, then an Up; x2/y2 adds a second finger. A plain Down then Up: same point = press-hold, other point = drag (Up delayMs = rest before the move); one Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). Any other train plays as timed paths, each event waiting its delayMs, and needs the app drawn in portrait.

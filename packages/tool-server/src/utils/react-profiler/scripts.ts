@@ -269,16 +269,23 @@ export const BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT = `
 
 /**
  * Bumps `lastHeartbeatEpochMs` on the session owner so concurrent tool-server
- * instances do not classify it as stale. No-op before
- * `REACT_NATIVE_PROFILER_SETUP_SCRIPT` has run.
+ * instances do not classify it as stale, but only while `sessionId` owns the
+ * run: a replaced run must not keep the session that replaced it fresh. The
+ * check is here because `__argent_profilerHeartbeat` is installed once per
+ * runtime, so changing it would miss a runtime that already has one. No-op
+ * before `REACT_NATIVE_PROFILER_SETUP_SCRIPT` has run.
  */
-export const HEARTBEAT_SCRIPT = `
+export function buildHeartbeatScript(sessionId: string): string {
+  return `
 (function(){
+  var o = globalThis.__ARGENT_PROFILER_OWNER__;
+  if (!o || o.sessionId !== ${JSON.stringify(sessionId)}) return;
   if (typeof globalThis.__argent_profilerHeartbeat === 'function') {
     try { globalThis.__argent_profilerHeartbeat(); } catch (_e) {}
   }
 })()
 `;
+}
 
 /**
  * Side-effect-free read of profiling state, so the caller can decide whether
@@ -286,7 +293,8 @@ export const HEARTBEAT_SCRIPT = `
  *
  * `isRunning` is true when ANY renderer is profiling — with RN's Fabric +
  * dormant Paper pair the first iterated renderer is not necessarily the
- * active one.
+ * active one. `rendererStartedAtEpochMs` lists each renderer's last start, which
+ * outlives its stop: `takeoverOf` reads it to tell runs apart in a stopped app.
  */
 export const READ_STATE_SCRIPT = `
 (function __argent_readState() {
@@ -294,10 +302,14 @@ export const READ_STATE_SCRIPT = `
   if (!h) return JSON.stringify({ hookExists: false });
   var rendererInterfaceFound = false;
   var isRunning = false;
+  var rendererStartedAtEpochMs = [];
   if (h.rendererInterfaces && typeof h.rendererInterfaces.forEach === 'function') {
     h.rendererInterfaces.forEach(function (ri) {
       rendererInterfaceFound = true;
       if (ri && ri.__argent_isProfiling__ === true) isRunning = true;
+      if (ri && typeof ri.__argent_startedAtEpochMs__ === 'number') {
+        rendererStartedAtEpochMs.push(ri.__argent_startedAtEpochMs__);
+      }
     });
   }
   if (!rendererInterfaceFound) {
@@ -310,6 +322,7 @@ export const READ_STATE_SCRIPT = `
     isRunning: isRunning,
     owner: globalThis.__ARGENT_PROFILER_OWNER__ || null,
     nowEpochMs: Date.now(),
+    rendererStartedAtEpochMs: rendererStartedAtEpochMs,
   });
 })()
 `;

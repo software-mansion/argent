@@ -17,6 +17,10 @@ import {
   type FlowFile,
   type FlowSavedTo,
 } from "./flow-utils";
+import { MACOS_APPS_FLAG } from "../../utils/capability";
+import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
+
+const MACOS_PLATFORM_FLAG = { [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } };
 
 /**
  * `project_root` is the AGENT's project; the probe says whether it also exists
@@ -54,7 +58,10 @@ const zodSchema = z.object({
   requires: z
     .object({
       platform: z
-        .union([z.enum(LAUNCH_PLATFORMS), z.array(z.enum(LAUNCH_PLATFORMS)).min(1)])
+        .union([
+          z.enum(LAUNCH_PLATFORMS).meta(MACOS_PLATFORM_FLAG),
+          z.array(z.enum(LAUNCH_PLATFORMS).meta(MACOS_PLATFORM_FLAG)).min(1),
+        ])
         .optional(),
       runtimeKind: z.enum(RUNTIME_KINDS).optional(),
     })

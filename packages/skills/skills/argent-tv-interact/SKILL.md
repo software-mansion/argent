@@ -15,9 +15,9 @@ description: Control and inspect TV apps via argent, Apple TV (tvOS), Android TV
 
 ## The navigation loop
 
-1. `describe`: find the cursor and your target (returns the focused element + all focusable ones, not a tap tree).
-2. `tv-remote`: move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; count rows/columns from the frames to build the path.
-3. `describe` again to confirm. On a miss, repeat.
+1. `describe`: find the cursor and your target.
+2. `tv-remote`: move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; count rows/columns from the list order.
+3. `describe` again to confirm, or on Apple TV `await-ui-element {condition:"exists", selector:{text:"X", role:"focused"}}`. On a miss, repeat.
 
 ## Tools
 
@@ -29,7 +29,7 @@ description: Control and inspect TV apps via argent, Apple TV (tvOS), Android TV
 
 ### Apple TV (tvOS simulator)
 
-- Boot like any iOS sim (`boot-device`); the AX + HID daemons auto-start on the first `describe` / `tv-remote` (first call may take a few seconds).
+- Boot like any iOS sim (`boot-device`); the first `describe` / `tv-remote` starts the AX + HID daemons (a few seconds).
 - Dev build: `open-url {udid, url:"<scheme>://expo-development-client/?url=http%3A%2F%2F<HOST_IP>%3A8081"}` (`<HOST_IP>` = your Mac's LAN IP, shown on the launcher).
 
 ### Android TV (leanback emulator)

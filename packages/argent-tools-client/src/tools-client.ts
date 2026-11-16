@@ -63,6 +63,13 @@ export interface ToolInvocationResult {
   profiling?: boolean;
   /** The `outputHint` of the tool's listing entry, when it has one. */
   outputHint?: string;
+  /**
+   * Why the call did not do what it was asked, when it returned anyway: the
+   * result reports a failure (an e2e test that did not pass, an unmet
+   * `await-ui-element`), or a baseline it returned was not written on this
+   * client.
+   */
+  failure?: string;
 }
 
 export interface CallToolOptions {
@@ -162,7 +169,7 @@ async function consumeToolStream(
   onProgress: (event: unknown) => void,
   signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
-  let final: { data?: unknown; note?: string; profiling?: boolean } | undefined;
+  let final: { data?: unknown; note?: string; profiling?: boolean; failure?: string } | undefined;
   let progress = 0;
   const reader = body.getReader();
   const handleLine = (line: string): void => {
@@ -172,6 +179,7 @@ async function consumeToolStream(
       data?: unknown;
       note?: string;
       profiling?: boolean;
+      failure?: string;
       error?: string;
       error_code?: string;
       error_kind?: string;
@@ -184,6 +192,7 @@ async function consumeToolStream(
         data: msg.data,
         note: msg.note,
         ...(msg.profiling === true ? { profiling: true } : {}),
+        ...(typeof msg.failure === "string" ? { failure: msg.failure } : {}),
       };
     } else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
@@ -245,6 +254,7 @@ async function consumeToolStream(
     data: final.data,
     note: final.note,
     ...(final.profiling ? { profiling: true } : {}),
+    ...(final.failure !== undefined ? { failure: final.failure } : {}),
   };
 }
 
@@ -517,6 +527,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     const shadowWarning = await e2eShadowWarningFor(name, args);
     // Where a baseline the result returns may be written (see file-inputs.ts).
     const baselineDirs: string[] = [];
+    let unwrittenBaselines: string[] = [];
     if (meta?.fileInputs?.length) {
       if (remote) assertRequiredPresent(meta, finalArgs);
       finalArgs = await prepareFileInputs(meta.fileInputs, finalArgs ?? {}, {
@@ -540,6 +551,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // not see is said in the result's `warning`, as it says one it sees.
     const settle = async (data: unknown): Promise<unknown> => {
       const applied = await applyClientFileDirectives(data, { allowedDirs: baselineDirs });
+      unwrittenBaselines = applied.failed.map((f) => f.path);
       for (const { path: file, error } of applied.failed) {
         diagnose(`The baseline ${file} was not written on this client: ${error}`);
       }
@@ -563,6 +575,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       }
       return { ...result, warning: shadowWarning };
     };
+
+    const unwrittenFailure = (): string | undefined =>
+      unwrittenBaselines.length > 0
+        ? `Baselines not written on this client: ${unwrittenBaselines.join(", ")}`
+        : undefined;
 
     // A call that sends a flow's closure runs that flow over a link, and its
     // progress lines keep the connection busy through a proxy's idle timeout.
@@ -647,11 +664,14 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         opts?.onProgress ?? (() => {}),
         opts?.signal
       );
+      const data = await settle(streamed.data);
+      const failure = streamed.failure ?? unwrittenFailure();
       return {
-        data: await settle(streamed.data),
+        data,
         note: streamed.note,
         outputHint: meta?.outputHint,
         ...(streamed.profiling ? { profiling: true } : {}),
+        ...(failure !== undefined ? { failure } : {}),
       };
     }
     let json: {
@@ -660,6 +680,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       message?: string;
       note?: string;
       profiling?: boolean;
+      failure?: string;
       error_code?: string;
       error_kind?: string;
       issues?: unknown;
@@ -707,11 +728,15 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       });
     }
     opts?.signal?.throwIfAborted();
+    const data = await settle(json.data);
+    const failure =
+      (typeof json.failure === "string" ? json.failure : undefined) ?? unwrittenFailure();
     return {
-      data: await settle(json.data),
+      data,
       note: json.note,
       outputHint: meta?.outputHint,
       ...(json.profiling === true ? { profiling: true } : {}),
+      ...(failure !== undefined ? { failure } : {}),
     };
   }
 
