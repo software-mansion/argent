@@ -25,8 +25,8 @@ import {
   AI_CLIENTS,
   type AiTelemetryProps,
   type Platform as TelemetryPlatform,
+  type InvalidParamIssue,
   type TelemetryDeviceKind,
-  type ZodIssueCode,
 } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
@@ -200,7 +200,7 @@ type InvocationMeta = {
 // Coarse context only: the raw device id (UDID / serial) infers a platform and is
 // never stored or forwarded; invalid_params carries schema-declared parameter
 // NAMES only (see deriveInvalidParams), never values or user-typed keys;
-// invalid_param_issues carries zod issue codes only.
+// invalid_param_issues carries fixed issue codes only.
 type HttpFailureMeta = {
   /** The call named the tool by a former id; `toolId` is the current one. */
   alias_used?: boolean;
@@ -208,7 +208,7 @@ type HttpFailureMeta = {
   platform?: TelemetryPlatform;
   device_kind?: TelemetryDeviceKind;
   invalid_params?: string[];
-  invalid_param_issues?: ZodIssueCode[];
+  invalid_param_issues?: InvalidParamIssue[];
 } & AiTelemetryProps;
 
 function inferDeviceAttribution(deviceId: string | null): DeviceAttribution | null {
@@ -821,7 +821,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             failure_area: "http",
             error_kind: "validation",
           },
-          req.body
+          req.body,
+          { invalid_param_issues: ["custom"] }
         );
         // `error` in the zod issue shape: older CLIs `JSON.parse` it (see below).
         const issues = [{ code: "custom", path: [], message: err.message }];
@@ -858,6 +859,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const parseResult = def.zodSchema.safeParse(bodyArgs);
         if (!parseResult.success) {
           const declared = new Set(Object.keys(def.zodSchema.shape ?? {}));
+          const sent = omitKeys(bodyArgs, derivedTargets);
           emitHttpFailure(
             {
               error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
@@ -868,7 +870,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             req.body,
             {
               invalid_params: deriveInvalidParams(parseResult.error, declared),
-              invalid_param_issues: deriveInvalidParamIssues(parseResult.error),
+              invalid_param_issues: deriveInvalidParamIssues(parseResult.error, sent),
             }
           );
           // `error` keeps the raw issue JSON. Every CLI released before
@@ -877,7 +879,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           // attribution, the help block, exit 2, and `--json`'s object.
           res.status(400).json({
             error: parseResult.error.message,
-            message: describeParamIssues(parseResult.error, omitKeys(bodyArgs, derivedTargets)),
+            message: describeParamIssues(parseResult.error, sent),
             issues: parseResult.error.issues,
           });
           return;

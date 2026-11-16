@@ -213,7 +213,7 @@ describe("a call that names its test by the former param name", () => {
     expect(JSON.parse(res.body.error)).toEqual([{ code: "custom", path: [], message }]);
     expect(recordFailure).toHaveBeenCalledWith(
       "e2e-execute",
-      expect.anything(),
+      expect.objectContaining({ invalid_param_issues: ["custom"] }),
       expect.objectContaining({
         error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
         failure_stage: "http_param_alias",

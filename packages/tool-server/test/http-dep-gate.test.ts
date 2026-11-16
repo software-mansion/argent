@@ -109,7 +109,7 @@ describe("http dependency gate", () => {
     expect(res.status).toBe(400);
     expect(recordFailure).toHaveBeenCalledWith(
       "validated-thing",
-      // Schema-declared names of the failing params only — never values.
+      // Schema-declared names and fixed issue codes only — never values.
       { invalid_params: ["count"], invalid_param_issues: ["invalid_type"] },
       {
         error_code: "HTTP_ZOD_VALIDATION_FAILED",
@@ -161,14 +161,38 @@ describe("http dependency gate", () => {
       },
     });
     const { app } = createHttpApp(registry, { recordFailure });
-    const res = await request(app).post("/tools/union-thing").send({ button: 7 });
+    const res = await request(app).post("/tools/union-thing").send({ button: "bogus" });
     expect(res.status).toBe(400);
     expect(recordFailure).toHaveBeenCalledWith(
       "union-thing",
       {
         invalid_params: ["button"],
-        invalid_param_issues: ["invalid_type", "invalid_union", "invalid_value"],
+        invalid_param_issues: ["invalid_union", "invalid_value"],
       },
+      expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
+      expect.any(Number)
+    );
+  });
+
+  it("records a parameter the call left out as missing", async () => {
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "required-thing",
+      zodSchema: z.object({ udid: z.string(), count: z.number() }),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app).post("/tools/required-thing").send({ count: "x" });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain("`udid` is required (string) and was not provided");
+    expect(recordFailure).toHaveBeenCalledWith(
+      "required-thing",
+      { invalid_params: ["udid", "count"], invalid_param_issues: ["invalid_type", "missing"] },
       expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
       expect.any(Number)
     );

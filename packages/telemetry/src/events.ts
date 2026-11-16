@@ -190,14 +190,15 @@ interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
    */
   invalid_params?: string[];
   /**
-   * The rejection's zod issue codes, deduped across the call. Tells e.g.
-   * `too_big` from `invalid_type`, which `invalid_params` cannot.
+   * The rejection's zod issue codes, deduped across the call, with "missing"
+   * for a parameter the call left out. Tells e.g. `too_big` from
+   * `invalid_type`, which `invalid_params` cannot.
    */
-  invalid_param_issues?: ZodIssueCode[];
+  invalid_param_issues?: InvalidParamIssue[];
 }
 
 /** Zod 4's issue codes: a closed vocabulary, so nothing user-typed reaches telemetry. */
-export const ZOD_ISSUE_CODES = [
+const ZOD_ISSUE_CODES = [
   "invalid_type",
   "too_big",
   "too_small",
@@ -212,6 +213,11 @@ export const ZOD_ISSUE_CODES = [
 ] as const;
 
 export type ZodIssueCode = (typeof ZOD_ISSUE_CODES)[number];
+
+/** Zod reports an omitted parameter as one of its codes, so "missing" is added. */
+export const INVALID_PARAM_ISSUES = [...ZOD_ISSUE_CODES, "missing"] as const;
+
+export type InvalidParamIssue = (typeof INVALID_PARAM_ISSUES)[number];
 
 /**
  * Reasons debugger-status / debugger-log-registry return a structured

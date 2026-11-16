@@ -5,8 +5,8 @@ import {
   DEBUGGER_TOOL_OUTCOMES,
   DEVICE_KINDS,
   EVENT_NAMES,
+  INVALID_PARAM_ISSUES,
   PLATFORMS,
-  ZOD_ISSUE_CODES,
 } from "../src/events.js";
 
 describe("sanitize", () => {
@@ -679,9 +679,11 @@ describe("sanitize", () => {
   describe("tool:fail invalid_param_issues validator", () => {
     const base = { tool: "await-ui-element", duration_ms: 1 };
 
-    it("accepts every code zod can raise, so no real rejection is voided", () => {
-      const out = sanitize("tool:fail", { ...base, invalid_param_issues: [...ZOD_ISSUE_CODES] });
-      expect(out.invalid_param_issues).toEqual([...ZOD_ISSUE_CODES]);
+    it("accepts every value the emit side can send, so no real rejection is voided", () => {
+      const all = [...INVALID_PARAM_ISSUES];
+      expect(all).toContain("missing");
+      const out = sanitize("tool:fail", { ...base, invalid_param_issues: all });
+      expect(out.invalid_param_issues).toEqual(all);
     });
 
     it("drops the whole property when a value is not a zod issue code", () => {

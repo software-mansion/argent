@@ -100,54 +100,82 @@ describe("deriveInvalidParams", () => {
 });
 
 describe("deriveInvalidParamIssues", () => {
+  const codesFor = (schema: z.ZodType, input: unknown) =>
+    deriveInvalidParamIssues(issuesFor(schema, input), input);
+
   // await-ui-element's timeoutMs schema.
   const timeoutMs = z.object({ timeoutMs: z.number().int().positive().max(120_000) });
 
   it("separates a value over the bound from a value of the wrong type", () => {
-    expect(deriveInvalidParamIssues(issuesFor(timeoutMs, { timeoutMs: 300_000 }))).toEqual([
-      "too_big",
-    ]);
-    expect(deriveInvalidParamIssues(issuesFor(timeoutMs, { timeoutMs: "5000" }))).toEqual([
-      "invalid_type",
-    ]);
-    expect(deriveInvalidParamIssues(issuesFor(timeoutMs, { timeoutMs: 0 }))).toEqual(["too_small"]);
+    expect(codesFor(timeoutMs, { timeoutMs: 300_000 })).toEqual(["too_big"]);
+    expect(codesFor(timeoutMs, { timeoutMs: "5000" })).toEqual(["invalid_type"]);
+    expect(codesFor(timeoutMs, { timeoutMs: 0 })).toEqual(["too_small"]);
   });
 
   it("dedupes repeats but keeps distinct codes, in one order whatever the input", () => {
     const schema = z.object({ a: z.number().max(5), b: z.number().max(5), c: z.string() });
-    expect(deriveInvalidParamIssues(issuesFor(schema, { a: 9, b: 9, c: 1 }))).toEqual([
-      "invalid_type",
-      "too_big",
-    ]);
-    expect(deriveInvalidParamIssues(issuesFor(schema, { a: "x", b: 9, c: "ok" }))).toEqual([
-      "invalid_type",
-      "too_big",
-    ]);
+    expect(codesFor(schema, { a: 9, b: 9, c: 1 })).toEqual(["invalid_type", "too_big"]);
+    expect(codesFor(schema, { a: "x", b: 9, c: "ok" })).toEqual(["invalid_type", "too_big"]);
+  });
+
+  it("reports a field the call left out as missing, not as zod's code for it", () => {
+    const schema = z.object({ udid: z.string(), condition: z.enum(["exists", "visible"]) });
+    expect(codesFor(schema, {})).toEqual(["missing"]);
+    expect(codesFor(schema, { udid: 1 })).toEqual(["invalid_type", "missing"]);
+    expect(codesFor(schema, { udid: "x", condition: "bogus" })).toEqual(["invalid_value"]);
+    // A union left out reads missing, not as its branches' codes.
+    const union = z.object({ button: z.union([z.enum(["up"]), z.array(z.enum(["up"]))]) });
+    expect(codesFor(union, {})).toEqual(["missing"]);
+  });
+
+  it("keeps an author's custom issue on an omitted field as custom", () => {
+    const schema = z
+      .object({ condition: z.enum(["text", "exists"]), expectedText: z.string().optional() })
+      .superRefine((v, ctx) => {
+        if (v.condition === "text" && v.expectedText === undefined)
+          ctx.addIssue({ code: "custom", path: ["expectedText"], message: "required for text" });
+      });
+    expect(codesFor(schema, { condition: "text" })).toEqual(["custom"]);
   });
 
   it("reports unrecognized_keys without carrying the user-typed key names", () => {
     const schema = z.object({ port: z.number() }).strict();
-    const err = issuesFor(schema, { port: 1, ssn: "123-45-6789" });
-    const out = deriveInvalidParamIssues(err);
+    const out = codesFor(schema, { port: 1, ssn: "123-45-6789" });
     expect(out).toEqual(["unrecognized_keys"]);
     expect(JSON.stringify(out)).not.toMatch(/ssn|123-45/);
   });
 
-  it("reports the codes nested in a union, so its causes stay apart", () => {
+  it("skips the union branches that rejected the value's type with invalid_type", () => {
     // tv-remote's button schema.
     const buttons = ["up", "down"] as const;
     const schema = z.object({
       button: z.union([z.enum(buttons), z.array(z.enum(buttons)).min(1).max(64)]),
     });
-    expect(deriveInvalidParamIssues(issuesFor(schema, { button: ["up", "bogus"] }))).toEqual([
-      "invalid_union",
-      "invalid_value",
-    ]);
-    expect(deriveInvalidParamIssues(issuesFor(schema, { button: 7 }))).toEqual([
+    for (const button of ["bogus", "", ["up", "bogus"]]) {
+      expect(codesFor(schema, { button })).toEqual(["invalid_union", "invalid_value"]);
+    }
+    // An object branch with a wrongly typed field did not reject the value's type.
+    const mixed = z.object({ v: z.union([z.object({ a: z.number() }), z.enum(["x"])]) });
+    expect(codesFor(mixed, { v: { a: "s" } })).toEqual([
       "invalid_type",
       "invalid_union",
       "invalid_value",
     ]);
+  });
+
+  it("reports invalid_type when every union branch rejected the value's type", () => {
+    const schema = z.object({ tag: z.union([z.string(), z.array(z.string())]) });
+    expect(codesFor(schema, { tag: 7 })).toEqual(["invalid_type", "invalid_union"]);
+  });
+
+  it("reports only invalid_union when the union lists no branch errors", () => {
+    const schema = z.object({
+      g: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("a") }),
+        z.object({ kind: z.literal("b") }),
+      ]),
+    });
+    expect(codesFor(schema, { g: { kind: "c" } })).toEqual(["invalid_union"]);
   });
 
   it("reports the codes of a union nested in a union branch", () => {
@@ -155,7 +183,7 @@ describe("deriveInvalidParamIssues", () => {
       z.object({ k: z.literal("x"), a: z.union([z.number(), z.boolean()]) }),
       z.object({ k: z.literal("y") }),
     ]);
-    expect(deriveInvalidParamIssues(issuesFor(schema, { k: "z", a: "s" }))).toEqual([
+    expect(codesFor(schema, { k: "z", a: "s" })).toEqual([
       "invalid_type",
       "invalid_union",
       "invalid_value",
@@ -171,6 +199,6 @@ describe("deriveInvalidParamIssues", () => {
     const forged = {
       issues: [{ code: "brand_new_zod_code", path: ["a"] }, ...err.issues],
     } as unknown as z.ZodError;
-    expect(deriveInvalidParamIssues(forged)).toEqual(["invalid_type"]);
+    expect(deriveInvalidParamIssues(forged, { a: "x" })).toEqual(["invalid_type"]);
   });
 });

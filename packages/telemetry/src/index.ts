@@ -35,10 +35,10 @@ export type {
 export {
   DEBUGGER_NOT_CONNECTED_REASONS,
   DEBUGGER_TOOL_OUTCOMES,
+  INVALID_PARAM_ISSUES,
   PLATFORMS,
-  ZOD_ISSUE_CODES,
 } from "./events.js";
-export type { ZodIssueCode } from "./events.js";
+export type { InvalidParamIssue, ZodIssueCode } from "./events.js";
 export type { Runtime } from "./base-props.js";
 export type { TelemetryResetResult } from "./uninstall-reset.js";
 export { resetLocalTelemetryState } from "./uninstall-reset.js";
