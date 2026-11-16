@@ -1342,10 +1342,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         // Without a pid, as when the probe failed, any armed connection of
         // the app counts.
         const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
+        // A dispose during the probe ended the capture, and has already woken the waiters.
+        if (disposed) return undefined;
         const gone = `native network capture is on for ${bundleId}, but no process of it is running after the launch; its next process is armed when it connects`;
         // A launched process that already exited, as after a crash at start,
         // never connects.
-        if (inspection?.running === false && !disposed) return gone;
+        if (inspection?.running === false) return gone;
         const pid = inspection?.process?.pid;
         const ofLaunch = (): AppConnection | undefined => {
           const conn = connections.get(bundleId);

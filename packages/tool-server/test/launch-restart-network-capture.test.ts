@@ -42,6 +42,8 @@ const sim = vi.hoisted(() => ({
   launchctlList: "",
   /** `launchctl list` fails, as on a simulator that stopped answering. */
   launchctlFails: false,
+  /** While set, `launchctl list` answers only once it resolves, as a slow simulator does. */
+  launchctlHeld: null as Promise<void> | null,
   /** What `ps` prints for the app's process. */
   psOutput: "",
   /** While set, `ps` answers only once it resolves, as a slow read of a process does. */
@@ -65,14 +67,18 @@ vi.mock("node:child_process", async () => {
         return;
       }
       if (argv.includes("launchctl list")) {
-        if (sim.launchctlFails) {
-          callback(new Error("Invalid device: the simulator did not answer"), {
-            stdout: "",
-            stderr: "",
-          });
-          return;
-        }
-        callback(null, { stdout: sim.launchctlList, stderr: "" });
+        const answer = () => {
+          if (sim.launchctlFails) {
+            callback(new Error("Invalid device: the simulator did not answer"), {
+              stdout: "",
+              stderr: "",
+            });
+            return;
+          }
+          callback(null, { stdout: sim.launchctlList, stderr: "" });
+        };
+        if (sim.launchctlHeld) void sim.launchctlHeld.then(answer);
+        else answer();
         return;
       }
       if (argv.includes("simctl list")) {
@@ -226,6 +232,7 @@ function resetSimulator(): void {
   sim.calls.length = 0;
   sim.launchctlList = runningRow(PID);
   sim.launchctlFails = false;
+  sim.launchctlHeld = null;
   sim.psOutput = psLine();
   sim.psHeld = null;
   sim.onLaunch = null;
@@ -680,6 +687,29 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
     });
   });
 
+  /**
+   * A launch also watches for a close of the app's connection, to ask the host
+   * whether its process exited. A watch kept after the launch ended would ask
+   * again at each later close, once more for each launch.
+   */
+  it("asks the host nothing at a later close for launches that already ended", async () => {
+    await withService(async (api) => {
+      const app = await dial(api);
+      await api.activateNetworkInspection(APP);
+      await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+      for (let launch = 0; launch < 3; launch++) {
+        await expect(api.networkCaptureAfterLaunch(APP)).resolves.toBe(ARMED_NOTE);
+      }
+
+      const probes = probeCalls().length;
+      app.close();
+      await vi.waitFor(() => expect(api.isConnected(APP)).toBe(false));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(probeCalls().length).toBe(probes);
+    });
+  });
+
   it("says the new process has not connected yet after waiting 5 s for it", async () => {
     await withService(async (api) => {
       await api.activateNetworkInspection(APP);
@@ -744,6 +774,45 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
       expect(settled).toEqual({ note: undefined });
     });
   });
+
+  /**
+   * stop-all-simulator-servers can also land while the host reads the launched
+   * process, before the wait starts. Capture has ended then, so no note fits.
+   */
+  it.each([
+    ["no process of the app runs", () => (sim.launchctlList = "")],
+    [
+      "its running process lacks the injection",
+      () => (sim.psOutput = psLine("10:00", { injected: false })),
+    ],
+    ["its new process has not connected yet", () => {}],
+  ])(
+    "answers nothing, at once, when the service is disposed while the host reads the launch and %s",
+    async (_case, arrange) => {
+      await withService(async (api, dispose) => {
+        await api.activateNetworkInspection(APP);
+        arrange();
+        let readLaunch!: () => void;
+        sim.launchctlHeld = new Promise((resolve) => (readLaunch = resolve));
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const probes = probeCalls().length;
+        const note = api.networkCaptureAfterLaunch(APP);
+        await vi.waitFor(() => expect(probeCalls().length).toBeGreaterThan(probes));
+
+        await dispose();
+        readLaunch();
+
+        // The fake clock never reaches the 5 s, so only the dispose can end the wait.
+        const deadline = performance.now() + 2_000;
+        let settled: unknown = "still waiting";
+        void note.then((value) => (settled = { note: value }));
+        while (settled === "still waiting" && performance.now() < deadline) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        expect(settled).toEqual({ note: undefined });
+      });
+    }
+  );
 
   /**
    * A new process can acknowledge Network.enable before the host has read its
@@ -973,6 +1042,47 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
 
         await expect(pending).resolves.toBe(NOT_CONNECTED_NOTE);
       });
+    });
+
+    /**
+     * The host check after a close runs without a caller to catch its errors.
+     * A failed check is no answer: the wait goes on, and no unhandled
+     * rejection stops the tool-server.
+     */
+    it("keeps waiting when a connection closes and the host cannot list the running apps", async () => {
+      const unhandled: unknown[] = [];
+      const record = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", record);
+      try {
+        await withService(async (api) => {
+          await expect(api.activateNetworkInspection(APP)).resolves.toBe(false);
+          const app = await dial(api, { acknowledge: false });
+          await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          const note = api.networkCaptureAfterLaunch(APP);
+          await launchWaitStarted();
+
+          // As when the simulator stops answering during the launch.
+          sim.launchctlFails = true;
+          const probes = probeCalls().length;
+          app.close();
+          const deadline = performance.now() + 2_000;
+          while (probeCalls().length === probes && performance.now() < deadline) {
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          expect(probeCalls().length).toBeGreaterThan(probes);
+
+          expect(await settledWithin(note, 50)).toBe("still waiting");
+          await vi.advanceTimersByTimeAsync(LAUNCH_ARM_WAIT_MS);
+          await expect(note).resolves.toBe(NOT_CONNECTED_NOTE);
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", record);
+      }
     });
   });
 });
