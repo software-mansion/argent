@@ -980,7 +980,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
      */
     const settleClosedConnection = async (bundleId: string, conn: AppConnection): Promise<void> => {
       const store = networkStores.get(bundleId);
-      if (lentSocketPath || disposed || !store?.holdsRecordsOf(conn.index)) return;
+      if (lentSocketPath || disposed || !store) return;
+      if (!store.holdsRecordsOf(conn.index)) {
+        // No host probe, but the store learns of the connection: its process
+        // is newer than that of each earlier connection.
+        const live = connections.get(bundleId);
+        store.connectionClosed(conn.index, { superseded: live !== undefined && live !== conn });
+        return;
+      }
       const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
       if (disposed) return;
       const live = connections.get(bundleId);
