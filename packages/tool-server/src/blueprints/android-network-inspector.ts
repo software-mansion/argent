@@ -412,6 +412,8 @@ interface AgentConnection {
   enabling: boolean;
   /** The Network.disable of the last stop went unanswered, so the agent may still intercept. */
   stopUnconfirmed?: boolean;
+  /** The agent acknowledged a stop's Network.disable, and no Network.enable went to it since. */
+  disabled?: boolean;
   /** A process read found its process gone. */
   ended?: boolean;
   byLayerId: Map<string, NativeNetworkRecord>;
@@ -1284,6 +1286,7 @@ function createInspector(
    */
   function enableNetwork(conn: AgentConnection): void {
     conn.enabling = true;
+    conn.disabled = false;
     // A stop after this request sent Network.disable after it, so the agent
     // no longer captures. Only the next start's own request arms again.
     const stopsBefore = stops;
@@ -1361,7 +1364,18 @@ function createInspector(
    */
   function disableOn(conn: AgentConnection, timeoutMs: number): Promise<boolean> {
     return conn.cdp
-      .request("Network.disable", {}, { timeoutMs, onResult: () => failStopped(conn) })
+      .request(
+        "Network.disable",
+        {},
+        {
+          timeoutMs,
+          onResult: () => {
+            // Not after a start: its Network.enable follows this one.
+            if (stopped) conn.disabled = true;
+            failStopped(conn);
+          },
+        }
+      )
       .then(
         () => {
           conn.stopUnconfirmed = false;
@@ -2006,12 +2020,15 @@ function createInspector(
   /**
    * An agent whose connection dropped captures on in the app until it
    * connects again, so the stop's Network.disable did not reach it. It gets
-   * that Network.disable when it connects. An agent whose process ended
-   * captures nothing, so the process read leaves it out.
+   * that Network.disable when it connects. An agent that acknowledged an
+   * earlier stop's Network.disable before the drop captures nothing, and nor
+   * does one whose process ended, which the process read leaves out.
    */
   async function awayAtStop(): Promise<boolean> {
     const away = (): AgentConnection[] =>
-      connections.filter((c) => c.closed && !c.resumedBy && !c.agentGone && !c.ended);
+      connections.filter(
+        (c) => c.closed && !c.resumedBy && !c.agentGone && !c.ended && !c.disabled
+      );
     if (away().length === 0) return false;
     try {
       const read = await readAppProcesses(serial, packageName, STOP_DISABLE_TIMEOUT_MS);

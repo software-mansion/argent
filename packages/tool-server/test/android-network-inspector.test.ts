@@ -4707,6 +4707,29 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(api.state()).toEqual({ armed: false, stopped: true });
   });
 
+  it("a second stop is confirmed when the agent acknowledged the first one and its connection dropped since", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    expect(agent.received).toEqual(["Control", "Network.enable", "Network.disable"]);
+    // The app runs on, and its agent, which captures nothing now, has not connected again.
+    await agent.close();
+    await vi.waitFor(() => expect(stderrText()).toContain("agent connection 1 closed"));
+
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+  });
+
+  it("a stop counts the agent away when a start enabled it again after an acknowledged stop and its connection dropped", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    await agent.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+
+    expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
+  });
+
   it("an agent that connects while stopped gets Network.enable, then Network.disable, is never armed, and fails the open requests it resumes on the reply", async () => {
     const api = await armedInspector();
     const first = agents[0]!;
@@ -4833,6 +4856,23 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
       expect(await start).toEqual({ armed: true });
       expect(again.received).toEqual(["Control", "Network.disable", "Network.enable"]);
       expect(api.records(8081)).toEqual([]);
+    });
+
+    it("counts that agent away at the next stop once its connection drops: the Network.enable after its Network.disable armed it", async () => {
+      const { api, first } = await stopWhileAway();
+      await vi.advanceTimersByTimeAsync(16_000);
+      device.adbDown = false;
+      vi.useRealTimers();
+      const start = api.startCapture(8081);
+      await vi.waitFor(() => expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort));
+      const again = (await FakeAgent.fromSession(dirFor(), proc(), { instance: first.instance }))!;
+      expect(await start).toEqual({ armed: true });
+      expect(again.received).toEqual(["Control", "Network.disable", "Network.enable"]);
+
+      await again.close();
+      await vi.waitFor(() => expect(api.state().armed).toBe(false));
+
+      expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
     });
   });
 
