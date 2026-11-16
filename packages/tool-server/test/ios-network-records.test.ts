@@ -1666,6 +1666,60 @@ describe("iOS native network records: request body still being sent", () => {
     expect(await r0).toEqual(body("body 0"));
   });
 
+  it(`keeps the body that a read held open brings at the end of the upload, past ${MAX_CACHED_BODIES} bodies read meanwhile`, async () => {
+    const { app, store, agent, id } = uploading();
+    const during = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(during.value).toEqual(refused(STILL_SENDING));
+    const lastSent = (): SentRead => app.sent[app.sent.length - 1]!;
+    for (let i = 0; i < MAX_CACHED_BODIES; i++) {
+      agent.complete(`r${i}`, `https://e.com/${i}`);
+      const read = store.responseBody(idOf(store, `r${i}`));
+      await settle();
+      lastSent().reply({ body: `body ${i}`, base64Encoded: false, wasTruncated: false });
+      await read;
+    }
+
+    // The app answers the open read once it has sent the whole body.
+    app.sent[0]!.reply({ postData: "done", base64Encoded: false });
+    await settle();
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    const after = track(store.requestPostData(id));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+    expect(after.value).toEqual(body("done"));
+
+    // The body read longest ago, r0, made room instead.
+    void store.responseBody(idOf(store, "r0"));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+  });
+
+  it(`keeps the body past ${KEPT_BODY_CHARS_BUDGET} chars that a read held open brings at the end of the upload, past a body read meanwhile`, async () => {
+    const { app, store, agent, id } = uploading();
+    const whole = "w".repeat(KEPT_BODY_CHARS_BUDGET + 1);
+    const during = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(during.value).toEqual(refused(STILL_SENDING));
+    agent.complete("other", "https://e.com/other");
+    const other = store.responseBody(idOf(store, "other"));
+    await settle();
+    app.sent[1]!.reply({ body: "other", base64Encoded: false, wasTruncated: false });
+    await other;
+
+    app.sent[0]!.reply({ postData: whole, base64Encoded: false });
+    await settle();
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    const after = track(store.requestPostData(id));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    expect(after.value?.body).toBe(whole);
+  });
+
   it(`keeps a request body read open, the oldest of all, once ${MAX_CACHED_BODIES + 1} newer bodies are read`, async () => {
     const { app, store, agent, id } = uploading();
     const first = track(store.requestPostData(id));

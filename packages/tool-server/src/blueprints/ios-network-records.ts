@@ -321,11 +321,16 @@ export function createIosNetworkRecords(
     // The lost read can still bring the body, as when the app answers it after
     // the request's end: its body answers this read too, if it comes first.
     if (cached) adoptLateBody(cached.answer, answer, adoptAnswer);
-    // Only a body is kept: every reason may change at the next read.
+    // Only a body is kept: every reason may change at the next read. A body
+    // takes the newest place when it comes, as a read held open through an
+    // upload brings it after the bodies read meanwhile.
     void answer.then((body) => {
       read.settled = true;
       read.chars = body.body.length;
-      if (!body.available && bodies.get(cacheKey) === read) bodies.delete(cacheKey);
+      if (bodies.get(cacheKey) === read) {
+        bodies.delete(cacheKey);
+        if (body.available) bodies.set(cacheKey, read);
+      }
       dropOldBodies();
     });
     const askedAt = performance.now();
