@@ -220,7 +220,7 @@ A second call of `network-capture-start` keeps the requests that Argent recorded
 
 The JS runtime capture of an app is on one Metro port of the device. A start or a stop on a different port moves it to that port only when Argent reaches the JS runtime of the app there. Otherwise, the capture on the earlier port stays as it is, and the `reason` of the `js` entry names that port.
 
-The native layer follows the app into each new process that `launch-app` or `restart-app` starts, until `network-capture-stop`. On iOS, it also follows a process that starts in a different way. The JS runtime layer arms only at a call of `network-capture-start`. A new JS runtime of the app has no capture. Thus call `network-capture-start` again after each of these events:
+The native layer follows the app into each new process that `launch-app` or `restart-app` starts, until `network-capture-stop`. On iOS, it also follows a process that starts in a different way. On a simulator where Argent uses the socket of a device provider, a relaunch of the app ends the native capture. Then `native-network-logs` says that the capture is not started. The `reason` of `network-capture-stop` is `capture was not started for this app`. Call `network-capture-start` again after the relaunch. The JS runtime layer arms only at a call of `network-capture-start`. A new JS runtime of the app has no capture. Thus call `network-capture-start` again after each of these events:
 
 - A reload of the JavaScript, for example with `debugger-reload-metro`.
 - `restart-app`, or a `launch-app` that starts a new process.
