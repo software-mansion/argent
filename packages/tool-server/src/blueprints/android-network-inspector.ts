@@ -1704,7 +1704,9 @@ function createInspector(
     if (own) return own;
     for (let dropped = conn.resumes; dropped; dropped = dropped.resumes) {
       const record = dropped.byLayerId.get(layerId);
-      if (record && (isOpen(record) || lostOnly.has(record))) return record;
+      if (record && (isOpen(record) || lostOnly.has(record) || failedAtStopTimeout.has(record))) {
+        return record;
+      }
     }
     return undefined;
   }

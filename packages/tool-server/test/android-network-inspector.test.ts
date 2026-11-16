@@ -4746,6 +4746,50 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(api.records(8081)[0]).not.toHaveProperty("errorText");
   });
 
+  it("a request from before a reconnect that an unacknowledged stop failed takes the final events the slow agent still sends", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const first = agents[0]!;
+    first.started(first.rid(1), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    await first.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+      instance: first.instance,
+      lastSeq: 1,
+      inFlight: [first.rid(1)],
+      unanswered: ["Network.disable"],
+    }))!;
+    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(again.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+
+    // The app was only slow: its agent reports the request's end after all.
+    again.event("Network.responseReceived", {
+      requestId: first.rid(1),
+      response: {
+        url: "https://example.com/slow",
+        status: 200,
+        headers: {},
+        mimeType: "text/plain",
+      },
+    });
+    again.event("Network.loadingFinished", { requestId: first.rid(1), encodedDataLength: 5 });
+    again.answer("Network.disable");
+    await vi.waitFor(() => expect(api.records(8081)[0]!.state).toBe("complete"));
+
+    expect(api.records(8081)[0]).toMatchObject({ response: { status: 200 }, encodedDataLength: 5 });
+    expect(api.records(8081)[0]).not.toHaveProperty("errorText");
+  });
+
   it("a request failed at an unacknowledged stop stays failed when the slow agent sends only some of its events before the stop takes effect", async () => {
     device.agentOptions = { unanswered: ["Network.disable"] };
     const api = await armedInspector();
