@@ -216,7 +216,7 @@ export const networkRequestTool: ToolDefinition<
   description: `Get full details of a specific network request by its requestId: one from view-network-logs, or an ios- or android- ID from native-network-logs, which needs no debugger connection.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
 Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of an ios- or android- ID. For an ios- or android- ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app is still sending the request body, call again once the upload has finished. Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found; on iOS and Android it also says when network capture is not started, which network-capture-start does. IDs keep working after network-capture-stop.`,
+Returns an error message string if the requestId is not found; on iOS and Android it also says when network capture is not started, which network-capture-start does. IDs keep working after network-capture-stop. A view-network-logs ID holds until the app's JS runtime reloads: the new runtime numbers its requests from rn-net-1 again, so an old ID can name a new request. ios- and android- IDs are not affected.`,
   zodSchema,
   readOnly: true,
   interaction: {

@@ -230,7 +230,7 @@ Until then, `view-network-logs` says that the capture stopped recording at the r
 
 #### Stop
 
-`network-capture-stop` stops the capture of the app on each layer. The capture of a different app continues. Argent keeps the requests that it recorded. Their IDs stay valid in `view-network-request-details`.
+`network-capture-stop` stops the capture of the app on each layer. The capture of a different app continues. Argent keeps the requests that it recorded. Their IDs stay valid in `view-network-request-details` until the JS runtime of the app reloads or restarts. Until the next `network-capture-start`, `view-network-request-details` says for an ID of the JS runtime layer that the reload cleared the requests. After the next `network-capture-start`, the new JS runtime numbers its requests from `rn-net-1` again. Then an earlier ID of the JS runtime layer can name a new request. A reload or a restart does not change the IDs of the native layers.
 
 The result contains `status` and `layers`. Each entry of `layers` contains these fields:
 
