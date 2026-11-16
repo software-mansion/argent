@@ -2725,6 +2725,32 @@ describe("a JS capture on another Metro port", () => {
     expect(rt.paused).toBe(false);
   });
 
+  it.each([
+    { there: "Metro is down", answer: undefined },
+    { there: "another app's runtime answers", answer: () => new FakeRuntime(OTHER) },
+    { there: "no app is connected", answer: () => FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS },
+    {
+      there: "another app's capture is on the port",
+      answer: () => new FakeRuntime(OTHER),
+      otherStarts: true,
+    },
+  ])(
+    "says a stop on another port may leave it recording after a stop on its own port did not reach it, when $there",
+    async ({ answer, otherStarts }) => {
+      const rt = await startedOnNewPort();
+      await reconnect(NEW_PORT, IOS_UDID, undefined);
+      expect(layer(await stop(IOS_UDID, APP, NEW_PORT), "js")).toMatchObject({ armed: true });
+      serve(PORT, IOS_UDID, answer?.());
+      if (otherStarts) await start(IOS_UDID, OTHER);
+
+      const stopped = await stop(IOS_UDID, APP);
+
+      expect(layer(stopped, "js")).toMatchObject({ armed: true, total: 0 });
+      expect(layer(stopped, "js").reason).toContain(hint);
+      expect(rt.paused).toBe(false);
+    }
+  );
+
   it("moves to a new port once the app's own runtime answers there", async () => {
     await startedOnNewPort();
     serve(PORT, IOS_UDID, new FakeRuntime(APP));
