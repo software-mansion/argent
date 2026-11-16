@@ -1658,6 +1658,36 @@ describe("network-capture-stop", () => {
     expect(findJsCapture(SERIAL, APP)).not.toHaveProperty("paused");
   });
 
+  it("says the JS layer is still armed within 5 s on a runtime that does not answer the pause", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    await start(SERIAL, APP);
+    // The runtime keeps the connection but is busy or frozen.
+    rt.frozen = true;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      const pending = stop(SERIAL, APP).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(settled).toBe(true);
+      expect(layer(await pending, "js")).toEqual({
+        layer: "js",
+        armed: true,
+        total: 0,
+        reason:
+          "the app's JS runtime did not pause capture: Runtime.evaluate timed out after 5000 ms",
+      });
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+    expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", installed: true });
+  });
+
   it("stores a stopped JS layer, with no interceptor to pause, after a start that installed none when the runtime cannot be reached", async () => {
     // The start found Metro with no app connected, so it installed nothing.
     serve(PORT, SERIAL, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);

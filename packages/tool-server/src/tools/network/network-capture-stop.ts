@@ -41,6 +41,8 @@ import {
 } from "./network-capture";
 
 const NOT_STARTED = "capture was not started for this app";
+/** How long a stop waits for the app's JS runtime to answer the pause, as a start waits for the mark. */
+const JS_ANSWER_WAIT_MS = 5_000;
 
 export function createNetworkCaptureStopTool(
   registry: Registry
@@ -201,7 +203,7 @@ async function stopJsLayer(
   }
   const stored = storeStopped(false);
   try {
-    await dbg.cdp.evaluate(makeNetworkCaptureControlScript(true));
+    await dbg.cdp.evaluate(makeNetworkCaptureControlScript(true), { timeout: JS_ANSWER_WAIT_MS });
     stored.paused = true;
     const { total, interceptorInstalled } = JSON.parse(
       String(await dbg.cdp.evaluate(makeNetworkLogReadScript(0, 0, port)))
