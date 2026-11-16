@@ -252,7 +252,15 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-`path` is relative to the test file that contains the step. Include `.mjs` and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
+`path` is relative to the test file that contains the step. Use an `.mjs` file, or an `.mts` file for TypeScript, and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
+
+Node runs `.mts` by removing the types, and it does not read `tsconfig.json`. In an `.mts` script:
+
+- Use no `enum`, runtime `namespace`, parameter property or `paths` alias.
+- Write the extension in each relative import (`./helpers.mts`), and import shared code only from `.mts` or `.mjs` files.
+- Import a type with `import type`.
+
+If the reason says that the Node.js of the tool-server cannot run TypeScript, use `.mjs` files.
 
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
 
