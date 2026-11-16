@@ -623,6 +623,19 @@ describe("selectTarget on a Mac app id", () => {
     expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
   });
 
+  it.each(["macos-app-com.other_app", "macos-app-"])(
+    "refuses %s, a Mac app id macOS cannot name, instead of falling back to the one device",
+    (deviceId) => {
+      // The capability gate admits a Mac app id by its prefix alone.
+      for (const lone of [macTarget("com.example.app"), iosTarget("com.example.app")]) {
+        const err = thrownBy(() => selectTarget([lone], 8081, { deviceId }));
+
+        expect(err.message).toContain("is connected to Metro on port 8081. Metro lists: ");
+        expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
+      }
+    }
+  );
+
   it("refuses when only an iOS simulator runs the same bundle id, and lists that device", () => {
     const ios = iosTarget("com.example.app");
     const legacy = makeTarget({ id: "0-1", title: "Hermes React Native" });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { parseMacosAppBundleId } from "../device-info";
+import { MACOS_APP_ID_PREFIX } from "../device-info";
 import type { CDPTarget } from "./discovery";
 
 interface SelectedTarget {
@@ -115,9 +115,13 @@ export function selectTarget(
   }
   let candidates = pool;
 
+  // By the prefix alone, as the capability gate classifies the id, so that a
+  // Mac app id with a bundle id macOS does not accept takes no fallback either.
   const macosBundleId =
-    typeof options?.deviceId === "string" ? parseMacosAppBundleId(options.deviceId) : null;
-  if (macosBundleId) {
+    typeof options?.deviceId === "string" && options.deviceId.startsWith(MACOS_APP_ID_PREFIX)
+      ? options.deviceId.slice(MACOS_APP_ID_PREFIX.length)
+      : null;
+  if (macosBundleId !== null) {
     candidates = macosAppTargets(pool, macosBundleId, port);
   } else if (typeof options?.deviceId === "string" && options.deviceId) {
     const deviceId = options.deviceId;
