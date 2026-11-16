@@ -84,4 +84,23 @@ describe("callTool tar-upload format", () => {
     expect(uploads[0]!.contentType).toBe("application/gzip");
     expect(uploads[0]!.magic.startsWith("1f8b")).toBe(true);
   });
+
+  it("rejects with the abort reason while archiving, without waiting for tar", async () => {
+    const uploads = await startServer(["zstd", "gzip"]);
+    const bin = path.join(tmpDir, "bin");
+    await fs.mkdir(bin);
+    await fs.writeFile(path.join(bin, "tar"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
+    const reason = new Error("gave up");
+    const abort = new AbortController();
+    setTimeout(() => abort.abort(reason), 200);
+    await expect(
+      createToolsClient().callTool(
+        "install",
+        { appPath: path.join(tmpDir, "MyApp.app") },
+        { signal: abort.signal }
+      )
+    ).rejects.toBe(reason);
+    expect(uploads).toEqual([]);
+  });
 });

@@ -12,10 +12,11 @@
  */
 
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { createReadStream, createWriteStream } from "node:fs";
 import { open, rm, readdir } from "node:fs/promises";
 import { basename, dirname, join, posix, resolve, sep } from "node:path";
-import type { Readable } from "node:stream";
+import { Writable, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import zlib from "node:zlib";
 
@@ -68,35 +69,56 @@ export function createCompressor(format: ArchiveFormat): zlib.Gzip | zlib.ZstdCo
  * archive's single top-level member, to stdout.
  */
 export function createTarArgs(sourcePath: string): string[] {
-  return ["-cf", "-", "-C", dirname(sourcePath), "--", basename(sourcePath)];
+  // `./` keeps a name like `-x` or `@list` from reading as an option or a bsdtar archive to copy.
+  return ["-cf", "-", "-C", dirname(sourcePath), `./${basename(sourcePath)}`];
 }
 
-// Far past any real bundle's listing, far below V8's ~512 MiB string limit.
-const MAX_LISTING_BYTES = 16 << 20;
+// iMovie.app's 59k members list in 24 MB under GNU tar, which counts bsdtar's
+// `._` metadata as members. Vetting costs grow with both limits.
+const MAX_LISTING_BYTES = 32 << 20;
+const MAX_LISTING_LINES = 1 << 18;
 // tar prints a line per failed member; the first ones say what went wrong.
 const MAX_STDERR_BYTES = 16 << 10;
+// Decoded after tar stops reading, to reach the checksum. A real archive ends
+// within a record of its end-of-archive marker.
+const MAX_UNREAD_BYTES = 16 << 20;
 
 /**
- * Keep the first `limit` bytes of `stream`. `onOverflow` runs once when more
- * arrive; `text()` then ends in `…`.
+ * Keep the first `maxBytes` of `stream`. Past them, or past `maxLines` lines,
+ * `onOverflow` runs once and `text()` ends in `…`.
  */
-function collect(stream: Readable, limit: number, onOverflow?: () => void) {
+function collect(
+  stream: Readable | undefined,
+  maxBytes: number,
+  { maxLines = Infinity, onOverflow }: { maxLines?: number; onOverflow?: () => void } = {}
+) {
   const chunks: Buffer[] = [];
-  let size = 0;
-  stream.on("data", (chunk: Buffer) => {
-    if (size < limit) chunks.push(chunk.subarray(0, limit - size));
-    if (size <= limit && size + chunk.length > limit) onOverflow?.();
-    size += chunk.length;
+  let bytes = 0;
+  let lines = 0;
+  let overflowed = false;
+  // Undefined when spawn fails with EMFILE, which the child's `error` reports.
+  stream?.on("data", (chunk: Buffer) => {
+    if (overflowed) return;
+    chunks.push(chunk.subarray(0, maxBytes - bytes));
+    bytes += chunk.length;
+    for (let i = chunk.indexOf(10); i !== -1 && lines <= maxLines; i = chunk.indexOf(10, i + 1)) {
+      lines++;
+    }
+    if (bytes > maxBytes || lines > maxLines) {
+      overflowed = true;
+      onOverflow?.();
+    }
   });
   return {
-    overflowed: () => size > limit,
-    text: () => Buffer.concat(chunks).toString("utf8") + (size > limit ? "…" : ""),
+    overflowed: () => overflowed,
+    text: () => Buffer.concat(chunks).toString("utf8") + (overflowed ? "…" : ""),
   };
 }
 
 /**
  * Archive `sourcePath` (file or directory) into `archivePath`. Removes the
- * partial archive on failure, including an abort through `signal`.
+ * partial archive on failure. An abort through `signal` rejects with its
+ * reason, as `fetch` does.
  */
 export async function createArchiveFile(
   sourcePath: string,
@@ -104,18 +126,20 @@ export async function createArchiveFile(
   format: ArchiveFormat,
   signal?: AbortSignal
 ): Promise<void> {
+  // Opened before tar starts, so nothing can recreate the archive after the rm below.
+  const out = createWriteStream(archivePath);
+  await once(out, "ready");
   const child = spawn("tar", createTarArgs(sourcePath), {
     stdio: ["ignore", "pipe", "pipe"],
     signal,
   });
-  const stderr = collect(child.stderr, MAX_STDERR_BYTES);
   const exited = new Promise<number | null>((res, rej) => {
     child.on("error", rej);
     child.on("close", res);
   });
-  // Both settle before the rm, so no late write recreates the archive.
+  const stderr = collect(child.stderr, MAX_STDERR_BYTES);
   const [written, closed] = await Promise.allSettled([
-    pipeline(child.stdout, createCompressor(format), createWriteStream(archivePath)),
+    pipeline(child.stdout, createCompressor(format), out),
     exited,
   ]);
   const err =
@@ -128,6 +152,7 @@ export async function createArchiveFile(
           : null;
   if (err) {
     await rm(archivePath, { force: true }).catch(() => {});
+    signal?.throwIfAborted();
     throw err;
   }
 }
@@ -205,38 +230,58 @@ interface Archive {
   format: ArchiveFormat;
 }
 
-/** A pipe `tar` closed because it stopped reading, which isn't a failure by itself. */
-function isClosedPipe(err: NodeJS.ErrnoException): boolean {
-  // GNU tar on macOS can make the write fail with ENOTCONN instead of EPIPE.
-  return ["EPIPE", "ENOTCONN", "ERR_STREAM_PREMATURE_CLOSE"].includes(err.code ?? "");
-}
-
 /**
  * Run `tar <args>` over `archive`, decompressed here and piped in, returning
- * stdout. A listing past {@link MAX_LISTING_BYTES} stops tar and throws.
+ * stdout. A listing past {@link MAX_LISTING_BYTES} or {@link MAX_LISTING_LINES}
+ * stops tar and throws.
  */
 async function runTar(archive: Archive, args: string[]): Promise<string> {
   const child = spawn("tar", [...args, "-f", "-"]);
-  const stdout = collect(child.stdout, MAX_LISTING_BYTES, () => child.kill());
-  const stderr = collect(child.stderr, MAX_STDERR_BYTES);
   const exited = new Promise<number | null>((res, rej) => {
     child.on("error", rej);
     child.on("close", res);
   });
+  const stdout = collect(child.stdout, MAX_LISTING_BYTES, {
+    maxLines: MAX_LISTING_LINES,
+    onOverflow: () => child.kill(),
+  });
+  const stderr = collect(child.stderr, MAX_STDERR_BYTES);
+  // Once tar stops reading, its stdin fails with EPIPE (ENOTCONN from GNU tar on macOS).
+  child.stdin?.on("error", () => {});
+  // Past MAX_UNREAD_BYTES the rest isn't decoded, so its checksum goes unchecked.
+  const unreadLimit = new Error("unread limit");
+  let unread = 0;
   const fed = pipeline(
     createReadStream(archive.path, { highWaterMark: CHUNK_BYTES }),
     archive.format === "zstd"
       ? zlib.createZstdDecompress({ chunkSize: CHUNK_BYTES })
       : zlib.createGunzip({ chunkSize: CHUNK_BYTES }),
-    child.stdin
+    new Writable({
+      write(chunk: Buffer, _encoding, done) {
+        if (child.stdin?.writable) return void child.stdin.write(chunk, () => done());
+        unread += chunk.length;
+        done(unread > MAX_UNREAD_BYTES ? unreadLimit : null);
+      },
+      final(done) {
+        child.stdin?.end();
+        done();
+      },
+      destroy(err, done) {
+        if (err) child.stdin?.destroy();
+        done(err);
+      },
+    })
   ).then(
     () => null,
-    (err: NodeJS.ErrnoException) => err
+    (err: Error) => err
   );
   const [code, feedError] = await Promise.all([exited, fed]);
-  if (stdout.overflowed())
-    throw new Error(`tar ${args.join(" ")} printed more than ${MAX_LISTING_BYTES >> 20} MiB`);
-  if (feedError && !isClosedPipe(feedError)) throw feedError;
+  if (stdout.overflowed()) {
+    throw new Error(
+      `tar ${args.join(" ")} listed more than ${MAX_LISTING_LINES} members or ${MAX_LISTING_BYTES >> 20} MiB`
+    );
+  }
+  if (feedError && feedError !== unreadLimit) throw feedError;
   if (code !== 0)
     throw new Error(`tar ${args.join(" ")} exited with code ${code}: ${stderr.text().trim()}`);
   return stdout.text();

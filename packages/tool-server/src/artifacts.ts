@@ -134,17 +134,14 @@ function streamDirectoryAsArchive(
     compressor.destroy();
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   });
-  // The compressor closes a valid frame even around a tar that failed, and tar
-  // still writes the end-of-archive marker after skipping unreadable members, so
-  // only exit 0 ends the response; otherwise the client's download fails instead
-  // of extracting a partial bundle.
-  const tarClosed = new Promise<number | null>((resolve) => child.on("close", resolve));
+  // tar still writes the end-of-archive marker after skipping a member it
+  // couldn't read, or (GNU tar) saw change. So the frame ends only on exit 0;
+  // otherwise the client gets a cut stream, even through a proxy that turns the
+  // destroy into a clean end.
   compressor.on("error", () => res.destroy());
-  compressor.on("end", () => {
-    void tarClosed.then((code) => {
-      if (code === 0) res.end();
-      else res.destroy();
-    });
+  child.on("close", (code) => {
+    if (code === 0) compressor.end();
+    else res.destroy();
   });
-  child.stdout.pipe(compressor).pipe(res, { end: false });
+  child.stdout.pipe(compressor, { end: false }).pipe(res);
 }

@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo } from "node:net";
 import type { Transform } from "node:stream";
 import { ARCHIVE_CONTENT_TYPES, ARCHIVE_FORMATS, safeExtractArchive } from "@argent/archive";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
@@ -375,6 +375,40 @@ describe("GET /artifacts/:id", () => {
     it("cuts the response off when tar wrote the whole archive", async () => {
       process.env.FAKE_TAR_BYTES = "100000000";
       await expect(download()).rejects.toThrow();
+    });
+
+    // HTTP/1.0 has no chunked framing to cut, so the response just ends; nginx
+    // proxies over HTTP/1.0 unless told otherwise.
+    it("sends no whole archive over HTTP/1.0 when tar wrote the whole archive", async () => {
+      process.env.FAKE_TAR_BYTES = "100000000";
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: join(root, "B.trace"),
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      const server = createServer(handle.app);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const response = await new Promise<Buffer>((resolve) => {
+        const chunks: Buffer[] = [];
+        const { port } = server.address() as AddressInfo;
+        const socket = connect(port, "127.0.0.1");
+        socket.on("data", (c: Buffer) => chunks.push(c));
+        socket.on("error", () => {});
+        socket.on("close", () => resolve(Buffer.concat(chunks)));
+        socket.write(
+          `GET /artifacts/${artifact.id} HTTP/1.0\r\nHost: 127.0.0.1:${port}\r\n` +
+            `Accept: ${ARCHIVE_CONTENT_TYPES[format]}\r\n\r\n`
+        );
+      });
+      server.close();
+      expect(response.toString("latin1")).not.toMatch(/^HTTP\/1\.1 [45]/);
+      const headerEnd = response.indexOf("\r\n\r\n");
+      const archivePath = join(root, "body");
+      await writeFile(archivePath, headerEnd === -1 ? "" : response.subarray(headerEnd + 4));
+      process.env.PATH = realPath;
+      const dest = await mkdtemp(join(root, "dest-"));
+      await expect(safeExtractArchive(archivePath, dest, "B.trace")).rejects.toThrow();
     });
   });
 
