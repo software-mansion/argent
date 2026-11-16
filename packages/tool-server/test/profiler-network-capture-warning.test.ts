@@ -266,9 +266,11 @@ describe("nativeNetworkCaptureWarning", () => {
           unresolved,
         });
 
+        // Capture for another app there is not named, nor stopped: the serial
+        // may be another device.
         it("names it as one that may also be the profiled device when capture is on for the app there", () => {
           connectedWithLogicalId();
-          live.mockImplementation((deviceId) => (deviceId === WIRELESS ? [PKG] : []));
+          live.mockImplementation((deviceId) => (deviceId === WIRELESS ? [OTHER_PKG, PKG] : []));
 
           const warning = nativeNetworkCaptureWarning(
             LOGICAL,
@@ -314,7 +316,7 @@ describe("nativeNetworkCaptureWarning", () => {
         // Two sets of steps would have the agent stop the run it just restarted,
         // and could name two serials of one device to restart.
         it("names it in the found device's warning, with one set of steps", () => {
-          const OTHER_DEVICE = "emulator-5556";
+          const OTHER_DEVICE = "10.0.0.7:5555";
           connectedWithLogicalId();
           live.mockImplementation((deviceId) =>
             deviceId === WIRELESS ? [OTHER_PKG] : deviceId === OTHER_DEVICE ? [PKG] : []
@@ -606,6 +608,26 @@ describe("react-profiler-start", () => {
             awaitSerials: [PROVIDER_ID],
           });
           expect(result).not.toHaveProperty("warning");
+        } finally {
+          unregister();
+        }
+      });
+
+      // The agent passes one serial to every tool, so capture and the
+      // simulator-server are usually under the same serial.
+      it("names a driven serial the probe could not read when capture is kept under it", async () => {
+        const WIRELESS = "192.168.1.5:5555";
+        liveSerials.mockReturnValue([WIRELESS]);
+        const unregister = registerCaptureOnDemandSender(WIRELESS, "ws://127.0.0.1:9000", () => {});
+        try {
+          findRuntimeDevices.mockResolvedValue({ found: [SERIAL], unresolved: [WIRELESS] });
+          live.mockImplementation((deviceId) => (deviceId === WIRELESS ? [PKG] : []));
+
+          const result = await start(ANDROID_APP);
+
+          expect(result.warning).toContain(
+            `Native network capture is on for ${PKG} on ${WIRELESS}, which may also be the device this profile runs on`
+          );
         } finally {
           unregister();
         }

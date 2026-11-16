@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { CDPClient } from "./cdp-client";
-import { ADB_DEVICES_TIMEOUT_MS, parseAdbDevices, runAdb } from "../adb";
+import { ADB_DEVICES_TIMEOUT_MS, consolePortFromAdbSerial, parseAdbDevices, runAdb } from "../adb";
 import { listIosSimulators } from "../ios-devices";
 import { simctlArgsForUdid } from "../ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../simctl-config";
@@ -16,7 +16,8 @@ const RETRY_DELAY_MS = 300;
  * How long the other adb serials get to answer once one holds the marker. A
  * device reachable over two transports answers on both, and a slow or hung one
  * must not hold up every start for the full read timeout. Serials the caller
- * names in `awaitSerials` are not cut off.
+ * names in `awaitSerials` are not cut off, unless their serial shows they are
+ * another device (see {@link anotherDevice}).
  */
 export const OTHER_TRANSPORTS_GRACE_MS = 500;
 
@@ -31,9 +32,10 @@ export interface RuntimeDevices {
    * Ids from `awaitSerials` whose logcat could not be read, so they may be this
    * device too: the read failed or timed out, or `adb devices` does not list
    * the serial as ready (offline, unauthorized or disconnected). Only set
-   * alongside an Android `found`. Any id adb does not list is reported, even one
-   * that names a device read under another id, such as a provider's `ext:` id,
-   * so a caller keeps only the ids it can act on.
+   * alongside an Android `found`, and never an id whose serial shows it is
+   * another device than a found one. Any other id adb does not list is
+   * reported, even one that names a device read under another id, such as a
+   * provider's `ext:` id, so a caller keeps only the ids it can act on.
    */
   unresolved: string[];
 }
@@ -58,7 +60,8 @@ const NOT_FOUND: RuntimeDevices = { found: [], unresolved: [] };
  * keys by serial, such as native network capture, may sit under any of them.
  * `awaitSerials` are the serials such state sits under: their reads are waited
  * for in full, and one that cannot be read is reported in `unresolved`, since
- * it cannot be told apart from this device.
+ * it cannot be told apart from this device. Neither holds for a serial that by
+ * itself names another device than a found one, such as a second emulator.
  *
  * Nothing is found when the runtime has no native logger, or when no device
  * argent can read the log of holds the marker (a physical iPhone, a provider's
@@ -119,7 +122,8 @@ function firstFound<T>(checks: Array<() => Promise<T | undefined>>): Promise<T |
  * The serials whose logcat holds the marker. It reads every listed serial at
  * once and stops once all have answered, or once
  * {@link OTHER_TRANSPORTS_GRACE_MS} has passed since the first hit and every
- * listed serial in `awaitSerials` has answered. Undefined when none holds it.
+ * listed serial in `awaitSerials` has answered or is {@link anotherDevice}
+ * than a serial that holds the marker. Undefined when none holds it.
  */
 async function androidDevices(
   serials: readonly string[],
@@ -137,7 +141,11 @@ async function androidDevices(
     let grace: ReturnType<typeof setTimeout> | undefined;
     const settle = () => {
       const allAnswered = answers.size === listed.length;
-      if (allAnswered || (graceOver && awaited.every((serial) => answers.has(serial)))) {
+      const held = heldSerials(answers);
+      const awaitedAnswered = awaited.every(
+        (serial) => answers.has(serial) || held.some((found) => anotherDevice(serial, found))
+      );
+      if (allAnswered || (graceOver && awaitedAnswered)) {
         clearTimeout(grace);
         resolve();
       }
@@ -156,12 +164,46 @@ async function androidDevices(
       });
     }
   });
-  const found = [...answers].filter(([, read]) => read === "held").map(([serial]) => serial);
+  const found = heldSerials(answers);
   if (found.length === 0) return undefined;
   const unresolved = [...new Set(awaitSerials)].filter(
-    (serial) => !listed.includes(serial) || answers.get(serial) === "failed"
+    (serial) =>
+      (!listed.includes(serial) || answers.get(serial) === "failed") &&
+      !found.some((device) => anotherDevice(serial, device))
   );
   return { found, unresolved };
+}
+
+function heldSerials(answers: ReadonlyMap<string, LogRead>): string[] {
+  return [...answers].filter(([, read]) => read === "held").map(([serial]) => serial);
+}
+
+/**
+ * Whether two adb serials surely name two devices, by the serials alone. Every
+ * serial that holds the marker names the profiled device, so a serial that is
+ * another device than any one of them is not it.
+ *
+ * A local emulator registers with adb as exactly one `emulator-<console port>`,
+ * and a loopback transport names its console port too (see
+ * `consolePortFromAdbSerial`), so two emulator ports are two devices. A USB
+ * serial (no `:`, and not an mDNS name such as
+ * `adb-<serial>._adb-tls-connect._tcp`) names one physical device, which is neither an emulator nor another USB
+ * serial. A wireless `ip:port` or mDNS name can be any device, so it is never
+ * told apart.
+ */
+function anotherDevice(a: string, b: string): boolean {
+  if (a === b) return false;
+  const portA = consolePortFromAdbSerial(a);
+  const portB = consolePortFromAdbSerial(b);
+  if (portA !== null && portB !== null) return portA !== portB;
+  if (isUsbSerial(a) && isUsbSerial(b)) return true;
+  return (
+    (a.startsWith("emulator-") && isUsbSerial(b)) || (b.startsWith("emulator-") && isUsbSerial(a))
+  );
+}
+
+function isUsbSerial(serial: string): boolean {
+  return !serial.startsWith("emulator-") && !serial.includes(":") && !serial.includes("._");
 }
 
 async function androidSerials(): Promise<string[]> {

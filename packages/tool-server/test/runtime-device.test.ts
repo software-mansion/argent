@@ -173,7 +173,7 @@ describe("findRuntimeDevices", () => {
 
     const found = findRuntimeDevices(runtimeOn("emulator-5554"), { awaitSerials: [SHARED] });
     await vi.runAllTimersAsync();
-    await expect(found).resolves.toEqual({ found: ["emulator-5554"], unresolved: [SHARED] });
+    await expect(found).resolves.toEqual(foundOn("emulator-5554"));
   });
 
   // The grace window starts at the first hit, not the first answer, so a serial
@@ -188,6 +188,54 @@ describe("findRuntimeDevices", () => {
     await expect(findRuntimeDevices(runtimeOn("emulator-5556"))).resolves.toEqual(
       foundOn("emulator-5556")
     );
+  });
+
+  // An emulator registers with adb as one `emulator-<console port>`, and its
+  // loopback transport names that port too, so a second emulator, or an
+  // emulator next to a USB serial, is another device.
+  describe("for a serial that by itself names another device", () => {
+    it("does not report it as unresolved when its read fails or adb does not list it", async () => {
+      adb.failing.add("emulator-5556");
+      await expect(
+        findRuntimeDevices(runtimeOn("emulator-5554"), { awaitSerials: ["emulator-5556"] })
+      ).resolves.toEqual(foundOn("emulator-5554"));
+
+      adb.serials = ["emulator-5554"];
+      await expect(
+        findRuntimeDevices(runtimeOn("emulator-5554"), { awaitSerials: ["emulator-5556"] })
+      ).resolves.toEqual(foundOn("emulator-5554"));
+
+      adb.serials = ["R58M123ABC"];
+      await expect(
+        findRuntimeDevices(runtimeOn("R58M123ABC"), {
+          awaitSerials: ["emulator-5556", "R58M999XYZ"],
+        })
+      ).resolves.toEqual(foundOn("R58M123ABC"));
+    });
+
+    it("reports the emulator's own loopback transport and wireless serials", async () => {
+      const MDNS = "adb-R58M123ABC-x1y2z3._adb-tls-connect._tcp";
+      adb.serials = ["emulator-5554"];
+
+      await expect(
+        findRuntimeDevices(runtimeOn("emulator-5554"), {
+          awaitSerials: ["127.0.0.1:5555", "127.0.0.1:5557", "192.168.1.5:5555", MDNS],
+        })
+      ).resolves.toEqual({
+        found: ["emulator-5554"],
+        unresolved: ["127.0.0.1:5555", "192.168.1.5:5555", MDNS],
+      });
+    });
+
+    it("does not wait out its hung read once the device is found", async () => {
+      adb.readDelayMs.set("emulator-5556", Infinity);
+      const startedAt = Date.now();
+
+      await expect(
+        findRuntimeDevices(runtimeOn("emulator-5554"), { awaitSerials: ["emulator-5556"] })
+      ).resolves.toEqual(foundOn("emulator-5554"));
+      expect(Date.now() - startedAt).toBeLessThan(OTHER_TRANSPORTS_GRACE_MS + 1_000);
+    });
   });
 
   describe("for a device reachable over two adb transports", () => {
@@ -250,8 +298,6 @@ describe("findRuntimeDevices", () => {
       ).resolves.toEqual(foundOn(USB));
     });
 
-    // An offline or disconnected transport is not read, yet capture kept under
-    // it stays on, so it may be this device as much as a failed read.
     // Several serials are often awaited, every simulator-server id among them.
     it("waits in full for every awaited serial, not only the first to answer", async () => {
       adb.readDelayMs.set(WIRELESS, OTHER_TRANSPORTS_GRACE_MS + 300);
@@ -261,20 +307,34 @@ describe("findRuntimeDevices", () => {
       ).resolves.toEqual(foundOn(USB, WIRELESS));
     });
 
-    // A simulator's UDID or a provider's `ext:` id is awaited too, and adb never
+    // A provider's `ext:` id or a simulator's UDID is awaited too, and adb never
     // answers for it.
     it("does not wait out a hung transport for an awaited id adb does not list", async () => {
+      const PROVIDER_ID = "ext:acme-3f2a9c:emulator-5556";
       adb.readDelayMs.set(WIRELESS, Infinity);
       const startedAt = Date.now();
 
       await expect(
-        findRuntimeDevices(runtimeOn(USB, WIRELESS), {
-          awaitSerials: ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"],
-        })
-      ).resolves.toEqual({ found: [USB], unresolved: ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"] });
+        findRuntimeDevices(runtimeOn(USB, WIRELESS), { awaitSerials: [PROVIDER_ID] })
+      ).resolves.toEqual({ found: [USB], unresolved: [PROVIDER_ID] });
       expect(Date.now() - startedAt).toBeLessThan(OTHER_TRANSPORTS_GRACE_MS + 1_000);
     });
 
+    // An awaited serial that reads without the marker has answered, so the grace
+    // window still bounds the probe when a transport that was not awaited hangs.
+    it("counts an awaited serial that reads without the marker as answered", async () => {
+      adb.serials = [USB, WIRELESS, "10.0.0.9:5555"];
+      adb.readDelayMs.set(WIRELESS, Infinity);
+      const startedAt = Date.now();
+
+      await expect(
+        findRuntimeDevices(runtimeOn(USB, WIRELESS), { awaitSerials: ["10.0.0.9:5555"] })
+      ).resolves.toEqual(foundOn(USB));
+      expect(Date.now() - startedAt).toBeLessThan(OTHER_TRANSPORTS_GRACE_MS + 1_000);
+    });
+
+    // An offline or disconnected transport is not read, yet capture kept under
+    // it stays on, so it may be this device as much as a failed read.
     it("reports an awaited serial adb does not list as ready as unresolved", async () => {
       adb.serials = [USB, OTHER];
 
