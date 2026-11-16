@@ -1,6 +1,7 @@
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   type DeviceInfo,
   type Registry,
   type ToolDefinition,
@@ -23,6 +24,7 @@ import {
   installNetworkInterceptor,
   jsCapturePayload,
   setJsCapture,
+  setJsUnavailable,
   type JsCapture,
   type JsCaptureMark,
   type NetworkInspectorApi,
@@ -34,8 +36,9 @@ import { metroPort } from "../../utils/debugger/metro-port";
 import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
 import { xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { resolveDevice } from "../../utils/device-info";
+import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { macosAppServices } from "../../utils/macos-input";
+import { macosAppRef, macosLaunchRefusal, type MacosAppApi } from "../../blueprints/macos-app";
 import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
@@ -63,7 +66,7 @@ export function createNetworkCaptureStartTool(
     id: "network-capture-start",
     description: `Start network capture for an app on every layer that sees its requests: the app's JS runtime and the native layer (NSURLProtocol on iOS; OkHttp on Android, which needs a debuggable build).<flag:macos-apps> On a Mac app, only its native NSURLProtocol layer.</flag:macos-apps>
 Use when you are about to trigger requests you need to inspect, also as a step of an e2e test. Unlike the read tools (native-network-logs and view-network-logs on iOS and Android<flag:macos-apps>, native-network-logs on a Mac app</flag:macos-apps>), which only read and say capture is not started until this runs, this turns capture on and waits a few seconds for each layer to arm. A second call keeps the requests captured so far.
-Returns { status, layers }: per layer, armed, and a reason when it is not armed (unavailable: true when nothing arms it without a change you must make). A native layer that is not armed yet arms by itself, for example at the app's next launch, and native capture follows the app into later processes that launch-app and restart-app start, until network-capture-stop. The JS layer arms only at a call of this tool: call it again once the app's JavaScript has loaded, and after a reload or relaunch. Capture can slow the app.
+Returns { status, layers }: per layer, armed, and a reason when it is not armed (unavailable: true when nothing arms it without a change you must make). A native layer that is not armed yet arms by itself, for example at the app's next launch (on Android, only a launch by launch-app or restart-app), and native capture follows the app into later processes that launch-app and restart-app start, until network-capture-stop. On a device whose devtools agent argent attached to, a relaunch ends native capture: call this tool again after it. The JS layer arms only at a call of this tool: call it again once the app's JavaScript has loaded, and after a reload or relaunch. Capture can slow the app.
 Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
@@ -74,33 +77,15 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
         `Failed to start network capture for ${params.bundleId}: ${failureSignal.error_code}`,
     },
     // Each layer resolves its own service, so one that fails leaves the others running.
-    // A Mac app has one layer, in the app's own service.
-    services: (params) => {
+    services: () => ({}),
+    async execute(_services, params) {
       const device = resolveDevice(params.udid);
-      return device.platform === "macos" ? macosAppServices(device) : {};
-    },
-    async execute(services, params) {
-      const device = resolveDevice(params.udid);
+      // Only the HTTP gate checks the capability, and an e2e `tool:` step does not pass it.
+      assertSupported("network-capture-start", CAPTURE_CAPABILITY, device);
       if (device.platform === "macos") {
-        const app = requireMacosAppOfBundle(
-          services,
-          device,
-          "network-capture-start",
-          params.bundleId
+        const layer = await withCaptureLock(params.udid, params.bundleId, () =>
+          startMacosLayer(registry, device, params)
         );
-        // No launch of an Apple app loads argent's library, so nothing arms it.
-        if (!isInjectableBundleId(params.bundleId)) {
-          throw unavailableError(params, [
-            unavailable(
-              "macos-native",
-              `${params.bundleId} is an Apple app; argent captures only apps it can load its library into, such as your own builds`
-            ),
-          ]);
-        }
-        const layer = await withCaptureLock(params.udid, params.bundleId, async () => {
-          const { armed, reason } = await app.startNetworkCapture();
-          return { layer: "macos-native" as const, armed, ...(reason ? { reason } : {}) };
-        });
         return { status: "ok", layers: [layer] };
       }
       await ensureDeps(
@@ -133,6 +118,39 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
       return { status: "ok", layers };
     },
   };
+}
+
+/**
+ * A Mac app has one layer, in the app's own service. It is resolved under the
+ * lock, so a start that waited for a stop-all-simulator-servers of the app arms
+ * the service that comes after it.
+ */
+async function startMacosLayer(
+  registry: Registry,
+  device: DeviceInfo,
+  params: CaptureParams
+): Promise<StartedLayer> {
+  const ref = macosAppRef(device);
+  const app = requireMacosAppOfBundle(
+    { macosApp: await registry.resolveService<MacosAppApi>(ref.urn, ref.options) },
+    device,
+    "network-capture-start",
+    params.bundleId
+  );
+  // No launch of an Apple app loads argent's library, so nothing arms it.
+  if (!isInjectableBundleId(params.bundleId)) {
+    throw unavailableError(params, [
+      unavailable(
+        "macos-native",
+        `${params.bundleId} is an Apple app; argent captures only apps it can load its library into, such as your own builds`
+      ),
+    ]);
+  }
+  // Nor does a launch arm an app that argent refuses to start.
+  const refusal = app.isConnected() ? undefined : await macosLaunchRefusal(params.bundleId);
+  if (refusal) throw unavailableError(params, [unavailable("macos-native", refusal)]);
+  const { armed, reason } = await app.startNetworkCapture();
+  return { layer: "macos-native", armed, ...(reason ? { reason } : {}) };
 }
 
 function unavailableError(params: CaptureParams, layers: StartedLayer[]): FailureError {
@@ -193,21 +211,40 @@ async function startJsLayer(
   // An interceptor an earlier start installed here stays in the app's JS context
   // until a reload, whatever becomes of this start.
   const installedHere = found !== undefined && !other && found.installed;
+  // That interceptor records until a stop pauses it, so its entry stays, and
+  // the layer is not unavailable, whatever this start finds.
+  const recording = installedHere && found.paused !== true;
   let dbg: JsRuntimeDebuggerApi;
   try {
     dbg = await resolveDebuggerService(registry, { port, device_id: udid });
   } catch (err) {
     const reason = classifyNotConnected(err);
-    const lost = reason === "metro_not_running" || reason === "device_mismatch";
+    const code = getFailureSignal(err)?.error_code;
+    // Only the device provider changes its grant, or offers the device again.
+    const lost =
+      reason === "metro_not_running" ||
+      reason === "device_mismatch" ||
+      code === FAILURE_CODES.EXTERNAL_DEVICE_CAPABILITY_DENIED ||
+      code === FAILURE_CODES.EXTERNAL_DEVICE_UNAVAILABLE;
     if (other) {
       const text = `${jsNotReached(reason, port, err)}; ${otherPortHint(bundleId, other.port)}`;
       return lost ? unavailable("js", text) : { layer: "js", armed: false, reason: text };
     }
+    if (lost && recording) {
+      return {
+        layer: "js",
+        armed: false,
+        reason: `${jsNotReached(reason, port, err)}; the interceptor already in the app's JS runtime may still record, so call network-capture-start again once the app answers`,
+      };
+    }
     if (lost) {
-      // No mark stays for a layer that is unavailable, but an interceptor an
-      // earlier start installed records until a stop pauses it, so its entry stays.
-      if (!found?.installed || found.paused) forgetJsCapture(device, bundleId);
-      return unavailable("js", jsNotReached(reason, port, err));
+      const text = jsNotReached(reason, port, err);
+      // A stop's pause, and the requests it kept, stay with that interceptor.
+      if (installedHere) return unavailable("js", text);
+      // No mark stays for a layer that is unavailable; a read says why.
+      forgetJsCapture(device, bundleId);
+      setJsUnavailable(payload, bundleId, text);
+      return unavailable("js", text);
     }
     // The app may connect, or answer, after this call; the next start arms it.
     // This start did not reach the JS context, so a pause a stop left there stays.
@@ -227,15 +264,22 @@ async function startJsLayer(
 
   const appId = dbg.runtimeApp?.appId;
   if (appId !== undefined && appId !== bundleId) {
-    // That app's own capture on this port stays as it is, and so does an
-    // interceptor an earlier start of this app installed.
-    if (!other && (!found?.installed || found.paused)) forgetJsCapture(device, bundleId);
-    return unavailable(
-      "js",
-      `the JS runtime on Metro port ${port} is ${appId}'s, not ${bundleId}'s; ${
-        other ? otherPortHint(bundleId, other.port) : `pass the port of ${bundleId}'s Metro`
-      }`
-    );
+    const notOurs = `the JS runtime on Metro port ${port} is ${appId}'s, not ${bundleId}'s`;
+    if (recording) {
+      return {
+        layer: "js",
+        armed: false,
+        reason: `${notOurs}; the interceptor already in ${bundleId}'s JS runtime may still record, so call network-capture-start again once that runtime answers on this port`,
+      };
+    }
+    if (other) return unavailable("js", `${notOurs}; ${otherPortHint(bundleId, other.port)}`);
+    const text = `${notOurs}; if that runtime is the app, pass bundleId ${appId}; otherwise pass the port of ${bundleId}'s Metro`;
+    // A stop's pause, and the requests it kept, stay with that interceptor.
+    if (installedHere) return unavailable("js", text);
+    // That app's own capture on this port stays as it is; a read says why this app has none.
+    forgetJsCapture(device, bundleId);
+    setJsUnavailable(payload, bundleId, text);
+    return unavailable("js", text);
   }
 
   const capture: JsCapture = { bundleId, intent: "started", installed: installedHere };
@@ -338,7 +382,8 @@ async function startIosLayer(
   const armed = await api.startNetworkCapture(
     bundleId,
     port,
-    block?.status === "connect_pending" ? IOS_CONNECT_WAIT_MS : 0
+    // A lent agent says whether the provider has capture on only after it connects.
+    block?.status === "connect_pending" || !api.armsEnv ? IOS_CONNECT_WAIT_MS : 0
   );
   if (armed) return { layer: "ios-native", armed: true };
   if (api.isConnected(bundleId)) {
@@ -363,7 +408,7 @@ async function startIosLayer(
     armed: false,
     reason:
       block?.status === "restart_required"
-        ? "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture"
+        ? "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app"
         : "the app has not connected yet; capture arms when it does",
   };
 }

@@ -42,6 +42,7 @@ import {
   recordTrackedMacosApp,
   runningTrackedApp,
   stageLibraryFor,
+  type MacosAppInfo,
 } from "../utils/macos-apps";
 import {
   createIosNetworkRecords,
@@ -253,6 +254,37 @@ function notRunningError(bundleId: string): FailureError {
     FAILURE_CODES.MACOS_APP_NOT_RUNNING,
     "macos_app_connect",
     "not_found"
+  );
+}
+
+function catalystRefusal(bundleId: string): string {
+  return (
+    `${bundleId} is a Mac Catalyst (UIKit) app, which argent does not drive: typing, ` +
+    `paste and scrolling do not reach its views. Test its UI on an iOS simulator instead.`
+  );
+}
+
+/**
+ * Why argent refuses to start the app, so that no launch arms its capture: a
+ * Mac Catalyst app, an Electron app or a build that the hardened runtime keeps
+ * the library out of. Undefined while argent's own copy runs, and when argent
+ * cannot tell, for example when Spotlight does not know the app.
+ */
+export async function macosLaunchRefusal(bundleId: string): Promise<string | undefined> {
+  if (await runningTrackedApp(bundleId)) return undefined;
+  const appPath = getTrackedMacosApp(bundleId)?.appPath ?? (await findMacosAppByBundleId(bundleId));
+  if (!appPath) return undefined;
+  let info: MacosAppInfo;
+  try {
+    info = await inspectMacosApp(appPath);
+  } catch {
+    return undefined;
+  }
+  if (info.bundleId !== bundleId) return undefined;
+  return (
+    (info.catalyst ? catalystRefusal(bundleId) : chromiumRefusal(info)) ??
+    hardenedRuntimeRefusal(info) ??
+    undefined
   );
 }
 
@@ -1205,8 +1237,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       ? `${bundleId} is an Apple app. argent drives only apps it can load its library into, ` +
         `such as your own builds.`
       : info.catalyst
-        ? `${bundleId} is a Mac Catalyst (UIKit) app, which argent does not drive: typing, ` +
-          `paste and scrolling do not reach its views. Test its UI on an iOS simulator instead.`
+        ? catalystRefusal(bundleId)
         : chromiumRefusal(info);
     if (unsupported) {
       throw macosFailure(
@@ -1480,12 +1511,15 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         ch = await ensureChannel();
       } catch (err) {
         if (disposed) return servicesStopped;
+        const notRunning = errorCode(err) === FAILURE_CODES.MACOS_APP_NOT_RUNNING;
+        // The app runs, so its requests before this start are not recorded, also
+        // when argent later reconnects to a process it was connected to before.
+        if (!notRunning && startedNow && !armedSinceLaunch) captureGap = true;
         return {
           armed: false,
-          reason:
-            errorCode(err) === FAILURE_CODES.MACOS_APP_NOT_RUNNING
-              ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
-              : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
+          reason: notRunning
+            ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
+            : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
         };
       }
       // A launch this start waited for armed its process from the start.
@@ -1511,7 +1545,15 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         await ch.cdp.request("Network.disable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS });
         return { confirmed: true };
       } catch (err) {
-        if (!ch.isOpen || disposed) return { confirmed: true };
+        // A stop of the app's services during this stop closed the channel and dropped the records.
+        if (disposed) {
+          return {
+            confirmed: true,
+            reason:
+              "the app's services stopped during this stop, which dropped the requests it recorded",
+          };
+        }
+        if (!ch.isOpen) return { confirmed: true };
         return {
           confirmed: false,
           reason: `${
@@ -1537,6 +1579,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     dispose: () => {
       disposed = true;
       macosCaptures.delete(capture);
+      // The records go with the service: a call that still holds it lists none.
+      records.clear();
       // A launch in flight finishes its checks on its channel first. A closed
       // channel takes the network capture off with it.
       if (!launching) closeChannel();

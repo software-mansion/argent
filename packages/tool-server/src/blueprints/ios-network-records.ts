@@ -62,9 +62,12 @@ const RESPONSE_BODY_TIMEOUT_MS = 10_000;
  */
 export const KEPT_BODY_CHARS_BUDGET = 64 * 1024 * 1024;
 
-const STILL_SENDING = "the app is still sending this request body; read it again later";
+const STILL_SENDING =
+  "the app may still be sending this request body; read it again after the request ends";
 /** A request body read of a request that has ended, which the app did not answer in time. */
 const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; read it again later`;
+/** A response body read that waited behind a read the app did not answer in time. */
+const NO_EARLIER_ANSWER = `the app did not answer an earlier body read within ${RESPONSE_BODY_TIMEOUT_MS / 1000} s; read it again later`;
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
 /** argent can connect to a Mac app's process again, and then read the body. */
 const MACOS_CONNECTION_CLOSED = `${CONNECTION_CLOSED}; read it again after argent reconnects to the app, as network-capture-start does`;
@@ -186,6 +189,12 @@ export function createIosNetworkRecords(
    * other replies and events on the connection while it is sent.
    */
   const bodyReads = new Map<string, Promise<unknown>>();
+  /**
+   * Per connection, when a body read last got no reply in time, until the app
+   * answers a later read. A response body read asked before then is not sent
+   * when its turn comes: each read would wait its own 10 s, one after another.
+   */
+  const stalls = new Map<number, number>();
   /** Closed connections whose process the host found ended. */
   const endedConnections = new Set<number>();
   /** The newest connection of the app seen, live or closed since. */
@@ -342,19 +351,31 @@ export function createIosNetworkRecords(
     bodies.set(cacheKey, read);
     // The lost read can still bring the body, as when the app answers it after
     // the request's end: its body answers this read too, if it comes first.
-    if (cached) {
-      void cached.answer.then((body) => {
-        if (body.available) adoptAnswer(body);
-      });
-    }
-    // Only a body is kept: every reason may change at the next read.
+    if (cached) adoptLateBody(cached.answer, answer, adoptAnswer);
+    // Only a body is kept: every reason may change at the next read. A body
+    // takes the newest place when it comes, as a read held open through an
+    // upload brings it after the bodies read meanwhile.
     void answer.then((body) => {
       read.settled = true;
       read.chars = body.body.length;
-      if (!body.available && bodies.get(cacheKey) === read) bodies.delete(cacheKey);
+      if (bodies.get(cacheKey) === read) {
+        bodies.delete(cacheKey);
+        if (body.available) bodies.set(cacheKey, read);
+      }
       dropOldBodies();
     });
+    const askedAt = performance.now();
     void withKeyedLock(bodyReads, String(record.connection), () => {
+      // The replaced read brought the body while this one waited its turn.
+      if (read.settled) {
+        markSent();
+        return answer;
+      }
+      if (kind === "response" && (stalls.get(record.connection) ?? -Infinity) > askedAt) {
+        adoptAnswer(unavailable(NO_EARLIER_ANSWER));
+        markSent();
+        return answer;
+      }
       read.heldOpen = kind === "post" && record.state === "pending";
       void sendBodyRead(record, kind).then(adoptAnswer);
       markSent();
@@ -421,8 +442,18 @@ export function createIosNetworkRecords(
         )
       );
     }).then(
-      (result) => toBody(result, kind),
-      (err: unknown) => unavailable(failureReason(record, kind, method, err))
+      (result) => {
+        stalls.delete(record.connection);
+        return toBody(result, kind);
+      },
+      (err: unknown) => {
+        if (getFailureSignal(err)?.error_code === FAILURE_CODES.NDJSON_CDP_REQUEST_TIMEOUT) {
+          stalls.set(record.connection, performance.now());
+        } else {
+          stalls.delete(record.connection);
+        }
+        return unavailable(failureReason(record, kind, method, err));
+      }
     );
   }
 
@@ -530,8 +561,13 @@ export function createIosNetworkRecords(
           check.runningPid !== check.connectionPid);
       if (ended) endedConnections.add(connection);
       // Collected first: re-measuring a record can evict the oldest, which
-      // would shift the array under a loop over it and skip a record.
-      const open = records.filter((r) => r.connection === connection && isOpen(r));
+      // would shift the array under a loop over it and skip a record. A Mac
+      // request cut off by a drop can complete only while its process runs.
+      const open = records.filter(
+        (r) =>
+          r.connection === connection &&
+          (isOpen(r) || (ended && r.errorText === MACOS_CONNECTION_DROPPED))
+      );
       for (const record of open) {
         record.state = "failed";
         record.errorText = ended
@@ -579,6 +615,27 @@ interface BodyRead {
   chars: number;
   /** A request body read that went out while the app was still sending the body. */
   heldOpen?: boolean;
+}
+
+/**
+ * Lets the body that a lost read brings answer the read that replaced it, if
+ * it comes first. The lost read can stay open until its connection closes, so
+ * it must not keep the replacing read's body after the store drops it. Its
+ * callback holds only `take`, which is cleared once the replacing read
+ * settles, and not the caller's scope, which holds the body.
+ */
+function adoptLateBody(
+  lost: Promise<NativeNetworkBody>,
+  replacing: Promise<NativeNetworkBody>,
+  adopt: (body: NativeNetworkBody) => void
+): void {
+  let take: typeof adopt | undefined = adopt;
+  void replacing.then(() => {
+    take = undefined;
+  });
+  void lost.then((body) => {
+    if (body.available) take?.(body);
+  });
 }
 
 /**

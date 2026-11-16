@@ -88,7 +88,9 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
       // machine-wide sweep, which would tear down other agents' services.
       const scoped = devices !== undefined;
       // A start or stop of their apps under way ends first, and one called meanwhile waits.
-      return withCaptureSweep(scoped ? devices : undefined, async () => {
+      return withCaptureSweep(scoped ? devices : undefined, { signal: ctx?.signal }, async () => {
+        // Cancelled while it waited: nothing is stopped yet.
+        if (ctx?.signal?.aborted) return { stopped: [], aborted: true };
         const stopped: string[] = [];
         const matchedIds = new Set<string>();
         // Live port-keyed services this scope did NOT claim; unclaimed services

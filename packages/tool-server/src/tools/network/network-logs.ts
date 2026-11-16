@@ -7,6 +7,7 @@ import {
   jsCapture,
   jsCapturePayload,
   jsCapturesOn,
+  jsUnavailableOn,
   type JsCapture,
   type NetworkInspectorApi,
 } from "../../blueprints/network-inspector";
@@ -38,7 +39,7 @@ const NOT_STARTED =
   "Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then";
 
 const PAUSED_BY_STOP =
-  "JS runtime does not record new requests: network-capture-stop paused it, and no network-capture-start reached it since";
+  "JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since";
 
 /**
  * The JS capture a read of `payload` reads, or undefined before any start. A runtime of another
@@ -56,7 +57,7 @@ export function jsCaptureForRead(
 
 /**
  * The not-started text, ending with `then`, and with the Metro ports the device's capture is on
- * instead.
+ * instead. After a start that found the JS layer unavailable on the port, it gives that reason.
  */
 export function jsNotStarted(
   device: string,
@@ -71,7 +72,11 @@ export function jsNotStarted(
         ` This device has network capture for ${capture.bundleId} on Metro port ${capture.port}: pass port ${capture.port} to read it.`
     )
     .join("");
-  return `${lead}${NOT_STARTED} ${then}.${elsewhere}`;
+  const unavailable = jsUnavailableOn(jsCapturePayload(port, device));
+  const head = unavailable
+    ? `Network capture is not started on the JS layer: network-capture-start for ${unavailable.bundleId} found it unavailable (${unavailable.reason}). native-network-logs lists the requests of the native layer. Once the JS layer can start, call network-capture-start again, repeat the action, then`
+    : NOT_STARTED;
+  return `${lead}${head} ${then}.${elsewhere}`;
 }
 
 /**
@@ -84,9 +89,11 @@ export function jsNoLog(capture: JsCapture): string {
       ? `Network capture is stopped for ${capture.bundleId} (network-capture-stop), and the app's JS runtime reloaded since, which cleared its requests. Call network-capture-start to capture again, then repeat the action.`
       : `Network capture is stopped for ${capture.bundleId} (network-capture-stop), and nothing was recorded in the app's current JS runtime. Call network-capture-start to capture again, then repeat the action.`;
   }
+  // The native layer records on, so these texts speak for the JS layer only.
+  const native = "native-network-logs lists the requests of the native layer.";
   return capture.installed
-    ? "Network capture for this app stopped recording at a JavaScript reload; requests since the reload are not recorded. Call network-capture-start again, repeat the action, then read again."
-    : "Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so no requests are recorded. Call network-capture-start again, repeat the action, then read again.";
+    ? `The JS layer of network capture for this app stopped recording at a JavaScript reload, so it recorded no requests since the reload. ${native} To record the app's JavaScript requests again, call network-capture-start, repeat the action, then read again.`
+    : `Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so the JS layer recorded no requests. ${native} To record the app's JavaScript requests, call network-capture-start again, repeat the action, then read again.`;
 }
 
 // Auto-scaled base-1024 units: a big download reads `1.4 GB`, not `1433.6 MB`.

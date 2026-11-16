@@ -633,12 +633,12 @@ describe("NetworkInspector integration (mock server)", () => {
     {
       says: "that capture stopped recording at a reload",
       installed: true,
-      text: "Network capture for this app stopped recording at a JavaScript reload; requests since the reload are not recorded. Call network-capture-start again, repeat the action, then read again.",
+      text: "The JS layer of network capture for this app stopped recording at a JavaScript reload, so it recorded no requests since the reload. native-network-logs lists the requests of the native layer. To record the app's JavaScript requests again, call network-capture-start, repeat the action, then read again.",
     },
     {
       says: "that the app's JS runtime was not ready at the start",
       installed: false,
-      text: "Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so no requests are recorded. Call network-capture-start again, repeat the action, then read again.",
+      text: "Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so the JS layer recorded no requests. native-network-logs lists the requests of the native layer. To record the app's JavaScript requests, call network-capture-start again, repeat the action, then read again.",
     },
   ])(
     "view-network-logs of a context without the interceptor says $says and installs nothing",

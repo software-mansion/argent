@@ -302,6 +302,46 @@ describe("view-network-request-details: iOS response bodies", () => {
     );
   });
 
+  it.each([["<a>hi</a>"], ["あいう"]])(
+    "decodes a text body in the charset its Content-Type names, as a base64 body: %s",
+    async (text) => {
+      // UTF-16 bytes with no BOM are often valid UTF-8, so the agent can send them as text.
+      const utf16 = Buffer.from(text, "utf16le");
+      serve(
+        record({
+          response: {
+            headers: { "Content-Type": "text/xml; charset=utf-16le" },
+            mimeType: "text/xml",
+          },
+        })
+      );
+      responseBody.mockResolvedValue(textBody(utf16.toString("utf8")));
+      expect((await details()).response.body).toBe(text);
+
+      responseBody.mockResolvedValue(base64Body(utf16));
+      expect((await details()).response.body).toBe(text);
+    }
+  );
+
+  it("decodes a text body the agent cut short in its charset, leaving out the incomplete character", async () => {
+    // "<a>" and the first byte of "h" in UTF-16LE.
+    const kept = Buffer.from("<a>h", "utf16le").subarray(0, 7);
+    serve(
+      record({
+        encodedDataLength: 5000,
+        response: {
+          headers: { "Content-Type": "text/xml; charset=utf-16le" },
+          mimeType: "text/xml",
+        },
+      })
+    );
+    responseBody.mockResolvedValue(textBody(kept.toString("utf8"), true));
+
+    expect((await details()).response.body).toBe(
+      "[TRUNCATED: first 3 chars shown, full size: 5000 bytes as the app received them; the agent kept only the first 7 bytes, MIME: text/xml]\n<a>"
+    );
+  });
+
   it("reads a body cut inside a multi-byte character as text, not binary", async () => {
     const kept = Buffer.concat([Buffer.from('{"a":"東'), Buffer.from("京").subarray(0, 2)]);
     expect(() => new TextDecoder("utf-8", { fatal: true }).decode(kept)).toThrow();
@@ -420,14 +460,16 @@ describe("view-network-request-details: iOS bodies that cannot be read", () => {
   it("shows the store's reason for a request body and a response body it cannot give", async () => {
     serve(post({ "Content-Type": "application/json" }));
     requestPostData.mockResolvedValue(
-      unavailable("the app is still sending this request body; read it again later")
+      unavailable(
+        "the app may still be sending this request body; read it again after the request ends"
+      )
     );
     responseBody.mockResolvedValue(unavailable("the agent no longer holds this body"));
 
     const result = await details();
 
     expect(result.request.postData).toBe(
-      "[unavailable: the app is still sending this request body; read it again later]"
+      "[unavailable: the app may still be sending this request body; read it again after the request ends]"
     );
     expect(result.response.body).toBe("[unavailable: the agent no longer holds this body]");
   });

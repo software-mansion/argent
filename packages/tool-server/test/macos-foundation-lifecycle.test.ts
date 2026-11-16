@@ -38,7 +38,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 // Pids that the process search reports besides the real ones: a pid that
 // another program has by the time argent signals it.
-const searched = vi.hoisted(() => ({ extraPids: [] as number[] }));
+const searched = vi.hoisted(() => ({
+  extraPids: [] as number[],
+  /** Apps that the Spotlight lookup finds, by bundle id. */
+  spotlight: {} as Record<string, string>,
+}));
 vi.mock("../src/utils/macos-apps", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/macos-apps")>();
   return {
@@ -47,7 +51,15 @@ vi.mock("../src/utils/macos-apps", async (importOriginal) => {
       const found = await actual.findRunningCopies(...args);
       return { ...found, same: [...found.same, ...searched.extraPids] };
     },
+    findMacosAppByBundleId: async (bundleId: string) =>
+      searched.spotlight[bundleId] ?? actual.findMacosAppByBundleId(bundleId),
   };
+});
+
+// The waits argent hands the pid poll, which no test can time on a busy machine.
+vi.mock("../src/utils/process-kill", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/process-kill")>();
+  return { ...actual, pollPidsUntilGone: vi.fn(actual.pollPidsUntilGone) };
 });
 
 // list-devices: only the Mac branch is under test, so the other platforms'
@@ -98,7 +110,9 @@ import { createNetworkCaptureStartTool } from "../src/tools/network/network-capt
 import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
+import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { resolveDevice } from "../src/utils/device-info";
+import { pollPidsUntilGone } from "../src/utils/process-kill";
 import { PROCESS_ENDED } from "../src/utils/native-network-record";
 import { MACOS_CONNECTION_DROPPED } from "../src/blueprints/ios-network-records";
 import {
@@ -248,6 +262,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     native.missing = false;
     spawned.length = 0;
     searched.extraPids = [];
+    searched.spotlight = {};
     registry = new Registry();
     registry.registerBlueprint(macosAppBlueprint);
     tools = {
@@ -261,6 +276,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       "network-capture-stop": createNetworkCaptureStopTool(registry),
       "view-network-request-details": networkRequestTool,
       "stop-simulator-server": createStopSimulatorServerTool(registry),
+      "stop-all-simulator-servers": createStopAllSimulatorServersTool(registry),
     };
     for (const tool of Object.values(tools)) registry.registerTool(tool);
   });
@@ -770,7 +786,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       });
       const [{ id }] = (await readLog()).requests;
       const sending =
-        "[unavailable: the app is still sending this request body; read it again later]";
+        "[unavailable: the app may still be sending this request body; read it again after the request ends]";
       expect((await details(id)).request.postData).toBe(sending);
       // The next wait ends 11 s after the read went out, and the read is still open.
       await new Promise((r) => setTimeout(r, 1_000));
@@ -926,7 +942,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       await run("boot-device", { macosAppPath: appPath });
       await start();
       const sending =
-        "[unavailable: the app is still sending this request body; read it again later]";
+        "[unavailable: the app may still be sending this request body; read it again after the request ends]";
       await request("https://example.com/r1", { method: "POST", postData: "BODY-1", hold: true });
       const [r1] = (await readLog()).requests;
       // The app holds the read until the upload ends, and answers it then on
@@ -951,7 +967,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       await request("https://example.com/held", { method: "POST", postData: "BODY", hold: true });
       const [held] = (await readLog()).requests;
       expect((await details(held!.id)).request.postData).toBe(
-        "[unavailable: the app is still sending this request body; read it again later]"
+        "[unavailable: the app may still be sending this request body; read it again after the request ends]"
       );
       // argent numbers the requests of a connection from 1, but sends them
       // under other ids, so these ids also match the number of the open read.
@@ -1007,7 +1023,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         };
       };
       const sending =
-        "[unavailable: the app is still sending this request body; read it again later]";
+        "[unavailable: the app may still be sending this request body; read it again after the request ends]";
       await run("boot-device", { macosAppPath: appPath });
       await registry.disposeService(macosAppRef(resolveDevice(DEVICE_ID)).urn);
 
@@ -1085,15 +1101,36 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       await start();
       await request("https://example.com/held", { hold: true });
       const app = await macosApp();
+      vi.mocked(pollPidsUntilGone).mockClear();
       await app.call("Net.drop");
       await waitUntil(() => !app.isConnected());
-      // argent waits for the process to exit, then fails the request as cut off by the drop.
+      // argent waits 2 s for the process to exit, then fails the request as cut off by the drop.
+      expect(vi.mocked(pollPidsUntilGone).mock.calls).toEqual([
+        [[pid], { timeoutMs: 2_000, pollIntervalMs: 100 }],
+      ]);
       const log = await readUntil((l) => l.requests[0]?.state === "failed");
       expect(log.requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
         ["https://example.com/held", "failed", MACOS_CONNECTION_DROPPED],
       ]);
       expect(pidAlive(pid)).toBe(true);
     });
+
+    it("fails a request cut off by a dropped connection as ended once restart-app replaces its process", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/held", { hold: true });
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      await waitUntil(() => app.networkRecords().records(8081)[0]?.state === "failed", 6_000);
+      expect(app.networkRecords().records(8081)[0]?.errorText).toBe(MACOS_CONNECTION_DROPPED);
+
+      await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      // Its process is gone, so its end can no longer come.
+      expect((await readLog()).requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
+        ["https://example.com/held", "failed", PROCESS_ENDED],
+      ]);
+    }, 20_000);
 
     it("stop-simulator-server ends the capture and drops its records: the next read says not started, and the app records nothing", async () => {
       await run("boot-device", { macosAppPath: appPath });
@@ -1216,6 +1253,31 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid}; ${GAP})`);
     }, 20_000);
 
+    it("says the gap when the first start cannot reach a process that argent was connected to before", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // Another client takes the app's socket, then the app is paused.
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      process.kill(pid, "SIGSTOP");
+      let first: Capture;
+      try {
+        first = await start();
+      } finally {
+        process.kill(pid, "SIGCONT");
+      }
+      expect(first.layers).toEqual([
+        expect.objectContaining({
+          layer: "macos-native",
+          armed: false,
+          reason: expect.stringMatching(/^argent cannot reach /),
+        }),
+      ]);
+      await new Promise((r) => setTimeout(r, 300));
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid}; ${GAP})`);
+    }, 20_000);
+
     it("says that capture is off when stop-simulator-server comes while a start waits for a launch", async () => {
       const booting = run("boot-device", {
         macosAppPath: appPath,
@@ -1244,6 +1306,43 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
       expect(await readLog()).toMatchObject({ started: false });
     }, 15_000);
+
+    it("arms the next service when a start comes during a stop-all-simulator-servers of the app", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--cdp-delay=1500"] });
+      const first = start();
+      await new Promise((r) => setTimeout(r, 200));
+      // The sweep waits for the first start, and the second start waits for the sweep.
+      const sweep = run("stop-all-simulator-servers", { devices: [DEVICE_ID] });
+      await new Promise((r) => setTimeout(r, 200));
+      const second = start();
+      expect((await first).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      await sweep;
+      expect((await second).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect(await readLog()).toMatchObject({ armed: true, total: 0 });
+      expect((await request("https://example.com/x")).active).toBe(true);
+      expect(urls(await readLog())).toEqual(["https://example.com/x"]);
+    }, 20_000);
+
+    it("says that the records are gone when stop-simulator-server comes while a stop waits for Network.disable", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--cdp-delay=1500"] });
+      await start();
+      await request("https://example.com/a");
+      const [{ id }] = (await readLog()).requests;
+      const stopping = stop();
+      await new Promise((r) => setTimeout(r, 300));
+      await run("stop-simulator-server", { udid: DEVICE_ID });
+      expect((await stopping).layers).toEqual([
+        {
+          layer: "macos-native",
+          armed: false,
+          total: 0,
+          reason:
+            "the app's services stopped during this stop, which dropped the requests it recorded",
+        },
+      ]);
+      expect(await readLog()).toMatchObject({ started: false, total: 0 });
+      expect(await details(id)).toMatch(/Native network capture is not started/);
+    }, 20_000);
 
     it("sends Network.enable again at a start after a stop on the same process", async () => {
       await run("boot-device", { macosAppPath: appPath });
@@ -1325,6 +1424,43 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       }).catch((e: unknown) => e);
       expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
       expect((err as Error).message).toContain("macos-native: com.apple.TextEdit is an Apple app");
+    });
+
+    it("fails with NETWORK_CAPTURE_UNAVAILABLE for a Mac Catalyst or an Electron app, which argent never starts", async () => {
+      const catalystId = `${BUNDLE_ID}.catalyst`;
+      const catalyst = writeBundle(path.join(root, `catalyst-${Date.now()}`), catalystId);
+      // A 64-bit Mach-O header and one LC_BUILD_VERSION load command for platform 6, Mac Catalyst.
+      const thin = Buffer.alloc(56);
+      [0xfeedfacf, 0x0100000c, 0, 2, 1, 24].forEach((v, i) => thin.writeUInt32LE(v, i * 4));
+      [0x32, 24, 6].forEach((v, i) => thin.writeUInt32LE(v, 32 + i * 4));
+      fs.writeFileSync(path.join(catalyst, "Contents", "MacOS", "FakeApp"), thin);
+      const electronId = `${BUNDLE_ID}.electron`;
+      const electron = writeBundle(path.join(root, `electron-${Date.now()}`), electronId);
+      fs.mkdirSync(path.join(electron, "Contents", "Frameworks", "Electron Framework.framework"), {
+        recursive: true,
+      });
+      searched.spotlight = { [catalystId]: catalyst, [electronId]: electron };
+      for (const [bundleId, refusal] of [
+        [catalystId, "is a Mac Catalyst (UIKit) app"],
+        [electronId, "is an Electron app"],
+      ] as const) {
+        const err = await run("network-capture-start", {
+          udid: `macos-app-${bundleId}`,
+          bundleId,
+        }).catch((e: unknown) => e);
+        expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+        expect((err as Error).message).toContain(`macos-native: ${bundleId} ${refusal}`);
+      }
+    });
+
+    it("refuses to read an Apple app instead of naming network-capture-start, which fails for it", async () => {
+      const err = await run("native-network-logs", {
+        udid: "macos-app-com.apple.TextEdit",
+        bundleId: "com.apple.TextEdit",
+      }).catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+      expect((err as Error).message).toContain("com.apple.TextEdit is an Apple app");
+      expect((err as Error).message).not.toContain("network-capture-start");
     });
 
     it("says so when the app does not acknowledge Network.enable or Network.disable", async () => {
@@ -1409,6 +1545,98 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(log.requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
         ["https://example.com/held", "failed", PROCESS_ENDED],
       ]);
+    });
+
+    it("says the gap once per start that found the app running, not at a later start while capture runs", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      await start();
+      expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid}; ${GAP})`);
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid})`);
+    });
+
+    it("says that capture is off when stop-simulator-server comes while a start reconnects to the app", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // A new tool-server meets the app paused, so the start waits for its handshake.
+      await registry.disposeService(macosAppRef(resolveDevice(DEVICE_ID)).urn);
+      process.kill(pid, "SIGSTOP");
+      let starting: Promise<Capture>;
+      try {
+        // The start waits up to 5 s for the paused app's handshake.
+        starting = start();
+        await new Promise((r) => setTimeout(r, 1_000));
+        await run("stop-simulator-server", { udid: DEVICE_ID });
+      } finally {
+        process.kill(pid, "SIGCONT");
+      }
+      expect((await starting).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED },
+      ]);
+      expect(await readLog()).toMatchObject({ started: false });
+    }, 20_000);
+
+    const NOT_CONNECTED =
+      "macos-native: not armed, 0 requests (the app is not connected; capture arms when argent starts the app or connects to it, as network-capture-start does)";
+
+    it("says no gap after a start that finds the app gone, when argent reached the app before any start", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // A new tool-server reaches the running app before capture is started.
+      await registry.disposeService(macosAppRef(resolveDevice(DEVICE_ID)).urn);
+      await (await macosApp()).call("Echo");
+      await quit(pid);
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      expect((await readLog()).header).toBe(NOT_CONNECTED);
+    });
+
+    it("says no gap after a start that finds the app gone, when a stop came after a start that found it running", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // The gap of this start is not read before the stop.
+      await start();
+      await stop();
+      await quit(pid);
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      expect((await readLog()).header).toBe(NOT_CONNECTED);
+    });
+
+    it("arms and stops an app that acknowledges Network.enable and Network.disable after 4 s", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--cdp-delay=4000"] });
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect((await stop()).layers).toEqual([{ layer: "macos-native", armed: false, total: 0 }]);
+    }, 30_000);
+
+    it("names native-network-logs for an unknown macos- id after a stop", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await stop();
+      expect(await details("macos-0000-999999")).toBe(
+        "Request macos-0000-999999 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
+      );
+    });
+
+    it("reads armed: false while capture is started and the app's connection is down", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      expect((await readLog()).armed).toBe(true);
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      const log = await readLog();
+      expect(log.header).toMatch(/^macos-native: not armed, /);
+      expect(log.armed).toBe(false);
+    });
+
+    it("gives a second network-capture-stop the requests it keeps, without Metro's own", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("http://localhost:8081/status");
+      await request("https://example.com/a");
+      const kept = [{ layer: "macos-native", armed: false, total: 1 }];
+      expect((await stop()).layers).toEqual(kept);
+      expect((await stop()).layers).toEqual(kept);
     });
 
     it("refuses another app's bundle id", async () => {

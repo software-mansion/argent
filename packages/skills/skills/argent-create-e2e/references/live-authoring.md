@@ -151,6 +151,8 @@ On iOS and Android, `view-network-logs` and `native-network-logs` only read. On 
 1. Record `network-capture-start` through `e2e-add-step` after the launch and its first-screen wait, before the action whose requests the test reads. A launch ends the capture of the JS layer. A start before `launch:` makes the test a fragment.
 2. Before a recorded `network-capture-stop`, record a wait for the screen that shows the result of the request. Argent records no request that the app sends after the stop.
 3. If a read says that capture is not started, do not answer it with a direct `network-capture-start` call: the replay does not have that call. Record the start, then record the action and the read again.
+4. A `tool:` step keeps its recorded `bundleId` on every platform. Only `launch:` takes an id per platform. If the app id differs by platform, add a top-level `requires:` block with the recording platform (see [File shape and test type](e2e-yaml.md#file-shape-and-test-type)). Record a separate test for each other platform.
+5. A `tool: network-capture-start` or `tool: network-capture-stop` step passes whatever its `armed` says. A start that armed no layer passes, and so does a stop whose JS layer stays `armed: true`. After each replay, read `armed` and `reason` of each layer in the step's `result`. If the start did not arm the layer that the test reads, or the stop did not disarm it, the reads after it prove nothing.
 
 ### Wrong turns
 

@@ -26,6 +26,7 @@ import { parseFlow, parseRequires } from "../src/tools/flows/flow-utils";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { CAPTURE_CAPABILITY } from "../src/tools/network/network-capture";
+import { networkRequestTool } from "../src/tools/network/network-request";
 
 const flag = useMacosAppsFlag();
 
@@ -302,6 +303,16 @@ describe("over HTTP", () => {
       .post("/tools/menu-bar")
       .send({ udid: MAC, action: "list" });
     expect(menuBar.status).toBe(404);
+  });
+
+  it("admits view-network-request-details for a Mac app id, which has only native ids", async () => {
+    const registry = new Registry();
+    registry.registerTool(networkRequestTool);
+    const res = await request(createHttpApp(registry).app)
+      .post("/tools/view-network-request-details")
+      .send({ device_id: MAC, requestId: "macos-1a2b-7" });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatch(/^Request macos-1a2b-7 not found\. /);
   });
 
   it("with the flag on, names restart-app instead of reinstall-app", async () => {

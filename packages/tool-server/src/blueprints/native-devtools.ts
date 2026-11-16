@@ -539,7 +539,8 @@ export interface NativeDevtoolsApi {
    * is armed at its handshake. Resolves true once the app's live connection
    * acknowledges Network.enable, false when there is no acknowledgement within
    * 5 s. Without a connection it waits `waitForConnectionMs` for one that is
-   * armed. Never rejects. In attach mode nothing is sent that changes the
+   * armed, and ends the wait early when the app's answer does not arm it.
+   * Never rejects. In attach mode nothing is sent that changes the
    * agent: true means the provider has capture on.
    */
   startNetworkCapture(
@@ -996,12 +997,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       return {
         armed: conn.armed,
         ...(conn.pid !== undefined ? { pid: conn.pid } : {}),
+        // A failure is the answer to the request still on its way, which settles just after.
         ...(conn.armed
           ? {}
-          : conn.enabling
-            ? { note: lentSocketPath ? WAITING_FOR_CAPTURE_STATE : WAITING_FOR_ENABLE }
-            : conn.enableFailure
-              ? { note: conn.enableFailure }
+          : conn.enableFailure
+            ? { note: conn.enableFailure }
+            : conn.enabling
+              ? { note: lentSocketPath ? WAITING_FOR_CAPTURE_STATE : WAITING_FOR_ENABLE }
               : {}),
       };
     };
@@ -1028,7 +1030,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
      */
     const settleClosedConnection = async (bundleId: string, conn: AppConnection): Promise<void> => {
       const store = networkStores.get(bundleId);
-      if (lentSocketPath || disposed || !store?.holdsRecordsOf(conn.index)) return;
+      if (lentSocketPath || disposed || !store) return;
+      if (!store.holdsRecordsOf(conn.index)) {
+        // No host probe, but the store learns of the connection: its process
+        // is newer than that of each earlier connection.
+        const live = connections.get(bundleId);
+        store.connectionClosed(conn.index, { superseded: live !== undefined && live !== conn });
+        return;
+      }
       const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
       if (disposed) return;
       const live = connections.get(bundleId);
@@ -1383,11 +1392,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         activatedBundleIds.add(bundleId);
         const conn = connections.get(bundleId);
         if (!conn) {
-          // The handshake sends Network.enable for an app in the set above.
-          return waitForConnection(
-            () => connections.get(bundleId)?.armed === true,
-            waitForConnectionMs
-          );
+          // The handshake sends Network.enable for an app in the set above. An
+          // answer that does not arm the app ends the wait too.
+          return waitForConnection(() => {
+            const next = connections.get(bundleId);
+            return next?.armed === true || next?.enableFailure !== undefined;
+          }, waitForConnectionMs).then(() => connections.get(bundleId)?.armed === true);
         }
         // No gap for a process recorded from its launch: a stop before this start keeps that launch.
         if (startedNow && !lentSocketPath && !conn.launchRecorded) captureGaps.add(bundleId);
@@ -1461,6 +1471,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         // Without a pid, as when the probe failed, any connection of the app
         // counts.
         const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
+        // A dispose during the probe ended the capture, and has already woken the waiters.
+        if (disposed) return undefined;
         const pid = inspection?.process?.pid;
         const ofLaunch = (): AppConnection | undefined => {
           const conn = connections.get(bundleId);
@@ -1478,7 +1490,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         const gone = `native network capture is on for ${bundleId}, but no process of it is running after the launch; its next process is armed when it connects`;
         // A launched process that already exited, as after a crash at start,
         // never connects.
-        if (inspection?.running === false && !disposed) return gone;
+        if (inspection?.running === false) return gone;
         // A launch of an app that already runs only brings it to the front.
         // When that process lacks this simulator's injection, or plainly
         // started before this listener and so dialed one we no longer hold,
@@ -1486,10 +1498,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         const running = inspection?.process;
         if (running && !ofLaunch()) {
           if (!processCarriesInjection(running.env, endpoint)) {
-            return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) was launched without argent's injection for this simulator, so capture cannot be armed in it; call restart-app to start a process that is armed`;
+            return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) was launched without argent's injection for this simulator, so capture cannot be armed in it; call restart-app to start a process that is armed, then network-capture-start again, since a relaunch ends the JS layer's capture`;
           }
           if (running.ageMs > Date.now() - listeningSince + NATIVE_DEVTOOLS_AGE_SLOP_MS) {
-            return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed`;
+            return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed, then network-capture-start again, since a relaunch ends the JS layer's capture`;
           }
         }
         // A launch is a next call too, so it asks again after a failed ask.
