@@ -430,6 +430,20 @@ describe("a script whose module type the project decides", () => {
     expect(step.reason).not.toContain("A script step does not accept");
   });
 
+  it("leaves no warning for a file the script imports, where no package.json sets a type", async () => {
+    // Node guesses the module type of `lib.js` from its `export`, and would
+    // say so in the log of every run.
+    await write("scripts/lib.js", `export const name = "b.txt";`);
+    const step = await runScript(
+      "seed.mjs",
+      `import { name } from "./lib.js";\nconsole.log("ran " + name);`,
+      undefined
+    );
+
+    expect(step).toMatchObject({ kind: "script", status: "pass" });
+    expect(step.scriptLog).toBe("ran b.txt\n");
+  });
+
   it.runIf(hostRunsTypeScript)("runs a type-only import as CommonJS", async () => {
     // Node picks the module type from what is left once the types are gone,
     // and a type-only import leaves nothing.
@@ -701,6 +715,27 @@ describe("a TypeScript script step", () => {
     }
   );
 
+  // The stack opens with a bare path here, not a URL: Node reads a `.ts` file
+  // as CommonJS first when no package.json sets `type`.
+  it.runIf(stripsTypes && process.versions.node.split(".")[0] !== "23")(
+    "names the file and the line of such syntax in a .ts script with no package type",
+    async () => {
+      await write("package.json", "{}");
+      await write(
+        "scripts/enum.ts",
+        `const a = 1;\nenum Color { Red }\nconsole.log(Color.Red, a);\n`
+      );
+      await flow("enumcjs", "steps:\n  - script: { path: ../../scripts/enum.ts }\n");
+
+      const { result } = await runFlow("enumcjs");
+
+      expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+      expect(result.steps[0]!.reason).toBe(
+        "TypeScript enum is not supported in strip-only mode\\n    at scripts/enum.ts:2"
+      );
+    }
+  );
+
   it.runIf(stripsTypes)("fails on a type imported without `import type`", async () => {
     // Stripping works on one file at a time, so it cannot tell that `Order` is
     // a type and leaves the import for Node to resolve.
@@ -784,6 +819,31 @@ describe("a TypeScript script step", () => {
       expect(result.steps[0]).toMatchObject({ kind: "script", status: "error" });
       expect(result.steps[0]!.reason).toContain(
         'Script "../../scripts/entry.mjs" loads the TypeScript file "scripts/helpers.mts", and the tool-server runs on '
+      );
+    }
+  );
+
+  it.runIf(!stripsTypes)(
+    "errors on TypeScript a CommonJS script requires, as the host's limit",
+    async () => {
+      // No loader refuses the extension here: Node compiles the file as
+      // JavaScript and stops at its first type.
+      await write("package.json", `{ "type": "commonjs" }`);
+      await write(
+        "scripts/helpers.ts",
+        "const orderId: number = 4711;\nmodule.exports = orderId;\n"
+      );
+      await write("scripts/entry.js", `console.log(require("./helpers.ts"));\n`);
+      await flow("requires", "steps:\n  - script: { path: ../../scripts/entry.js }\n");
+
+      const { result } = await runFlow("requires");
+
+      expect(result.steps[0]).toMatchObject({ kind: "script", status: "error" });
+      expect(result.steps[0]!.reason).toContain(
+        'Script "../../scripts/entry.js" loads the TypeScript file "scripts/helpers.ts", and the tool-server runs on '
+      );
+      expect(result.steps[0]!.reason).toContain(
+        "or use JavaScript (.js, or .mjs for an ES module) for the script"
       );
     }
   );

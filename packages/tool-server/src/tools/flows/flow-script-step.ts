@@ -9,6 +9,7 @@ import {
 import type { FlowStep } from "./flow-utils";
 import {
   flowScriptExecutor,
+  type FlowScriptFailure,
   type FlowScriptFailureKind,
   type FlowScriptLogBudget,
   type FlowScriptResult,
@@ -284,18 +285,17 @@ const UNKNOWN_TYPESCRIPT_FILE_RE = /^Unknown file extension "\.[mc]?ts" for (.+)
 
 /**
  * The same refusal, for TypeScript the step's own name does not show: a file
- * the script imports. Nothing before the run can see it, so it is read back
- * from Node's failure — `ERR_UNKNOWN_FILE_EXTENSION` for a TypeScript
- * extension, on a host with a {@link TypeScriptGap}. Left as it came, that is
- * the host's limit reported as the script's fault.
+ * the script loads. Nothing before the run can see it, so it is read back from
+ * Node's failure, on a host with a {@link TypeScriptGap}. Left as it came, that
+ * is the host's limit reported as the script's fault.
  */
 async function typeScriptLoadRefusal(
   target: string,
   result: FlowScriptResult,
   roots: readonly string[]
 ): Promise<string | undefined> {
-  if (result.ok || result.failure?.kind !== "load") return undefined;
-  const file = UNKNOWN_TYPESCRIPT_FILE_RE.exec(result.failure.message)?.[1];
+  if (result.ok || !result.failure) return undefined;
+  const file = unloadedTypeScriptFile(result.failure);
   if (file === undefined) return undefined;
   const gap = typeScriptGap(await flowScriptExecutor().stripsTypes());
   return (
@@ -308,6 +308,35 @@ async function typeScriptLoadRefusal(
     )
   );
 }
+
+/**
+ * The TypeScript file a failure says Node could not load, or undefined. Node
+ * says it two ways, by the loader the file went through.
+ *
+ * An `import` goes through the ESM loader, which has no format for the
+ * extension: `ERR_UNKNOWN_FILE_EXTENSION`, with the file in the message.
+ *
+ * A `require` goes through the CommonJS loader, which knows no extension it
+ * would refuse: it compiles the file as JavaScript, and the first type in it is
+ * a `SyntaxError`. Only the stack names the file, in the place it opens with
+ * (see `STACK_PLACE_RE`). On a host that runs TypeScript the same shape is the
+ * file's own fault — an `enum`, say — which is why the caller asks for the gap
+ * before it believes either.
+ */
+function unloadedTypeScriptFile(failure: FlowScriptFailure): string | undefined {
+  if (failure.kind === "load") {
+    const named = UNKNOWN_TYPESCRIPT_FILE_RE.exec(failure.message)?.[1];
+    if (named !== undefined) return named;
+  }
+  const lines = failure.stack?.split("\n") ?? [];
+  const place = lines[0]?.trim() ?? "";
+  if (!STACK_PLACE_RE.test(place) || place.startsWith("file:")) return undefined;
+  const file = place.slice(0, place.lastIndexOf(":"));
+  if (!TYPESCRIPT_FILE_RE.test(file)) return undefined;
+  return lines.some((line) => line.startsWith("SyntaxError")) ? file : undefined;
+}
+
+const TYPESCRIPT_FILE_RE = /\.[mc]?ts$/;
 
 /**
  * How many of the script's own frames ride into the reason. A thrown message
@@ -405,8 +434,13 @@ function readablePath(file: string, roots: readonly string[]): string {
  * parameter property — and for an import of a name the other module does not
  * export. Every `at` line under it is the loader's own, so without this line
  * the reason names no file at all.
+ *
+ * The file is a URL when the ESM loader compiled it and a bare absolute path
+ * when the CommonJS one did, which is every `require`d file and a `.ts` or
+ * `.js` script whose package.json sets no `type`: Node reads such a script as
+ * CommonJS first.
  */
-const STACK_PLACE_RE = /^file:\/\/\S+:\d+$/;
+const STACK_PLACE_RE = /^(?:file:\/\/\S+|(?:\/|[A-Za-z]:[\\/]).*):\d+$/;
 
 /**
  * The frames of a failed script, as a block appended to its message. Newline
@@ -422,7 +456,7 @@ function scriptFrames(stack: string | undefined, roots: readonly string[]): stri
   let dropped = 0;
   const lines = stack.split("\n");
   const place = lines[0]!.trim();
-  if (STACK_PLACE_RE.test(place)) frames.push(`    at ${readableFrame(place, roots)}`);
+  if (STACK_PLACE_RE.test(place)) frames.push(`    ${readableFrame(`at ${place}`, roots)}`);
   for (const line of lines) {
     const frame = line.trim();
     if (!frame.startsWith("at ") || isHostFrame(frame)) continue;
