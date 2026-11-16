@@ -254,6 +254,8 @@ class FakeIos implements Pick<
   envError: Error | undefined;
   /** What the service recorded when its env setup failed. */
   initFailure: NativeDevtoolsInitFailure | null = null;
+  /** What the service factory throws, as the real one does when it cannot attach. */
+  factoryError: Error | undefined;
   /** A connected app acknowledges Network.enable. */
   acknowledges = true;
   /** The note the app's records keep. */
@@ -397,6 +399,7 @@ const fakeNativeDevtoolsBlueprint: ServiceBlueprint<unknown, string> = {
   namespace: "NativeDevtools",
   getURN: (payload) => `NativeDevtools:${payload}`,
   async factory() {
+    if (ios.factoryError) throw ios.factoryError;
     return { api: ios, dispose: async () => {}, events: new TypedEventEmitter<ServiceEvents>() };
   },
 };
@@ -710,6 +713,23 @@ describe("network-capture-start", () => {
       });
       expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "started", installed: true });
       expect(rt.paused).toBe(false);
+    });
+
+    it("fails with NETWORK_CAPTURE_UNAVAILABLE on iOS when the native devtools service cannot start", async () => {
+      const refusal =
+        "NativeDevtools could not attach to the socket its provider published at /tmp/provider.sock: ECONNREFUSED.";
+      ios.factoryError = new Error(refusal);
+
+      const err = await start(IOS_UDID, APP).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect(err?.message).toContain(
+        `js: ${METRO_DOWN}; ios-native: [NativeDevtools:${IOS_UDID}] ${refusal}`
+      );
+      expect(ios.calls).toEqual([]);
     });
 
     it("does not fail while a layer is only waiting for the app", async () => {
