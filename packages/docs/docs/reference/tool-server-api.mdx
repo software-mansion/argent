@@ -319,11 +319,13 @@ The `Content-Type` of the tar is `application/zstd` or `application/gzip`. The r
 
 The receiver refuses a tar that has one of these:
 
-- More than 262,144 entries.
+- No entries, or more than 262,144 entries.
 - A list of entries larger than 32 MiB, as `tar -tv` shows it.
-- An entry with an absolute path or a `..` segment.
-- A symlink with an absolute target or a `..` segment in its target.
+- An entry or a symlink target with an absolute path, a drive such as `C:`, or a `..` segment.
+- An entry for the directory that the receiver extracts into, such as `./`.
+- A symlink whose name or target contains `->`.
 - An entry that is not a file, a directory or a symlink, for example a hardlink.
+- zstd data in more than one frame.
 
 A tool-server that does not list `uploadFormats` gets gzip uploads. A client that does not ask for `application/zstd` gets gzip downloads. A sender without zstd in its Node.js uses gzip. All versions of the client and the tool-server read gzip.
 

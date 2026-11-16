@@ -338,9 +338,7 @@ describe("materializeArtifacts directory bundles", () => {
     await rm(hostDir, { recursive: true, force: true });
   });
 
-  // Build a real .trace-like bundle and a gzipped tar of it (as a server streams
-  // it when zstd isn't asked for), so the client extraction runs against genuine
-  // tar output.
+  // A real bundle and its gzipped tar, as a server streams it when zstd isn't asked for.
   async function makeBundle(): Promise<{ bundlePath: string; tarGz: Buffer }> {
     const bundlePath = join(hostDir, "session.trace");
     await mkdir(join(bundlePath, "sub"), { recursive: true });

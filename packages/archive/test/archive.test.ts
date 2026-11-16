@@ -100,12 +100,25 @@ const UNREADING_TAR = [
   "esac",
 ].join("\n");
 
+/** `mib` MiB of zeros in RLE blocks of 128 KiB, ending in a wrong checksum. */
+function zerosWithBadChecksum(mib: number): Buffer {
+  const blocks = mib * 8;
+  const frame = Buffer.alloc(6 + blocks * 4 + 4);
+  frame.writeUInt32LE(0xfd2fb528, 0);
+  frame[4] = 1 << 2; // content checksum
+  frame[5] = 7 << 3; // 128 KiB window
+  for (let i = 0; i < blocks; i++) {
+    frame.writeUIntLE(((128 << 10) << 3) | (1 << 1) | +(i === blocks - 1), 6 + i * 4, 3);
+  }
+  return frame;
+}
+
 describe("createTarArgs", () => {
   it("archives the source's basename as the single top-level member", () => {
     expect(createTarArgs("/a/b/MyApp.app")).toEqual(["-cf", "-", "-C", "/a/b", "MyApp.app"]);
   });
 
-  // GNU tar would archive the whole disk for `./`.
+  // `./` would archive the whole disk.
   it("leaves the root's empty name for tar to refuse", () => {
     expect(createTarArgs("/")).toEqual(["-cf", "-", "-C", "/", ""]);
   });
@@ -275,6 +288,16 @@ describe("safeExtractArchive input", () => {
     );
     await expect(safeExtractArchive(archivePath, tmpDir, "Bundle.app")).rejects.toThrow(
       "Could not read archive: tar -tv listed more than 262144 members or 32 MiB"
+    );
+  });
+
+  // Killing tar leaves the rest to decode, up to the bad checksum.
+  it("reports a listing past the limit over the decoding it cut short", async () => {
+    const archivePath = path.join(tmpDir, "bad.archive");
+    await fs.writeFile(archivePath, zerosWithBadChecksum(1));
+    await tarOnPath("yes Bundle.app/f | head -n 262145");
+    await expect(safeExtractArchive(archivePath, tmpDir, "Bundle.app")).rejects.toThrow(
+      "Could not read archive: tar -t listed more than 262144 members or 32 MiB"
     );
   });
 
@@ -539,23 +562,10 @@ describe("safeExtractArchive zstd framing", () => {
       expect(path.basename(await extract(bytes))).toBe("Bundle.app");
     });
 
-    /** `mib` MiB of zeros in RLE blocks of 128 KiB, ending in a wrong checksum. */
-    function zerosWithBadChecksum(mib: number): Buffer {
-      const blocks = mib * 8;
-      const frame = Buffer.alloc(6 + blocks * 4 + 4);
-      frame.writeUInt32LE(0xfd2fb528, 0);
-      frame[4] = 1 << 2; // content checksum
-      frame[5] = 7 << 3; // 128 KiB window
-      for (let i = 0; i < blocks; i++) {
-        frame.writeUIntLE(((128 << 10) << 3) | (1 << 1) | +(i === blocks - 1), 6 + i * 4, 3);
-      }
-      return frame;
-    }
-
     it("decodes no more than 16 MiB that tar didn't read", async () => {
       await tarOnPath(UNREADING_TAR);
       // Decoding up to the checksum would fail.
-      expect(path.basename(await extract(zerosWithBadChecksum(32)))).toBe("Bundle.app");
+      expect(path.basename(await extract(zerosWithBadChecksum(20)))).toBe("Bundle.app");
     });
 
     it("holds decoded data back while tar isn't reading", async () => {
@@ -691,6 +701,7 @@ describe.each(ARCHIVE_FORMATS)("safeExtractArchive hardening (%s)", (format) => 
     await fs.mkdir(app);
     await fs.writeFile(path.join(app, "A"), "real");
     await fs.symlink("A", path.join(app, "Current")); // relative, stays inside
+    await fs.symlink("A..B", path.join(app, "Dotted")); // `..` inside a name isn't a segment
     const tarPath = path.join(tmpDir, "app.tar.gz");
     await createArchiveFile(app, tarPath, format);
 
@@ -699,6 +710,74 @@ describe.each(ARCHIVE_FORMATS)("safeExtractArchive hardening (%s)", (format) => 
     const member = await safeExtractArchive(tarPath, dest, "MyApp.app");
     expect(path.basename(member)).toBe("MyApp.app");
     expect(await fs.readlink(path.join(member, "Current"))).toBe("A");
+    expect(await fs.readlink(path.join(member, "Dotted"))).toBe("A..B");
+  });
+
+  // `a/../../escaped` normalizes to `escaped`; `./././` is the extract dir.
+  it.each(["../escaped", "Bundle.app/a/../../escaped", "C:escaped", "./././"])(
+    "rejects a member named %s before extracting anything",
+    async (name) => {
+      const tar = Buffer.concat([
+        ustarHeader("Bundle.app/", "5", 0),
+        ustarHeader("Bundle.app/ok", "0", 0),
+        ustarHeader(name, name.endsWith("/") ? "5" : "0", 0),
+        Buffer.alloc(1024),
+      ]);
+      const archivePath = path.join(tmpDir, "slip.archive");
+      await fs.writeFile(archivePath, compress(tar, format));
+      const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+      await expect(safeExtractArchive(archivePath, dest, "Bundle.app")).rejects.toThrow(
+        "Archive contains an unsafe path"
+      );
+      expect(await fs.readdir(dest)).toEqual([]);
+    }
+  );
+
+  // Absolute or outside the bundle on a Windows receiver.
+  it.each(["..\\..\\Windows", "C:\\Windows", "\\Windows", "C:x"])(
+    "rejects a symlink to %s",
+    async (target) => {
+      const src = path.join(tmpDir, "winlink");
+      await fs.mkdir(src);
+      await fs.symlink(target, path.join(src, "l"));
+      const tarPath = path.join(tmpDir, "winlink.archive");
+      await createArchiveFile(src, tarPath, format);
+
+      const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+      await expect(safeExtractArchive(tarPath, dest, "winlink")).rejects.toThrow(
+        "Archive contains a symlink whose target could not be confirmed safe"
+      );
+    }
+  );
+
+  it("extracts a bundle whose name tar escapes outside a UTF-8 locale", async () => {
+    const app = path.join(tmpDir, "日記.app");
+    await fs.mkdir(app);
+    await fs.writeFile(path.join(app, "f"), "x");
+    const tarPath = path.join(tmpDir, "cjk.archive");
+    await createArchiveFile(app, tarPath, format);
+    const locale = process.env.LC_ALL;
+    process.env.LC_ALL = "C";
+    try {
+      const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+      expect(path.basename(await safeExtractArchive(tarPath, dest, "日記.app"))).toBe("日記.app");
+    } finally {
+      if (locale === undefined) delete process.env.LC_ALL;
+      else process.env.LC_ALL = locale;
+    }
+  });
+
+  it("rejects a fifo member", async () => {
+    const src = path.join(tmpDir, "fifobundle");
+    await fs.mkdir(src);
+    execFileSync("mkfifo", [path.join(src, "Info.plist")]);
+    const tarPath = path.join(tmpDir, "fifo.archive");
+    await createArchiveFile(src, tarPath, format);
+
+    const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+    await expect(safeExtractArchive(tarPath, dest, "fifobundle")).rejects.toThrow(
+      'Archive contains an unsupported member type "p"'
+    );
   });
 
   // Each target normalizes to `.`, but `b` resolves to the extract dir and `c` above it.
@@ -731,6 +810,20 @@ describe.each(ARCHIVE_FORMATS)("safeExtractArchive hardening (%s)", (format) => 
     await fs.mkdir(dest);
     await expect(safeExtractArchive(tarPath, dest, "cfgbundle")).rejects.toBeInstanceOf(
       ArchiveError
+    );
+  });
+
+  it("rejects a symlink whose target contains ' -> '", async () => {
+    const src = path.join(tmpDir, "arrowtarget");
+    await fs.mkdir(src);
+    // Read after the last ` -> `, the target would be `x`.
+    await fs.symlink("/tmp/ -> x", path.join(src, "l"));
+    const tarPath = path.join(tmpDir, "arrowtarget.archive");
+    await createArchiveFile(src, tarPath, format);
+
+    const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+    await expect(safeExtractArchive(tarPath, dest, "arrowtarget")).rejects.toThrow(
+      "Archive contains a symlink whose target could not be confirmed safe"
     );
   });
 

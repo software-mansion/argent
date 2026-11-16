@@ -15,7 +15,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createReadStream, createWriteStream } from "node:fs";
 import { open, rm, readdir } from "node:fs/promises";
-import { basename, dirname, join, posix, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { Writable, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import zlib from "node:zlib";
@@ -46,7 +46,6 @@ export function pickArchiveFormat(peerFormats: readonly string[] | undefined): A
   return ARCHIVE_FORMATS.find((f) => peerFormats?.includes(f)) ?? "gzip";
 }
 
-/** The archive formats an HTTP `Accept` header names. */
 export function archiveFormatsFromAccept(accept: string | undefined): ArchiveFormat[] {
   return ARCHIVE_FORMATS.filter((f) => accept?.includes(ARCHIVE_CONTENT_TYPES[f]));
 }
@@ -142,7 +141,10 @@ export async function createArchiveFile(
   }
 }
 
-/** Write tar's archive of `sourcePath`, compressed, to `out`. tar's own failure wins. */
+/**
+ * Write tar's archive of `sourcePath`, compressed, to `out`. A failed spawn or
+ * an abort outranks a failed write, which outranks the tar exit it causes.
+ */
 async function archiveInto(
   out: Writable,
   sourcePath: string,
@@ -242,13 +244,19 @@ interface Archive {
   format: ArchiveFormat;
 }
 
+// Outside a UTF-8 locale tar lists a name like `日記.app` as `\346\227...`,
+// which reads as absolute. macOS ships en_US.UTF-8, Linux C.UTF-8.
+const TAR_LOCALE = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
+
 /**
  * Run `tar <args>` over `archive`, decompressed here and piped in, returning
  * stdout. A listing past {@link MAX_LISTING_BYTES} or {@link MAX_LISTING_LINES}
  * stops tar and throws.
  */
 async function runTar(archive: Archive, args: string[]): Promise<string> {
-  const child = spawn("tar", [...args, "-f", "-"]);
+  const child = spawn("tar", [...args, "-f", "-"], {
+    env: { ...process.env, LC_ALL: TAR_LOCALE },
+  });
   const exited = new Promise<number | null>((res, rej) => {
     child.on("error", rej);
     child.on("close", res);
@@ -303,18 +311,24 @@ function normalizeTarMemberPath(memberPath: string): string {
   return memberPath.replace(/^\.\//, "").replace(/\\/g, "/");
 }
 
-/** Reject tar-slip paths (absolute, `..`, or resolving outside `destDir`). */
+/**
+ * True for a relative path with no `..` segment, reading `\` as a separator
+ * and `C:` as a drive. Not normalized: in `a/..`, `..` applies where a link
+ * `a` points.
+ */
+function isContainedPath(path: string): boolean {
+  const slashed = path.replace(/\\/g, "/");
+  return (
+    !slashed.startsWith("/") && !/^[A-Za-z]:/.test(slashed) && !slashed.split("/").includes("..")
+  );
+}
+
+/** Reject tar-slip paths, and an entry for `destDir` itself, which would set its mode. */
 function isSafeTarMember(memberPath: string, destDir: string): boolean {
   const normalized = normalizeTarMemberPath(memberPath);
-  if (!normalized || normalized === "." || normalized === "./") return false;
-  if (normalized.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalized)) return false;
-  const relative = posix.normalize(normalized);
-  if (relative === ".." || relative.startsWith("../") || relative.split("/").includes("..")) {
-    return false;
-  }
+  if (!isContainedPath(normalized)) return false;
   const root = resolve(destDir);
-  const resolved = resolve(destDir, relative);
-  return resolved === root || resolved.startsWith(root + sep);
+  return resolve(destDir, normalized).startsWith(root + sep);
 }
 
 /** {@link runTar} for a vetting pass, whose failure means the archive can't be read. */
@@ -337,13 +351,6 @@ async function listTarMembers(archive: Archive): Promise<string[]> {
     .filter((line) => line.length > 0);
 }
 
-/** True when a symlink target is absolute or has a `..` segment. */
-function isEscapingLinkTarget(target: string): boolean {
-  if (target.startsWith("/") || /^[A-Za-z]:[\\/]/.test(target)) return true;
-  // Not normalized: `a/..` reads as `.`, but `..` applies where the link `a` points.
-  return target.replace(/\\/g, "/").split("/").includes("..");
-}
-
 /**
  * Reject members that could write or link outside `destDir`. Regular files and
  * directories pass; symlinks pass only with a relative target free of `..` (a
@@ -364,7 +371,7 @@ async function assertSafeMemberTypes(archive: Archive): Promise<void> {
       // `x -> safe` that hides an escaping target.
       const parts = line.split(" -> ");
       const target = parts.length === 2 ? parts[1]!.trim() : "";
-      if (parts.length !== 2 || !target || isEscapingLinkTarget(target)) {
+      if (parts.length !== 2 || !target || !isContainedPath(target)) {
         throw new ArchiveError(
           `Archive contains a symlink whose target could not be confirmed safe: "${line.trim()}".`
         );
