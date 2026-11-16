@@ -91,21 +91,19 @@ describe("native-profiler-launch-analysis", () => {
     expect(profileLaunch).not.toHaveBeenCalled();
   });
 
-  it("rejects project parameters as unknown keys", async () => {
+  it("ignores an unknown key and runs with the defined parameters", async () => {
     const { registry } = rig();
-    await expect(
-      registry.invokeTool(ID, {
-        mode: "measure",
-        bundle_id: BUNDLE_ID,
-        workspace_path: "/app",
-        scheme: "App",
-        xcode_container: "ios/App.xcworkspace",
-        configuration: "Release",
-      })
-    ).rejects.toThrow(
-      "unknown parameters `workspace_path`, `scheme`, `xcode_container`, `configuration`"
-    );
-    expect(measureLaunch).not.toHaveBeenCalled();
+    const result = await registry.invokeTool(ID, {
+      mode: "measure",
+      bundle_id: BUNDLE_ID,
+      workspace_path: "/app",
+    });
+    expect(result).toEqual({ metric: "XCTApplicationLaunchMetric" });
+    expect(vi.mocked(measureLaunch).mock.calls[0][1]).toEqual({
+      mode: "measure",
+      bundle_id: BUNDLE_ID,
+      allow_simulator: false,
+    });
   });
 
   it("rejects duration_seconds in measure mode", async () => {

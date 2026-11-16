@@ -50,8 +50,6 @@ const zodSchema = z
         `profile mode only: App Launch trace recording length in seconds (default ${DEFAULT_PROFILE_SECONDS}). Rejected in measure mode.`
       ),
   })
-  // An unknown key, such as a project path, fails by name instead of being dropped.
-  .strict()
   .superRefine((params, ctx) => {
     if (params.mode === "measure" && params.duration_seconds !== undefined) {
       ctx.addIssue({
