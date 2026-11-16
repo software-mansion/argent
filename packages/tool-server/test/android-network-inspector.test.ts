@@ -82,7 +82,7 @@ const UNACKNOWLEDGED_STOP =
 const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
 const STOPPED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop); this process runs without it until network-capture-start`;
 const LOADED_NOTE =
-  "pid 4722 already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server is capturing this app or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's capture of the app; after restart-app, call network-capture-start again, since a relaunch ends the JS layer's capture";
+  "pid 4722 already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server holds the agent's connection, also after a network-capture-stop there, or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's connection to the app; after restart-app, call network-capture-start again, since a relaunch ends the JS layer's capture";
 const AWAY_AT_STOP =
   "the agent's connection was down at the stop, so it did not get Network.disable; it gets it when it connects again, and argent records none of the app's new requests meanwhile";
 const UNCONFIRMED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop), but its running process (pid 4722) has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`;
@@ -2513,6 +2513,18 @@ describe("attaching and the app's lifecycle", () => {
 
     // The JS layer of the same start can be armed, and a relaunch ends it.
     expect(await startUnarmed(api)).toEqual({ armed: false, reason: LOADED_NOTE });
+  });
+
+  it("network-capture-start says another tool-server holds the agent, and not that it captures, when that one stopped its capture", async () => {
+    // Two inspectors of one app stand for two tool-servers.
+    const first = await armedInspector();
+    expect(await first.stopCapture()).toEqual({ confirmed: true });
+    // The stop keeps the agent's connection, and the agent reads a session only before it connects.
+    expect(agents[0]!.socket.destroyed).toBe(false);
+
+    const second = await createInspector();
+    expect(await startUnarmed(second)).toEqual({ armed: false, reason: LOADED_NOTE });
+    expect(first.isStarted()).toBe(false);
   });
 
   it("writes the session owner-only, then copies the agent under code_cache and chmods it, before the attach", async () => {

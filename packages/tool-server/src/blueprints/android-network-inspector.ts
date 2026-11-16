@@ -864,10 +864,11 @@ function createInspector(
     if (copy === "loaded") {
       if (known) return "known";
       // The agent reads the session only before it connects, so while another
-      // tool-server holds its connection it stays with that one. An agent from
-      // an earlier Argent dials a port of its own and never reads the session.
-      // The note has to hold for both.
-      note = `pid ${proc.pid} already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server is capturing this app or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's capture of the app; after restart-app, call network-capture-start again, since a relaunch ends the JS layer's capture`;
+      // tool-server holds its connection it stays with that one. A stop keeps
+      // the connection, so this holds also when that capture is stopped. An
+      // agent from an earlier Argent dials a port of its own and never reads
+      // the session. The note has to hold for all of them.
+      note = `pid ${proc.pid} already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server holds the agent's connection, also after a network-capture-stop there, or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's connection to the app; after restart-app, call network-capture-start again, since a relaunch ends the JS layer's capture`;
       awaiting = { key, note, since };
       notAttached = false;
       log(`pid ${proc.pid} already has the agent loaded`);
