@@ -19,6 +19,8 @@ describe("advertised bundleId pattern", () => {
   it("is advertised by exactly the tools that take an app identifier", () => {
     expect(constrained.map(({ id }) => id).sort()).toEqual([
       "launch-app",
+      "network-capture-start",
+      "network-capture-stop",
       "open-url",
       "reinstall-app",
       "restart-app",
