@@ -905,6 +905,96 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect((await details(r1!.id)).request.postData).toBe("BODY-1");
     }, 25_000);
 
+    it("does not answer a body read with a reply under an id that argent did not send on the connection", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/held", { method: "POST", postData: "BODY", hold: true });
+      const [held] = (await readLog()).requests;
+      expect((await details(held!.id)).request.postData).toBe(
+        "[unavailable: the app is still sending this request body; read it again later]"
+      );
+      // argent numbers the requests of a connection from 1, but sends them
+      // under other ids, so these ids also match the number of the open read.
+      const app = await macosApp();
+      await app.call("Net.answer", {
+        ids: Array.from({ length: 64 }, (_, i) => i + 1),
+        reply: { result: { postData: "NOT-SENT", base64Encoded: false } },
+      });
+      await app.call("Net.finish");
+      expect((await details(held!.id)).request.postData).toBe("BODY");
+    }, 15_000);
+
+    it("does not answer a body read with the answer to a read of the tool-server before it", async () => {
+      /** A new tool-server process: the Mac app module and the tools load again. */
+      const newToolServer = async () => {
+        vi.resetModules();
+        const { Registry: FreshRegistry } = await import("@argent/registry");
+        const macos = await import("../src/blueprints/macos-app");
+        const { createNetworkCaptureStartTool: startTool } =
+          await import("../src/tools/network/network-capture-start");
+        const { createNativeNetworkLogsTool: logsTool } =
+          await import("../src/tools/native-devtools/native-network-logs");
+        const { networkRequestTool: detailsTool } =
+          await import("../src/tools/network/network-request");
+        const reg = new FreshRegistry();
+        reg.registerBlueprint(macos.macosAppBlueprint);
+        reg.registerTool(startTool(reg));
+        reg.registerTool(logsTool(reg));
+        reg.registerTool(detailsTool);
+        const ref = macos.macosAppRef(resolveDevice(DEVICE_ID));
+        return {
+          reg,
+          app: () => reg.resolveService<MacosAppApi>(ref.urn, ref.options),
+          start: () =>
+            reg.invokeTool("network-capture-start", { udid: DEVICE_ID, bundleId: BUNDLE_ID }),
+          held: async (url: string, postData: string): Promise<string> => {
+            await (
+              await reg.resolveService<MacosAppApi>(ref.urn, ref.options)
+            ).call("Net.request", { url, method: "POST", postData, hold: true });
+            const log = await reg.invokeTool<Listing>("native-network-logs", {
+              udid: DEVICE_ID,
+              bundleId: BUNDLE_ID,
+            });
+            return log.requests.find((r) => r.url === url)!.id;
+          },
+          postData: async (requestId: string): Promise<unknown> =>
+            (
+              await reg.invokeTool<any>("view-network-request-details", {
+                device_id: DEVICE_ID,
+                requestId,
+              })
+            ).request.postData,
+        };
+      };
+      const sending =
+        "[unavailable: the app is still sending this request body; read it again later]";
+      await run("boot-device", { macosAppPath: appPath });
+      await registry.disposeService(macosAppRef(resolveDevice(DEVICE_ID)).urn);
+
+      // The first tool-server reads a body that the app holds until the upload ends.
+      const first = await newToolServer();
+      try {
+        await first.start();
+        expect(await first.postData(await first.held("https://example.com/r1", "BODY-1"))).toBe(
+          sending
+        );
+      } finally {
+        await first.reg.dispose();
+      }
+
+      // The next one sends the same requests, and the app answers both reads to it.
+      const next = await newToolServer();
+      try {
+        await next.start();
+        const r2 = await next.held("https://example.com/r2", "BODY-2");
+        expect(await next.postData(r2)).toBe(sending);
+        await (await next.app()).call("Net.finish");
+        expect(await next.postData(r2)).toBe("BODY-2");
+      } finally {
+        await next.reg.dispose();
+      }
+    }, 25_000);
+
     it("gives a body read before restart-app from argent's copy, and says that the process is gone for one not read", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();

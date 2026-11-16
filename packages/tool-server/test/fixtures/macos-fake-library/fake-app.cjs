@@ -20,7 +20,8 @@
 // sends one 150 ms after the start. It keeps the bodies and answers the body
 // reads, as the real library does: a request body read of a held request
 // waits until `Net.finish`, which answers it to whichever client is connected
-// now, under the id of its read.
+// now, under the id of its read. `Net.answer` sends the CDP reply `reply`
+// under each of `ids`, as answers to requests that this client did not send.
 "use strict";
 const fs = require("node:fs");
 const net = require("node:net");
@@ -190,6 +191,13 @@ function handle(socket, msg) {
         }
       }
       for (const { last } of held.splice(0)) sendEvents(last);
+      return reply({ result: {} });
+    case "Net.answer":
+      for (const answerId of params.ids) {
+        socket.write(
+          JSON.stringify({ type: "CDP", payload: { id: answerId, ...params.reply } }) + "\n"
+        );
+      }
       return reply({ result: {} });
     case "Net.drop":
       // The fake answers, then closes this client's connection.
