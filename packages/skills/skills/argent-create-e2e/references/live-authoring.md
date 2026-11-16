@@ -63,7 +63,7 @@ steps:
         args: ["--enable-feature-flag"]
 ```
 
-During polish, make `path` relative (here `../../app`) so the test replays on other machines. A relative path resolves from the folder of the test being run.
+During polish, make `path` relative (here `../../app`) so the test replays on other machines. A relative path resolves from the folder of the test being run. A run over a link (argent link or ARGENT_TOOLS_URL) needs the absolute path on the computer of the tool-server, so keep that path in a test you run that way.
 
 ### Fragments
 
