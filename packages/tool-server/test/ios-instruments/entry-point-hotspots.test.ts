@@ -826,14 +826,46 @@ describe("system code under the app's entry point", () => {
     });
     expect(report).toContain("### system code under `start_wqthread` (Example)");
     expect(report).toContain(
-      "No function of the app is in these stacks: only system code ran on this thread.\n"
+      "No function of the app is in these stacks: only system code ran in them.\n"
     );
     expect(report).toContain(
-      "system code under `start_wqthread` on Example (20%): Not a function of the app: only system code (libsystem_pthread.dylib 100%) ran on this thread"
+      "system code under `start_wqthread` on Example (20%): Not a function of the app: only system code (libsystem_pthread.dylib 100%) ran in these stacks"
     );
     const text = renderFunctionCallersIos(out.cpuSamples, "start_wqthread", 15);
     expect(text).toContain("In the 25 samples with only system code below the function");
     expect(text).toContain("| `_pthread_wqthread` > `0x1e642f2ff` > `0x1e643d281` | 25 | 100.0% |");
+  });
+
+  it("does not say that only system code ran on a thread that also ran the app's code", async () => {
+    // Pooled dispatch workers have no name, so their samples share one thread name: the
+    // app's own block on a worker is on the same thread as the system code of the others.
+    const system = backtrace(4, [
+      runtime("_dispatch_worker_thread2", "libdispatch.dylib"),
+      runtime("_pthread_wqthread", "libsystem_pthread.dylib"),
+      runtime("start_wqthread", "libsystem_pthread.dylib"),
+    ]);
+    const appBlock = backtrace(5, [
+      app("profFixtureSpinBackground()"),
+      runtime("_dispatch_call_block_and_release", "libdispatch.dylib"),
+      runtime("_dispatch_worker_thread2", "libdispatch.dylib"),
+      runtime("_pthread_wqthread", "libsystem_pthread.dylib"),
+      runtime("start_wqthread", "libsystem_pthread.dylib"),
+    ]);
+    const { out, report } = await analyze([
+      row(1, system, "Example 0x2"),
+      ...Array.from({ length: 19 }, (_, i) => row(2 + i, `<backtrace ref="4"/>`, "Example 0x2")),
+      row(100, appBlock, "Example 0x3"),
+      ...Array.from({ length: 79 }, (_, i) => row(101 + i, `<backtrace ref="5"/>`, "Example 0x3")),
+    ]);
+
+    expect(out.cpuHotspots.map((h) => [h.dominantFunction, h.thread])).toEqual([
+      ["profFixtureSpinBackground()", "Example"],
+      ["start_wqthread", "Example"],
+    ]);
+    expect(report).not.toContain("on this thread");
+    expect(report).toContain(
+      "No function of the app is in these stacks: only system code ran in them.\n"
+    );
   });
 
   it("gives function_callers of the entry point its heaviest system stack", async () => {
