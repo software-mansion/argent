@@ -652,6 +652,63 @@ describe("the suspended time next to a hang's duration", () => {
       clearCachedProfilerPaths(PORT, DEVICE);
     }
   });
+
+  it("does not make a commit that a pause made longer look like dev mode, on iOS either", async () => {
+    // A React commit of 5000 ms over the 11000 ms hang at 20 s, 10000 ms of it suspended: the
+    // commit's time holds the pause too, so its ratio to the hang's recorded length is under 2.
+    const DEVICE = "ios-sim";
+    const PORT = 8082;
+    const START = 1_000_000;
+    const commitsPath = join(dir, "commits.json");
+    await fs.writeFile(
+      commitsPath,
+      JSON.stringify({
+        commits: [
+          {
+            commitIndex: 0,
+            timestamp: 20_100,
+            componentName: "MyComp",
+            actualDuration: 5000,
+            selfDuration: 5000,
+            commitDuration: 5000,
+            didRender: true,
+            changeDescription: null,
+          },
+        ],
+        meta: { profileStartWallMs: START },
+      })
+    );
+    cacheProfilerPaths(
+      PORT,
+      {
+        sessionId: "s",
+        debugDir: dir,
+        cpuProfilePath: null,
+        commitsPath,
+        cpuSampleIndexPath: null,
+        detectedArchitecture: null,
+        anyCompilerOptimized: null,
+        hotCommitIndices: [0],
+        totalReactCommits: 1,
+      },
+      DEVICE
+    );
+    try {
+      const api = makeApi("ios", LEAK_CHECKS);
+      api.wallClockStartMs = START;
+      await analyzeNativeProfilerIos(api);
+      const out = (await profilerCombinedReportTool.execute({ nativeSession: api } as never, {
+        port: PORT,
+        device_id: DEVICE,
+      })) as string;
+      expect(out).toContain(
+        `### Severe Hang at 00:20.000 (11000ms${SUSPENDED}) ↔ Commit #0 (5000ms)`
+      );
+      expect(out).not.toContain("dev mode");
+    } finally {
+      clearCachedProfilerPaths(PORT, DEVICE);
+    }
+  });
 });
 
 describe("suspensionSpansInTrace", () => {
