@@ -87,6 +87,13 @@ describe("flow-execute with await-ui-element gating", () => {
     expect(last.status).toBe("fail");
     expect(last.reason).toMatch(/condition not met/i);
     expect(last.reason).toMatch(/no element matched/i);
+    // The report keeps what the step ran with and what it got back.
+    expect(last.args).toEqual({ condition: "visible", selector: { text: "Continue" } });
+    expect(last.result).toEqual({
+      success: false,
+      elapsed: 5000,
+      note: "no element matched the selector before timeout",
+    });
     expect(result.ok).toBe(false);
   });
 

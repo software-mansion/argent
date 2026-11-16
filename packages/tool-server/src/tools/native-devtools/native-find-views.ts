@@ -1,19 +1,25 @@
 import { z } from "zod";
-import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import {
-  nativeDevtoolsRef,
-  precheckNativeDevtools,
-  type NativeDevtoolsApi,
-  type NativeDevtoolsPrecheckBlock,
-} from "../../blueprints/native-devtools";
+import { FAILURE_CODES, type ToolDefinition } from "@argent/registry";
+import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
-import { ensureDeps } from "../../utils/check-deps";
+import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
 
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; matches: unknown[] };
+type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; matches: unknown[]; note?: string };
+
+/**
+ * The `note` of an empty Mac app result to an identifier or label search. A
+ * SwiftUI control has no NSView that carries its identifier or label, so the
+ * library's NSView search cannot find it, while describe, which reads the
+ * accessibility tree, lists it. A className search can match the NSView that
+ * backs a SwiftUI control, so a className, tag or nativeID miss gets no note.
+ */
+const MACOS_NO_MATCH_NOTE =
+  "No NSView matched. SwiftUI sets a control's identifier and label on an accessibility element, " +
+  "not on an NSView, so this search does not find SwiftUI controls: describe lists them with " +
+  "their identifiers and frames.";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
-  bundleId: z.string().describe("Bundle ID of the app"),
+  ...nativeAppTarget,
   className: z.string().optional().describe("UIView class name to match (exact, e.g. UIButton)"),
   identifier: z.string().optional().describe("Accessibility identifier to match (exact)"),
   label: z.string().optional().describe("Accessibility label to match (exact)"),
@@ -31,10 +37,10 @@ const zodSchema = z.object({
     .array(z.string())
     .optional()
     .describe(
-      "View fields to include. Defaults: className, frame, hidden, alpha, " +
-        "identifier, label, nativeID, userInteractionEnabled, depth. " +
-        "Additional: pointer, tag, windowFrame, screenFrame, bounds, center, opaque, " +
-        "clipsToBounds, transform, contentMode, backgroundColor, tintColor, layerName"
+      "View fields to include. Defaults: pointer, className, tag, frame, " +
+        "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
+        "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
+        "Additional: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder"
     ),
 });
 
@@ -44,8 +50,9 @@ export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
   id: "native-find-views",
   description: `Search for specific UIViews in the running app by class name, accessibility identifier, accessibility label, tag or React Native nativeID; at least one of these params is required.
 Use when you need to locate a specific view by its properties without dumping the entire native-full-hierarchy.
-Returns { status: "ok", matches }: the matching views with their frames, properties, optional ancestors and optional children.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+Returns { status: "ok", matches }: the matching views with their frames, properties, optional ancestors and optional children. Frames are in points. frame and center are relative to the superview, and windowFrame turns with the UI. To tap a view, divide the centre of its screenFrame by the screen size in points, which native-full-hierarchy returns as screen (maxDepth: 1 is enough), and pass the result to gesture-tap. Matches are not filtered for visibility. Before tapping, call native-user-interactable-view-at-point at that centre with skipClasses ["UITextEffectsWindow"]. If it does not return the match or a descendant, check a screenshot.
+<flag:macos-apps>On a Mac app it searches the NSViews of every visible window: className is the NSView class, and identifier matches the accessibility identifier or the view identifier. SwiftUI sets a control's identifier and label on an accessibility element, not on an NSView, so an identifier or label search does not find SwiftUI controls: describe lists them with their identifiers and frames. The tap recipe above and the statuses below are iOS only.
+</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
   readOnly: true,
@@ -58,44 +65,30 @@ An Apple system app is rejected outright (terminal: never retry it).`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to search native views in ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
-  services: (params) => ({
-    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
-  }),
-  async execute(services, params) {
-    const device = resolveDevice(params.udid);
-    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
-
-    const api = services.nativeDevtools as NativeDevtoolsApi;
-
-    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
-    if (blocked) return blocked;
-
-    const rpcParams: Record<string, unknown> = {};
-    if (params.className !== undefined) rpcParams.className = params.className;
-    if (params.identifier !== undefined) rpcParams.identifier = params.identifier;
-    if (params.label !== undefined) rpcParams.label = params.label;
-    if (params.tag !== undefined) rpcParams.tag = params.tag;
-    if (params.nativeID !== undefined) rpcParams.nativeID = params.nativeID;
-    if (params.includeAncestors !== undefined) rpcParams.includeAncestors = params.includeAncestors;
-    if (params.includeChildren !== undefined) rpcParams.includeChildren = params.includeChildren;
-    if (params.fields !== undefined) rpcParams.fields = params.fields;
-
-    const result = (await api.queryViewHierarchy(
-      params.bundleId,
+  capability: {
+    apple: { simulator: true },
+    appleRemote: { simulator: true },
+    macos: { app: true },
+  },
+  services: nativeAppServices,
+  execute: (services, params) => {
+    const noteOnEmpty =
+      resolveDevice(params.udid).platform === "macos" &&
+      (params.identifier !== undefined || params.label !== undefined);
+    return queryViewHierarchyFor(
+      services,
+      params,
+      "native-find-views",
       "ViewHierarchy.findViews",
-      rpcParams
-    )) as { matches?: unknown[]; error?: string };
-
-    if (result.error) {
-      throw new FailureError(result.error, {
-        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_FIND_VIEWS_ERROR,
-        failure_stage: "native_devtools_find_views",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      });
-    }
-
-    return { status: "ok", matches: result.matches ?? [] };
+      FAILURE_CODES.NATIVE_DEVTOOLS_FIND_VIEWS_ERROR,
+      (result: { matches?: unknown[] }) => {
+        const matches = result.matches ?? [];
+        return {
+          status: "ok" as const,
+          matches,
+          ...(noteOnEmpty && matches.length === 0 ? { note: MACOS_NO_MATCH_NOTE } : {}),
+        };
+      }
+    );
   },
 };

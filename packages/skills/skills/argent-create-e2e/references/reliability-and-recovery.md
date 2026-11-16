@@ -26,7 +26,7 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 
 Work this gate as soon as capture warns that it kept a raw point or recorded a role-only selector. Keep the source screen available and do these checks:
 
-1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no YAML selector exists.
+1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` is an accessibility projection. It cannot prove that no YAML selector exists.
 2. **Other platforms:** use `describe`; for React Native on Android, also `debugger-component-tree`, for testIDs `describe` omits. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
 3. Test each candidate in a scratch fragment with `assert: { visible: <candidate> }` on the valid screen. Inspect every failure before trying a better id, label, app, or container.
 4. If source is available, inspect its `testID`, `accessibilityIdentifier`, or `resource-id`. If none exists, report the missing stable id as the real fix.
@@ -43,8 +43,8 @@ On an iOS simulator, the full runner tree exists only for an app launched by Arg
 
 1. If Metro, Expo, Xcode, an icon, or a prior process launched the app, call `restart-app`. Restore the source screen and retry capture. `launch-app` can only foreground the existing process.
 2. Tap capture does **not** wait for that connection. It makes one tree read and turns any failure straight into the kept-coordinates warning. A recording-time `restart-app` returns before the devtools connection opens, so the first tap after a restart can warn transiently. Re-record that tap once before escalating; only a warning that survives the retry is evidence of a real fault.
-3. If the warning survives, call `native-devtools-status` with the same UDID and bundle id and follow its `message`, which names the one action that helps and says when to stop.
-4. If an injectable app remains disconnected, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`**. This does not change app or account data. Then restart and check status again.
+3. If the warning survives, call `native-full-hierarchy` with the same UDID and bundle id and `maxDepth: 1`. A `status` other than `ok` carries a `message`: follow it. It names the one action that helps and says when to stop. If the call fails with `ViewInspector RPC timed out`, the app is connected and its main thread is stalled, so skip step 4: wait a few seconds, then repeat this call.
+4. If an injectable app remains disconnected, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`**. This does not change app or account data. Then restart and repeat the step 3 call.
 5. If it still fails, report an instrumentation blocker. Do not replace selectors with coordinates in a QA e2e test.
 
 Use the same explicit UDID throughout. Multiple booted simulators are not an injection fault. Pass `--device <udid>` when CLI device selection is ambiguous.

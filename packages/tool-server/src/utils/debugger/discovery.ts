@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 
 export interface CDPTarget {
@@ -31,6 +32,21 @@ interface MetroInfo {
  * makes a list holding only the decoy read as "no targets".
  */
 const DECOY_VM = "don't use";
+
+/**
+ * Expo CLI sends `encodeURI(projectRoot)` and RN CLI 20.2 the pathname of a
+ * file URL, so a space arrives as "%20" and a non-ASCII letter as its UTF-8
+ * escapes. Older RN CLIs send the raw path, which may hold a literal "%": a
+ * value that exists on disk as sent, or that does not decode, is kept as is.
+ */
+function decodeProjectRoot(raw: string): string {
+  if (!raw.includes("%") || existsSync(raw)) return raw;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
 
 export async function discoverMetro(port: number): Promise<MetroInfo> {
   let statusRes: Response;
@@ -95,7 +111,7 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
   // source path to resolve against). Legacy Metro (RN 0.72, which Vega forks)
   // never sends it, and hard-failing there would also take down evaluate,
   // console logs and the network inspector.
-  const projectRoot = statusRes.headers.get("X-React-Native-Project-Root") ?? "";
+  const projectRoot = decodeProjectRoot(statusRes.headers.get("X-React-Native-Project-Root") ?? "");
 
   let listRes: Response;
   try {

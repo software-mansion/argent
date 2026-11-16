@@ -125,7 +125,7 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or physical device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Android emulator). All from/to positions are fractions of screen width/height (not pixels), same as gesture-tap.
 Generates interpolated Move events for a natural feel (~60fps)<flag:harmonyos>; HarmonyOS takes the whole gesture in one call and interpolates it on-device</flag:harmonyos>.
 Swipe up (fromY > toY) to scroll content down.
-Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium; use gesture-scroll there instead.
+Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium; use gesture-scroll there instead.<flag:macos-apps> Not supported on a Mac app; use gesture-scroll or gesture-drag there.</flag:macos-apps>
 Physical iOS: an edge gesture (back-swipe) needs fromX 0 exactly; durationMs sets drag speed, not time; momentum:false only rests 300ms at the end and does not damp.<flag:harmonyos>
 HarmonyOS: durationMs sets drag speed, clamped to uitest's 200-40000 px/s, so a short slow swipe ends early and a long fast one runs late.</flag:harmonyos>
 Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
