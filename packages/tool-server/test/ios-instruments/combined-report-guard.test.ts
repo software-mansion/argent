@@ -49,6 +49,7 @@ function frozenParsedData(): NativeProfilerParsedData {
     memoryLeaks: [],
     leaksRecorded: true,
     mallocStackLogging: true,
+    customTemplate: null,
     wallClockStartMs: 1_000_000,
   };
 }

@@ -308,7 +308,13 @@ describe("the 10-minute recording cap", () => {
     commitXctraceRecording(
       instance.api,
       { child: child as unknown as ChildProcess, pid: child.pid },
-      { appProcess: "ExampleExec", traceFile: TRACE, mallocStackLogging: false, cpuFilterPid: null }
+      {
+        appProcess: "ExampleExec",
+        traceFile: TRACE,
+        mallocStackLogging: false,
+        customTemplate: false,
+        cpuFilterPid: null,
+      }
     );
     await vi.advanceTimersByTimeAsync(RECORDING_CAP_MS);
     expect(child.signals).toEqual(["SIGINT"]);

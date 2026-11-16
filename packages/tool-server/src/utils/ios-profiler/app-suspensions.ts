@@ -1,8 +1,8 @@
 /**
- * When macOS held a Mac app suspended during a recording. Instruments suspends
- * the whole app while it checks it for leaks (about every 11 s, up to about
- * 10 s each on an app that argent drove), and a debugger or a stop signal
- * suspends it too. A hang that such a pause overlaps holds the pause in the
+ * When macOS held a Mac app or an iOS simulator app suspended during a recording.
+ * Instruments suspends the whole app while it checks it for leaks (a Mac app that
+ * argent drove about every 11 s and up to about 10 s each, an iOS simulator app
+ * every 12 to 15 s), and a debugger or a stop signal suspends it too. A hang that such a pause overlaps holds the pause in the
  * trace. The pause makes a hang of fixed work longer, but not a hang whose main
  * thread waits for something that goes on during the pause (a sleep, a deadline,
  * I/O, another process). Measured on a Mac app: a 1.5 s main-thread spin to a
@@ -13,6 +13,8 @@
  * part and the recorded length.
  */
 import type { RawHang, UiHang } from "./types";
+import type { RecorderAdjustment } from "./recorder-hangs";
+import { classifyHangSeverity } from "./pipeline/01-correlate";
 
 /** A suspension in wall-clock ms since 1970, as `argent-macos-helper watch-suspension` reports it. */
 export interface AppSuspensionWindow {
@@ -51,6 +53,12 @@ export function suspensionSpansInTrace(
   return spans;
 }
 
+// xctrace's hang labels, measured on macOS 27 / Xcode 27.2 with main-thread blocks of known
+// length: none for a block under 250 ms, "Microhang" for 402 ms, "Hang" for 504 and 1961 ms,
+// "Severe Hang" for 2000.7 ms.
+const MIN_HANG_NS = 250_000_000;
+const HANG_NS = 500_000_000;
+const SEVERE_HANG_NS = 2_000_000_000;
 /**
  * The watch reads the suspend count every 10 ms, so each edge of a window can
  * be up to 10 ms off: a smaller overlap is no evidence that a suspension was in the hang.
@@ -66,10 +74,16 @@ export interface SuspensionAdjustment {
   overlappedHangs: number;
 }
 
-export interface SuspendedTimeInHangs {
-  /** For each hang: the ns of its recorded span during which the app was suspended. */
+export interface HangsToReport {
+  /** The hangs to report, in their order, with their recorded spans. */
+  hangs: RawHang[];
+  /** For each of `hangs`: the ns of its recorded span during which the app was suspended. */
   suspendedNs: number[];
+  /** For each of `hangs`: the ns of main-thread CPU time of Instruments' recorder in its span. */
+  recorderNs: number[];
   summary: SuspensionAdjustment;
+  /** What taking the recorder's time out changed. */
+  recorderSummary: RecorderAdjustment;
 }
 
 /** Sorted, with the empty spans left out and the overlapping ones merged. */
@@ -96,32 +110,80 @@ function overlapNs(startNs: number, endNs: number, merged: readonly AppSuspensio
   return total;
 }
 
-/** The time the app was suspended in each hang's recorded span. */
-export function suspendedTimeInHangs(
+/**
+ * The time the app was suspended in each hang's recorded span, and the main-thread
+ * time of Instruments' recorder (`recorderNs`, one for each of `rawHangs`; from
+ * recorderNsIn), which the report takes out. A hang with under 250 ms besides the
+ * recorder's time is left out, as xctrace reports no shorter hang. A suspension
+ * leaves out and shortens no hang. The hangs keep their recorded spans, so their
+ * CPU samples stay theirs.
+ */
+export function hangsToReport(
   rawHangs: readonly RawHang[],
-  spans: readonly AppSuspensionSpan[]
-): SuspendedTimeInHangs {
+  spans: readonly AppSuspensionSpan[],
+  recorderNs: readonly number[] = []
+): HangsToReport {
   const merged = mergeSpans(spans);
-  const suspendedNs = rawHangs.map((hang) => {
+  const hangs: RawHang[] = [];
+  const suspendedNs: number[] = [];
+  const keptRecorderNs: number[] = [];
+  let overlappedHangs = 0;
+  const recorderSummary: RecorderAdjustment = { removedHangs: 0, adjustedHangs: 0, recorderMs: 0 };
+  let recorderTotalNs = 0;
+  rawHangs.forEach((hang, i) => {
     const overlap = overlapNs(hang.startNs, hang.startNs + hang.durationNs, merged);
-    return overlap < MIN_OVERLAP_NS ? 0 : overlap;
+    const suspended = overlap < MIN_OVERLAP_NS ? 0 : overlap;
+    const recorder = recorderNs[i] ?? 0;
+    recorderTotalNs += recorder;
+    if (recorder > 0 && hang.durationNs - recorder < MIN_HANG_NS) {
+      recorderSummary.removedHangs++;
+      return;
+    }
+    if (suspended > 0) overlappedHangs++;
+    if (recorder > 0) recorderSummary.adjustedHangs++;
+    hangs.push(hang);
+    suspendedNs.push(suspended);
+    keptRecorderNs.push(recorder);
   });
+  recorderSummary.recorderMs = Math.round(recorderTotalNs / 1_000_000);
   const pausedNs = merged.reduce((sum, s) => sum + (s.endNs - s.startNs), 0);
   return {
+    hangs,
     suspendedNs,
+    recorderNs: keptRecorderNs,
     summary: {
       pauses: merged.length,
       pausedMs: Math.round(pausedNs / 1_000_000),
-      overlappedHangs: suspendedNs.filter((ns) => ns > 0).length,
+      overlappedHangs,
     },
+    recorderSummary,
   };
 }
 
+/** xctrace's label for a hang of this length (of 250 ms or more). */
+function hangLabel(ns: number): string {
+  if (ns >= SEVERE_HANG_NS) return "Severe Hang";
+  return ns >= HANG_NS ? "Hang" : "Microhang";
+}
+
 /**
- * The hang with the suspended part of its span. Its length, label and severity
- * stay those that Instruments recorded.
+ * The hang as the report shows it: without the recorder's time, and labeled and
+ * graded from that length, with the suspended part of its span. A suspension
+ * changes neither its length nor its label. Its span stays the recorded one.
  */
-export function withSuspendedTime(hang: UiHang, suspendedNs: number): UiHang {
-  if (!(suspendedNs > 0)) return hang;
-  return { ...hang, suspendedMs: Math.round(suspendedNs / 1_000_000) };
+export function reportedHang(hang: UiHang, suspendedNs: number, recorderNs = 0): UiHang {
+  if (!(suspendedNs > 0) && !(recorderNs > 0)) return hang;
+  const withSuspension =
+    suspendedNs > 0 ? { suspendedMs: Math.round(suspendedNs / 1_000_000) } : {};
+  if (!(recorderNs > 0)) return { ...hang, ...withSuspension };
+  const ownNs = hang.endNs - hang.startNs - recorderNs;
+  const hangType = hangLabel(ownNs);
+  return {
+    ...hang,
+    hangType,
+    durationMs: Math.round(ownNs / 1_000_000),
+    severity: classifyHangSeverity(hangType),
+    ...withSuspension,
+    recorderMs: Math.round(recorderNs / 1_000_000),
+  };
 }

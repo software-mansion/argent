@@ -1113,6 +1113,7 @@ describe("profiler-combined-report on a session with no stored commit", () => {
       memoryLeaks: [],
       leaksRecorded: true,
       mallocStackLogging: true,
+      customTemplate: null,
       wallClockStartMs: 1_000_000,
     };
     const error: unknown = await Promise.resolve(

@@ -279,6 +279,8 @@ describe("native-profiler-stop recovery branch", () => {
     api.traceFile = FAKE_TRACE;
     api.recordingMallocStackLogging = true; // in-flight malloc capture
     api.mallocStackLogging = false; // previous capture was attach-mode
+    api.recordingCustomTemplate = true;
+    api.customTemplate = false;
 
     const promise = nativeProfilerStopTool.execute(
       { session: api } as never,
@@ -291,6 +293,7 @@ describe("native-profiler-stop recovery branch", () => {
     await promise;
 
     expect(api.mallocStackLogging).toBe(true);
+    expect(api.customTemplate).toBe(true);
   });
 
   it("pairs the exports with the capture mode on the recovery branch too", async () => {
@@ -300,6 +303,8 @@ describe("native-profiler-stop recovery branch", () => {
     api.lastExitInfo = { code: 137, signal: "SIGKILL" };
     api.recordingMallocStackLogging = true;
     api.mallocStackLogging = false;
+    api.recordingCustomTemplate = true;
+    api.customTemplate = false;
 
     await nativeProfilerStopTool.execute(
       { session: api } as never,
@@ -310,6 +315,7 @@ describe("native-profiler-stop recovery branch", () => {
     );
 
     expect(api.mallocStackLogging).toBe(true);
+    expect(api.customTemplate).toBe(true);
   });
 });
 

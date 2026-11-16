@@ -165,3 +165,45 @@ describe("real xctrace time-profile exports", () => {
     expect(samples[4]!.stack).toContain("cpuProbeHashLoop(_:)");
   });
 });
+
+describe("system libraries of a simulator runtime", () => {
+  // Paths as an all-processes trace of iOS 27.0 and iOS 26.5 simulators gave them (Xcode 26.6).
+  // macOS mounts the iOS 27 runtime under cryptexd, so its paths start with /private/var/run.
+  const IOS_27_UIKIT =
+    "/private/var/run/com.apple.security.cryptexd/mnt/iOS_24A434/Library/Developer/CoreSimulator/" +
+    "Profiles/Runtimes/iOS 27.0.simruntime/Contents/Resources/RuntimeRoot/System/Library/" +
+    "PrivateFrameworks/UIKitCore.framework/UIKitCore";
+  const IOS_27_DISPATCH =
+    "/private/var/run/com.apple.security.cryptexd/mnt/iOS_24A434/Library/Developer/CoreSimulator/" +
+    "Profiles/Runtimes/iOS 27.0.simruntime/Contents/Resources/RuntimeRoot/usr/lib/system/libdispatch.dylib";
+  const IOS_26_FOUNDATION =
+    "/Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/" +
+    "Runtimes/iOS 26.5.simruntime/Contents/Resources/RuntimeRoot/System/Library/Frameworks/" +
+    "Foundation.framework/Foundation";
+  const APP =
+    "/Users/me/Library/Developer/CoreSimulator/Devices/56AC385B-AF1F-467E-BB5D-972CEB9C9899/data/" +
+    "Containers/Bundle/Application/DEBDAC26-75F6-4D5F-83D8-C5EF54F326BA/ProfProbe.app/ProfProbe";
+
+  function frame(id: number, name: string, binaryId: number, path: string): string {
+    const binary = path.split("/").pop();
+    return `<frame id="${id}" name="${name}" addr="0x${id}"><binary id="${binaryId}" name="${binary}" path="${path}"/></frame>`;
+  }
+
+  it("marks the frames of the iOS 27 and iOS 26.5 runtimes as system, not the app's", () => {
+    const xml = row(
+      "<sample-time>1</sample-time>",
+      `<backtrace id="1">` +
+        frame(2, "-[UIView layoutSubviews]", 3, IOS_27_UIKIT) +
+        frame(4, "_dispatch_main_queue_drain", 5, IOS_27_DISPATCH) +
+        frame(6, "-[NSRunLoop runMode:beforeDate:]", 7, IOS_26_FOUNDATION) +
+        frame(8, "closure #1 in ProbeViewController.watchCommandFile()", 9, APP) +
+        `</backtrace>`
+    );
+    expect(parseCpuXml(xml)[0]!.stack.map((f) => [f.name, f.isSystemLibrary])).toEqual([
+      ["-[UIView layoutSubviews]", true],
+      ["_dispatch_main_queue_drain", true],
+      ["-[NSRunLoop runMode:beforeDate:]", true],
+      ["closure #1 in ProbeViewController.watchCommandFile()", false],
+    ]);
+  });
+});

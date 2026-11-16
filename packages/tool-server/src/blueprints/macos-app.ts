@@ -19,7 +19,11 @@ import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-
 import { macosAppIdFromBundleId, parseMacosAppBundleId } from "../utils/device-info";
 import { pidIsAlive, pollPidsUntilGone, signalGroupThenPid } from "../utils/process-kill";
 import { settleWithin, sleep } from "../utils/timing";
-import { startSuspensionWatch, type SuspensionWatch } from "../utils/macos-suspension-watch";
+import {
+  startSuspensionWatch,
+  suspensionWatchHelper,
+  type SuspensionWatch,
+} from "../utils/macos-suspension-watch";
 import type { AppSuspensionWindow } from "../utils/ios-profiler/app-suspensions";
 import {
   chromiumRefusal,
@@ -1296,12 +1300,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     async watchSuspensions(pid) {
       suspensionWatches.get(bundleId)?.end();
       suspensionWatches.delete(bundleId);
-      let helper: string;
-      try {
-        helper = macosArtifacts().helper;
-      } catch {
-        return null;
-      }
+      const helper = suspensionWatchHelper();
+      if (!helper) return null;
       const watch = await startSuspensionWatch(helper, pid);
       if (!watch) return null;
       suspensionWatches.set(bundleId, watch);

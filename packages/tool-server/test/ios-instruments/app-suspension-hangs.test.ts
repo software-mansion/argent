@@ -17,9 +17,9 @@ import type {
   NativeProfilerSessionApi,
 } from "../../src/blueprints/native-profiler-session";
 import {
-  suspendedTimeInHangs,
+  hangsToReport,
   suspensionSpansInTrace,
-  withSuspendedTime,
+  reportedHang,
   type AppSuspensionSpan,
 } from "../../src/utils/ios-profiler/app-suspensions";
 import { correlateHangsWithCpu } from "../../src/utils/ios-profiler/pipeline/01-correlate";
@@ -51,10 +51,10 @@ function span(startMs: number, endMs: number): AppSuspensionSpan {
 
 /** The hangs as the pipeline reports them: correlated, then with the suspended time. */
 function report(hangs: RawHang[], spans: AppSuspensionSpan[]) {
-  const out = suspendedTimeInHangs(hangs, spans);
+  const out = hangsToReport(hangs, spans);
   const { uiHangs } = correlateHangsWithCpu(hangs, []);
   return {
-    uiHangs: uiHangs.map((h, i) => withSuspendedTime(h, out.suspendedNs[i]!)),
+    uiHangs: uiHangs.map((h, i) => reportedHang(h, out.suspendedNs[i]!)),
     summary: out.summary,
   };
 }
@@ -212,11 +212,11 @@ describe("the suspended time in a hang", () => {
 
   it("changes nothing without a suspension", () => {
     const hangs = [rawHang(0, 600, "Hang"), rawHang(1_000, 3_000)];
-    const out = suspendedTimeInHangs(hangs, []);
+    const out = hangsToReport(hangs, []);
     expect(out.suspendedNs).toEqual([0, 0]);
     expect(out.summary).toEqual({ pauses: 0, pausedMs: 0, overlappedHangs: 0 });
     const [uiHang] = correlateHangsWithCpu([hangs[0]!], []).uiHangs;
-    expect(withSuspendedTime(uiHang!, 0)).toBe(uiHang);
+    expect(reportedHang(uiHang!, 0)).toBe(uiHang);
   });
 });
 
@@ -226,7 +226,7 @@ function cpuRow(timeMs: number, id: number, fn: string): string {
   return (
     `<row><sample-time>${timeMs * MS}</sample-time>` +
     `<thread fmt="Main Thread 0x1 (ExampleExec, pid: 4321)"></thread>` +
-    `<weight>${MS}</weight>` +
+    `<weight>${150 * MS}</weight>` +
     `<backtrace id="${id}"><frame id="${id + 1}" name="${fn}" addr="0x${(0x1000 + id).toString(16)}">` +
     `<binary id="${id + 2}" name="ExampleExec" UUID="00000000-0000-0000-0000-000000000000" ` +
     `arch="arm64" load-addr="0x100000000" path="${APP_EXECUTABLE}"/></frame></backtrace></row>`
@@ -254,7 +254,8 @@ afterEach(() => {
  * A trace of two hangs: one at 3.644 s that a leak check filled but for 56 ms
  * (with a sample of `-[ExampleView layoutA]` in those 56 ms), and one at 20 s of
  * 11 s, 10 s of it a leak check (with `-[ExampleView layoutB]`). The two leak
- * checks are the spans below.
+ * checks are the spans below. Each sample weighs 150 ms, so the main thread ran
+ * for more than 10% of the second hang's own 1 s.
  */
 function writeTrace(leaks = true): Record<string, string | null> {
   const files = {
@@ -377,10 +378,13 @@ function makeApi(
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,
     exportSkipReason: null,
+    leaksCaptureError: null,
     recordedMs: null,
     startReturnedMs: null,
     stopInProgress: null,
@@ -488,14 +492,45 @@ describe("the analyze report's note on the app's suspensions", () => {
     expect(report).toContain("| 1 | Severe Hang | 00:03.644 | 13827ms |");
   });
 
-  it("leaves an iOS simulator's hangs as recorded", async () => {
+  it("gives an iOS simulator's hangs the suspended part too", async () => {
+    // The device capture records the leak checks of the Argent template, which
+    // suspend the simulator app as they suspend a Mac app.
     const api = makeApi("ios", LEAK_CHECKS);
     const { report } = await analyzeNativeProfilerIos(api);
-    expect(report).not.toContain(NOTE);
+    expect(report).toContain(
+      `> ⚠️ ${NOTE} Instruments held the app suspended 2 times (23.8 s in all) to check it for ` +
+        `leaks. These pauses overlap 2 hangs. Such a hang keeps the length that Instruments ` +
+        `recorded`
+    );
+    expect(report).not.toContain(OLD_NOTE);
+    expect(report).toContain(
+      "| 2 | Severe Hang | 00:20.000 | 11000ms, 10000ms of it while the app was suspended " +
+        "(the app's own hang: 1000 to 11000ms) | 🔴 |"
+    );
     expect(api.parsedData?.uiHangs.map((h) => [h.durationMs, h.suspendedMs])).toEqual([
-      [13_827, undefined],
-      [11_000, undefined],
+      [13_827, 13_771],
+      [11_000, 10_000],
     ]);
+  });
+
+  it("leaves an iOS simulator's hangs as recorded, with the warning in iOS words, when argent did not watch", async () => {
+    const api = makeApi("ios", null);
+    const { report } = await analyzeNativeProfilerIos(api);
+    expect(report).not.toContain(NOTE);
+    expect(report).toContain(
+      `> ⚠️ ${OLD_NOTE} Instruments pauses the app for several seconds while it checks the app ` +
+        `for leaks, about every 12 to 15 s. A hang that overlaps a check can include this pause, ` +
+        `so the app's own work can be much shorter than the hang. To check a hang, record the ` +
+        `same actions again with \`template_path: "Time Profiler"\`, which records hangs and CPU ` +
+        `samples but does not check for leaks.`
+    );
+    expect(report).not.toContain("Mac app");
+    expect(report.indexOf(OLD_NOTE)).toBeLessThan(report.indexOf("---"));
+    expect(api.parsedData?.uiHangs.map((h) => h.durationMs)).toEqual([13_827, 11_000]);
+
+    // The all-processes fallback records the Time Profiler template: no leak check.
+    const noLeakCheck = await analyzeNativeProfilerIos(makeApi("ios", null, false));
+    expect(noLeakCheck.report).not.toContain(OLD_NOTE);
   });
 });
 
@@ -603,6 +638,7 @@ describe("the suspended time next to a hang's duration", () => {
         memoryLeaks: [],
         leaksRecorded: true,
         mallocStackLogging: null,
+        customTemplate: null,
         wallClockStartMs: START,
       };
       api.parsedData = parsedData;
@@ -612,6 +648,63 @@ describe("the suspended time next to a hang's duration", () => {
       })) as string;
       expect(out).toContain(`### Severe Hang at 00:20.000 (11000ms${SUSPENDED}) ↔ Commit #0`);
       expect(out).toContain(`- **Severe Hang** at 01:00.000 (11000ms${SUSPENDED})`);
+    } finally {
+      clearCachedProfilerPaths(PORT, DEVICE);
+    }
+  });
+
+  it("does not make a commit that a pause made longer look like dev mode, on iOS either", async () => {
+    // A React commit of 5000 ms over the 11000 ms hang at 20 s, 10000 ms of it suspended: the
+    // commit's time holds the pause too, so its ratio to the hang's recorded length is under 2.
+    const DEVICE = "ios-sim";
+    const PORT = 8082;
+    const START = 1_000_000;
+    const commitsPath = join(dir, "commits.json");
+    await fs.writeFile(
+      commitsPath,
+      JSON.stringify({
+        commits: [
+          {
+            commitIndex: 0,
+            timestamp: 20_100,
+            componentName: "MyComp",
+            actualDuration: 5000,
+            selfDuration: 5000,
+            commitDuration: 5000,
+            didRender: true,
+            changeDescription: null,
+          },
+        ],
+        meta: { profileStartWallMs: START },
+      })
+    );
+    cacheProfilerPaths(
+      PORT,
+      {
+        sessionId: "s",
+        debugDir: dir,
+        cpuProfilePath: null,
+        commitsPath,
+        cpuSampleIndexPath: null,
+        detectedArchitecture: null,
+        anyCompilerOptimized: null,
+        hotCommitIndices: [0],
+        totalReactCommits: 1,
+      },
+      DEVICE
+    );
+    try {
+      const api = makeApi("ios", LEAK_CHECKS);
+      api.wallClockStartMs = START;
+      await analyzeNativeProfilerIos(api);
+      const out = (await profilerCombinedReportTool.execute({ nativeSession: api } as never, {
+        port: PORT,
+        device_id: DEVICE,
+      })) as string;
+      expect(out).toContain(
+        `### Severe Hang at 00:20.000 (11000ms${SUSPENDED}) ↔ Commit #0 (5000ms)`
+      );
+      expect(out).not.toContain("dev mode");
     } finally {
       clearCachedProfilerPaths(PORT, DEVICE);
     }

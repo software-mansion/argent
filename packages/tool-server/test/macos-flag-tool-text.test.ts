@@ -122,6 +122,19 @@ describe("the native profiler tools' Mac app text", () => {
     expect(off.properties.template_path!.description).toMatch(/^iOS only\./);
   });
 
+  it("native-profiler-start says that leaks of new objects carry a backtrace without malloc_stack_logging", () => {
+    // Measured on an iOS simulator and on Mac apps: without malloc stack logging, a leak of an
+    // object allocated after the start has a responsible frame.
+    for (const flag of [true, false]) {
+      const text = advertised("native-profiler-start", flag).properties.malloc_stack_logging!
+        .description;
+      expect(text).toMatch(
+        /Without it, only leaks of objects allocated after the start carry one; the others show '<Call stack limit reached>', so use it only for older objects\./
+      );
+      expect(text).not.toMatch(/leaks carry no backtrace/);
+    }
+  });
+
   it("profiler-stack-query names Mac apps for leak_stacks only with the flag on", () => {
     expect(advertised("profiler-stack-query", true).description).toMatch(
       /leak_stacks: Memory leak details \(iOS and Mac apps only\)/

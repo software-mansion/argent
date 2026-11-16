@@ -32,7 +32,7 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS and
 
 - **Hang** → mode `hang_stacks` for the native call chain → `function_callers` for the suspected function → read the native source.
 - **CPU hotspot** → `thread_breakdown` for the per-thread split → `function_callers` for the dominant function.
-- **Memory leak** (iOS, Mac app) → `leak_stacks`, filtered by `object_type`, for the responsible frames and libraries. A leak is in the trace only after a leak check that began after it has ended (about every 11 s): keep recording about 25 s after the action that leaks, then stop. To attribute leaks shown as `<Call stack limit reached>`, re-run `native-profiler-start` with `malloc_stack_logging: true`; it restarts the app and adds overhead, so not for CPU or hang passes.
+- **Memory leak** (iOS, Mac app) → `leak_stacks`, filtered by `object_type`, for the responsible frames and libraries. A leak is in the trace only after a leak check that began after it has ended: keep recording about 25 s after the action that leaks, then stop. To attribute leaks shown as `<Call stack limit reached>`, re-run `native-profiler-start` with `malloc_stack_logging: true`; it restarts the app and adds overhead, so not for CPU or hang passes.
 
 ## 3. Caveats
 

@@ -368,6 +368,7 @@ describe("startNativeProfilerMacos recording", () => {
     // Scoped to the app by --attach: no host-wide sample filter.
     expect(api.cpuFilterPid).toBeNull();
     expect(api.recordingMallocStackLogging).toBe(false);
+    expect(api.recordingCustomTemplate).toBe(true);
     expect(api.appProcess).toBe("ExampleExec");
     expect(api.traceFile).toBe(result.traceFile);
   });
@@ -410,6 +411,7 @@ describe("startNativeProfilerMacos recording", () => {
 
     const args = xctraceArgs();
     expect(args[args.indexOf("--template") + 1]).toMatch(/Argent\.tracetemplate$/);
+    expect(api.recordingCustomTemplate).toBe(false);
   });
 
   it("an xctrace exit ends the recording and keeps the trace for stop", async () => {

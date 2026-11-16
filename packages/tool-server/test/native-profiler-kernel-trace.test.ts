@@ -154,6 +154,7 @@ async function recording(): Promise<NativeProfilerSessionApi> {
     appProcess: "ProfProbe",
     traceFile,
     mallocStackLogging: false,
+    customTemplate: false,
     cpuFilterPid: 4242,
   });
   // The start returns at "Starting recording", before the helper creates the file.
