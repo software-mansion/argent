@@ -151,6 +151,8 @@ Android results also carry capture and captureDetail. When capture is active, ca
           "native-network-logs",
           params.bundleId
         );
+        // network-capture-start fails for an Apple app, so pointing at it would loop.
+        if (!isInjectableBundleId(params.bundleId)) throw macosNotInjectable(params.bundleId);
         return listMacosNative(app, params, port);
       }
 
@@ -248,6 +250,20 @@ function listMacosNative(app: MacosAppApi, params: Params, port: number): Native
   });
   if (params.clear) store.clear();
   return listing;
+}
+
+/** argent does not load its library into an Apple app, so nothing ever captures it. */
+function macosNotInjectable(bundleId: string): FailureError {
+  return new FailureError(
+    `${bundleId} is an Apple app; argent captures only apps it can load its library into, ` +
+      `such as your own builds. Treat its native network log as unavailable rather than retrying.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+      error_kind: "validation",
+      failure_area: "tool_server",
+      failure_stage: "native_network_logs_macos_bundle_id",
+    }
+  );
 }
 
 /** The answer before any start: no service was reached, and nothing was turned on. */

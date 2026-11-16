@@ -1096,6 +1096,16 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect((err as Error).message).toContain("macos-native: com.apple.TextEdit is an Apple app");
     });
 
+    it("refuses to read an Apple app instead of naming network-capture-start, which fails for it", async () => {
+      const err = await run("native-network-logs", {
+        udid: "macos-app-com.apple.TextEdit",
+        bundleId: "com.apple.TextEdit",
+      }).catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
+      expect((err as Error).message).toContain("com.apple.TextEdit is an Apple app");
+      expect((err as Error).message).not.toContain("network-capture-start");
+    });
+
     it("says so when the app does not acknowledge Network.enable or Network.disable", async () => {
       await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=network-silent"] });
       const reason =
