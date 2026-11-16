@@ -169,6 +169,11 @@ describe("chromium-cookies tool", () => {
 });
 
 describe("chromium-storage tool", () => {
+  // Agents use debugger-evaluate; the SDK and the e2e-full suite still call it.
+  it("is hidden from MCP", () => {
+    expect(chromiumStorageTool.hideFromMcp).toBe(true);
+  });
+
   it("capability is chromium-only", () => {
     expect(() => assertSupported("s", chromiumStorageTool.capability, chromium)).not.toThrow();
     expect(() => assertSupported("s", chromiumStorageTool.capability, ios)).toThrow(

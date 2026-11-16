@@ -1227,6 +1227,37 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0]?.reason).toContain("unrecognized step kind");
   });
 
+  it("reports a run: target with a newer version as a step error", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "newer.yaml" },
+        { kind: "echo", message: "after" },
+      ],
+    });
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "newer.yaml"),
+      "version: 2\nsteps:\n  - echo: hi\n",
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
+    expect(result.steps[0]).toMatchObject({
+      kind: "run",
+      status: "error",
+      reason:
+        'could not load fragment "newer.yaml": The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it.',
+    });
+  });
+
   it("bounds the reason when a run: target is in-project YAML but not a flow", async () => {
     // A mistyped run: path can select any YAML file inside the project root —
     // here a CI config whose sole top-level key happens to be `steps`. Its

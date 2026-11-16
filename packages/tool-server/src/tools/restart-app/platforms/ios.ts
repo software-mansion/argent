@@ -14,6 +14,7 @@ import {
 import { externalClaimForAnyId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
@@ -49,25 +50,45 @@ export function makeIosImpl(
         if (blocked) return blocked;
       }
       try {
-        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]));
-      } catch {
-        // App may not be running
+        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]), {
+          timeout: 15_000,
+          killSignal: SIMCTL_KILL_SIGNAL,
+        });
+      } catch (err) {
+        // Not running is fine; a timed-out terminate may have left the old process up.
+        if ((err as { killed?: boolean }).killed) {
+          throw new FailureError(
+            `Terminating iOS app ${bundleId} on ${udid} did not finish within 15s, so it was not restarted.`,
+            {
+              error_code: FAILURE_CODES.IOS_RESTART_TERMINATE_FAILED,
+              failure_stage: "ios_restart_app_simctl_terminate",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              ...subprocessFailureMetadata(err, "xcrun_simctl"),
+            },
+            { cause: err as Error }
+          );
+        }
       }
       try {
         await execFileAsync(
           "xcrun",
-          await simctlArgsForUdid(udid, ["launch", udid, bundleId, ...(params.launchArgs ?? [])])
+          await simctlArgsForUdid(udid, ["launch", udid, bundleId, ...(params.launchArgs ?? [])]),
+          { timeout: 30_000, killSignal: SIMCTL_KILL_SIGNAL }
         );
       } catch (err) {
         // Its message says what to do, and a flow step reports only the thrown message.
         if (err instanceof XcodeFirstLaunchPendingError) throw err;
+        const timedOut = (err as { killed?: boolean }).killed === true;
         throw new FailureError(
-          `Failed to restart iOS app ${bundleId} on ${udid}.`,
+          timedOut
+            ? `Relaunching iOS app ${bundleId} on ${udid} did not finish within 30s.`
+            : `Failed to restart iOS app ${bundleId} on ${udid}.`,
           {
             error_code: FAILURE_CODES.IOS_RESTART_LAUNCH_FAILED,
             failure_stage: "ios_restart_app_simctl_launch",
             failure_area: "tool_server",
-            error_kind: "subprocess",
+            error_kind: timedOut ? "timeout" : "subprocess",
             ...subprocessFailureMetadata(err, "xcrun_simctl"),
           },
           { cause: err instanceof Error ? err : new Error(String(err)) }

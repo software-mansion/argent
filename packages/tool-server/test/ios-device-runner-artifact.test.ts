@@ -454,6 +454,22 @@ describe("ensureRunnerArtifact", () => {
     return binDir;
   }
 
+  it("names the signing team on a signing failure, with the override", async () => {
+    const binDir = await stubXcodebuild("signing-fails", [
+      "echo '/proj.xcodeproj: error: No profiles for \"com.example\" were found' >&2",
+      "exit 65",
+    ]);
+
+    const caught = await withEnsureEnv(
+      "signing-fails",
+      () => ensureRunnerArtifact(CONFIG).catch((error: unknown) => error),
+      { binDir }
+    );
+
+    expect((caught as Error).message).toContain(`Signing team: ${CONFIG.teamId}.`);
+    expect((caught as Error).message).toContain("ARGENT_IOS_TEAM_ID=<team-id>");
+  });
+
   it("stamps a failed xcodebuild as the not-ready build stage with the exit code", async () => {
     const binDir = await stubXcodebuild("build-fails", [
       'echo "/proj.xcodeproj: error: No Accounts: Add a new account in Accounts settings." >&2',

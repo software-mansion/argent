@@ -4,6 +4,7 @@ import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlTargetForUdid } from "../../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { assertIosAppBundle } from "../validate-app";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
@@ -17,20 +18,42 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
     await assertIosAppBundle(absolute, bundleId);
     const { nativeId, prefix } = await simctlTargetForUdid(udid);
     try {
-      await execFileAsync("xcrun", [...prefix, "uninstall", nativeId, bundleId]);
-    } catch {
-      // App may not be installed
+      await execFileAsync("xcrun", [...prefix, "uninstall", nativeId, bundleId], {
+        timeout: 30_000,
+        killSignal: SIMCTL_KILL_SIGNAL,
+      });
+    } catch (err) {
+      // Not installed is fine; a timed-out uninstall may have left the old app and its data.
+      if ((err as { killed?: boolean }).killed) {
+        throw new FailureError(
+          `Uninstalling ${bundleId} from ${udid} did not finish within 30s, so it was not reinstalled.`,
+          {
+            error_code: FAILURE_CODES.IOS_REINSTALL_UNINSTALL_FAILED,
+            failure_stage: "ios_reinstall_app_simctl_uninstall",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+            ...subprocessFailureMetadata(err, "xcrun_simctl"),
+          },
+          { cause: err as Error }
+        );
+      }
     }
     try {
-      await execFileAsync("xcrun", [...prefix, "install", nativeId, absolute]);
+      await execFileAsync("xcrun", [...prefix, "install", nativeId, absolute], {
+        timeout: 180_000,
+        killSignal: SIMCTL_KILL_SIGNAL,
+      });
     } catch (err) {
+      const timedOut = (err as { killed?: boolean }).killed === true;
       throw new FailureError(
-        `Failed to install iOS app bundle on ${udid}.`,
+        timedOut
+          ? `Installing the iOS app bundle on ${udid} did not finish within 180s.`
+          : `Failed to install iOS app bundle on ${udid}.`,
         {
           error_code: FAILURE_CODES.IOS_REINSTALL_INSTALL_FAILED,
           failure_stage: "ios_reinstall_app_simctl_install",
           failure_area: "tool_server",
-          error_kind: "subprocess",
+          error_kind: timedOut ? "timeout" : "subprocess",
           ...subprocessFailureMetadata(err, "xcrun_simctl"),
         },
         { cause: err instanceof Error ? err : new Error(String(err)) }

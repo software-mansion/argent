@@ -9,6 +9,12 @@ import { vegaImpl } from "./platforms/vega";
 
 const BUTTONS = [...REMOTE_BUTTONS] as [RemoteButton, ...RemoteButton[]];
 
+const capability: ToolCapability = {
+  apple: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  vega: { vvd: true },
+};
+
 // Some MCP clients serialize array arguments as a JSON (or comma-separated)
 // string, so coerce those back to an array before validating.
 const buttonSchema = z
@@ -34,12 +40,9 @@ const buttonSchema = z
     z.union([z.enum(BUTTONS), z.array(z.enum(BUTTONS)).min(1).max(64)])
   )
   .describe(
-    "A single TV-remote button, or a path of them run in one call. " +
-      "Buttons: up/down/left/right (D-pad), select (OK), back, home, menu, playPause, " +
-      "rewind, fastForward, next, previous, volumeUp, volumeDown, mute. " +
-      "The media-transport and volume keys work on Android TV and Vega; on the Apple TV " +
-      "simulator they are rejected (its HID stack ignores them). The D-pad/select/back/menu/" +
-      "home/playPause core works on all three. " +
+    "A single TV-remote button, or a path of them run in one call. Move focus with " +
+      "up/down/left/right, confirm with select, go back with back/menu, exit with home; the " +
+      "media and volume buttons press the matching remote keys. " +
       'For multi-step navigation pass an array, e.g. ["up","right","right","select"]; ' +
       "strongly prefer this over multiple `tv-remote` calls: the whole path runs in a single call."
   );
@@ -63,12 +66,6 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-const capability: ToolCapability = {
-  apple: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  vega: { vvd: true },
-};
-
 // `capability` can't tell a TV apart from a phone, so the ios/android branches
 // accept any Apple/Android target and `resolveTvApi` rejects the non-TV ones at
 // call time — which is also why `services()` is empty: the backend can only be
@@ -76,6 +73,13 @@ const capability: ToolCapability = {
 export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, TvRemoteResult> {
   return {
     id: "tv-remote",
+    description: `Press a TV remote / D-pad button (or a whole path of them) on a TV device: Apple TV (tvOS), Android TV (leanback), or Vega (Fire TV).
+A TV is navigated with a directional remote, not touch. Use when you need to move focus or press a key on a TV, instead of gesture-tap/swipe (which do not apply on a TV).
+Read the screen with \`describe\` before and after to see where focus landed.
+Returns { pressed, count }. Fails on a target that is not a TV, and on the Apple TV simulator for rewind, fastForward, next, previous, volumeUp, volumeDown and mute (its HID stack ignores them); every other button works on all three platforms.`,
+    zodSchema,
+    searchHint:
+      "tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward sequence path apple tv tvos android tv leanback vega fire tv",
     interaction: {
       startedMsg: ({ params }) =>
         `Pressing ${params.button} on TV remote${(params.repeat ?? 1) > 1 ? ` ${params.repeat} times` : ""}`,
@@ -84,18 +88,9 @@ export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, T
       failedMsg: ({ params, failureSignal }) =>
         `Failed to press ${params.button} on TV remote: ${failureSignal.error_code}`,
     },
-    description: `Press a TV remote / D-pad button (or a whole path of them) on a TV device: Apple TV (tvOS), Android TV (leanback), or Vega (Fire TV).
-A TV is navigated with a directional remote, not touch. Use this instead of gesture-tap/swipe (which do not apply on a TV). Move focus with up/down/left/right, confirm with select, go back with back/menu, exit with home, and use playPause/rewind/fastForward/next/previous/volumeUp/volumeDown/mute for the corresponding remote keys. (On the Apple TV simulator the media-transport and volume keys are rejected (its HID stack ignores them); they work on Android TV and Vega.)
-Single press: { button: "down" }. Repeat the same button: { button: "down", repeat: 3 }.
-Multi-step navigation: pass a path as { button: ["up","right","right","select"] }. It runs in one tool call, far cheaper than separate presses.
-Read the screen with \`describe\` before and after to see where focus landed.
-Returns { pressed, count }.`,
     // A path (≤64 buttons) × repeat (≤50) flattens to thousands of presses, sent
     // one round-trip at a time on the Apple/Android path — minutes of wall-clock.
     longRunning: true,
-    searchHint:
-      "tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward sequence path apple tv tvos android tv leanback vega fire tv",
-    zodSchema,
     capability,
     services: () => ({}),
     execute: dispatchByPlatform<

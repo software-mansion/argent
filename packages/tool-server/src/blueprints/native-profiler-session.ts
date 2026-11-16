@@ -37,6 +37,12 @@ export interface NativeProfilerParsedData {
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
   /**
+   * False when THIS data has no leaks export (a template without the Leaks
+   * instrument, or a failed export), so an empty `memoryLeaks` means "not
+   * checked" rather than "no leaks". See LEAKS_NOT_RECORDED in ios-profiler/render.ts.
+   */
+  leaksRecorded: boolean;
+  /**
    * Capture mode of THIS data, frozen at parse time so drill-down consumers
    * (leak_stacks, the combined report) are not re-labeled by a later capture.
    * Null when unknown (session restored from disk).

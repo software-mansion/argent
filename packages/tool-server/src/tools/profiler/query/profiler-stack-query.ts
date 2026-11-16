@@ -18,41 +18,8 @@ import {
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
 import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-shared/format";
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
+import { LEAKS_NOT_RECORDED } from "../../../utils/ios-profiler/render";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
-
-const zodSchema = z.object({
-  device_id: metroDeviceIdParam("iOS Simulator UDID or Android serial."),
-  mode: z
-    .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
-    .describe(
-      "Query mode: hang_stacks (full CPU context during a hang), function_callers (who calls a native function), " +
-        "thread_breakdown (CPU split by thread), leak_stacks (leak details by object type)"
-    ),
-  hang_index: z.coerce
-    .number()
-    .int()
-    .optional()
-    .describe("0-based index into the hang list for hang_stacks mode"),
-  function_name: z.string().optional().describe("Function name for function_callers mode"),
-  thread: z
-    .string()
-    .optional()
-    .describe(
-      "Thread filter. thread_breakdown: case-insensitive substring match. " +
-        'function_callers: exact raw thread name (e.g. ".blueskyweb.app"), or "main" for ' +
-        "the UI thread; omit to search ALL threads (each result is tagged with its thread). " +
-        "Run thread_breakdown first to see the exact raw names."
-    ),
-  object_type: z.string().optional().describe("Object type filter for leak_stacks mode"),
-  top_n: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(15)
-    .describe("Max results to return (default 15)"),
-});
-
-type Params = z.infer<typeof zodSchema>;
 
 const stackQueryMode = {
   hang_stacks: "hang stacks",
@@ -278,8 +245,12 @@ export function renderLeakStacksIos(
   memoryLeaks: MemoryLeak[],
   objectTypeFilter: string | undefined,
   topN: number,
-  mallocStackLogging?: boolean | null
+  mallocStackLogging?: boolean | null,
+  leaksRecorded?: boolean
 ): string {
+  // Empty because nothing was recorded, not because nothing leaked.
+  if (leaksRecorded === false) return `_${LEAKS_NOT_RECORDED}_`;
+
   // Read from the FULL capture, never the object_type-filtered slice: one
   // attributed group proves the process ran under malloc stack logging however
   // it was launched, so an attach-mode flag must not claim "no malloc-stack
@@ -387,7 +358,8 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         data.memoryLeaks,
         params.object_type,
         params.top_n,
-        data.mallocStackLogging
+        data.mallocStackLogging,
+        data.leaksRecorded
       );
     default:
       throw new FailureError(`Unknown mode: ${params.mode}`, {
@@ -425,25 +397,46 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
   });
 }
 
+const zodSchema = z.object({
+  device_id: metroDeviceIdParam("iOS Simulator UDID or Android serial."),
+  mode: z
+    .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
+    .describe("Query mode; see Modes in the tool description."),
+  hang_index: z.coerce.number().int().optional().describe("0-based index into the hang list"),
+  function_name: z.string().optional().describe("Native function name"),
+  thread: z
+    .string()
+    .optional()
+    .describe(
+      "Thread filter. thread_breakdown: case-insensitive substring match. " +
+        'function_callers: exact raw thread name (e.g. ".blueskyweb.app"), or "main" for ' +
+        "the UI thread; omit to search ALL threads (each result is tagged with its thread). " +
+        "Run thread_breakdown first to see the exact raw names."
+    ),
+  object_type: z.string().optional().describe("Object type filter"),
+  top_n: z.coerce.number().int().positive().default(15).describe("Max results to return"),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const profilerStackQueryTool: ToolDefinition<Params, string> = {
   id: "profiler-stack-query",
+  description: `Query native profiler trace data for iterative investigation of native performance.
+Modes:
+- hang_stacks: Full CPU context during a specific hang (by hang_index).
+- function_callers: Who calls function_name and what it calls.
+- thread_breakdown: CPU time split by thread, optionally filtered.
+- leak_stacks: Memory leak details (iOS only), optionally filtered by object_type.
+Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after native-profiler-analyze.
+Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
+Fails if native-profiler-stop → native-profiler-analyze has not been run or no parsed trace data is in memory.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Querying native stacks by ${stackQueryMode[params.mode]}`,
     completedMsg: ({ params }) => `Queried native stacks by ${stackQueryMode[params.mode]}`,
     failedMsg: ({ failureSignal }) => `Failed to query native stacks: ${failureSignal.error_code}`,
   },
-  description: `Query native profiler trace data for iterative investigation of native performance.
-Requires native-profiler-stop → native-profiler-analyze to have been called first.
-Modes:
-- hang_stacks: Full CPU context during a specific hang (by hang_index).
-- function_callers: Who calls a specific native function and what it calls.
-- thread_breakdown: CPU time split by thread, optionally filtered.
-- leak_stacks: Memory leak details (iOS only), optionally filtered by object_type.
-Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after native-profiler-analyze.
-Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
-Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,
-  readOnly: true,
-  zodSchema,
   // No chromium entry: it has no native trace capture.
   capability: {
     apple: { simulator: true },

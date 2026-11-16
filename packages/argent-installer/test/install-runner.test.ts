@@ -9,6 +9,7 @@ import { runInstall } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
 import { isGloballyInstalled, isLocallyInstalled, resolveProjectRoot } from "../src/utils.js";
 import { probeGlobalInstallTarget } from "../src/global-prefix.js";
+import { PACKAGE_NAME } from "../src/constants.js";
 import type { InitTelemetry } from "../src/init-telemetry.js";
 
 // Exercises installLocally's failure handling: the retry-once semantics, the
@@ -84,6 +85,16 @@ function localInstall(tel: InitTelemetry): Promise<string> {
     version: "0.0.0",
     tel,
   });
+}
+
+// What a mocked p.log.* printed, one entry per call, colour codes removed.
+function loggedLines(fn: (message: string) => void): string[] {
+  const esc = String.fromCharCode(27);
+  return vi.mocked(fn).mock.calls.map((c) =>
+    String(c[0])
+      .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+      .join("")
+  );
 }
 
 describe("installLocally failure handling", () => {
@@ -207,6 +218,29 @@ describe("installLocally failure handling", () => {
     }
   });
 
+  it("shows pnpm's own error and advises the command it ran, workspace-root check skipped", async () => {
+    // The advice has to be the command that ran: a bare `pnpm add -D` fails at
+    // a workspace root (ERR_PNPM_ADDING_TO_ROOT) however the reader runs it.
+    vi.mocked(p.log.info).mockClear();
+    vi.mocked(p.log.error).mockClear();
+    const pnpmError = "ERR_PNPM_META_FETCH_FAIL  GET https://registry.npmjs.org/ failed";
+    vi.mocked(runShellCommand).mockRejectedValue(new ShellCommandError(pnpmError, 1, null));
+
+    await expect(localInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+    const ran = vi.mocked(runShellCommand).mock.calls[0]!;
+    expect(ran[0]).toEqual({
+      bin: "pnpm",
+      args: ["add", "-D", "--ignore-workspace-root-check", PACKAGE_NAME],
+    });
+    expect(ran[1]).toEqual({ cwd: "/fake/project" });
+
+    expect(loggedLines(p.log.error).join("\n")).toContain(pnpmError);
+    expect(loggedLines(p.log.info).join("\n")).toContain(
+      `pnpm add -D --ignore-workspace-root-check ${PACKAGE_NAME}`
+    );
+  });
+
   it.skipIf(process.platform === "win32")(
     "quotes the project root in the manual-install advice",
     async () => {
@@ -224,15 +258,9 @@ describe("installLocally failure handling", () => {
 
         await expect(localInstall(makeTel())).rejects.toThrow(ExitCalled);
 
-        const esc = String.fromCharCode(27);
-        const advice = vi
-          .mocked(p.log.info)
-          .mock.calls.map((c) =>
-            String(c[0])
-              .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
-              .join("")
-          )
-          .find((line) => line.startsWith("Install manually with: "));
+        const advice = loggedLines(p.log.info).find((line) =>
+          line.startsWith("Install manually with: ")
+        );
         expect(advice).toBeDefined();
 
         const cd = advice!.slice(advice!.indexOf("cd ")).split(" && ")[0];
