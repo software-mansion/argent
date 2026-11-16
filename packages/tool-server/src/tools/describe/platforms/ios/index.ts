@@ -61,10 +61,11 @@ function externalCaveat(deviceId: string, body: string): string {
   return `${externalSupportHint(deviceId) ?? "This device is supplied by an external provider."} ${body}`;
 }
 
-const EXTERNAL_BLIND_BODY =
-  "The accessibility read returned no elements, and argent cannot reboot this device to apply the " +
-  "pre-boot accessibility settings. Restart it from that application, or take a screenshot to see " +
-  "the screen.";
+const EXTERNAL_BLIND_TAIL =
+  ", and argent cannot reboot this device to apply the pre-boot accessibility settings. Restart it " +
+  "from that application, or take a screenshot to see the screen.";
+
+const EXTERNAL_BLIND_BODY = `The accessibility read returned no elements${EXTERNAL_BLIND_TAIL}`;
 
 const EXTERNAL_STANDING_BODY =
   "System dialogs and native modals may not appear in this tree; everything else reads normally. " +
@@ -85,6 +86,22 @@ function isBlindCaveat(hint: string | undefined): boolean {
   return hint === DEGRADED_BLIND_HINT || Boolean(hint?.endsWith(EXTERNAL_BLIND_BODY));
 }
 
+function startFailure(err: unknown): string {
+  return `The accessibility service failed to start (${errMsg(err)})`;
+}
+
+// The blind caveat for a daemon that never came up, appended to the failure
+// above. No read took place, so it does not say that one returned no elements,
+// and it has no blank-screen exception, which is about a read. The reboot stays
+// worth one attempt: the boot is the one thing known to be wrong with this sim.
+// The last sentence is the exit for a start that fails before the boot state is
+// measured, where the caveat would otherwise come back after every reboot.
+const DEGRADED_START_FAILED_TAIL =
+  ", and this simulator was not booted through argent, so the pre-boot accessibility settings were " +
+  "never applied. Call boot-device with force=true to reboot it with those settings — this restarts " +
+  "the simulator. If it fails to start again after that reboot, do not reboot again: the boot was " +
+  "not the cause.";
+
 // A daemon that a fault signal killed says nothing about how the simulator was
 // booted, so it must not be reported as the boot caveat. On a host where it
 // crashes every time (#800: SIGSEGV on every attach on Intel Macs) the reboot
@@ -101,21 +118,15 @@ function isBlindCaveat(hint: string | undefined): boolean {
 // failure, the agent has to be able to see it repeat, and the tree that comes
 // with it is empty or is the native fallback's, which can lack a system dialog
 // that covers the screen.
-const AX_CRASH_HINT_LEAD = "The accessibility service (ax-service) crashed";
-
 function axCrashHint(signal: string): string {
   return (
-    `${AX_CRASH_HINT_LEAD} with ${signal}, so the accessibility tree could not be read. ` +
+    `The accessibility service (ax-service) crashed with ${signal}, so the accessibility tree could not be read. ` +
     "Every describe starts the service again. If this hint repeats, the crash is in the service on " +
     "this host: rebooting the simulator (boot-device with force=true) or restarting the tool-server " +
     "will not fix it, because both start the same binary again. While it crashes, system dialogs and " +
     "SpringBoard chrome cannot be read through describe. describe continues on the app's native view " +
     "hierarchy where that is available, and `screenshot` shows the rest."
   );
-}
-
-function isAxCrashHint(hint: string | undefined): boolean {
-  return Boolean(hint?.startsWith(AX_CRASH_HINT_LEAD));
 }
 
 const NATIVE_FALLBACK_LEAD =
@@ -126,6 +137,20 @@ const NATIVE_FALLBACK_LEAD =
 // but cleared per device when a read comes back off that state, so a later
 // external boot of the same udid is caveated again.
 const bootCaveatToldDevices = new Set<string>();
+
+/**
+ * What a read learned beside its result. Kept beside the result and not on it:
+ * the tree data is a contract every platform shares, and only the dedupe below
+ * asks.
+ */
+interface IosReadFacts {
+  /** How the sim was booted, as measured; undefined when nothing measured it. */
+  degraded?: boolean;
+  /** The daemon crashed or never started, so no read took place. */
+  daemonGone?: boolean;
+}
+
+const readFacts = new WeakMap<DescribeTreeData, IosReadFacts>();
 
 export function __resetBootCaveatStateForTests(): void {
   bootCaveatToldDevices.clear();
@@ -145,10 +170,13 @@ export function withBootCaveatOncePerDevice(
     // A read that is not degraded at all means the caveat no longer describes
     // this device, so a later external boot has to be able to say it again. The
     // blind caveat is the same degraded state read blind, so it does not reset.
-    // Nor does a crashed read, which never learned how the sim was booted.
-    if (!isBlindCaveat(data.hint) && !isAxCrashHint(data.hint)) {
-      bootCaveatToldDevices.delete(deviceId);
-    }
+    //
+    // A read whose daemon was gone has a hint that is neither caveat, on a sim
+    // booted either way, so there the answer is what the factory measured. Only
+    // a sim measured as booted through argent is off the degraded state.
+    const facts = readFacts.get(data);
+    const stillDegraded = facts?.daemonGone ? facts.degraded !== false : isBlindCaveat(data.hint);
+    if (!stillDegraded) bootCaveatToldDevices.delete(deviceId);
     return data;
   }
   if (!bootCaveatToldDevices.has(deviceId)) {
@@ -229,6 +257,19 @@ export async function describeIos(
   params: DescribeIosParams,
   options: DescribeIosOptions = {}
 ): Promise<DescribeTreeData> {
+  const facts: IosReadFacts = {};
+  const data = await readIos(registry, device, params, options, facts);
+  readFacts.set(data, facts);
+  return data;
+}
+
+async function readIos(
+  registry: Registry,
+  device: DeviceInfo,
+  params: DescribeIosParams,
+  options: DescribeIosOptions,
+  facts: IosReadFacts
+): Promise<DescribeTreeData> {
   // The focus-engine tree is served by tv-control, not the iOS ax-service.
   const isTvOs = options.isTvOs ?? (await isTvOsSimulator(device.id));
   if (isTvOs) {
@@ -242,9 +283,12 @@ export async function describeIos(
   // The daemon came up but the read itself failed (a query timeout, an RPC
   // error). That says nothing about how the sim was booted, so it must not be
   // reported as the boot caveat — which prescribes a reboot the developer pays
-  // for and that would not have helped. The same holds for a daemon that did
-  // not come up on a sim the factory measured as booted through argent.
+  // for and that would not have helped.
   let readFailureHint: string | undefined;
+  // The daemon did not come up, for a reason the two hints around this one do
+  // not cover. Always reported with its error: no read took place, and why is
+  // the one thing the agent can act on.
+  let startFailureHint: string | undefined;
   // The daemon died on a fault signal, while it started or during the read.
   // Reported in place of the boot caveat and the read failure it would
   // otherwise come out as: see `axCrashHint`.
@@ -255,6 +299,7 @@ export async function describeIos(
     const axRef = axServiceRef(device);
     axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
     degraded = axApi.degraded;
+    facts.degraded = degraded;
   } catch (err) {
     // Not an empty screen, and the reboot the empty tree prescribes is refused too.
     if (isFirstLaunchRefusal(err)) throw err;
@@ -268,11 +313,17 @@ export async function describeIos(
     // before the measurement is still taken for a sim not booted through
     // argent: taking every failed start for one prescribed the reboot again
     // after each reboot, whatever had gone wrong.
-    const measuredDegraded = axStartFailureDegraded(err);
+    facts.degraded = axStartFailureDegraded(err);
     const explained = resolverHint !== undefined || crashSignal !== undefined;
-    degraded = !explained && measuredDegraded !== false;
-    if (!explained && measuredDegraded === false) {
-      readFailureHint = `The accessibility service failed to start (${errMsg(err)}).`;
+    degraded = !explained && facts.degraded !== false;
+    if (!explained) {
+      facts.daemonGone = true;
+      // On a provider's device the reboot is refused, so the remedy is theirs.
+      startFailureHint = !degraded
+        ? `${startFailure(err)}.`
+        : isExternalId(device.id)
+          ? externalCaveat(device.id, `${startFailure(err)}${EXTERNAL_BLIND_TAIL}`)
+          : `${startFailure(err)}${DEGRADED_START_FAILED_TAIL}`;
     }
   }
 
@@ -287,6 +338,7 @@ export async function describeIos(
     }
   }
   const crashHint = crashSignal === undefined ? undefined : axCrashHint(crashSignal);
+  if (crashHint !== undefined) facts.daemonGone = true;
 
   // Keyed to what the ACCESSIBILITY read produced, not to the tree finally
   // returned: the native-devtools fallback fills it from the injected app's own
@@ -295,9 +347,10 @@ export async function describeIos(
   //
   // A crash leaves no degraded hint at all, also on a sim that was booted
   // externally: the blind caveat would say the read returned no elements, when
-  // no read took place, and prescribe the reboot.
+  // no read took place, and prescribe the reboot. A start that failed has its
+  // own wording of the caveat, for the same reason.
   const degradedHint =
-    !degraded || crashHint !== undefined
+    !degraded || crashHint !== undefined || startFailureHint !== undefined
       ? undefined
       : tree.children.length === 0
         ? DEGRADED_BLIND_HINT
@@ -317,6 +370,7 @@ export async function describeIos(
   const hint =
     resolverHint ??
     crashHint ??
+    startFailureHint ??
     (readFailureHint
       ? deviceDegradedHint
         ? `${deviceDegradedHint}. ${readFailureHint}`
@@ -342,27 +396,36 @@ export async function describeIos(
   // system app's tree, at which point `describe`, not a screenshot, is the
   // right tool.
   //
-  // A crashed ax-service is the other way round: no remedy brings its read of
-  // this app back, so the terminal hint follows the crash one, or the crash
-  // hint's "where that is available" leaves the empty tree unexplained.
+  // A daemon that crashed, or failed to start on a sim booted through argent,
+  // is the other way round: no remedy brings its read of this app back, so the
+  // terminal hint follows that one. Alone, it leaves the empty tree unexplained,
+  // and the crash hint's "where that is available" unanswered.
+  const daemonGoneHint = crashHint ?? (degraded ? undefined : startFailureHint);
   if (params.bundleId && !isInjectableBundleId(params.bundleId)) {
     return {
       tree,
       source: "ax-service",
-      hint: crashHint ? `${crashHint} ${NON_INJECTABLE_HINT}` : (hint ?? NON_INJECTABLE_HINT),
+      hint: daemonGoneHint
+        ? `${daemonGoneHint} ${NON_INJECTABLE_HINT}`
+        : (hint ?? NON_INJECTABLE_HINT),
     };
   }
 
   // Without a lent socket the fallback would inject our own dylib, which is
   // refused here. Say so rather than let that error replace describe's real
-  // empty-tree result. An unexplained "no elements" reads as a bug.
+  // empty-tree result. An unexplained "no elements" reads as a bug. After a
+  // daemon that is gone the same is said without the claim about the read.
   if (isExternalId(device.id) && !lendsNativeDevtools(device.id)) {
+    const provider =
+      externalSupportHint(device.id) ?? "This device is supplied by an external provider.";
     return {
-      hint:
-        hint ??
-        `${externalSupportHint(device.id) ?? "This device is supplied by an external provider."} ` +
-          `The native view-hierarchy fallback is unavailable on it, so an empty tree here ` +
-          `means the accessibility tree itself was empty. Take a screenshot to see the screen.`,
+      hint: daemonGoneHint
+        ? `${daemonGoneHint} ${provider} The native view-hierarchy fallback is unavailable on it. ` +
+          `Take a screenshot to see the screen.`
+        : (hint ??
+          `${provider} ` +
+            `The native view-hierarchy fallback is unavailable on it, so an empty tree here ` +
+            `means the accessibility tree itself was empty. Take a screenshot to see the screen.`),
       source: "ax-service",
       tree,
     };

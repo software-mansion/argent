@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import * as fs from "node:fs";
 import * as net from "node:net";
 import type { ChildProcess } from "node:child_process";
 import {
@@ -37,8 +38,16 @@ let hostKind: "local" | "remote" = "local";
 // What the factory measures before it starts the daemon: whether the sim was
 // booted with argent's pre-boot accessibility settings.
 let bootedThroughArgent = true;
+// Ways for the start to fail after that measurement and before the daemon runs.
+let hostRequiresTcp = false;
+let spawnError: Error | undefined;
+let startProxyError: Error | undefined;
+const proxyCalls: string[] = [];
 const procs: FakeProc[] = [];
 const daemonSockets: net.Socket[] = [];
+// One per daemon connection the blueprint accepted, in order: settled once the
+// blueprint has handled the close of its end.
+const serverCloses: Promise<void>[] = [];
 
 /** What `simctl spawn` does when signal `number` kills its child. */
 function simctlReportsSignal(
@@ -55,7 +64,6 @@ function simctlReportsSignal(
 }
 
 function fakeDaemon(endpoint: IosEndpoint): ChildProcess {
-  if (endpoint.transport !== "unix") throw new Error("unix only here");
   const proc = Object.assign(new EventEmitter(), {
     stderr: new PassThrough(),
     killed: false,
@@ -70,7 +78,10 @@ function fakeDaemon(endpoint: IosEndpoint): ChildProcess {
   if (behavior === "crash-before-connect") {
     setImmediate(() => simctlReportsSignal(proc, 11, "Segmentation fault"));
   } else if (behavior !== "idle") {
-    const socket = net.connect(endpoint.socketPath);
+    const socket =
+      endpoint.transport === "unix"
+        ? net.connect(endpoint.socketPath)
+        : net.connect(endpoint.port!, "127.0.0.1");
     daemonSockets.push(socket);
     if (behavior === "crash-on-first-command") {
       // The order a real crash arrives in: the socket closes, then simctl
@@ -92,12 +103,40 @@ vi.mock("../../src/utils/ios-host", async () => {
     ...actual,
     pickIosHost: () => ({
       kind: hostKind,
-      requiresTcp: false,
+      requiresTcp: hostRequiresTcp,
       bootstrapAx: async () => ({ entitlementBypassActive: bootedThroughArgent }),
-      spawnAxDaemon: (_udid: string, endpoint: IosEndpoint) => fakeDaemon(endpoint),
-      startProxy: async () => {},
-      stopProxy: async () => {},
+      spawnAxDaemon: (_udid: string, endpoint: IosEndpoint) => {
+        if (spawnError) throw spawnError;
+        return fakeDaemon(endpoint);
+      },
+      startProxy: async (_udid: string, port: number) => {
+        proxyCalls.push(`start:${port}`);
+        if (startProxyError) throw startProxyError;
+      },
+      stopProxy: async (_udid: string, port: number) => {
+        proxyCalls.push(`stop:${port}`);
+      },
     }),
+  };
+});
+
+// The blueprint hands each accepted connection to the reader, which is the one
+// place a test can get hold of the blueprint's end of the socket.
+vi.mock("../../src/utils/ndjson-socket", async () => {
+  const actual = await vi.importActual<typeof import("../../src/utils/ndjson-socket")>(
+    "../../src/utils/ndjson-socket"
+  );
+  return {
+    ...actual,
+    attachNdjsonReader: (...args: Parameters<typeof actual.attachNdjsonReader>) => {
+      // This listener is registered before the blueprint's own, so it runs
+      // first; the microtask puts the resolution after every `close` listener.
+      // `socket.closed` would not do: it is already true inside `destroy()`.
+      serverCloses.push(
+        new Promise((resolve) => args[0].once("close", () => queueMicrotask(resolve)))
+      );
+      return actual.attachNdjsonReader(...args);
+    },
   };
 });
 
@@ -115,6 +154,7 @@ import { describeIos } from "../../src/tools/describe/platforms/ios";
 // Its own udid prefix: the socket path is /tmp/ax-<first 8 chars>.sock, and
 // other suites run beside this one.
 const UDID = "C0FFEE00-0800-4000-8000-000000000800";
+const SOCKET_PATH = "/tmp/ax-C0FFEE00.sock";
 const device: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 
 const disposers: Array<() => Promise<void>> = [];
@@ -131,6 +171,37 @@ async function spawned(index = 0): Promise<FakeProc> {
   return procs[index];
 }
 
+/** Resolves once the blueprint has handled the close of its end of the daemon connection. */
+function serverSideClosed(index = 0): Promise<void> {
+  return serverCloses[index];
+}
+
+/**
+ * Fakes the timers the blueprint sets from here on (the stderr drain, the
+ * disconnect grace, RPC timeouts), so a test moves through them itself. Socket
+ * and stream events stay real.
+ */
+function fakeBlueprintTimers(): void {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+}
+
+/** How a promise stands after the microtasks that are already due have run. */
+async function settledNow(promise: Promise<unknown>): Promise<string> {
+  return Promise.race([
+    promise.then(
+      () => "resolved",
+      (err: unknown) => (err instanceof Error ? err.message : String(err))
+    ),
+    new Promise<string>((resolve) => setImmediate(() => resolve("pending"))),
+  ]);
+}
+
+const failure = (promise: Promise<unknown>): Promise<unknown> =>
+  promise.then(
+    () => undefined,
+    (e: unknown) => e
+  );
+
 const SEGFAULT_STDERR = "Child process terminated with signal 11: Segmentation fault\n";
 // What simctl prints for an error of its own, here a simulator that is shut down.
 const NOT_BOOTED_STDERR =
@@ -141,13 +212,19 @@ beforeEach(() => {
   behavior = "connect";
   hostKind = "local";
   bootedThroughArgent = true;
+  hostRequiresTcp = false;
+  spawnError = undefined;
+  startProxyError = undefined;
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const dispose of disposers.splice(0)) await dispose();
   for (const socket of daemonSockets.splice(0)) socket.destroy();
   procs.length = 0;
+  serverCloses.length = 0;
+  proxyCalls.length = 0;
 });
 
 describe("readAxDaemonExit", () => {
@@ -276,6 +353,42 @@ describe("ax-service blueprint: a daemon that dies before it connects", () => {
     await expect(pending).rejects.toThrow("ax-service crashed with SIGABRT before connecting");
   });
 
+  it("waits for a line that arrives well after the exit", async () => {
+    // `exit` and the last stderr chunk are separate events, and nothing orders
+    // them. The stand-in above ends stderr in the same tick as the exit; this
+    // one lets time pass in between, which is what the wait is for.
+    const pending = failure(axServiceBlueprint.factory({}, device, { device }));
+    const proc = await spawned();
+    fakeBlueprintTimers();
+
+    proc.emit("exit", 139, null);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await settledNow(pending)).toBe("pending");
+    proc.stderr.write(SEGFAULT_STDERR);
+    proc.stderr.end();
+
+    expect(((await pending) as Error).message).toBe(
+      "ax-service crashed with SIGSEGV before connecting"
+    );
+  });
+
+  it("stops waiting for stderr after the drain window and reports what it has", async () => {
+    // A daemon that outlives simctl can hold the pipe open, so the wait is bounded.
+    const pending = failure(axServiceBlueprint.factory({}, device, { device }));
+    const proc = await spawned();
+    fakeBlueprintTimers();
+
+    proc.emit("exit", 139, null);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await settledNow(pending)).toBe("pending");
+    await vi.advanceTimersByTimeAsync(100);
+
+    // No line, so no signal: the code alone is not evidence of one.
+    expect(((await pending) as Error).message).toBe(
+      "ax-service exited with code 139 before connecting"
+    );
+  });
+
   it("does not report simctl's own failure as a crash", async () => {
     const pending = axServiceBlueprint.factory({}, device, { device });
     const proc = await spawned();
@@ -339,6 +452,67 @@ describe("ax-service blueprint: a daemon that dies before it connects", () => {
   });
 });
 
+describe("ax-service blueprint: a start that fails before the daemon runs", () => {
+  // The boot state is measured first, so each of these knows it. Without it
+  // describe takes the failure for a sim not booted through argent and
+  // prescribes the reboot again after every reboot.
+  const MISSING_BINARY = "ax-service binary not found: /nowhere/bin/darwin/ax-service";
+
+  it.each([true, false])(
+    "says how the sim was booted when the binary is missing (through argent: %s)",
+    async (throughArgent) => {
+      bootedThroughArgent = throughArgent;
+      spawnError = new Error(MISSING_BINARY);
+
+      const err = await failure(axServiceBlueprint.factory({}, device, { device }));
+
+      expect(err).toBe(spawnError);
+      expect(axStartFailureDegraded(err)).toBe(!throughArgent);
+      // The listener that was already up is released with it.
+      expect(fs.existsSync(SOCKET_PATH)).toBe(false);
+    }
+  );
+
+  it("says how the sim was booted when the listener cannot bind", async () => {
+    // A directory in the socket's place survives the pre-bind unlink.
+    fs.mkdirSync(SOCKET_PATH);
+    try {
+      const err = await failure(axServiceBlueprint.factory({}, device, { device }));
+
+      expect(err).toBeInstanceOf(Error);
+      expect(axStartFailureDegraded(err)).toBe(false);
+      expect(procs).toHaveLength(0);
+    } finally {
+      fs.rmdirSync(SOCKET_PATH);
+    }
+  });
+
+  it("says how the sim was booted when the tunnel fails to start", async () => {
+    hostRequiresTcp = true;
+    startProxyError = new Error("sim-remote proxy start failed");
+
+    const err = await failure(axServiceBlueprint.factory({}, device, { device }));
+
+    expect(err).toBe(startProxyError);
+    expect(axStartFailureDegraded(err)).toBe(false);
+    expect(procs).toHaveLength(0);
+    // A tunnel that never started is not stopped.
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]).toMatch(/^start:\d+$/);
+  });
+
+  it("stops the tunnel it started when the binary is missing", async () => {
+    hostRequiresTcp = true;
+    spawnError = new Error(MISSING_BINARY);
+
+    const err = await failure(axServiceBlueprint.factory({}, device, { device }));
+
+    expect(axStartFailureDegraded(err)).toBe(false);
+    const port = proxyCalls[0].slice("start:".length);
+    expect(proxyCalls).toEqual([`start:${port}`, `stop:${port}`]);
+  });
+});
+
 describe("ax-service blueprint: a daemon that dies after it connected", () => {
   it.each(["socket-first", "exit-first"] as const)(
     "fails the read in flight with the crash, not the disconnect it arrives as (%s)",
@@ -356,8 +530,7 @@ describe("ax-service blueprint: a daemon that dies after it connected", () => {
 
       if (order === "socket-first") {
         daemonSockets[0].destroy();
-        // Long enough for the blueprint to see the close, far inside its grace.
-        await new Promise((resolve) => setTimeout(resolve, 30));
+        await serverSideClosed();
         simctlReportsSignal(proc, 11, "Segmentation fault");
       } else {
         simctlReportsSignal(proc, 11, "Segmentation fault", "exit-first");
@@ -387,7 +560,7 @@ describe("ax-service blueprint: a daemon that dies after it connected", () => {
       (e: unknown) => e
     );
     daemonSockets[0].destroy();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await serverSideClosed();
 
     const late = instance.api.describe().then(
       () => undefined,
@@ -399,49 +572,101 @@ describe("ax-service blueprint: a daemon that dies after it connected", () => {
     expect(await first).toBe(await late);
   });
 
+  it("fails a read that starts after the close with the crash when the exit came first", async () => {
+    // The other order: the exit is seen, its stderr is still being read, and
+    // then the socket closes. The service is as much on its way out, so a read
+    // that starts now waits for the verdict too.
+    const instance = await attach();
+    const proc = await spawned();
+    fakeBlueprintTimers();
+
+    proc.emit("exit", 139, null);
+    daemonSockets[0].destroy();
+    await serverSideClosed();
+    const late = failure(instance.api.describe());
+    expect(await settledNow(late)).toBe("pending");
+    proc.stderr.write(SEGFAULT_STDERR);
+    proc.stderr.end();
+
+    expect(((await late) as Error).message).toBe("ax-service crashed with SIGSEGV");
+  });
+
+  it("lets an exit late in the grace window name the crash, with its stderr still to come", async () => {
+    // The exit lands 900 ms after the close and its line 200 ms after that, past
+    // the second the disconnect waits. The exit has to call the disconnect off,
+    // or the read fails as a bare disconnect with the verdict 50 ms away.
+    const instance = await attach();
+    const proc = await spawned();
+    fakeBlueprintTimers();
+    const read = failure(instance.api.describe());
+
+    daemonSockets[0].destroy();
+    await serverSideClosed();
+    await vi.advanceTimersByTimeAsync(900);
+    proc.emit("exit", 139, null);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await settledNow(read)).toBe("pending");
+    proc.stderr.write(SEGFAULT_STDERR);
+    proc.stderr.end();
+
+    expect(((await read) as Error).message).toBe("ax-service crashed with SIGSEGV");
+  });
+
   it("answers not connected once the service has been disposed", async () => {
     const instance = await attach();
-    await vi.waitFor(() => expect(daemonSockets).toHaveLength(1));
     daemonSockets[0].destroy();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await serverSideClosed();
     await instance.dispose();
 
     // No verdict is coming any more, so the read must not wait for one.
-    await expect(instance.api.describe()).rejects.toThrow("ax-service not connected");
+    expect(await settledNow(instance.api.describe())).toBe("ax-service not connected");
+  });
+
+  it("answers not connected at once after a dispose that closes the socket itself", async () => {
+    // The order dispose produces on its own: disposed first, then the close of
+    // the socket it destroyed. That close must not set a verdict to wait for:
+    // none comes, and a read would sit out its whole timeout.
+    const instance = await attach();
+    const onTerminated = vi.fn();
+    instance.events.on("terminated", onTerminated);
+    fakeBlueprintTimers();
+
+    await instance.dispose();
+    await serverSideClosed();
+
+    expect(await settledNow(instance.api.describe())).toBe("ax-service not connected");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(onTerminated).not.toHaveBeenCalled();
   });
 
   it("reports a daemon that only disconnected as a disconnect, once the exit has had its chance", async () => {
     const instance = await attach();
-    const read = instance.api.describe().then(
-      () => undefined,
-      (e: unknown) => e
-    );
-    await vi.waitFor(() => expect(daemonSockets).toHaveLength(1));
-    const closedAt = Date.now();
+    fakeBlueprintTimers();
+    const read = failure(instance.api.describe());
     daemonSockets[0].destroy();
+    await serverSideClosed();
+
+    // It waits for an exit that could name a signal.
+    await vi.advanceTimersByTimeAsync(900);
+    expect(await settledNow(read)).toBe("pending");
+    await vi.advanceTimersByTimeAsync(200);
 
     const err = await read;
     expect((err as Error).message).toBe("ax-service daemon disconnected");
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AX_DAEMON_PROCESS_ERROR);
     expect(axDaemonCrashSignal(err)).toBeUndefined();
-    // It waited for an exit that could have named a signal.
-    expect(Date.now() - closedAt).toBeGreaterThanOrEqual(900);
   });
 
   it("does not wait for an exit a remote daemon can never report", async () => {
     hostKind = "remote";
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const instance = await attach();
-    const read = instance.api.describe().then(
-      () => undefined,
-      (e: unknown) => e
-    );
-    await vi.waitFor(() => expect(daemonSockets).toHaveLength(1));
+    fakeBlueprintTimers();
+    const read = instance.api.describe();
     daemonSockets[0].destroy();
+    await serverSideClosed();
 
-    expect(((await read) as Error).message).toBe("ax-service daemon disconnected");
-    // The only timer of a second is the grace a local daemon gets.
-    expect(setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 1_000)).toEqual([]);
+    // No timer has been advanced: a local daemon would still be in its grace.
+    expect(await settledNow(read)).toBe("ax-service daemon disconnected");
   });
 
   it("does not report its own SIGTERM on dispose as a death", async () => {
@@ -449,13 +674,14 @@ describe("ax-service blueprint: a daemon that dies after it connected", () => {
     const onTerminated = vi.fn();
     instance.events.on("terminated", onTerminated);
     const proc = await spawned();
+    fakeBlueprintTimers();
 
     await instance.dispose();
     expect(proc.signals).toEqual(["SIGTERM"]);
-    // What the SIGTERM does to the real process, and to its socket.
+    // What the SIGTERM does to the real process.
     proc.emit("exit", null, "SIGTERM");
-    daemonSockets[0].destroy();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await serverSideClosed();
+    await vi.advanceTimersByTimeAsync(2_000);
 
     expect(onTerminated).not.toHaveBeenCalled();
   });
@@ -465,10 +691,12 @@ describe("ax-service blueprint: a daemon that dies after it connected", () => {
     const onTerminated = vi.fn();
     instance.events.on("terminated", onTerminated);
     const proc = await spawned();
+    fakeBlueprintTimers();
 
     await instance.dispose();
     simctlReportsSignal(proc, 11, "Segmentation fault");
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await serverSideClosed();
+    await vi.advanceTimersByTimeAsync(2_000);
 
     expect(onTerminated).not.toHaveBeenCalled();
   });
@@ -558,13 +786,112 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
       expect(result.hint).not.toContain("crashed");
     });
 
-    it("keeps the boot caveat on a sim measured as not booted through argent", async () => {
+    it("keeps the reboot on a sim measured as not booted through argent, and says why the start failed", async () => {
+      // The blind caveat alone said "the accessibility read returned no
+      // elements" and dropped the error. No read took place, and the error is
+      // what tells an agent whether the reboot is worth it.
       bootedThroughArgent = false;
 
       const result = await describeWithFailedStart();
 
-      expect(result.hint).toContain("not booted through argent");
-      expect(result.hint).toMatch(/call boot-device with force=true/);
+      expect(result.hint).toBe(
+        `The accessibility service failed to start ([AXService:${UDID}] ax-service exited with ` +
+          "code 111 before connecting), and this simulator was not booted through argent, so the " +
+          "pre-boot accessibility settings were never applied. Call boot-device with force=true to " +
+          "reboot it with those settings — this restarts the simulator. If it fails to start again " +
+          "after that reboot, do not reboot again: the boot was not the cause. " +
+          // The native fallback is not registered here, which describe says after it.
+          `The native view hierarchy could not be read (Service "NativeDevtools:${UDID}" not found), ` +
+          "so this empty accessibility tree is not evidence that nothing is on screen. Pass " +
+          "`bundleId` to have the connection state measured, or take a `screenshot` to see what is there."
+      );
+      expect(result.hint).not.toContain("read returned no elements");
+    });
+
+    it("says a missing binary is missing, and prescribes no reboot for it", async () => {
+      // Thrown before any process exists. On a sim booted through argent this
+      // used to be the boot caveat, the same after every reboot.
+      spawnError = new Error("ax-service binary not found: /nowhere/bin/darwin/ax-service");
+
+      const result = await describeIos(registryWithAx(), device, {}, { isTvOs: false });
+
+      expect(result.hint).toContain(
+        `The accessibility service failed to start ([AXService:${UDID}] ax-service binary not ` +
+          "found: /nowhere/bin/darwin/ax-service)."
+      );
+      expect(result.hint).not.toContain("not booted through argent");
+      expect(result.hint).not.toMatch(/boot-device/);
+    });
+
+    it("adds the system-app dead end to a failed start on a sim booted through argent", async () => {
+      // Nothing brings the read of this app back, so the failure alone leaves
+      // the empty tree unexplained and the agent without the next step.
+      behavior = "idle";
+      const pending = describeIos(
+        registryWithAx(),
+        device,
+        { bundleId: "com.apple.Preferences" },
+        { isTvOs: false }
+      );
+      const proc = await spawned();
+      proc.stderr.end();
+      proc.emit("exit", 1, null);
+      const result = await pending;
+
+      expect(result.hint).toMatch(
+        /^The accessibility service failed to start \(.*exited with code 1 before connecting\)\. This is an Apple system app/
+      );
+      expect(result.hint).toContain("Take a `screenshot` to see the screen");
+      expect(result.should_restart).toBeUndefined();
+    });
+
+    it("keeps the reboot ahead of the system-app dead end on a sim not booted through argent", async () => {
+      // A boot through argent may let the service read this app, so the
+      // terminal hint must not replace the one thing left to try.
+      bootedThroughArgent = false;
+      behavior = "idle";
+      const pending = describeIos(
+        registryWithAx(),
+        device,
+        { bundleId: "com.apple.Preferences" },
+        { isTvOs: false }
+      );
+      const proc = await spawned();
+      proc.stderr.end();
+      proc.emit("exit", 1, null);
+      const result = await pending;
+
+      expect(result.hint).toContain("Call boot-device with force=true");
+      expect(result.hint).not.toContain("Apple system app");
+    });
+
+    it("tells a provider's device that the native fallback is not there either", async () => {
+      // The factory refuses a provider's device this suite has not registered,
+      // so the failure of a real start is handed to describe for one.
+      behavior = "idle";
+      const pending = failure(axServiceBlueprint.factory({}, device, { device }));
+      const proc = await spawned();
+      proc.stderr.end();
+      proc.emit("exit", 1, null);
+      const cause = (await pending) as Error;
+      const registry = {
+        resolveService: async () => {
+          throw new ServiceInitializationError(`AXService:${UDID}`, cause.message, { cause });
+        },
+      } as unknown as Registry;
+      const external: DeviceInfo = {
+        id: `ext:provider:${UDID}`,
+        platform: "ios",
+        kind: "simulator",
+      };
+
+      const result = await describeIos(registry, external, {}, { isTvOs: false });
+
+      expect(result.hint).toBe(
+        `The accessibility service failed to start ([AXService:${UDID}] ax-service exited with ` +
+          "code 1 before connecting). This device is supplied by an external provider. The native " +
+          "view-hierarchy fallback is unavailable on it. Take a screenshot to see the screen."
+      );
     });
   });
 

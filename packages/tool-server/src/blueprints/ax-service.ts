@@ -549,6 +549,11 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     };
 
     const { entitlementBypassActive } = await host.bootstrapAx(udid);
+    // Every failure from here on is of a start whose boot state is known.
+    const startFailed = (err: unknown): unknown => {
+      if (err instanceof Error) startFailureDegraded.set(err, !entitlementBypassActive);
+      return err;
+    };
 
     // Listen before spawning; the daemon dials in.
     const server = await startListener(endpoint, (socket) => {
@@ -608,16 +613,41 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       socket.on("error", () => {
         // close handler does the cleanup
       });
+    }).catch((err: unknown) => {
+      throw startFailed(err);
     });
 
-    if (endpoint.transport === "tcp") {
-      // Tunnel before spawn: the daemon dials 127.0.0.1:<port> inside the sim and
-      // the tunnel forwards it back to the listener above. No-op on local;
-      // `port` was populated by startListener.
-      await host.startProxy(udid, endpoint.port!);
-    }
+    let proxyStarted = false;
+    // Don't leak the listener or the tunnel of a start that failed.
+    const abandonStart = async (): Promise<void> => {
+      server.close();
+      if (endpoint.transport === "unix") {
+        try {
+          fs.unlinkSync(endpoint.socketPath);
+        } catch {
+          /* best-effort socket cleanup */
+        }
+      }
+      if (endpoint.transport === "tcp" && proxyStarted) {
+        await host.stopProxy(udid, endpoint.port!);
+      }
+    };
 
-    const proc = host.spawnAxDaemon(udid, endpoint);
+    let proc: ChildProcess;
+    try {
+      if (endpoint.transport === "tcp") {
+        // Tunnel before spawn: the daemon dials 127.0.0.1:<port> inside the sim and
+        // the tunnel forwards it back to the listener above. No-op on local;
+        // `port` was populated by startListener.
+        await host.startProxy(udid, endpoint.port!);
+        proxyStarted = true;
+      }
+      // Throws when the binary is missing.
+      proc = host.spawnAxDaemon(udid, endpoint);
+    } catch (err) {
+      await abandonStart();
+      throw startFailed(err);
+    }
 
     const exited = watchDaemonExit(proc, () => {
       exitSeen = true;
@@ -642,21 +672,10 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     try {
       daemonSocket = await waitForDaemonConnection(server, proc, exited, 10_000);
     } catch (err) {
-      // Don't leak the listener or the daemon.
+      // Don't leak the daemon either.
       if (!proc.killed) proc.kill("SIGTERM");
-      server.close();
-      if (endpoint.transport === "unix") {
-        try {
-          fs.unlinkSync(endpoint.socketPath);
-        } catch {
-          /* best-effort socket cleanup */
-        }
-      }
-      if (endpoint.transport === "tcp") {
-        await host.stopProxy(udid, endpoint.port!);
-      }
-      if (err instanceof Error) startFailureDegraded.set(err, !entitlementBypassActive);
-      throw err;
+      await abandonStart();
+      throw startFailed(err);
     }
 
     // Registered once the daemon is connected: before that an exit fails the

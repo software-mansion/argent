@@ -1239,7 +1239,15 @@ describe("describe tool — ax-service daemon crash", () => {
       const tool = createDescribeTool(registryWhereAxFailsToStart(startFailure(exit)));
       const result = await tool.execute({}, { udid: UDID });
       expect(result.hint).toContain("not booted through argent");
+      expect(result.hint).toContain("Call boot-device with force=true");
       expect(result.hint).not.toContain("crashed");
+      // No read took place, and the error is not dropped.
+      expect(result.hint).not.toContain("read returned no elements");
+      expect(result.hint).toMatch(
+        exit.signal
+          ? /was killed by SIGKILL before connecting/
+          : /exited with code 1 before connecting/
+      );
     }
   });
 
@@ -1294,26 +1302,63 @@ describe("describe tool — ax-service daemon crash", () => {
     expect(second.hint).toBe(CRASH_HINT);
   });
 
-  it("does not let a crashed read re-arm or consume the standing boot caveat", async () => {
-    const elements = [
-      { label: "General", frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 }, traits: [] },
-    ];
-    const response = { alertVisible: false, screenFrame: { width: 440, height: 956 }, elements };
-    const degradedTool = () =>
+  describe("and the standing boot caveat", () => {
+    // The crash hint says nothing about how the sim was booted, but the read
+    // that crashed knew: the service reports it once connected, and a failed
+    // start carries what the factory measured. The once-per-device state goes
+    // by that, as it does for a read that worked.
+    const response = {
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        { label: "General", frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 }, traits: [] },
+      ],
+    };
+    const degradedRead = () =>
       createDescribeTool(
         makeMockRegistry({ axService: makeAXServiceApi(response, { degraded: true }) })
+      ).execute({}, { udid: UDID });
+    const crashedRead = (degraded: boolean) =>
+      createDescribeTool(makeMockRegistry({ axService: axApiThatCrashesOnRead(degraded) })).execute(
+        {},
+        { udid: UDID }
       );
-    const crashTool = createDescribeTool(
-      makeMockRegistry({ axService: axApiThatCrashesOnRead(true) })
+
+    it("is not re-armed by a crash on a sim still not booted through argent", async () => {
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await crashedRead(true)).hint).toContain("crashed with SIGSEGV");
+      // Same sim, same state: the caveat already told stays told.
+      expect((await degradedRead()).hint).toBeUndefined();
+    });
+
+    it("is re-armed by a crash on a sim booted through argent", async () => {
+      // The crashed read found the sim off the state the caveat describes, as a
+      // read that timed out in its place would have. A later external boot of
+      // the same udid has not been told.
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await crashedRead(false)).hint).toContain("crashed with SIGSEGV");
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+    });
+
+    it.each([true, false])(
+      "is not consumed by a crash that comes first (sim not booted through argent: %s)",
+      async (degraded) => {
+        // A crashed read told the agent nothing about the boot, so the first
+        // degraded read after it still owes the caveat.
+        expect((await crashedRead(degraded)).hint).toContain("crashed with SIGSEGV");
+        expect((await degradedRead()).hint).toMatch(/booted through argent/);
+        expect((await degradedRead()).hint).toBeUndefined();
+      }
     );
 
-    expect((await degradedTool().execute({}, { udid: UDID })).hint).toMatch(
-      /booted through argent/
-    );
-    expect((await crashTool.execute({}, { udid: UDID })).hint).toContain("crashed with SIGSEGV");
-    // The crashed read never learned how the sim was booted, so the caveat
-    // already told stays told.
-    expect((await degradedTool().execute({}, { udid: UDID })).hint).toBeUndefined();
+    it("is not re-armed by a crash whose boot state nothing measured", async () => {
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      const unmeasured = createDescribeTool(
+        registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }))
+      );
+      expect((await unmeasured.execute({}, { udid: UDID })).hint).toContain("crashed with SIGSEGV");
+      expect((await degradedRead()).hint).toBeUndefined();
+    });
   });
 
   it("sets the native fallback's own diagnosis apart from the crash", async () => {
@@ -1387,15 +1432,27 @@ describe("describe tool — ax-service daemon crash", () => {
       {},
       { isTvOs: false }
     );
-    expect(crashed.hint).toBe(CRASH_HINT);
+    // The crash hint says describe continues on the native hierarchy "where
+    // that is available", so on a device that does not lend it, it says so.
+    expect(crashed.hint).toBe(
+      `${CRASH_HINT} This device is supplied by an external provider. The native view-hierarchy ` +
+        "fallback is unavailable on it. Take a screenshot to see the screen."
+    );
+    expect(crashed.hint).not.toContain("Restart it from that application");
 
-    // The same device with a daemon that merely failed to start keeps it.
+    // The same device with a daemon that merely failed to start keeps the
+    // provider's caveat, with the failure in place of a read that never ran.
     const failed = await describeIos(
       registryWhereAxFailsToStart(startFailure({ code: 1 })),
       external,
       {},
       { isTvOs: false }
     );
-    expect(failed.hint).toContain("Restart it from that application");
+    expect(failed.hint).toBe(
+      "This device is supplied by an external provider. The accessibility service failed to start " +
+        `([AXService:${UDID}] ax-service exited with code 1 before connecting), and argent cannot ` +
+        "reboot this device to apply the pre-boot accessibility settings. Restart it from that " +
+        "application, or take a screenshot to see the screen."
+    );
   });
 });
