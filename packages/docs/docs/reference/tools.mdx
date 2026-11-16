@@ -400,7 +400,7 @@ After each stop, the in-app agent stays in the current process of the app until 
 
 On iOS, `native-network-logs` reads the `URLSession` requests of an app on an iOS simulator. `network-capture-start` starts the capture with `Network.enable`. The start waits until the app acknowledges `Network.enable`, for at most 5 seconds. Thus a start for a connected app usually returns `armed: true` for the `ios-native` layer. Argent does not capture the requests from before the start.
 
-On a simulator where Argent uses the socket of a device provider, the provider controls the capture. Argent does not send `Network.enable` there, because `Network.enable` resets the network settings of the provider, for example its throttling. Instead, `network-capture-start` asks the agent of the app if the capture is on. While the capture is started, each call of `native-network-logs` asks again. After a stop, Argent does not ask. `armed` is `true` when the capture of the provider is on.
+On a simulator where Argent uses the socket of a device provider, the provider controls the capture. Argent does not send `Network.enable` there, because `Network.enable` resets the network settings of the provider, for example its throttling. Instead, `network-capture-start` asks the agent of the app if the capture is on. The start waits for the answer, for at most 5 seconds. If the app still connects to Argent, these 5 seconds also include the connection. While the capture is started, each call of `native-network-logs` asks again. After a stop, Argent does not ask. `armed` is `true` when the capture of the provider is on.
 
 To capture a request:
 

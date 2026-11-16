@@ -336,7 +336,8 @@ async function startIosLayer(
   const armed = await api.startNetworkCapture(
     bundleId,
     port,
-    block?.status === "connect_pending" ? IOS_CONNECT_WAIT_MS : 0
+    // A lent agent says whether the provider has capture on only after it connects.
+    block?.status === "connect_pending" || !api.armsEnv ? IOS_CONNECT_WAIT_MS : 0
   );
   if (armed) return { layer: "ios-native", armed: true };
   if (api.isConnected(bundleId)) {

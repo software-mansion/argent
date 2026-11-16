@@ -1249,7 +1249,8 @@ describe("network-capture-start", () => {
         reason:
           "the app has not connected through the device's devtools agent; it arms when it does",
       });
-      expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
+      // The start waits up to 5 s for the provider's agent to connect and say whether capture is on.
+      expect(ios.calls).toEqual([`start ${APP} ${PORT} 5000`]);
     });
 
     it("tells to restart an app whose running process cannot be armed, then to start again for the JS layer the relaunch ends", async () => {
@@ -1392,9 +1393,10 @@ describe("network-capture-start", () => {
     });
 
     it.each([
-      { app: "a connected app", prepare: () => ios.connected.add(APP) },
+      { app: "a connected app", wait: 0, prepare: () => ios.connected.add(APP) },
       {
         app: "an app on a device provider's simulator",
+        wait: 5000,
         prepare: () => {
           ios.armsEnv = false;
           ios.appState = "provider_attached";
@@ -1402,7 +1404,7 @@ describe("network-capture-start", () => {
       },
     ])(
       "starts $app while Xcode's first launch is pending, as it needs no simctl",
-      async ({ prepare }) => {
+      async ({ prepare, wait }) => {
         serve(PORT, IOS_UDID, new FakeRuntime(APP));
         xcode.pending = true;
         prepare();
@@ -1410,7 +1412,7 @@ describe("network-capture-start", () => {
         const result = await start(IOS_UDID, APP);
 
         expect(layer(result, "js")).toEqual({ layer: "js", armed: true });
-        expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
+        expect(ios.calls).toEqual([`start ${APP} ${PORT} ${wait}`]);
       }
     );
 

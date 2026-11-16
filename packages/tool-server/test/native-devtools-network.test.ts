@@ -1152,9 +1152,10 @@ describe("native-devtools network capture on a lent agent", () => {
   /**
    * Plays a device provider that lends the app's agent: it publishes the
    * device and serves the socket the service dials, opening with the app's
-   * handshake and answering every CDP request.
+   * handshake and answering every CDP request. `handshakeDelayMs` holds the handshake back
+   * after the accept, as a provider that is a moment late to hand the app over.
    */
-  async function lendAgent(): Promise<LentAgent> {
+  async function lendAgent({ handshakeDelayMs = 0 } = {}): Promise<LentAgent> {
     const socketPath = path.join(dir, "agent.sock");
     const sockets: net.Socket[] = [];
     const write = (socket: net.Socket, frame: Frame) => socket.write(JSON.stringify(frame) + "\n");
@@ -1169,7 +1170,9 @@ describe("native-devtools network capture on a lent agent", () => {
             : {};
         write(socket, { type: "CDP", payload: { id: frame.payload.id, result } });
       });
-      write(socket, { type: "Control", payload: { bundleId: BUNDLE } });
+      const handshake = () => write(socket, { type: "Control", payload: { bundleId: BUNDLE } });
+      if (handshakeDelayMs > 0) setTimeout(handshake, handshakeDelayMs);
+      else handshake();
     });
     const lent: LentAgent = {
       received: [],
@@ -1331,6 +1334,61 @@ describe("native-devtools network capture on a lent agent", () => {
     } finally {
       await registry.dispose();
     }
+  });
+
+  /**
+   * Runs network-capture-start on a registry where nothing answers on the Metro port and no
+   * native devtools service runs yet, so the start is the call that connects to the lent agent.
+   */
+  async function firstLentStart(): Promise<unknown> {
+    const metroDown: ServiceBlueprint<unknown, string> = {
+      namespace: "JsRuntimeDebugger",
+      getURN: (payload) => `JsRuntimeDebugger:${payload}`,
+      factory: () =>
+        Promise.reject(
+          new FailureError("nothing answers on port 8081", {
+            error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
+            failure_stage: "test_metro",
+            failure_area: "tool_server",
+            error_kind: "network",
+          })
+        ),
+    };
+    const registry = new Registry();
+    registry.registerBlueprint(nativeDevtoolsBlueprint);
+    registry.registerBlueprint(metroDown);
+    registry.registerTool(createNetworkCaptureStartTool(registry));
+    try {
+      return await registry
+        .invokeTool("network-capture-start", { udid: LENT_DEVICE_ID, bundleId: BUNDLE })
+        .catch((e: unknown) => e);
+    } finally {
+      await registry.dispose();
+    }
+  }
+
+  it("waits at a first start, which connects to the lent agent, until the provider says capture is on", async () => {
+    await lendAgent({ handshakeDelayMs: 50 });
+
+    await expect(firstLentStart()).resolves.toMatchObject({
+      status: "ok",
+      layers: [expect.objectContaining({ layer: "js" }), { layer: "ios-native", armed: true }],
+    });
+  });
+
+  it("fails a first start, which connects to the lent agent, with NETWORK_CAPTURE_UNAVAILABLE when the provider has capture off and Metro is not running", async () => {
+    const lent = await lendAgent({ handshakeDelayMs: 50 });
+    lent.captureOn = false;
+
+    const startedAt = performance.now();
+    const err = await firstLentStart();
+
+    // The provider's answer ends the wait: the start does not wait the 5 s out.
+    expect(performance.now() - startedAt).toBeLessThan(2_500);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+    expect((err as Error).message).toMatch(
+      /; ios-native: the device provider has capture off for the app; .*turn capture on in the provider$/
+    );
   });
 
   it("asks the provider again at each read of a started app whether capture is on", async () => {

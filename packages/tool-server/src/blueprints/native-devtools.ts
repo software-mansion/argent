@@ -539,7 +539,8 @@ export interface NativeDevtoolsApi {
    * is armed at its handshake. Resolves true once the app's live connection
    * acknowledges Network.enable, false when there is no acknowledgement within
    * 5 s. Without a connection it waits `waitForConnectionMs` for one that is
-   * armed. Never rejects. In attach mode nothing is sent that changes the
+   * armed, and ends the wait early when the app's answer does not arm it.
+   * Never rejects. In attach mode nothing is sent that changes the
    * agent: true means the provider has capture on.
    */
   startNetworkCapture(
@@ -996,12 +997,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       return {
         armed: conn.armed,
         ...(conn.pid !== undefined ? { pid: conn.pid } : {}),
+        // A failure is the answer to the request still on its way, which settles just after.
         ...(conn.armed
           ? {}
-          : conn.enabling
-            ? { note: lentSocketPath ? WAITING_FOR_CAPTURE_STATE : WAITING_FOR_ENABLE }
-            : conn.enableFailure
-              ? { note: conn.enableFailure }
+          : conn.enableFailure
+            ? { note: conn.enableFailure }
+            : conn.enabling
+              ? { note: lentSocketPath ? WAITING_FOR_CAPTURE_STATE : WAITING_FOR_ENABLE }
               : {}),
       };
     };
@@ -1383,11 +1385,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         activatedBundleIds.add(bundleId);
         const conn = connections.get(bundleId);
         if (!conn) {
-          // The handshake sends Network.enable for an app in the set above.
-          return waitForConnection(
-            () => connections.get(bundleId)?.armed === true,
-            waitForConnectionMs
-          );
+          // The handshake sends Network.enable for an app in the set above. An
+          // answer that does not arm the app ends the wait too.
+          return waitForConnection(() => {
+            const next = connections.get(bundleId);
+            return next?.armed === true || next?.enableFailure !== undefined;
+          }, waitForConnectionMs).then(() => connections.get(bundleId)?.armed === true);
         }
         // No gap for a process recorded from its launch: a stop before this start keeps that launch.
         if (startedNow && !lentSocketPath && !conn.launchRecorded) captureGaps.add(bundleId);
