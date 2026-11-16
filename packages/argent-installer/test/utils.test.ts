@@ -1104,8 +1104,12 @@ describe("localInstallCommand", () => {
       args: ["add", "--dev", "pkg"],
     });
   });
-  it("uses add -D for pnpm", () => {
-    expect(localInstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["add", "-D", "pkg"] });
+  it("uses add -D for pnpm, skipping the workspace-root check", () => {
+    // A bare `pnpm add` at a workspace root fails with ERR_PNPM_ADDING_TO_ROOT.
+    expect(localInstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["add", "-D", "--ignore-workspace-root-check", "pkg"],
+    });
   });
   it("uses add -d for bun", () => {
     expect(localInstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["add", "-d", "pkg"] });
