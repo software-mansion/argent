@@ -1037,7 +1037,7 @@ describe("network-capture-start", () => {
       {
         found: "another app's runtime",
         answer: (): FakeRuntime | FailureCode | undefined => new FakeRuntime(OTHER),
-        reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; pass the port of ${APP}'s Metro`,
+        reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; if that runtime is the app, pass bundleId ${OTHER}; otherwise pass the port of ${APP}'s Metro`,
         kept: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; the interceptor already in ${APP}'s JS runtime may still record, so call network-capture-start again once that runtime answers on this port`,
       },
     ];
@@ -1959,7 +1959,7 @@ describe("a JS runtime of another app on the port", () => {
       layer: "js",
       armed: false,
       unavailable: true,
-      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; pass the port of ${APP}'s Metro`,
+      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; if that runtime is the app, pass bundleId ${OTHER}; otherwise pass the port of ${APP}'s Metro`,
     });
     expect(jsCapture(payload)).toEqual(otherCapture);
     expect(rt.evaluated).toHaveLength(evaluated);
@@ -2044,7 +2044,7 @@ describe("a JS runtime of another app on the port", () => {
       layer: "js",
       armed: false,
       total: 0,
-      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s, so nothing changed there; pass the port of ${APP}'s Metro`,
+      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s, so nothing changed there; if that runtime is the app, pass bundleId ${OTHER}; otherwise pass the port of ${APP}'s Metro`,
     });
     expect(layer(started, "js")).toMatchObject({ armed: false, unavailable: true });
     expect(jsCapturesOn(IOS_UDID)).toEqual([]);

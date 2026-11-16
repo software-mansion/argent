@@ -183,7 +183,7 @@ async function stopJsLayer(
         layer: "js",
         armed: false,
         total: 0,
-        reason: `${notOurs}, so nothing changed there; pass the port of ${bundleId}'s Metro`,
+        reason: `${notOurs}, so nothing changed there; if that runtime is the app, pass bundleId ${appId}; otherwise pass the port of ${bundleId}'s Metro`,
       };
     }
     const stored = storeStopped(kept.paused === true);

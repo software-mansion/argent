@@ -226,7 +226,9 @@ async function startJsLayer(
     return unavailable(
       "js",
       `${notOurs}; ${
-        other ? otherPortHint(bundleId, other.port) : `pass the port of ${bundleId}'s Metro`
+        other
+          ? otherPortHint(bundleId, other.port)
+          : `if that runtime is the app, pass bundleId ${appId}; otherwise pass the port of ${bundleId}'s Metro`
       }`
     );
   }
