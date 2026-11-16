@@ -16,8 +16,7 @@ For implementation tasks that modify visible UI, this workflow also serves as a 
 1. **Baseline screenshot**: call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
 2. **Find target**: get element coordinates from a discovery tool before tapping:
    - **App screens (React Native included), in-app modals and system dialogs**: `describe`. Fall back to `screenshot` only if an overlay is not exposed reliably. When the app raises its own permission dialog, answer it here; that's the real flow under test. To take a prompt _out_ of the flow, use `argent-settings-permissions` during setup.
-   - **Fallback**: use `screenshot` to estimate where the component is, then verify immediately after the action.
-3. **Interact**: perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...); you receive a screenshot automatically.
+3. **Interact**: perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...); you receive a screenshot and element tree automatically.
 4. **Verify**: check the returned screenshot. If it shows a loading/transitional state, block with `await-ui-element` (expected element `visible`, or a spinner `hidden`) rather than a guessed delay (its result carries the new screenshot and element tree), but only with a selector you can trust (`text`/`identifier`/`role`) that the screen is known to have or that you saw in a prior `describe`; a guessed one just times out. Otherwise use a short fixed wait. Pick evidence by what's being asserted:
    - **Visual** (layout, spacing, color, typography, image/icon rendering, clipping, overflow, text rendering): prefer `screenshot-diff` against the step 1 baseline: it surfaces pixel-visible changes the auto-screenshot might miss. Fall back to inspecting the auto-screenshot only when a stable baseline isn't available.
    - **Structural** (navigation state, element existence, accessibility labels/values, selection, hierarchy, route): verify with `describe` or `debugger-component-tree`.
@@ -29,13 +28,12 @@ For implementation tasks that modify visible UI, this workflow also serves as a 
 ## 2. Example: login flow
 
 ```
-1. screenshot → see login screen
-2. gesture-tap { x: 0.5, y: 0.4 }  → tap email field
+1. describe → login screen
+2. gesture-tap email field (frame centre from the tree)
 3. keyboard { text: "user@example.com" }
-4. gesture-tap { x: 0.5, y: 0.55 } → tap password field
-5. keyboard { text: "{{secret:APP_PASSWORD}}" }
-6. gesture-tap { x: 0.5, y: 0.7 }  → tap Login button
-7. screenshot → verify home screen appeared
+4. gesture-tap password field (from the returned tree)
+5. run-sequence: keyboard { text: "{{secret:APP_PASSWORD}}" }, gesture-tap Login button
+6. await-ui-element → home screen appeared
 ```
 
 > **Credentials:** never type plaintext credentials; use a `{{secret:<NAME>}}` placeholder (`keyboard`'s `text` parameter lists where it is read from and what to do when a name is missing). Never invent credentials or echo secret values into reports or saved files.
