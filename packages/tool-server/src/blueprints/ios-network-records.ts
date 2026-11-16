@@ -118,6 +118,12 @@ export interface IosAgentLink {
     params: Record<string, unknown>,
     timeoutMs: number
   ): Promise<unknown>;
+  /**
+   * argent can still connect again to the process of the closed `connection`,
+   * as to a Mac app's process while it runs. Absent on iOS, where a
+   * connection does not come back for the same process.
+   */
+  canReconnect?(connection: number): boolean;
 }
 
 /** What the host learned about the app after one of its connections closed. */
@@ -274,7 +280,7 @@ export function createIosNetworkRecords(
     const live = link.liveConnection();
     if (live !== undefined) sawConnection(live);
     if (endedConnections.has(connection) || newestConnection > connection) return PROCESS_GONE;
-    return layer === "macos-native" ? MACOS_CONNECTION_CLOSED : CONNECTION_CLOSED;
+    return link.canReconnect?.(connection) ? MACOS_CONNECTION_CLOSED : CONNECTION_CLOSED;
   }
 
   function readBody(id: string, kind: "response" | "post"): Promise<NativeNetworkBody> {

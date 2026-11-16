@@ -806,6 +806,9 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           ? ch.cdp.request(method, params, { timeoutMs })
           : Promise.reject(connectionClosedBefore(bundleId, method));
       },
+      // Not once the app's services stopped, which drops the records, or the process ended.
+      canReconnect: (index) =>
+        !disposed && recordedProcess?.index === index && pidIsAlive(recordedProcess.pid),
     },
     () => captureStarted,
     "macos-native"

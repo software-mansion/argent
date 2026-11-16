@@ -882,6 +882,46 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       });
     });
 
+    describe("does not say to read a body again after a reconnect when no reconnect can bring it", () => {
+      const CLOSED = "[unavailable: the agent's connection closed before this body was read]";
+
+      it("when the app quit after the check of its dropped connection", async () => {
+        const { pid } = await run("boot-device", { macosAppPath: appPath });
+        await start();
+        await request("https://example.com/kept", {
+          method: "POST",
+          postData: "SENT",
+          body: "RECEIVED",
+        });
+        const [{ id }] = (await readLog()).requests;
+        const app = await macosApp();
+        await app.call("Net.drop");
+        await waitUntil(() => !app.isConnected());
+        // The app quits after argent's 2 s check of the dropped connection.
+        await new Promise((r) => setTimeout(r, 2_500));
+        process.kill(pid, "SIGKILL");
+        await waitUntil(() => !pidAlive(pid));
+
+        expect(await details(id)).toMatchObject({
+          request: { postData: CLOSED },
+          response: { body: CLOSED },
+        });
+      }, 15_000);
+
+      it("when stop-simulator-server stops the app's services during the read", async () => {
+        await run("boot-device", { macosAppPath: appPath });
+        await start();
+        await request("https://example.com/held", { method: "POST", postData: "BODY", hold: true });
+        const [held] = (await readLog()).requests;
+        // The app holds the read until the upload ends.
+        const reading = details(held!.id);
+        await new Promise((r) => setTimeout(r, 500));
+        await run("stop-simulator-server", { udid: DEVICE_ID });
+
+        expect((await reading).request.postData).toBe(CLOSED);
+      });
+    });
+
     it("does not answer a body read with the answer to a read of an earlier connection", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();

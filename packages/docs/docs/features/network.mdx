@@ -106,7 +106,7 @@ The network log of this layer keeps the requests of the earlier processes of the
 
 Each request has an ID such as `macos-3f9a-12`. The agent uses this ID to read headers and request or response bodies. An ID is valid only in the tool-server that listed it. An ID stays valid after the capture stops. An ID is not valid after `stop-simulator-server` or `stop-all-simulator-servers` stops the services of the app, or after the tool-server stops.
 
-If the app still sends a request body, the details tell the agent to read the body again later. Then the agent reads the details again after the upload ends. If the connection to the app drops before Argent reads a body, the details tell the agent to read the body again after Argent connects to the app again.
+If the app still sends a request body, the details tell the agent to read the body again later. Then the agent reads the details again after the upload ends. The connection to the app can drop before Argent reads a body. While the app process runs, the details then tell the agent to read the body again after Argent connects to the app again.
 
 The capture stays on until the agent stops it. `stop-simulator-server` and `stop-all-simulator-servers` for the app also stop it.
 
