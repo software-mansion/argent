@@ -49,6 +49,14 @@ describe("parseUiAutomatorDump — WebView captures", () => {
     expect(rendered).toContain("[clickable]");
   });
 
+  it("keeps the focus that Chromium's root web area holds in an in-app WebView", () => {
+    // The capture has focused="true" on the inner root and "false" on the outer host.
+    const webview = flatten(parseUiAutomatorDump(fixture("inapp"), 1080, 2424)).find(
+      (n) => n.role === "WebView"
+    );
+    expect(webview?.focused).toBe(true);
+  });
+
   it("renders the cold capture as a leaf the adapter re-reads on", () => {
     const tree = parseUiAutomatorDump(fixture("cold"), 1080, 2424);
     expect(hasUnreadWebView(tree)).toBe(true);

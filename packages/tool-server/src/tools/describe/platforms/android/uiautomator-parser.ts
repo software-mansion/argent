@@ -509,6 +509,7 @@ function computeNodeOutput(
       node.clickable ||= inner.clickable;
       node.longClickable ||= inner.longClickable;
       node.scrollable ||= inner.scrollable;
+      node.focused ||= inner.focused;
       if (!node.identifier && inner.identifier) node.identifier = inner.identifier;
     }
     const hidden = hiddenInScroll + (inner?.scrollHidden ?? 0);

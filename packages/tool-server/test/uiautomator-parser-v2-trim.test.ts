@@ -337,4 +337,17 @@ ${row("Sound", 'focused="false" selected="false"').replace("[0,100][800,200]", "
     expect(play[0]!.focused).toBe(true);
     expect(play[0]!.selected).toBe(true);
   });
+
+  it("keeps the focus of the inner target when only it holds focus", () => {
+    const xml = `<hierarchy rotation="0">
+<node class="android.widget.FrameLayout" content-desc="Play" clickable="true" focusable="false" focused="false" selected="false" package="com.example.tv" bounds="[0,0][400,200]">
+  <node class="android.widget.Button" text="" clickable="true" focusable="true" focused="true" selected="true" package="com.example.tv" bounds="[0,0][400,200]" />
+</node>
+</hierarchy>`;
+
+    const play = flatten(parseUiAutomatorDump(xml, 1920, 1080)).filter((n) => n.label === "Play");
+    expect(play).toHaveLength(1);
+    expect(play[0]!.focused).toBe(true);
+    expect(play[0]!.selected).toBe(true);
+  });
 });
