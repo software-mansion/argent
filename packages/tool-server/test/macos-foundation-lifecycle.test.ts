@@ -1299,6 +1299,18 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       );
     });
 
+    it("reads armed: false while capture is started and the app's connection is down", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      expect((await readLog()).armed).toBe(true);
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      const log = await readLog();
+      expect(log.header).toMatch(/^macos-native: not armed, /);
+      expect(log.armed).toBe(false);
+    });
+
     it("refuses another app's bundle id", async () => {
       const refusal = async (tool: string) =>
         codeOf(
