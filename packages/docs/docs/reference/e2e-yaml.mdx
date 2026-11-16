@@ -412,12 +412,14 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 
 Use a `script` step for setup or cleanup that device steps cannot do. The script must be a local file with one of these extensions:
 
-| Extension | Language   |
-| --------- | ---------- |
-| `.mjs`    | JavaScript |
-| `.mts`    | TypeScript |
+| Extension | Language   | Module type                               |
+| --------- | ---------- | ----------------------------------------- |
+| `.mjs`    | JavaScript | ES module                                 |
+| `.mts`    | TypeScript | ES module                                 |
+| `.js`     | JavaScript | The `package.json` of the project decides |
+| `.ts`     | TypeScript | The `package.json` of the project decides |
 
-Node reads both as an ES module, whatever the `type` field of the `package.json` of the project holds. Parsing rejects each other extension, such as `.js` or `.ts`. See [TypeScript scripts](#typescript-scripts) for the limits of an `.mts` file.
+Parsing rejects each other extension, such as `.cjs` or `.tsx`. See [Module type](#module-type) for a `.js` or `.ts` file, and [TypeScript scripts](#typescript-scripts) for the limits of a `.ts` or `.mts` file.
 
 Over a link, the tool-server rejects an e2e test with a `script` step, and the `e2e-add-script` tool refuses to record one. Record and replay an e2e test with a `script` step without a link. An argent client that is older than the tool-server can record a `script` step when the computer of the tool-server has the `project_root` path, for example over a link to `127.0.0.1`. A replay over the link then rejects the e2e test. See [E2E tests over a link](#e2e-tests-over-a-link).
 
@@ -425,10 +427,10 @@ A `script` step needs no device. An e2e test of script steps alone runs with no 
 
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
-| Key       | Required | Description                                                                                                                                      |
-| --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `path`    | yes      | An `.mjs` or `.mts` file, relative to the e2e test file that holds the step. Write the extension in lowercase, and match the letter case on disk |
-| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                         |
+| Key       | Required | Description                                                                                                                                                    |
+| --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | yes      | An `.mjs`, `.mts`, `.js` or `.ts` file, relative to the e2e test file that holds the step. Write the extension in lowercase, and match the letter case on disk |
+| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                                       |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -463,18 +465,36 @@ Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node proce
 
 `scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
+### Module type
+
+An `.mjs` or `.mts` script is an ES module in every project.
+
+A `.js` or `.ts` script has the module type that Node gives each `.js` file in the same directory. Node reads the `type` field of the nearest `package.json`:
+
+| `type`     | Result                                                                                                                                   |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `module`   | The script is an ES module. A call to `require` makes the step fail                                                                      |
+| `commonjs` | The script is a CommonJS module. An `import` statement or a top-level `await` makes the step fail                                        |
+| Not set    | Node reads a script with an `import` statement or a top-level `await` as an ES module. Node reads each other script as a CommonJS module |
+
+A React Native project usually does not set `type`. Node 20.12 to 20.18 does not examine the syntax. There, Node reads such a script as a CommonJS module, and an `import` statement makes the step fail.
+
+When `type` is not set, Node usually prints a warning for a script that it reads as an ES module. Argent turns this warning off, so the log of the step does not hold it.
+
+Use the `.mjs` or `.mts` extension for a script that must behave the same in every project.
+
 ### TypeScript scripts
 
-Node runs an `.mts` script without a build step. Node removes the type annotations and runs the code that remains. Argent adds no compiler.
+Node runs a `.ts` or `.mts` script without a build step. Node removes the type annotations and runs the code that remains. Argent adds no compiler.
 
-The tool-server must run on Node 22.18 or later. On an older Node, the step is errored and the script does not start. Use an `.mjs` file when you cannot upgrade Node.
+The tool-server must run on Node 22.18 or later. On an older Node, the step is errored and the script does not start. Use an `.mjs` or `.js` file when you cannot upgrade Node.
 
 These limits apply:
 
 - Node does not check the types. Run `tsc --noEmit` on the script to check them.
 - Node does not read `tsconfig.json`. A path alias from `paths` does not resolve.
 - Node accepts only the syntax that it can remove. An `enum`, a `namespace` that holds code, or a parameter property makes the step fail.
-- Each relative import needs the file extension, for example `./helpers.mts`.
+- Each relative import needs the file extension, for example `./helpers.ts`.
 - An import of a type needs `import type`.
 - Node does not run a TypeScript file from `node_modules`.
 

@@ -243,22 +243,24 @@ export const FLOW_FILE_NAME_PATTERN = new RegExp(`^${FLOW_NAME_CHARSET}\\.yaml$`
 /**
  * The extensions a flow `script:` target may carry, in lowercase.
  *
- * Both pin the module type against a project's `package.json` `type` field, so
- * one script file behaves the same way in every project it is copied into.
- * `.js` and `.ts` do not — Node reads their module type from that field — and
- * stay out.
+ * `.mjs` and `.mts` pin the module type against a project's `package.json`
+ * `type` field, so one script file behaves the same way in every project it is
+ * copied into. `.js` and `.ts` do not — Node reads their module type from that
+ * field — and are here because they are what a project already writes.
+ * `.cjs` and `.cts` stay out: a script that wants CommonJS in an ES module
+ * project is not a case worth a fifth and sixth spelling.
  *
- * Node runs `.mts` by stripping the types, with no type check and no
- * `tsconfig.json`, and only from the releases `nodeStripsTypes` names
+ * Node runs the two TypeScript ones by stripping the types, with no type check
+ * and no `tsconfig.json`, and only from the releases `nodeStripsTypes` names
  * (flow-script-step.ts in the tool-server).
  */
-export const SCRIPT_FILE_EXTENSIONS = [".mjs", ".mts"] as const;
+export const SCRIPT_FILE_EXTENSIONS = [".mjs", ".mts", ".js", ".ts"] as const;
 
 /**
  * `<name><extension>` filename check for a flow `script:` target. Shares the
  * charset of the flow-name patterns above, so a name legal in a `run:` target
  * stays legal in a `script:` path. The charset has no dot, which also keeps a
- * declaration file (`seed.d.mts`) out.
+ * declaration file (`seed.d.ts`) out.
  */
 export const SCRIPT_FILE_NAME_PATTERN = new RegExp(
   `^${FLOW_NAME_CHARSET}(?:${SCRIPT_FILE_EXTENSIONS.map((ext) => `\\${ext}`).join("|")})$`

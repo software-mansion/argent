@@ -139,7 +139,7 @@ export async function runFlowScriptStep(
 }
 
 function isTypeScriptScript(base: string): boolean {
-  return base.endsWith(".mts");
+  return base.endsWith(".ts") || base.endsWith(".mts");
 }
 
 /** The first release of the oldest line that runs TypeScript with no flag. */

@@ -514,10 +514,17 @@ export class FlowScriptExecutor {
         // *script* is what `process.argv[1]`/`require.main` name and an "am I
         // the main module?" guard runs its body. Node awaits an `--import`
         // module before the entry, which leaves room for the handshake.
+        //
+        // The last flag silences one warning by its code. A `.js` or `.ts`
+        // script with `import` in a project whose package.json sets no `type`
+        // — the ordinary React Native layout — makes Node print it on every
+        // run, into the step's log, and what it advises is setting `type` on
+        // the whole project for the sake of one e2e script.
         execArgv: [
           `--max-old-space-size=${bounds.heapLimitMb}`,
           "--import",
           pathToFileURL(runnerPath).href,
+          "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
         ],
         // Index 3 is a sink, and the protocol channel sits above it. The
         // channel is inherited by the script, Node parses it inside its own

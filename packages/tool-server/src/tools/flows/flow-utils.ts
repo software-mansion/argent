@@ -3194,7 +3194,7 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
     }
     badEntry(
       raw,
-      `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE} — the extension pins the module type whatever the project's package.json says`
+      `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE} — a JavaScript or TypeScript file`
     );
   }
   if (!SCRIPT_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
@@ -3206,7 +3206,7 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   return value;
 }
 
-/** ".mjs or .mts", for the messages that name every spelling a script may take. */
+/** ".mjs, .mts, .js or .ts", for the messages that name every spelling a script may take. */
 const SCRIPT_EXTENSIONS_FOR_MESSAGE = `${SCRIPT_FILE_EXTENSIONS.slice(0, -1).join(", ")} or ${SCRIPT_FILE_EXTENSIONS.slice(-1)[0]}`;
 
 /**
