@@ -447,7 +447,7 @@ Argent also gives the script the device of the run in three environment variable
 | `ARGENT_DEVICE_PLATFORM` | `ios`, `ios-remote`, `android`, `chromium`, `vega`, `harmony` or `macos`                                           |
 | `ARGENT_DEVICE_KIND`     | `simulator`, `emulator`, `device`, `vvd` for a Vega Virtual Device, or `app`                                       |
 
-The kind `device` is a physical iPhone or a physical Android device. On HarmonyOS, `device` is each target that `hdc` connects to, also a booted emulator. `ARGENT_DEVICE_KIND` is `app` for a Chromium app and for a Mac app.
+The kind `device` is a physical iPhone, a physical Android device or a physical Fire TV. On HarmonyOS, `device` is each target that `hdc` connects to, also a booted emulator. `ARGENT_DEVICE_KIND` is `app` for a Chromium app and for a Mac app.
 
 The script reads the variables from `process.env`. This script adds a photo to an iOS simulator and clears the data of an Android app:
 

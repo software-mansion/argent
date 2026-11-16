@@ -6,6 +6,12 @@ import * as path from "node:path";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
 import { stepRequiresDevice } from "../../../src/tools/flows/flow-device";
+import { listVegaDevices, type VegaDevice } from "../../../src/utils/vega-devices";
+
+vi.mock("../../../src/utils/vega-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/utils/vega-devices")>()),
+  listVegaDevices: vi.fn(async () => []),
+}));
 
 /**
  * The `script:` step in a run; the executor's own behaviour is covered beside
@@ -667,6 +673,60 @@ describe("the device values a script step gets", () => {
       ARGENT_DEVICE_PLATFORM: platform,
       ARGENT_DEVICE_KIND: kind,
     });
+  });
+
+  function vegaRow(serial: string, kind: VegaDevice["kind"]): VegaDevice {
+    return {
+      platform: "vega",
+      serial,
+      vvdImage: kind === "vvd" ? "tv" : null,
+      kind,
+      state: kind === "vvd" ? "running" : "device",
+      product: null,
+      profile: null,
+      buildDescription: null,
+      simulated: kind === "vvd",
+    };
+  }
+
+  it.each([
+    { device: "amazon-0f1e2d3c4b5a6978", listed: "device", kind: "device" },
+    { device: "amazon-4a27df03c9777152", listed: "vvd", kind: "vvd" },
+    { device: "amazon-5b38e014da888263", listed: null, kind: "vvd" },
+  ] as const)(
+    "names Vega $device with the kind list-devices prints ($listed)",
+    async ({ device, listed, kind }) => {
+      vi.mocked(listVegaDevices).mockResolvedValue(listed ? [vegaRow(device, listed)] : []);
+      await write("scripts/device.mjs", PRINT_DEVICE_ENV);
+      await flow("device", "steps:\n  - script: { path: ../../scripts/device.mjs }\n");
+
+      const { result } = await runFlow("device", { device });
+
+      expect(printedEnv(result.steps[0]!.scriptLog)).toEqual({
+        ARGENT_DEVICE_ID: device,
+        ARGENT_DEVICE_PLATFORM: "vega",
+        ARGENT_DEVICE_KIND: kind,
+      });
+    }
+  );
+
+  it("lists the Vega devices once per Fire TV, not at each script step", async () => {
+    const device = "amazon-6c49f125eb999374";
+    vi.mocked(listVegaDevices).mockClear();
+    vi.mocked(listVegaDevices).mockResolvedValue([vegaRow(device, "device")]);
+    await write("scripts/device.mjs", PRINT_DEVICE_ENV);
+    await flow(
+      "twice",
+      "steps:\n  - script: { path: ../../scripts/device.mjs }\n  - script: { path: ../../scripts/device.mjs }\n"
+    );
+
+    const { result } = await runFlow("twice", { device });
+
+    expect(result.steps.map((s) => printedEnv(s.scriptLog).ARGENT_DEVICE_KIND)).toEqual([
+      "device",
+      "device",
+    ]);
+    expect(listVegaDevices).toHaveBeenCalledTimes(1);
   });
 
   it("gives a script in a run: fragment the device the run detected", async () => {

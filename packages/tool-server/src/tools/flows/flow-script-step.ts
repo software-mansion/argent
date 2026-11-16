@@ -6,7 +6,9 @@ import {
   resolveFlowRelativeFile,
   SCRIPT_FILE_NAME_PATTERN,
   type DeviceInfo,
+  type DeviceKind,
 } from "@argent/registry";
+import { listVegaDevices } from "../../utils/vega-devices";
 import type { FlowStep } from "./flow-utils";
 import {
   flowScriptExecutor,
@@ -56,16 +58,35 @@ interface FlowScriptStepRequest {
 }
 
 /**
+ * A VVD and a physical Fire TV have ids of the same shape, so `resolveDevice`
+ * calls both `vvd`. The Vega listing that `list-devices` prints tells them
+ * apart. A serial never changes kind, so each serial is listed once.
+ */
+const vegaKindBySerial = new Map<string, DeviceKind>();
+
+async function scriptDeviceKind(device: DeviceInfo): Promise<DeviceKind> {
+  if (device.platform !== "vega") return device.kind;
+  const known = vegaKindBySerial.get(device.id);
+  if (known) return known;
+  const listed = (await listVegaDevices().catch(() => [])).find((d) => d.serial === device.id);
+  if (!listed) return device.kind;
+  vegaKindBySerial.set(device.id, listed.kind);
+  return listed.kind;
+}
+
+/**
  * The run's device as environment values. All three are left unset, not set
  * empty, when the run has no device, so `process.env.ARGENT_DEVICE_ID ===
  * undefined` is the whole check a script needs.
  */
-function scriptDeviceEnv(device: DeviceInfo | null | undefined): Record<string, string> | null {
+async function scriptDeviceEnv(
+  device: DeviceInfo | null | undefined
+): Promise<Record<string, string> | null> {
   if (!device) return null;
   return {
     ARGENT_DEVICE_ID: device.id,
     ARGENT_DEVICE_PLATFORM: device.platform,
-    ARGENT_DEVICE_KIND: device.kind,
+    ARGENT_DEVICE_KIND: await scriptDeviceKind(device),
   };
 }
 
@@ -111,7 +132,7 @@ export async function runFlowScriptStep(
     };
   }
 
-  const deviceEnv = scriptDeviceEnv(request.device);
+  const deviceEnv = await scriptDeviceEnv(request.device);
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
     output: {},
