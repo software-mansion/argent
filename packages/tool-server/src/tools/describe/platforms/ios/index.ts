@@ -5,7 +5,12 @@ import {
   type Registry,
   type ToolDependency,
 } from "@argent/registry";
-import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
+import {
+  axDaemonCrashSignal,
+  axServiceRef,
+  axStartFailureDegraded,
+  AXServiceApi,
+} from "../../../../blueprints/ax-service";
 import {
   buildAppStateMessage,
   isInjectableBundleId,
@@ -80,6 +85,42 @@ function isBlindCaveat(hint: string | undefined): boolean {
   return hint === DEGRADED_BLIND_HINT || Boolean(hint?.endsWith(EXTERNAL_BLIND_BODY));
 }
 
+// A daemon that a fault signal killed says nothing about how the simulator was
+// booted, so it must not be reported as the boot caveat. On a host where it
+// crashes every time (#800: SIGSEGV on every attach on Intel Macs) the reboot
+// that caveat prescribes starts the same binary into the same crash, and an
+// agent that obeyed it rebooted a healthy simulator without end. Restarting the
+// tool-server does the same and cuts off every agent that shares it. The hint
+// rules both out by name, because both are what an agent tries next.
+//
+// One crash does not show that the next read crashes too, and every read starts
+// the daemon again, so the hint makes its repeat the test instead of claiming a
+// permanent fault from one observation.
+//
+// Never deduped, unlike DEGRADED_STANDING_HINT: it reports this read's own
+// failure, the agent has to be able to see it repeat, and the tree that comes
+// with it is empty or is the native fallback's, which can lack a system dialog
+// that covers the screen.
+const AX_CRASH_HINT_LEAD = "The accessibility service (ax-service) crashed";
+
+function axCrashHint(signal: string): string {
+  return (
+    `${AX_CRASH_HINT_LEAD} with ${signal}, so the accessibility tree could not be read. ` +
+    "Every describe starts the service again. If this hint repeats, the crash is in the service on " +
+    "this host: rebooting the simulator (boot-device with force=true) or restarting the tool-server " +
+    "will not fix it, because both start the same binary again. While it crashes, system dialogs and " +
+    "SpringBoard chrome cannot be read through describe. describe continues on the app's native view " +
+    "hierarchy where that is available, and `screenshot` shows the rest."
+  );
+}
+
+function isAxCrashHint(hint: string | undefined): boolean {
+  return Boolean(hint?.startsWith(AX_CRASH_HINT_LEAD));
+}
+
+const NATIVE_FALLBACK_LEAD =
+  "The native fallback has no tree for this read, for a reason of its own, unrelated to the crash:";
+
 // Devices already told DEGRADED_STANDING_HINT. Not cleared on shutdown or
 // disposal — the externally-booted state outlives any one service instance —
 // but cleared per device when a read comes back off that state, so a later
@@ -104,7 +145,10 @@ export function withBootCaveatOncePerDevice(
     // A read that is not degraded at all means the caveat no longer describes
     // this device, so a later external boot has to be able to say it again. The
     // blind caveat is the same degraded state read blind, so it does not reset.
-    if (!isBlindCaveat(data.hint)) bootCaveatToldDevices.delete(deviceId);
+    // Nor does a crashed read, which never learned how the sim was booted.
+    if (!isBlindCaveat(data.hint) && !isAxCrashHint(data.hint)) {
+      bootCaveatToldDevices.delete(deviceId);
+    }
     return data;
   }
   if (!bootCaveatToldDevices.has(deviceId)) {
@@ -198,8 +242,13 @@ export async function describeIos(
   // The daemon came up but the read itself failed (a query timeout, an RPC
   // error). That says nothing about how the sim was booted, so it must not be
   // reported as the boot caveat — which prescribes a reboot the developer pays
-  // for and that would not have helped.
+  // for and that would not have helped. The same holds for a daemon that did
+  // not come up on a sim the factory measured as booted through argent.
   let readFailureHint: string | undefined;
+  // The daemon died on a fault signal, while it started or during the read.
+  // Reported in place of the boot caveat and the read failure it would
+  // otherwise come out as: see `axCrashHint`.
+  let crashSignal: string | undefined;
 
   let axApi: AXServiceApi | undefined;
   try {
@@ -211,28 +260,48 @@ export async function describeIos(
     if (isFirstLaunchRefusal(err)) throw err;
     // Carry on with an empty tree so the native-devtools fallback below still
     // runs. A missing TCP-transport artifact is a config error, not a boot-state
-    // one, so it must not read as degraded.
+    // one, so it must not read as degraded. Nor must a daemon that crashed.
     resolverHint = tcpArtifactHint(err);
-    degraded = resolverHint === undefined;
+    crashSignal = axDaemonCrashSignal(err);
+    // The factory measures the boot state before it starts the daemon, so a
+    // start that failed after that says which it was. Only a failure from
+    // before the measurement is still taken for a sim not booted through
+    // argent: taking every failed start for one prescribed the reboot again
+    // after each reboot, whatever had gone wrong.
+    const measuredDegraded = axStartFailureDegraded(err);
+    const explained = resolverHint !== undefined || crashSignal !== undefined;
+    degraded = !explained && measuredDegraded !== false;
+    if (!explained && measuredDegraded === false) {
+      readFailureHint = `The accessibility service failed to start (${errMsg(err)}).`;
+    }
   }
 
   if (axApi) {
     try {
       tree = adaptAXDescribeToDescribeResult(await axApi.describe());
     } catch (err) {
-      readFailureHint = `The accessibility read failed (${errMsg(err)}).`;
+      crashSignal = axDaemonCrashSignal(err);
+      if (crashSignal === undefined) {
+        readFailureHint = `The accessibility read failed (${errMsg(err)}).`;
+      }
     }
   }
+  const crashHint = crashSignal === undefined ? undefined : axCrashHint(crashSignal);
 
   // Keyed to what the ACCESSIBILITY read produced, not to the tree finally
   // returned: the native-devtools fallback fills it from the injected app's own
   // view hierarchy, which carries no SpringBoard chrome and no system dialogs,
   // so it is no evidence the AX subsystem works.
-  const degradedHint = !degraded
-    ? undefined
-    : tree.children.length === 0
-      ? DEGRADED_BLIND_HINT
-      : DEGRADED_STANDING_HINT;
+  //
+  // A crash leaves no degraded hint at all, also on a sim that was booted
+  // externally: the blind caveat would say the read returned no elements, when
+  // no read took place, and prescribe the reboot.
+  const degradedHint =
+    !degraded || crashHint !== undefined
+      ? undefined
+      : tree.children.length === 0
+        ? DEGRADED_BLIND_HINT
+        : DEGRADED_STANDING_HINT;
   // Both degraded hints end in "boot-device with force=true", which is refused
   // on a provider's device. Keep the blind/standing split, redirect the remedy.
   // Redirected before the composition below, so the comparison still sees a
@@ -247,6 +316,7 @@ export async function describeIos(
 
   const hint =
     resolverHint ??
+    crashHint ??
     (readFailureHint
       ? deviceDegradedHint
         ? `${deviceDegradedHint}. ${readFailureHint}`
@@ -271,8 +341,16 @@ export async function describeIos(
   // reboot guidance instead: a proper boot may let the ax-service read this
   // system app's tree, at which point `describe`, not a screenshot, is the
   // right tool.
+  //
+  // A crashed ax-service is the other way round: no remedy brings its read of
+  // this app back, so the terminal hint follows the crash one, or the crash
+  // hint's "where that is available" leaves the empty tree unexplained.
   if (params.bundleId && !isInjectableBundleId(params.bundleId)) {
-    return { tree, source: "ax-service", hint: hint ?? NON_INJECTABLE_HINT };
+    return {
+      tree,
+      source: "ax-service",
+      hint: crashHint ? `${crashHint} ${NON_INJECTABLE_HINT}` : (hint ?? NON_INJECTABLE_HINT),
+    };
   }
 
   // Without a lent socket the fallback would inject our own dylib, which is
@@ -323,8 +401,16 @@ export async function describeIos(
       // `unregistered` already launched under the terms a restart recreates, and
       // `connecting` is the handshake exec begins, so flagging either would
       // rebuild the restart-app → describe loop.
+      //
+      // After a crash hint the diagnosis is set apart as the fallback's own: two
+      // states prescribe a tool-server restart, which that hint has just said
+      // does not fix the crash, and both statements are true of their subject.
       const diagnosis = buildAppStateMessage(target.bundleId, state);
-      const merged = hint ? `${hint} ${diagnosis}` : diagnosis;
+      const merged = crashHint
+        ? `${crashHint} ${NATIVE_FALLBACK_LEAD} ${diagnosis}`
+        : hint
+          ? `${hint} ${diagnosis}`
+          : diagnosis;
       return state === "unregistered" || state === "connecting"
         ? { tree, source: "ax-service", hint: merged }
         : { tree, source: "ax-service", should_restart: true, hint: merged };
