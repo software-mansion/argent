@@ -275,6 +275,8 @@ interface StopPerfettoOptions {
 interface StopPerfettoResult {
   hostTracePath: string;
   warning?: string;
+  /** perfetto was gone before the stop signalled it, so the trace ended at a time not known. */
+  endedBeforeStop?: boolean;
 }
 
 /**
@@ -350,5 +352,9 @@ export async function stopPerfetto(opts: StopPerfettoOptions): Promise<StopPerfe
   await runAdb(["-s", opts.serial, "pull", opts.onDeviceTracePath, opts.hostTracePath]);
   await adbShell(opts.serial, `rm -f ${opts.onDeviceTracePath}`).catch(() => {});
 
-  return { hostTracePath: opts.hostTracePath, ...(warning ? { warning } : {}) };
+  return {
+    hostTracePath: opts.hostTracePath,
+    ...(warning ? { warning } : {}),
+    endedBeforeStop: !aliveBeforeSignal,
+  };
 }

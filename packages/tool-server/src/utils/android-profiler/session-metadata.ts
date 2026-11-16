@@ -5,7 +5,10 @@ interface AndroidNativeProfilerMetadata {
   platform: "android";
   appProcess: string;
   wallClockStartMs: number | null;
-  /** When the recording ended: the stop, or the 10-minute cap. Absent in older files. */
+  /**
+   * When the recording ended: the stop, or the 10-minute cap. Null when perfetto
+   * ended before the stop for another reason. Absent in older files.
+   */
   stoppedAtMs?: number | null;
   /** The device that recorded, to pair the session with a React one. Absent in older files. */
   deviceId?: string | null;

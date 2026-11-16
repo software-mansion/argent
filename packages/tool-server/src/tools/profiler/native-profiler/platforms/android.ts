@@ -197,10 +197,11 @@ export async function stopNativeProfilerAndroid(
   }
 
   // When the recording ended: at the cap, or now, at this stop.
-  const stoppedAtMs =
+  const capEndMs =
     api.recordingTimedOut && api.wallClockStartMs !== null
       ? api.wallClockStartMs + RECORDING_CAP_MS
-      : Date.now();
+      : null;
+  const stopCalledAtMs = Date.now();
   let stopResult: Awaited<ReturnType<typeof stopPerfetto>>;
   try {
     stopResult = await stopPerfetto({
@@ -224,6 +225,9 @@ export async function stopNativeProfilerAndroid(
   }
 
   const { hostTracePath, warning } = stopResult;
+  // A perfetto that ended before the stop for another reason (the app crashed, for
+  // example) ended at a time that is not known: no end, so no React session pairs.
+  const stoppedAtMs = capEndMs ?? (stopResult.endedBeforeStop ? null : stopCalledAtMs);
   const exportedFiles: Record<AndroidExportKey, string | null> = { pftrace: hostTracePath };
   api.exportedFiles = exportedFiles;
   if (api.appProcess) {
