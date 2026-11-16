@@ -2,7 +2,7 @@ import { z } from "zod";
 import { isLiveServiceState, type Registry, type ToolCapability } from "@argent/registry";
 import type { DebuggerNotConnectedReason } from "@argent/telemetry";
 import { metroPortField } from "../../utils/debugger/metro-port";
-import { canonicalDeviceId } from "../../utils/debugger/device-alias";
+import { deviceKeyOf } from "../../utils/native-network-record";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 
@@ -62,7 +62,7 @@ const captureLocks = new Map<string, Promise<unknown>>();
 const captureSweeps = new Set<{ devices?: ReadonlySet<string>; done: Promise<void> }>();
 
 function lockDevice(udid: string): string {
-  return (canonicalDeviceId(udid) ?? udid).toLowerCase();
+  return deviceKeyOf(udid).toLowerCase();
 }
 
 export function withCaptureLock<T>(

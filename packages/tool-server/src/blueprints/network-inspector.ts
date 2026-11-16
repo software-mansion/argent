@@ -19,6 +19,7 @@ import {
   makeNetworkCaptureControlScript,
 } from "../utils/debugger/scripts/network-interceptor";
 import { resolveDevice } from "../utils/device-info";
+import { externalNativeId } from "../utils/external-devices";
 
 export const NETWORK_INSPECTOR_NAMESPACE = "NetworkInspector";
 
@@ -68,9 +69,13 @@ function splitPayload(payload: string): { port: number; device: string } {
   return { port: Number(payload.slice(0, at)), device: payload.slice(at + 1) };
 }
 
-/** Device ids are compared as the stop tools compare them: case-insensitively. */
+/**
+ * Device ids are compared case-insensitively, as the stop tools compare them,
+ * and a provider's `ext:` id names the same device as the id it holds, as the
+ * Android native layer keys a device.
+ */
 function sameDevice(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
+  return externalNativeId(a).toLowerCase() === externalNativeId(b).toLowerCase();
 }
 
 export function jsCapturePayload(port: number, device: string): string {

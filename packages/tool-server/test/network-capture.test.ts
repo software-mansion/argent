@@ -84,6 +84,8 @@ const SERIAL = "emulator-5554";
 const WIFI_SERIAL = "192.168.1.5:5555";
 /** The id a Metro gives the device at SERIAL. */
 const LOGICAL_ID = "b1946ac92492d2347c6235b4d2611184";
+/** The id a device provider gives the device at SERIAL. */
+const EXT_ID = `ext:acme-3f2a9c:${SERIAL}`;
 const APP = "com.example.shop";
 const OTHER = "com.example.other";
 const PORT = 8081;
@@ -1858,6 +1860,25 @@ describe("network-capture-stop", () => {
     ]);
   });
 
+  it("stops and reads with the serial the capture a start stored with the device's ext: id", async () => {
+    const rt = new FakeRuntime(APP);
+    // Metro has one runtime for the device, which a debugger reaches with either id.
+    serve(PORT, EXT_ID, rt);
+    serve(PORT, SERIAL, rt);
+    await start(EXT_ID, APP);
+    rt.send("/a");
+
+    expect(await read(SERIAL)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+    expect(layer(await stop(SERIAL, APP), "js")).toEqual({ layer: "js", armed: false, total: 1 });
+    expect(rt.paused).toBe(true);
+    expect(await read(EXT_ID)).toContain(
+      "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ==="
+    );
+    expect(jsCapturesOn(SERIAL)).toEqual([
+      expect.objectContaining({ bundleId: APP, intent: "stopped", port: PORT }),
+    ]);
+  });
+
   it.each(PLATFORMS)(
     "on $platform, a second stop changes nothing",
     async ({ udid, connect, nativeRecord, nativeCalls }) => {
@@ -2088,6 +2109,20 @@ describe("stop-all-simulator-servers", () => {
       expect(await read(IOS_UDID)).toContain('"GET /after-start"');
     }
   );
+
+  it("ends the JS capture a start stored with the device's ext: id when it names the device by its serial", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, EXT_ID, rt);
+    serve(PORT, SERIAL, rt);
+    await start(EXT_ID, APP);
+    rt.send("/a");
+
+    await stopAll([SERIAL]);
+
+    expect(rt.paused).toBe(true);
+    expect(findJsCapture(EXT_ID, APP)).toBeUndefined();
+    expect(await read(EXT_ID)).toContain("Network capture is not started for this app");
+  });
 
   it.each(PLATFORMS)(
     "leaves the $platform native service it disposed as it is at a later stop, which says capture was not started",
@@ -2497,6 +2532,11 @@ describe("a start and a stop of one app", () => {
       devices: [SERIAL],
     },
     { how: "with a serial that has a colon", udid: WIFI_SERIAL, devices: [WIFI_SERIAL] },
+    {
+      how: "with the serial, for a start under the device's ext: id",
+      udid: EXT_ID,
+      devices: [SERIAL],
+    },
   ])("hold stop-all-simulator-servers $how until they end", async ({ udid, devices }) => {
     const device = udid === LOGICAL_ID ? SERIAL : udid;
     if (udid === LOGICAL_ID) rememberDeviceAlias(LOGICAL_ID, SERIAL);
