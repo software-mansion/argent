@@ -687,6 +687,29 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
     });
   });
 
+  /**
+   * A launch also watches for a close of the app's connection, to ask the host
+   * whether its process exited. A watch kept after the launch ended would ask
+   * again at each later close, once more for each launch.
+   */
+  it("asks the host nothing at a later close for launches that already ended", async () => {
+    await withService(async (api) => {
+      const app = await dial(api);
+      await api.activateNetworkInspection(APP);
+      await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+      for (let launch = 0; launch < 3; launch++) {
+        await expect(api.networkCaptureAfterLaunch(APP)).resolves.toBe(ARMED_NOTE);
+      }
+
+      const probes = probeCalls().length;
+      app.close();
+      await vi.waitFor(() => expect(api.isConnected(APP)).toBe(false));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(probeCalls().length).toBe(probes);
+    });
+  });
+
   it("says the new process has not connected yet after waiting 5 s for it", async () => {
     await withService(async (api) => {
       await api.activateNetworkInspection(APP);
