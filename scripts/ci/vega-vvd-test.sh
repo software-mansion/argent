@@ -98,7 +98,7 @@ group "Environment"
 echo "node $("$ARGENT_NODE" -v 2>/dev/null || echo '<none>')"
 # zstd in node:zlib marks the engines floor (22.15 / 23.8).
 if ! "$ARGENT_NODE" -e 'process.exit(typeof require("node:zlib").zstdCompressSync === "function" ? 0 : 1)' 2>/dev/null; then
-  echo "ERROR: ARGENT_NODE=$ARGENT_NODE is missing or older than Node 22.15"; exit 1
+  echo "ERROR: ARGENT_NODE=$ARGENT_NODE is missing or has no zstd in node:zlib (needs 22.15+ or 23.8+)"; exit 1
 fi
 adb version 2>/dev/null | head -1 || echo "adb <none>"
 echo "vega $(vega -v 2>/dev/null | tr '\n' ' ' || echo '<none>')"
