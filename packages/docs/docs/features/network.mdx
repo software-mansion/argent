@@ -92,7 +92,7 @@ Each request has an ID such as `ios-3f9a-12`. The agent uses this ID to read hea
 
 If the app still sends a request body, the details tell the agent to read the body again later. Then the agent reads the details again after the upload ends.
 
-The capture stays on until the agent stops it for the app. The capture of a different app continues. `stop-all-simulator-servers` also stops it for all apps of the simulator. A shutdown of a local simulator stops it too. On a simulator where Argent uses the socket of a device provider, the provider keeps its own capture setting after the stop. Argent records no new request of the app there.
+The capture stays on until the agent stops it for the app. The capture of a different app continues. `stop-all-simulator-servers` also stops it for all apps of the simulator. A stop of the tool-server and a shutdown of a local simulator stop it too. On a simulator of a [device provider](/docs/reference/device-providers), a change of the grant of the simulator also stops it. On a simulator where Argent uses the socket of a device provider, the provider keeps its own capture setting after the stop. Argent records no new request of the app there.
 
 ## The request record
 
