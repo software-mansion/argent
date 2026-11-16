@@ -49,6 +49,7 @@ import {
 } from "../src/utils/debugger/scripts/network-interceptor";
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
 import { BUNDLE_ID_MESSAGE } from "../src/utils/bundle-id";
+import { forgetDeviceAlias, rememberDeviceAlias } from "../src/utils/debugger/device-alias";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
@@ -79,6 +80,10 @@ vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
 const REMOTE_UDID = "remote:66666666-7777-8888-9999-000000000000";
 const SERIAL = "emulator-5554";
+/** An Android device on adb over Wi-Fi. */
+const WIFI_SERIAL = "192.168.1.5:5555";
+/** The id a Metro gives the device at SERIAL. */
+const LOGICAL_ID = "b1946ac92492d2347c6235b4d2611184";
 const APP = "com.example.shop";
 const OTHER = "com.example.other";
 const PORT = 8081;
@@ -488,10 +493,11 @@ function stop(udid: string, bundleId: string, port?: number) {
   });
 }
 
-function stopAll(devices: string[], signal?: AbortSignal) {
+/** Without `devices`, the machine-wide sweep. */
+function stopAll(devices: string[] | undefined, signal?: AbortSignal) {
   return registry.invokeTool<{ stopped: string[]; aborted?: true }>(
     "stop-all-simulator-servers",
-    { devices },
+    devices === undefined ? {} : { devices },
     signal ? { signal } : undefined
   );
 }
@@ -2038,44 +2044,50 @@ describe("stop-all-simulator-servers", () => {
     expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
   });
 
-  it("holds a start called during its teardown until the teardown ends, so the start's capture stays", async () => {
-    let releaseServer!: () => void;
-    const serverDisposed = new Promise<void>((resolve) => (releaseServer = resolve));
-    registry.registerBlueprint({
-      namespace: "SimulatorServer",
-      getURN: (payload: string) => `SimulatorServer:${payload}`,
-      async factory() {
-        return {
-          api: {},
-          dispose: () => serverDisposed,
-          events: new TypedEventEmitter<ServiceEvents>(),
-        };
-      },
-    });
-    await registry.resolveService(`SimulatorServer:${IOS_UDID}`);
-    const rt = new FakeRuntime(APP);
-    serve(PORT, IOS_UDID, rt);
-    ios.connected.add(APP);
-    await start(IOS_UDID, APP);
+  it.each([
+    { scope: "the device", devices: [IOS_UDID] },
+    { scope: "every device", devices: undefined },
+  ])(
+    "holds a start called during its teardown of $scope until the teardown ends, so the start's capture stays",
+    async ({ devices }) => {
+      let releaseServer!: () => void;
+      const serverDisposed = new Promise<void>((resolve) => (releaseServer = resolve));
+      registry.registerBlueprint({
+        namespace: "SimulatorServer",
+        getURN: (payload: string) => `SimulatorServer:${payload}`,
+        async factory() {
+          return {
+            api: {},
+            dispose: () => serverDisposed,
+            events: new TypedEventEmitter<ServiceEvents>(),
+          };
+        },
+      });
+      await registry.resolveService(`SimulatorServer:${IOS_UDID}`);
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
 
-    const sweep = stopAll([IOS_UDID]);
-    await settle();
-    expect(rt.paused).toBe(true);
-    const started = start(IOS_UDID, APP);
-    await settle();
-    releaseServer();
-    await sweep;
-    const result = await started;
+      const sweep = stopAll(devices);
+      await settle();
+      expect(rt.paused).toBe(true);
+      const started = start(IOS_UDID, APP);
+      await settle();
+      releaseServer();
+      await sweep;
+      const result = await started;
 
-    expect(result.layers).toEqual([
-      { layer: "js", armed: true },
-      { layer: "ios-native", armed: true },
-    ]);
-    expect(rt.paused).toBe(false);
-    expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "started", installed: true });
-    rt.send("/after-start");
-    expect(await read(IOS_UDID)).toContain('"GET /after-start"');
-  });
+      expect(result.layers).toEqual([
+        { layer: "js", armed: true },
+        { layer: "ios-native", armed: true },
+      ]);
+      expect(rt.paused).toBe(false);
+      expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "started", installed: true });
+      rt.send("/after-start");
+      expect(await read(IOS_UDID)).toContain('"GET /after-start"');
+    }
+  );
 
   it.each(PLATFORMS)(
     "leaves the $platform native service it disposed as it is at a later stop, which says capture was not started",
@@ -2447,12 +2459,12 @@ describe("a JS capture on another Metro port", () => {
 describe("a start and a stop of one app", () => {
   /** Holds the app's Android start in its attach until `release` is called. */
   function holdStart(packageName: string): { release: () => void } {
-    let release!: () => void;
+    let release: (() => void) | undefined;
     androidFor(packageName).startAnswer = () =>
       new Promise((resolve) => {
         release = () => resolve({ armed: true });
       });
-    return { release: () => release() };
+    return { release: () => release?.() };
   }
 
   it("run one after the other", async () => {
@@ -2474,6 +2486,72 @@ describe("a start and a stop of one app", () => {
 
     expect(androidFor(APP).calls).toEqual([`start ${PORT}`, "stop"]);
     expect(rt.paused).toBe(true);
+  });
+
+  it.each([
+    { how: "with no devices", udid: SERIAL, devices: undefined },
+    { how: "with the serial in another case", udid: SERIAL, devices: ["EMULATOR-5554"] },
+    {
+      how: "with the serial, for a start under a logicalDeviceId Metro gave the device",
+      udid: LOGICAL_ID,
+      devices: [SERIAL],
+    },
+    { how: "with a serial that has a colon", udid: WIFI_SERIAL, devices: [WIFI_SERIAL] },
+  ])("hold stop-all-simulator-servers $how until they end", async ({ udid, devices }) => {
+    const device = udid === LOGICAL_ID ? SERIAL : udid;
+    if (udid === LOGICAL_ID) rememberDeviceAlias(LOGICAL_ID, SERIAL);
+    const rt = new FakeRuntime(APP);
+    serve(PORT, device, rt);
+    const held = holdStart(APP);
+    try {
+      const starting = start(udid, APP);
+      await vi.waitFor(() => expect(androidFor(APP).calls).toEqual([`start ${PORT}`]));
+      let swept = false;
+      const sweep = stopAll(devices).finally(() => {
+        swept = true;
+      });
+      await settle();
+
+      expect(swept).toBe(false);
+      expect(rt.evaluated).not.toContain("end");
+
+      held.release();
+      await starting;
+      await sweep;
+
+      expect(rt.evaluated.indexOf("end")).toBeGreaterThan(rt.evaluated.indexOf("install"));
+      expect(findJsCapture(device, APP)).toBeUndefined();
+    } finally {
+      held.release();
+      forgetDeviceAlias(LOGICAL_ID);
+    }
+  });
+
+  it("let stop-all-simulator-servers end when it comes in while a second start of the app waits behind the first", async () => {
+    // An app of its own, so a lock this test leaves held holds up no other test.
+    const app = "com.example.queued";
+    serve(PORT, SERIAL, new FakeRuntime(app));
+    const held = holdStart(app);
+
+    const first = start(SERIAL, app);
+    await vi.waitFor(() => expect(androidFor(app).calls).toEqual([`start ${PORT}`]));
+    // The second start waits on the lock before the sweep comes in.
+    const second = start(SERIAL, app);
+    await settle();
+    const sweep = stopAll([SERIAL]);
+    await settle();
+    held.release();
+    // The second start runs once the first ends, and the sweep waits for it.
+    await vi.waitFor(() =>
+      expect(androidFor(app).calls).toEqual([`start ${PORT}`, `start ${PORT}`])
+    );
+    held.release();
+
+    await expect(first).resolves.toMatchObject({ status: "ok" });
+    await expect(second).resolves.toMatchObject({ status: "ok" });
+    expect((await sweep).stopped).toContain(
+      androidNetworkInspectorRef(resolveDevice(SERIAL), app, PORT).urn
+    );
   });
 
   it("do not hold up a start of another app on the device", async () => {
