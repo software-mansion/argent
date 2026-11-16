@@ -143,7 +143,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 ## Limits
 
 - Argent does not capture the requests that the app sends before the capture starts. Do the operation again after the capture starts. Argent starts the capture at these moments:
-  - JS runtime layer and native `NSURLProtocol` layer on iOS: the agent starts the capture.
+  - JS runtime layer and native `NSURLProtocol` layer on iOS: the agent starts the capture. On a simulator where Argent uses the socket of a device provider, the native `NSURLProtocol` layer records the requests from the time that Argent connects to the in-app agent of the provider. This time can be before the start.
   - Native network capture: the in-app agent connects to Argent. This occurs a short time after the agent starts the capture.
   - JS runtime layer on Vega: the agent reads the network log for the first time.
   - Chrome DevTools Protocol layer: Argent attaches to the page.
