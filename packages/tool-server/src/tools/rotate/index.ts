@@ -6,15 +6,6 @@ import { sendCommand } from "../../utils/simulator-client";
 import { ADB_DEVICES_TIMEOUT_MS, isAndroidTv } from "../../utils/adb";
 import { UnsupportedOperationError } from "../../utils/capability";
 
-const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-  orientation: z
-    .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
-    .describe("Target orientation"),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 interface Result {
   orientation: string;
 }
@@ -24,6 +15,15 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
+
+const zodSchema = z.object({
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  orientation: z
+    .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
+    .describe("Target orientation"),
+});
+
+type Params = z.infer<typeof zodSchema>;
 
 /**
  * A wedged adb server must not hold a phone's rotate for the 30 s `adb devices`
@@ -37,16 +37,16 @@ async function isAndroidTvForRotate(serial: string): Promise<boolean> {
 export function createRotateTool(registry: Registry): ToolDefinition<Params, Result> {
   return {
     id: "rotate",
+    description: `Set the device orientation.
+Use when testing layout in a different orientation. Re-run \`describe\` afterwards: frame coordinates change with the orientation.
+On an unfolded foldable iOS simulator (the iPhone Duo), the value sets the orientation of the device, not of the UI: \`Portrait\` gives a landscape UI and \`LandscapeLeft\` gives a portrait UI. To fold or unfold the device, use \`fold\`.
+Returns { orientation }. Fails on a TV target, or if the target device is not booted.`,
+    zodSchema,
     interaction: {
       startedMsg: ({ params }) => `Rotating device to ${params.orientation}`,
       completedMsg: ({ params }) => `Rotated device to ${params.orientation}`,
       failedMsg: ({ failureSignal }) => `Failed to rotate device: ${failureSignal.error_code}`,
     },
-    description: `Set the device orientation to Portrait, LandscapeLeft, LandscapeRight, or PortraitUpsideDown.
-Use to test layout in a different orientation. Re-run \`describe\` afterwards: frame coordinates change with the orientation.
-On an unfolded foldable iOS simulator (the iPhone Duo), the value sets the orientation of the device, not of the UI: \`Portrait\` gives a landscape UI and \`LandscapeLeft\` gives a portrait UI. To fold or unfold the device, use \`fold\`.
-Returns { orientation }. Fails on a TV target, or if the target device is not booted.`,
-    zodSchema,
     capability,
     // The simulator-server is resolved in execute, after the Android TV check, so a
     // TV is refused without first starting one.

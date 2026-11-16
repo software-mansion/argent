@@ -21,24 +21,29 @@ import {
   appIdForPlatform,
   authoringPlatform,
   chromiumLaunchSpec,
-  iosLaunchArgs,
+  appLaunchArgs,
   writeNewFlowFile,
   blockSteps,
   BLOCK_DIRECTIVE_KEYS,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
+import { scopeTempFlags } from "../helpers/macos-apps-flag";
 
 // ── serializeFlow ────────────────────────────────────────────────────
 
 describe("serializeFlow", () => {
+  it("writes the format version as the first key", async () => {
+    expect(serializeFlow({ executionPrerequisite: "", steps: [] })).toBe("version: 1\nsteps: []\n");
+  });
+
   it("serializes an empty flow with prerequisite", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "App on home screen",
       steps: [],
     };
-    const result = serializeFlow(flow);
-    expect(result).toContain("executionPrerequisite: App on home screen");
-    expect(result).toContain("steps: []");
+    expect(serializeFlow(flow)).toBe(
+      "version: 1\nsteps: []\nexecutionPrerequisite: App on home screen\n"
+    );
   });
 
   it("serializes echo steps", async () => {
@@ -197,9 +202,12 @@ describe("parseFlow", () => {
     expect(message.length).toBeLessThan(400);
   });
 
-  it("throws when content is not an object with steps", async () => {
-    expect(() => parseFlow("- echo: Hello\n")).toThrow("expected an object with a steps array");
-  });
+  it.each([["- echo: Hello\n"], ["~\n"], ["hello\n"], ["42\n"]])(
+    "throws when content is not an object with steps: %j",
+    async (content) => {
+      expect(() => parseFlow(content)).toThrow("expected an object with a steps array");
+    }
+  );
 
   it("classifies a YAML syntax error as a validation failure with the parser's detail", async () => {
     let thrown: unknown;
@@ -753,8 +761,26 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([{ kind: "snapshot", name: "home", maxMismatch: 1.5 }]);
   });
 
+  it.each([
+    ['" 1.5 "', 1.5],
+    ['".5"', 0.5],
+    ['"+1"', 1],
+    ['"5."', 5],
+  ])("accepts the quoted decimal maxMismatch %s", (quoted, expected) => {
+    const flow = parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${quoted} }\n`);
+    expect(flow.steps).toEqual([{ kind: "snapshot", name: "home", maxMismatch: expected }]);
+  });
+
   it("rejects a non-numeric, negative, or out-of-range maxMismatch", async () => {
     for (const bad of ['"5%"', "-1", "101", ".nan"]) {
+      expect(() =>
+        parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${bad} }\n`)
+      ).toThrow("snapshot maxMismatch must be a number between 0 and 100");
+    }
+  });
+
+  it("rejects maxMismatch values that Number() would silently coerce", async () => {
+    for (const bad of ["", "null", "true", "false", "[]", '"  "', '"0x10"']) {
       expect(() =>
         parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${bad} }\n`)
       ).toThrow("snapshot maxMismatch must be a number between 0 and 100");
@@ -860,6 +886,76 @@ describe("parseFlow", () => {
     expect(parseFlow(yaml).steps).toEqual(steps);
   });
 
+  describe("format version", () => {
+    const thrown = (content: string): unknown => {
+      try {
+        parseFlow(content);
+      } catch (e) {
+        return e;
+      }
+      throw new Error("parseFlow did not throw");
+    };
+
+    it("reads a file without version, and one with version 1, the same", async () => {
+      const body = "steps:\n  - echo: hi\n";
+      expect(parseFlow(`version: 1\n${body}`)).toEqual(parseFlow(body));
+    });
+
+    it.each([[2], [3]])("refuses a version %i file and says to update", async (v) => {
+      const err = thrown(`version: ${v}\nsteps:\n  - echo: hi\n`);
+      expect((err as Error).message).toBe(
+        `The e2e test file is version ${v}, but this Argent reads up to version 1. Update Argent to run it.`
+      );
+      // `validation` is what lets `argent e2e run <dir>` move on to the next file.
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+        error_kind: "validation",
+      });
+    });
+
+    it.each([
+      ["adds a top-level key", "version: 2\nmetadata: x\nsteps: []\n"],
+      ["reshapes steps", "version: 2\nsteps:\n  main: []\n"],
+    ])("refuses a newer file that %s as newer, not as malformed", async (_, file) => {
+      expect(() => parseFlow(file)).toThrow(
+        "The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it."
+      );
+    });
+
+    it.each([
+      ["0", "0"],
+      ["1.5", "1.5"],
+      ['"1"', '"1"'],
+      [".inf", "Infinity"],
+      [".nan", "NaN"],
+      ["&a [*a]", "[cyclic entry]"],
+    ])("rejects version: %s, naming it as %s", async (v, shown) => {
+      const err = thrown(`version: ${v}\nsteps: []\n`);
+      expect((err as Error).message).toBe(
+        `Invalid e2e test file: version must be a positive integer, got ${shown}`
+      );
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        error_kind: "validation",
+      });
+    });
+
+    it.each([["version:"], ["version: ~"], ["version: null"]])(
+      "reads %j as version 1",
+      async (line) => {
+        expect(parseFlow(`${line}\nsteps:\n  - echo: hi\n`)).toEqual(
+          parseFlow("steps:\n  - echo: hi\n")
+        );
+      }
+    );
+
+    it("caps an oversized version in the message", async () => {
+      expect(() => parseFlow(`version: ${"x".repeat(300)}\nsteps: []\n`)).toThrow(
+        /got "x{199}…\(\+102 chars\)$/
+      );
+    });
+  });
+
   // Flows are hand-authored YAML, so a misspelled option key must fail at
   // parse time — silently dropping it would apply the default instead and
   // surface later as a misleading runtime failure (wrong scroll direction,
@@ -956,10 +1052,25 @@ describe("parseFlow", () => {
       );
     });
 
+    it("names a non-finite step entry instead of null", async () => {
+      expect(() => parseFlow("steps:\n  - .inf\n")).toThrow(
+        "Unrecognized e2e test entry (step must be an object): Infinity"
+      );
+    });
+
     it("rejects an unknown top-level flow file key", async () => {
       expect(() =>
         parseFlow("executionPrerequisit: Settings open\nsteps:\n  - echo: hi\n")
       ).toThrow(/unknown key `executionPrerequisit` \(did you mean `executionPrerequisite`\?\)/);
+    });
+
+    it.each([
+      ["verison: 1", "unknown key `verison` (did you mean `version`?)"],
+      ["metadata: x", "unknown key `metadata`"],
+    ])("names the allowed top-level keys for %j", async (line, unknown) => {
+      expect(() => parseFlow(`${line}\nsteps: []\n`)).toThrow(
+        `Invalid e2e test file: ${unknown} — allowed top-level keys: version, executionPrerequisite, requires, steps`
+      );
     });
   });
 
@@ -1178,6 +1289,9 @@ describe("output references", () => {
     expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 2 }\n')).toBe(
       "`tap.on.id`"
     );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, button: right }\n')).toBe(
+      "`tap.on.id`"
+    );
     expect(
       locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
     ).toBe("`long-press.on.id`");
@@ -1209,6 +1323,9 @@ describe("output references", () => {
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 1 }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, button: left }\n')).toBe(
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n')).toBe(
@@ -1563,11 +1680,13 @@ describe("ios launch args", () => {
     expect(appIdForPlatform(app, "android")).toBe("com.acme.native");
   });
 
-  it("iosLaunchArgs reads only an ios { app, args } entry", async () => {
-    expect(iosLaunchArgs({ ios: { app: "com.acme.app", args: ["-Flag"] } })).toEqual(["-Flag"]);
-    expect(iosLaunchArgs({ ios: "com.acme.app" })).toBeUndefined();
-    expect(iosLaunchArgs("com.acme.app")).toBeUndefined();
-    expect(iosLaunchArgs(undefined)).toBeUndefined();
+  it("appLaunchArgs reads only an { app, args } entry", async () => {
+    expect(appLaunchArgs({ ios: { app: "com.acme.app", args: ["-Flag"] } }, "ios")).toEqual([
+      "-Flag",
+    ]);
+    expect(appLaunchArgs({ ios: "com.acme.app" }, "ios")).toBeUndefined();
+    expect(appLaunchArgs("com.acme.app", "ios")).toBeUndefined();
+    expect(appLaunchArgs(undefined, "ios")).toBeUndefined();
   });
 });
 
@@ -1614,6 +1733,15 @@ describe("native launch shorthand", () => {
 // ── the authoring platform fold ──────────────────────────────────────
 
 describe("the authoring platform fold", () => {
+  // The allowed launch keys name macos only where the macos-apps flag is on and
+  // the host is macOS, so the developer's own flags must not reach the message,
+  // and a test that reads it pins the host.
+  scopeTempFlags();
+  const realPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+  });
+
   it("folds only ios-remote, and leaves every writable platform alone", async () => {
     expect(authoringPlatform("ios-remote")).toBe("ios");
     for (const p of ["ios", "android", "chromium", "vega"]) {
@@ -1643,13 +1771,20 @@ describe("the authoring platform fold", () => {
     );
   });
 
-  it("keeps `ios-remote` unwritable: the launch map still rejects the key", async () => {
-    // The fold exists so no flow file needs a remote key. Accepting one would
-    // let a flow name the host, which is the thing a flow deliberately cannot do.
-    expect(() => parseFlow('steps:\n  - launch: { "ios-remote": com.acme.app }\n')).toThrow(
-      /allowed keys: native, ios, android, chromium, vega/
-    );
-  });
+  it.each<[string, NodeJS.Platform, string]>([
+    ["on a Mac", "darwin", "native, ios, android, chromium, vega, macos"],
+    ["off macOS", "linux", "native, ios, android, chromium, vega"],
+  ])(
+    "keeps `ios-remote` unwritable %s: the launch map still rejects the key",
+    async (_host, platform, keys) => {
+      // The fold exists so no flow file needs a remote key. Accepting one would
+      // let a flow name the host, which is the thing a flow deliberately cannot do.
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      expect(() => parseFlow('steps:\n  - launch: { "ios-remote": com.acme.app }\n')).toThrow(
+        `launch has unknown key \`ios-remote\` — allowed keys: ${keys})`
+      );
+    }
+  );
 });
 
 // ── Recording sessions ───────────────────────────────────────────────

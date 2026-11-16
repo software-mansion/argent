@@ -166,10 +166,9 @@ describe("Vega target routing on a legacy Metro (no logicalDeviceId)", () => {
   });
 
   it("must NOT attach to the proxy's `don't use` page even if it is listed first", async () => {
-    // Nothing in the inspector protocol fixes the order of /json/list, and no
-    // priority rule matches a legacy Hermes target — selection falls through to
-    // "first candidate". If the synthetic reload page ever came first, we would
-    // bind to a page that is not a JS VM.
+    // Nothing in the inspector protocol fixes the order of /json/list. Both
+    // discoverMetro (drops the synthetic reload page) and selectTarget (picks
+    // the "Hermes React Native" title) keep us off a page that is not a JS VM.
     listTargets = [...VEGA_TARGETS].reverse();
 
     const res = (await registry.invokeTool("debugger-connect", {

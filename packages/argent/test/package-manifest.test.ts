@@ -91,7 +91,7 @@ describe("package manifest", () => {
 // failed and fell back to native-devtools (or an empty tree), with a misleading
 // "not booted through argent" hint. This test pins the producer→consumer path
 // agreement so the two can never drift apart again.
-describe("ax-service native-binary placement (producer/consumer path agreement)", () => {
+describe("native-binary placement (producer/consumer path agreement)", () => {
   const workspaceRoot = path.resolve(import.meta.dirname, "..", "..", "..");
   const downloadScript = fs.readFileSync(
     path.join(workspaceRoot, "scripts/download-native-binaries.sh"),
@@ -134,5 +134,26 @@ describe("ax-service native-binary placement (producer/consumer path agreement)"
     // The two MUST agree: producer dir + ax-service === consumer source file.
     expect(path.posix.join(producerDir, "ax-service")).toBe(consumerFile);
     expect(producerDir.endsWith("/darwin")).toBe(true);
+  });
+
+  it("download-native-binaries.sh installs the macOS artifacts where bundle-tools.cjs copies them from", () => {
+    // Producer: the tarball goes to dylibs/macos/, the helper then to bin/darwin/.
+    const BIN_DIR = shVar(downloadScript, "BIN_DIR", {});
+    const IOS_BIN_DIR = shVar(downloadScript, "IOS_BIN_DIR", { BIN_DIR });
+    const DYLIBS_DIR = shVar(downloadScript, "DYLIBS_DIR", {});
+    const MACOS_DYLIBS_DIR = shVar(downloadScript, "MACOS_DYLIBS_DIR", { DYLIBS_DIR });
+    expect(downloadScript).toContain(`tar -xzf "\${TMP_MACOS_TARBALL}" -C "\${MACOS_DYLIBS_DIR}"`);
+    expect(downloadScript).toContain(
+      `mv -f "\${MACOS_DYLIBS_DIR}/argent-macos-helper" "\${IOS_BIN_DIR}/argent-macos-helper"`
+    );
+
+    // Consumer: bundle-tools copies the helper from bin/darwin/ and the whole dylibs/ tree.
+    const binSrcRoot = bundleTools.match(/BIN_SRC_ROOT = path\.resolve\([^,]+,\s*"([^"]+)"\)/)?.[1];
+    const dylibsSrc = bundleTools.match(/DYLIBS_SRC = path\.resolve\([^,]+,\s*"([^"]+)"\)/)?.[1];
+    expect(bundleTools).toContain(`src: path.resolve(BIN_SRC_ROOT, "darwin/argent-macos-helper")`);
+    expect(path.posix.join(IOS_BIN_DIR, "argent-macos-helper")).toBe(
+      path.posix.join(binSrcRoot!, "darwin/argent-macos-helper")
+    );
+    expect(MACOS_DYLIBS_DIR).toBe(path.posix.join(dylibsSrc!, "macos"));
   });
 });

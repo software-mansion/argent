@@ -1,8 +1,8 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "mcpName": "io.github.software-mansion/argent",
-  "description": "MCP server for iOS Simulator and Android Emulator control",
+  "description": "MCP server for iOS Simulator, Android Emulator, Chromium app and Mac app control",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

@@ -5,8 +5,12 @@ import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
-import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
+import {
+  buildHeartbeatScript,
+  FIBER_ROOT_TRACKER_SCRIPT,
+} from "../../../utils/react-profiler/scripts";
 import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-profiler-start";
+import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const COLLECT_RENDERS_SCRIPT = `
@@ -85,7 +89,7 @@ interface RenderEntry {
 function renderMarkdownTable(entries: RenderEntry[]): string {
   if (entries.length === 0)
     return "_No render data found. Ensure React DevTools global hook is present._";
-  const header = "| Component | Renders | Total (ms) | Self Base (ms) |";
+  const header = "| Component | Instances | Total (ms) | Self Base (ms) |";
   const sep = "|---|---|---|---|";
   const rows = entries.map(
     (e) =>
@@ -101,39 +105,40 @@ const zodSchema = z.object({
     .describe(
       "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
     ),
-  top_n: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(20)
-    .describe("Number of top re-rendering components to return (default 20)"),
+  top_n: z.coerce.number().int().positive().default(20).describe("Number of components to return"),
 });
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
+  description: `Scan the live React fiber tree and count the mounted instances of each component, with their last render durations.
+Returns a markdown table of the components with the longest total render time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
+Use when you want a quick look at what is mounted in a live connected app, without a profiling session.
+Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
+  zodSchema,
+  readOnly: true,
+  // It walks only the top 30 fiber levels, above the screens of a real app
+  // (Bluesky's first feed item sits at depth 446), and its totals double-count
+  // nested instances. Agents read render counts from a profiling session
+  // (profiler-commit-query mode=render_counts); HTTP and SDK callers keep it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: () => "Reading React render activity",
     completedMsg: () => "Read React render activity",
     failedMsg: ({ failureSignal }) =>
       `Failed to read React render activity: ${failureSignal.error_code}`,
   },
-  description: `Scan the live React fiber tree to collect component render counts and durations.
-Returns a markdown table of the top re-rendering components. No profiling session required; works on a live connected app.
-Use when you want a quick snapshot of render counts without a full profiling session.
-Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
-  readOnly: true,
-  zodSchema,
   // RN-only: queries the React DevTools backend hook on the live runtime.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${params.device_id}`,
+    // Same key as react-profiler-start, so a forwarded logicalDeviceId reads its run.
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
 
-    if (api.profilingActive && api.ownerToolServerPid === process.pid) {
-      await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
+    if (api.profilingActive && api.sessionId && api.ownerToolServerPid === process.pid) {
+      await cdp.evaluate(buildHeartbeatScript(api.sessionId)).catch(() => {});
     }
 
     type EvalResult = {
@@ -209,6 +214,6 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
       .sort((a, b) => b.totalActualDuration_ms - a.totalActualDuration_ms)
       .slice(0, params.top_n);
 
-    return `## React Component Renders\n\n${renderMarkdownTable(entries)}`;
+    return `## Mounted React Components\n\n${renderMarkdownTable(entries)}`;
   },
 };

@@ -177,20 +177,26 @@ export function subprocessFailureMetadata(
   > = { failure_command };
   const err = error as {
     code?: string | number | null;
+    // execFileSync reports the exit code here; execFile in `code`.
+    status?: number | null;
     signal?: string | null;
   };
-  if (
-    typeof err.code === "number" &&
-    Number.isInteger(err.code) &&
-    err.code >= 0 &&
-    err.code <= 255
-  ) {
-    metadata.failure_exit_code = err.code;
-  } else if (
-    typeof err.code === "string" &&
-    FAILURE_SPAWN_CODE_SET.has(err.code as FailureSpawnCode)
-  ) {
-    metadata.failure_spawn_code = err.code as FailureSpawnCode;
+  if (typeof err.code === "string") {
+    // A string code wins over `status`: an execFileSync timeout whose child
+    // traps SIGTERM carries both ETIMEDOUT and the child's exit status.
+    if (FAILURE_SPAWN_CODE_SET.has(err.code as FailureSpawnCode)) {
+      metadata.failure_spawn_code = err.code as FailureSpawnCode;
+    }
+  } else {
+    const exitCode = typeof err.code === "number" ? err.code : err.status;
+    if (
+      typeof exitCode === "number" &&
+      Number.isInteger(exitCode) &&
+      exitCode >= 0 &&
+      exitCode <= 255
+    ) {
+      metadata.failure_exit_code = exitCode;
+    }
   }
   if (
     typeof err.signal === "string" &&

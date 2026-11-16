@@ -20,6 +20,7 @@ import {
   type ToolsClient,
   type ToolsServerPaths,
 } from "@argent/tools-client";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import { FlagParseException } from "./flag-parser.js";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 
@@ -115,8 +116,26 @@ function durationSuffix(ms: unknown): string {
   return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
-function printHelp(toStderr = false): void {
+/**
+ * Whether the help lists `macos` under --platform: the flag is on, and a Mac
+ * can run the test. That is this host, or the tool-server that `argent link`
+ * or ARGENT_TOOLS_URL names, which can be a Mac when this host is not. Help
+ * reads the link (one local file, no network) and does not contact that
+ * tool-server, so a linked CLI lists `macos` whatever the remote host is.
+ */
+async function offersMacosPlatform(): Promise<boolean> {
+  if (!isFeatureEnabled("macos-apps")) return false;
+  if (process.platform === "darwin") return true;
+  try {
+    return (await getResolvedToolsUrl()).url !== null;
+  } catch {
+    return false;
+  }
+}
+
+async function printHelp(toStderr = false): Promise<void> {
   const print = toStderr ? console.error : console.log;
+  const macos = (await offersMacosPlatform()) ? " macos |" : "";
   print(`Usage: argent e2e <subcommand> [options]
 
 Run a YAML e2e test without an LLM in the loop. \`run\` takes any of these forms:
@@ -137,8 +156,9 @@ contain only letters, numbers, "_", or "-" — the same charset a name must
 match. A test is standalone when its first non-\`echo\`/\`script\` step is \`launch\`.
 Other tests are fragments and use the device's current state. Exception: a fragment whose first step \`run:\`s a chromium standalone
 test boots that test's app before step 1 — when that launch is unambiguously
-chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
-multi-platform launch auto-detects a device instead. Pass --device to attach to
+chromium (a lone \`{ chromium: ... }\` target, --platform chromium, or a
+\`requires:\` block that allows only chromium); a multi-platform launch
+auto-detects a device instead. Pass --device to attach to
 a running instance.
 
 A directory run prints only the steps that need attention (each failure, each
@@ -150,6 +170,12 @@ keeps the batch running, as does one the server rejects up front — an invalid
 file, or a device it cannot resolve. A transport failure, a rejection the server
 does not mark as validation, or a reply that is not a report stops the batch and
 counts the remaining tests skipped.
+
+A test can declare a \`requires:\` block (platform, runtimeKind) that names the
+targets it supports. A directory run skips each test whose requirements the
+target does not meet, so the same directory runs on each platform without a
+separate list of tests. A single-test run fails instead. A directory run where
+no test ran exits 2.
 
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
@@ -180,7 +206,7 @@ Subcommands:
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega | ios-remote — narrow
+  --platform <p>         ios | android | chromium | vega |${macos} ios-remote — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,
@@ -427,7 +453,8 @@ export function renderBatchSummary(
   },
   durationMs?: number
 ): string {
-  return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} e2e test${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped${durationSuffix(durationMs)}`;
+  const verdict = counts.failed > 0 ? "FAIL" : counts.passed === 0 ? "NONE RAN" : "PASS";
+  return `${verdict} — ${counts.total} e2e test${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped${durationSuffix(durationMs)}`;
 }
 
 interface FailedFlow {
@@ -1291,8 +1318,12 @@ function rejectionVerdict(code: string | undefined): string {
     case FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED:
     case FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE:
       return "not run (invalid e2e test)";
+    case FAILURE_CODES.FLOW_FILE_NEWER_VERSION:
+      return "not run (needs a newer Argent)";
     case FAILURE_CODES.FLOW_DEVICE_RESOLUTION:
       return "not run (no device resolved)";
+    case FAILURE_CODES.FLOW_REQUIREMENTS_UNMET:
+      return "not run (requires not met)";
     case FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED:
       return "not run (upload failed)";
     default:
@@ -1365,6 +1396,8 @@ interface BatchFlowResult {
   error?: string;
   error_code?: string;
   error_kind?: string;
+  /** Why a skipped test did not run, when it was skipped for its `requires:`. */
+  reason?: string;
 }
 
 /**
@@ -1439,6 +1472,14 @@ async function runFlowDirectory(
       const err = unreachableErr ?? thrown;
       const message = err instanceof Error ? err.message : String(err);
       const toolErr = err instanceof ToolInvocationError ? err : undefined;
+      if (toolErr?.errorCode === FAILURE_CODES.FLOW_REQUIREMENTS_UNMET) {
+        // A skip is an outcome, not a tool error, so drop the tool-server's `[Tool:<id>] ` prefix.
+        const reason = message.replace(/^\[Tool:[^\]]+\] /, "");
+        results.push({ path: rel, status: "skip", reason });
+        if (!args.json)
+          console.log(`  ${STATUS_GLYPH.skip} skipped (requires not met)\n    ${reason}`);
+        continue;
+      }
       const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
       const verdict = unreachableErr
         ? UNREACHABLE_VERDICT
@@ -1502,11 +1543,19 @@ async function runFlowDirectory(
     skipped: results.filter((r) => r.status === "skip").length,
   };
   const durationMs = Date.now() - batchStartedAt;
+  // All tests skipped is as likely a wrong target or a mistyped `requires:` as intended.
+  const noneRan = counts.passed === 0 && counts.failed === 0;
   if (args.json) {
     console.log(
       JSON.stringify(
         // `flows` is the deprecated spelling of `e2eTests`.
-        { ok: counts.failed === 0, ...counts, durationMs, e2eTests: results, flows: results },
+        {
+          ok: counts.failed === 0 && !noneRan,
+          ...counts,
+          durationMs,
+          e2eTests: results,
+          flows: results,
+        },
         null,
         2
       )
@@ -1514,15 +1563,16 @@ async function runFlowDirectory(
   } else {
     for (const line of renderFailedFlows(failures)) console.log(line);
     console.log(`\n${renderBatchSummary(counts, durationMs)}`);
+    if (noneRan) console.error(`No e2e test in ${dir} ran on the selected target.`);
   }
-  return exitAfterFlush(unreachable ? 2 : counts.failed === 0 ? 0 : 1);
+  return exitAfterFlush(unreachable || noneRan ? 2 : counts.failed === 0 ? 0 : 1);
 }
 
 export async function e2e(argv: string[], options: E2eCommandOptions): Promise<void> {
   const [sub, ...rest] = argv;
 
   if (!sub || sub === "--help" || sub === "-h") {
-    printHelp();
+    await printHelp();
     return;
   }
 
@@ -1591,17 +1641,17 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
   if (rest.includes("--help") || rest.includes("-h")) {
-    printHelp(jsonStream);
+    await printHelp(jsonStream);
     return;
   }
-  const usageError = (message: string, prose: string): Promise<never> => {
+  const usageError = async (message: string, prose: string): Promise<never> => {
     if (json) {
       console.error(JSON.stringify(errorRecord(message)));
       return exitAfterFlush(2);
     }
     if (jsonStream) writeJsonStreamError(message);
     console.error(prose);
-    printHelp(jsonStream);
+    await printHelp(jsonStream);
     return exitAfterFlush(2);
   };
   let args: ReturnType<typeof parseRunArgs>;

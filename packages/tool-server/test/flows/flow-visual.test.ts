@@ -261,6 +261,18 @@ describe("runSnapshot baselines", () => {
     expect(r.snapshotKey).toBeUndefined();
   });
 
+  it("compares a Mac window's top band: it is the title bar and toolbar, not a status bar", async () => {
+    const macEnv = { ...env, device: { platform: "macos", id: "macos-app-com.example.notes" } };
+    const macBaseline = path.join(tmpDir, "__baselines__", "checkout", "home__macos-390x844.png");
+    await fs.mkdir(path.dirname(macBaseline), { recursive: true });
+    await writeFakePng(macBaseline);
+
+    const r = await runSnapshot(macEnv as unknown as ActionEnv, opts());
+
+    expect(r.status).toBe("pass");
+    expect(h.diffTopMask).toBe("none");
+  });
+
   it("fails a dimension-mismatch bail instead of passing its 0% mismatch", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());

@@ -15,7 +15,7 @@ sidebar_custom_props:
 | `argent remove`    | Alias for `uninstall`                                                                                                                                                                                                                                             |
 | `argent mcp`       | Start an MCP server instance, used internally by the agent                                                                                                                                                                                                        |
 | `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)                                                                                                                                                                                             |
-| `argent run`       | Invoke a tool by name                                                                                                                                                                                                                                             |
+| `argent run`       | Invoke a tool by name. The command exits with status 1 when the tool fails or when the result reports a failure (see [Tool-server API](/docs/reference/tool-server-api#failure-in-the-response))                                                                  |
 | `argent e2e`       | Run an e2e test by name or YAML path (`argent e2e --help` for options)                                                                                                                                                                                            |
 | `argent flow`      | Alias for `e2e`                                                                                                                                                                                                                                                   |
 | `argent server`    | Manage the shared tool-server: `start` / `status` / `stop` / `logs`                                                                                                                                                                                               |
@@ -33,3 +33,5 @@ sidebar_custom_props:
 Run `argent --help` for the full set of options, and `argent --version` to print the installed version.
 
 `argent init`, `update`, `uninstall`, `link` and `unlink` ask questions on a terminal. When stdin is not a terminal, as in CI or a Dockerfile, a command that must ask a question stops with exit code 2. To run these commands without a terminal, pass `--yes`. For `link`, also pass `--host`. The port is 3001 unless you pass `--port`.
+
+`argent init` exits with code `1` when the skills install fails and no skills are on disk.

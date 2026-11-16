@@ -1,6 +1,8 @@
 /**
- * Collapses the two ids that name the same device onto one canonical id, so its
- * debugger service is cached once instead of twice.
+ * Joins the two ids that name the same device. `canonicalDeviceId` collapses
+ * them onto one canonical id, so its debugger service is cached once instead of
+ * twice. `deviceIdsOf` expands an id to all of them, so a run stored under either
+ * id (the React profiler's paths cache) is found by both.
  *
  * A caller connects with a stable id from `list-devices` (iOS UDID, Android or
  * Vega serial); Metro's inspector-proxy echoes back an unrelated per-connection
@@ -13,9 +15,10 @@
  * The alias is learned at connect — the one place both ids are known at once —
  * and read synchronously, so the tools' `services()` callbacks stay synchronous.
  *
- * A logicalDeviceId is unique per Metro connection, so the map is 1:1 and never
- * mis-collapses two devices. A stale entry (reconnect, fresh logicalDeviceId) is
- * harmless: the caller is handed the new id, so the old key is never looked up.
+ * A logicalDeviceId is unique per Metro connection, so the map never
+ * mis-collapses two devices. An entry lives as long as its debugger connection:
+ * dispose calls `forgetDeviceAlias`, so every logicalDeviceId `deviceIdsOf` adds
+ * belongs to a connection that is still open.
  */
 const logicalIdToConnectId = new Map<string, string>();
 
@@ -39,6 +42,19 @@ export function rememberDeviceAlias(
 export function canonicalDeviceId(deviceId: string | undefined): string | undefined {
   if (!deviceId) return deviceId;
   return logicalIdToConnectId.get(deviceId) ?? deviceId;
+}
+
+/**
+ * Every id currently known to name the same device as `deviceId`, in no
+ * particular order. Includes `deviceId` itself, so an unaliased id yields just
+ * that id.
+ */
+export function deviceIdsOf(deviceId: string): string[] {
+  const connectId = canonicalDeviceId(deviceId) ?? deviceId;
+  const logicalIds = [...logicalIdToConnectId]
+    .filter(([, aliased]) => aliased === connectId)
+    .map(([logicalId]) => logicalId);
+  return [...new Set([deviceId, connectId, ...logicalIds])];
 }
 
 /** Drop a learned alias when its debugger connection is disposed. */
