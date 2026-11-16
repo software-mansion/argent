@@ -3407,6 +3407,68 @@ describe("after a drop, with the clock under test control", () => {
     expect(attachCommands()).toHaveLength(1);
   });
 
+  it("a start whose agent does not connect again answers with that, not with the advice to start again", async () => {
+    const api = await armedInspector();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(api.state().note).toBe(
+      "the agent's connection dropped, and it did not reconnect; network-capture-start connects it again"
+    );
+    vi.useRealTimers();
+
+    // The start puts the reverse back, but the agent does not connect within its 5 s.
+    expect(await startUnarmed(api)).toEqual({
+      armed: false,
+      reason: "waiting for the agent in pid 4722",
+    });
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      "android-native: not armed, 0 requests (waiting for the agent in pid 4722)"
+    );
+  });
+
+  it("a start that reaches adb does not answer with the adb failure of the start before it", async () => {
+    const api = await armedInspector();
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    device.adbDown = true;
+    expect(await api.startCapture(8081)).toEqual({
+      armed: false,
+      reason:
+        "adb did not answer (device offline); the next launch or network-capture-start tries again",
+    });
+    device.adbDown = false;
+
+    expect(await startUnarmed(api)).toEqual({
+      armed: false,
+      reason: "waiting for the agent in pid 4722",
+    });
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      "android-native: not armed, 0 requests (waiting for the agent in pid 4722)"
+    );
+  });
+
+  it("a start that reaches adb brings back the note of the process still waiting for its agent, with the agent's reason", async () => {
+    device.loaded.add("4722:91000");
+    device.agentOnAttach = false;
+    const api = await createInspector();
+    expect(await startUnarmed(api)).toEqual({ armed: false, reason: LOADED_NOTE });
+    device.adbDown = true;
+    expect(await api.startCapture(8081)).toMatchObject({
+      armed: false,
+      reason: expect.stringContaining("adb did not answer (device offline)"),
+    });
+    device.adbDown = false;
+    const refused = "Proof of the session secret did not verify - not connecting";
+    device.logcat = `W/ArgentNetworkInspector: ${refused}\n`;
+
+    expect(await startUnarmed(api)).toEqual({
+      armed: false,
+      reason: `${LOADED_NOTE}; the agent says: ${refused}`,
+    });
+  });
+
   it("restarts a process's recheck when its connection drops again during it", async () => {
     const api = await armedInspector();
     const first = agents[0]!;

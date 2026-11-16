@@ -489,6 +489,8 @@ function createInspector(
   let sessionPort = 0;
   const attachedProcesses = new Set<string>();
   let note: string | undefined;
+  /** The note a start left as its answer: the next start replaces it. */
+  let startNote: string | undefined;
   /**
    * The process attached last while its agent has not completed a handshake:
    * the note that says so, and the reason the agent last logged for not
@@ -1896,6 +1898,7 @@ function createInspector(
       unavailableReason = reason;
       // For the reads of a capture an earlier start left started.
       note = reason;
+      startNote = reason;
       return { result: { armed: false, unavailable: true, reason } };
     };
     const attached = await withKeyedLock(
@@ -1908,6 +1911,9 @@ function createInspector(
         mark = { lastRecord: nextRecordNumber - 1, metroPort: port };
         stopped = false;
         notAttached = false;
+        // An earlier start's answer, and the advice to start again, describe
+        // no part of this start: what it finds says why capture is not armed.
+        if (note === startNote || note === NOT_RECONNECTED_NOTE) note = awaiting?.note;
         try {
           const outcome = await attachCurrent();
           if ("blocked" in outcome) return unavailableStart(outcome.blocked.reason);
@@ -1935,6 +1941,7 @@ function createInspector(
           log(reason);
           // Reads run no adb, so they say why from this note.
           note = reason;
+          startNote = reason;
           return { result: { armed: false, reason } };
         }
       }
@@ -1955,13 +1962,9 @@ function createInspector(
     const conn = connections.find((c) => c.armed && !c.closed && c.processKey === key);
     if (!conn) {
       const reason = await refreshAgentReason(attached.current);
-      const shown = shownNote();
-      return {
-        armed: false,
-        reason:
-          shown ??
-          `waiting for the agent in pid ${attached.current.pid}${reason ? `: ${reason}` : ""}`,
-      };
+      // Reads run no adb, so they say what this start found.
+      note ??= `waiting for the agent in pid ${attached.current.pid}${reason ? `: ${reason}` : ""}`;
+      return { armed: false, reason: shownNote() ?? note };
     }
     // The agent reports that it captures nothing in this process, and no retry
     // changes that. The start's js layer tells whether JavaScript requests are
