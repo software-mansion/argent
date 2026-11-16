@@ -628,12 +628,15 @@ export function npxChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
   return childEnv;
 }
 
-export function isSkillsCliAvailable(): boolean {
+// `cwd`: where the `skills` command will run - `npx --no-install` resolves a
+// project-local bin from it.
+export function isSkillsCliAvailable(cwd?: string): boolean {
   try {
     execSync("npx --force --no-install skills --version", {
       env: npxChildEnv(),
       stdio: ["ignore", "ignore", "ignore"],
       timeout: PROBE_TIMEOUT_MS,
+      ...(cwd ? { cwd } : {}),
     });
     return true;
   } catch {
