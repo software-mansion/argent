@@ -183,9 +183,11 @@ export function isLeakAttributed(responsibleFrame: string): boolean {
 const ALLOCATOR_LIBRARIES = new Set(["libswiftCore.dylib"]);
 
 /**
- * Whether the responsible frame of a leak is in a system library: macOS or iOS
- * leaks it by itself, not the app's code. `libraryPaths` gives the path of each
- * binary the trace sampled, by name; a library not in it counts as the app's.
+ * Whether the responsible frame of a leak is in a system library. This does not
+ * tell who leaked the object: the app's own code also leaks objects that a system
+ * library made (measured on a Mac app: a CGPath that it did not release, an NSData
+ * that it retained too often). `libraryPaths` gives the path of each binary the
+ * trace sampled, by name; a library not in it counts as the app's.
  */
 function inSystemLibrary(library: string, libraryPaths: ReadonlyMap<string, string>): boolean {
   if (ALLOCATOR_LIBRARIES.has(library)) return false;
@@ -193,7 +195,7 @@ function inSystemLibrary(library: string, libraryPaths: ReadonlyMap<string, stri
   return libraryPath !== undefined && isSystemLibraryPath(libraryPath);
 }
 
-/** App leaks first, then the system's own leaks, then the unattributed ones. */
+/** App leaks first, then the leaks of system libraries, then the unattributed ones. */
 export function leakRank(leak: Pick<MemoryLeak, "attributed" | "systemLibrary">): number {
   if (!leak.attributed) return 2;
   return leak.systemLibrary ? 1 : 0;
@@ -246,7 +248,7 @@ export function aggregateLeaks(
         responsibleLibrary: g.library,
         attributed,
         ...(systemLibrary ? { systemLibrary } : {}),
-        severity: attributed && !systemLibrary ? "RED" : "YELLOW",
+        severity: attributed ? "RED" : "YELLOW",
       };
     })
     .sort((a, b) => leakRank(a) - leakRank(b) || b.totalSizeBytes - a.totalSizeBytes);

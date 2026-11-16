@@ -311,9 +311,11 @@ describe("leaks of system libraries", () => {
     ]);
   }
 
-  it("keeps the app's leaks RED and rates a leak from a system library YELLOW, after them", () => {
+  it("rates a leak from a system library RED, after the app's leaks", () => {
     const leaks = aggregateLeaks(parseLeaksXml(LEAKS_XML), LIBRARY_PATHS);
-    // RED by size first, then the system libraries' leaks, then the unattributed ones.
+    // The app's leaks by size first, then the system libraries' leaks, then the unattributed
+    // ones. The responsible library does not tell who leaked an object: the app's own code
+    // also leaks objects that a system library made.
     expect(bySeverity(leaks)).toEqual([
       ["MyModel", "PM-leaks-dbg", "RED", false],
       // Not in the paths, so not known as a system library.
@@ -322,9 +324,31 @@ describe("leaks of system libraries", () => {
       // The Swift runtime's allocator stands for whoever made the object: the app here.
       ["ProfLeakNodeA", "libswiftCore.dylib", "RED", false],
       ["ProfLeakNodeB", "libswiftCore.dylib", "RED", false],
-      ["Malloc 48 Bytes", "Foundation", "YELLOW", true],
+      ["Malloc 48 Bytes", "Foundation", "RED", true],
       ["Malloc 32 Bytes", "", "YELLOW", false],
     ]);
+  });
+
+  it("rates the app's own leaks of objects that system libraries made RED", () => {
+    // Rows of a real Leaks export of a Mac app (Xcode 27.2, macOS 27) whose own code made
+    // each of these objects after the start: CGPathCreateMutable and CGColorCreateSRGB with
+    // no release, and an NSString, an NSData and an NSBezierPath that it retained once more.
+    const xml = `<?xml version="1.0"?>
+<trace-query-result>
+<node xpath='//trace-toc[1]/run[1]/tracks[1]/track[2]/details[1]/detail[1]'><row leaked-object="CGPath" size="160" responsible-frame="CGTypeCreateInstance" count="1" responsible-library="CoreGraphics" address="0x77ac40d040"/>
+<row leaked-object="CGColor" size="112" responsible-frame="CGTypeCreateInstance" count="1" responsible-library="CoreGraphics" address="0x77ac40d0e0"/>
+<row leaked-object="Malloc 64 Bytes" size="64" responsible-frame="-[NSString initWithFormat:]" count="1" responsible-library="Foundation" address="0x77ac4081c0"/>
+<row leaked-object="NSData" size="224" responsible-frame="-[_NSPlaceholderData initWithBytes:length:copy:deallocator:]" count="1" responsible-library="Foundation" address="0x77ac409580"/>
+<row leaked-object="NSBezierPath" size="80" responsible-frame="+[NSBezierPath bezierPath]" count="1" responsible-library="AppKit" address="0x77ac409600"/>
+</node></trace-query-result>`;
+    const paths = new Map([
+      ["CoreGraphics", "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics"],
+      ["Foundation", "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation"],
+      ["AppKit", "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit"],
+    ]);
+    const leaks = aggregateLeaks(parseLeaksXml(xml), paths);
+    expect(leaks).toHaveLength(5);
+    for (const leak of leaks) expect(leak).toMatchObject({ severity: "RED", systemLibrary: true });
   });
 
   it("keeps every attributed leak RED without the binaries' paths", () => {
@@ -375,8 +399,8 @@ describe("the pipeline's leak libraries", () => {
     expect(memoryLeaks.map((l) => [l.objectType, l.severity, l.systemLibrary ?? false])).toEqual([
       ["MyModel", "RED", false],
       ["Other", "RED", false],
-      ["NSSet", "YELLOW", true],
-      ["Malloc 48 Bytes", "YELLOW", true],
+      ["NSSet", "RED", true],
+      ["Malloc 48 Bytes", "RED", true],
     ]);
     // Only the names that the CPU export lacks are looked for, in the app's bundle first.
     expect(access.mock.calls.map(([p]) => String(p))).toEqual([
@@ -495,7 +519,7 @@ describe("the pipeline's leak libraries", () => {
     writeFileSync(emptyCpu, "");
     for (const cpu of [null, emptyCpu]) {
       const mac = await runIosProfilerPipeline({ cpu, hangs: null, leaks }, { macApp: true });
-      expect(mac.memoryLeaks[0]).toMatchObject({ severity: "YELLOW", systemLibrary: true });
+      expect(mac.memoryLeaks[0]).toMatchObject({ severity: "RED", systemLibrary: true });
       // The frameworks of this Mac are not those of an iOS app.
       const ios = await runIosProfilerPipeline({ cpu, hangs: null, leaks });
       expect(ios.memoryLeaks[0]).toMatchObject({ severity: "RED", attributed: true });

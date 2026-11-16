@@ -691,10 +691,11 @@ function renderFullReport(
     lines.push(``);
   }
 
-  const appLeaks = memoryLeaks.filter((b) => b.attributed && !b.systemLibrary);
-  if (appLeaks.length > 0) {
+  // Also the leaks of system libraries: the app's code can have leaked them.
+  const attributedLeaks = memoryLeaks.filter((b) => b.attributed);
+  if (attributedLeaks.length > 0) {
     lines.push(`### Memory Leaks`, ``);
-    for (const b of appLeaks) {
+    for (const b of attributedLeaks) {
       lines.push(
         `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${demangleSymbol(b.responsibleFrame)}\`: Check for retain cycles or strong delegate references.`
       );
@@ -753,9 +754,12 @@ export function renderSystemLibraryLeaksNote(systemLeaks: MemoryLeak[]): string 
     .map((name) => `\`${name}\``)
     .join(", ");
   return (
-    `> ${severityEmoji("YELLOW")} **${systemLeaks.length} leak group(s) from system libraries** ` +
-    `(${objs} object(s); ${libraries}): the responsible frame is in a library of the OS, not in the ` +
-    `app's code. Most likely the OS leaks these objects by itself, so they are not confirmed app leaks.`
+    `> ℹ️ **${systemLeaks.length} leak group(s) from system libraries** ` +
+    `(${objs} object(s); ${libraries}): the responsible frame is in a library of the OS. This does ` +
+    `not tell who leaked the objects. The OS leaks some objects by itself, for example in its XPC ` +
+    `connections. The app's code can also leak an object that a library of the OS made, for ` +
+    `example a Core Graphics or Core Foundation object that it does not release, or an object ` +
+    `that it retains too often. Look for the calls in the app's code that make these objects.`
   );
 }
 

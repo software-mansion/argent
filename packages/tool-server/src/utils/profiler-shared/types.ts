@@ -125,11 +125,12 @@ export interface MemoryLeak {
   attributed: boolean;
   /**
    * True when the responsible frame is in a system library (a path the trace
-   * shows under /System/Library/, /usr/lib/ or a simulator runtime): macOS or
-   * iOS leaked the object by itself, not the app's code.
+   * shows under /System/Library/, /usr/lib/ or a simulator runtime). Either the OS
+   * leaked the object by itself, or the app's code leaked an object that this
+   * library made: the leak does not tell which.
    */
   systemLibrary?: boolean;
-  /** RED only when attributed to the app's code; the others are a low-confidence YELLOW. */
+  /** RED only when attributed; unattributed leaks are a low-confidence YELLOW. */
   severity: "RED" | "YELLOW";
 }
 

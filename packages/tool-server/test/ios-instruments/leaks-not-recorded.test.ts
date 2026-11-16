@@ -445,7 +445,7 @@ describe("leaks of a Mac app with no CPU sample", () => {
       api.exportedFiles = { cpu: null, hangs: null, leaks };
       const res = await analyzeNativeProfilerIos(api);
       expect(api.parsedData?.memoryLeaks[0]).toMatchObject({
-        severity: "YELLOW",
+        severity: "RED",
         systemLibrary: true,
       });
       expect(res.report).toContain(
@@ -456,7 +456,7 @@ describe("leaks of a Mac app with no CPU sample", () => {
       const loaded = await freshMacSession();
       await loadNative(loaded);
       expect(loaded.parsedData?.memoryLeaks[0]).toMatchObject({
-        severity: "YELLOW",
+        severity: "RED",
         systemLibrary: true,
       });
 
@@ -464,6 +464,7 @@ describe("leaks of a Mac app with no CPU sample", () => {
       const ios = await freshIosSession();
       await loadNative(ios);
       expect(ios.parsedData?.memoryLeaks[0]).toMatchObject({ severity: "RED" });
+      expect(ios.parsedData?.memoryLeaks[0]?.systemLibrary).toBeUndefined();
     } finally {
       spy.mockRestore();
     }

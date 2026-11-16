@@ -457,9 +457,9 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
 /**
  * Memory Leaks section of the combined report, with the attribution split of the
  * iOS analyze report (`utils/ios-profiler/render.ts`). Attributed leaks are listed
- * individually: the app's own first, heuristically tied to recently-mounted React
- * components, then those of system libraries, with no component and the note that
- * analyze gives them. Unattributed ones collapse into one low-confidence caveat so
+ * individually and heuristically tied to recently-mounted React components: the
+ * app's own first, then those of system libraries, with the note that analyze
+ * gives them. Unattributed ones collapse into one low-confidence caveat so
  * benign system-allocation noise can't masquerade as a wall of confirmed leaks.
  * The notes come from render.ts's shared `renderSystemLibraryLeaksNote` and
  * `renderUnattributedLeaksNote`, so their wording and capture-mode handling
@@ -484,14 +484,12 @@ export function renderCombinedMemoryLeaks(
   if (attributedLeaks.length > 0) {
     // aggregateLeaks gives the app's own leaks first, then those of system libraries.
     for (const leak of attributedLeaks) {
-      // The OS leaks a system library's objects by itself, so no component of the app explains it.
-      const possibleComponent = leak.systemLibrary
-        ? undefined
-        : [...mountComponents].find(
-            (name) =>
-              leak.objectType.toLowerCase().includes(name.toLowerCase()) ||
-              leak.responsibleFrame.toLowerCase().includes(name.toLowerCase())
-          );
+      // Also for a leak of a system library: the app's code can have leaked it.
+      const possibleComponent = [...mountComponents].find(
+        (name) =>
+          leak.objectType.toLowerCase().includes(name.toLowerCase()) ||
+          leak.responsibleFrame.toLowerCase().includes(name.toLowerCase())
+      );
 
       lines.push(
         `- **\`${leak.objectType}\`** ${formatBytes(leak.totalSizeBytes)} (${leak.count}×) — \`${leak.responsibleFrame}\`` +

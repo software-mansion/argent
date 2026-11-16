@@ -193,7 +193,7 @@ describe("leak attribution rendering on a Mac app", () => {
 });
 
 describe("leaks of system libraries in the report", () => {
-  it("rates them YELLOW with a note, and gives the retain-cycle advice for the app's leaks only", async () => {
+  it("lists them as leaks to fix, with a note that the app's code can have leaked them", async () => {
     const appLeak: MemoryLeak = {
       ...leak(
         true,
@@ -207,21 +207,27 @@ describe("leaks of system libraries in the report", () => {
       objectType: "xpc_connection_t",
       count: 3,
       systemLibrary: true,
-      severity: "YELLOW",
     };
     const res = await renderNativeProfilerReport({
       payload: payload([appLeak, systemLeak]),
       traceFile: null,
     });
 
-    expect(res.report).toContain("| Memory Leaks | 2 | 🔴 1  🟡 1 |");
+    expect(res.report).toContain("| Memory Leaks | 2 | 🔴 2 |");
     expect(res.report).toContain(
-      "> 🟡 **1 leak group(s) from system libraries** (3 object(s); `Foundation`): the responsible " +
-        "frame is in a library of the OS, not in the app's code."
+      "> ℹ️ **1 leak group(s) from system libraries** (3 object(s); `Foundation`): the responsible " +
+        "frame is in a library of the OS. This does not tell who leaked the objects."
     );
+    // Measured on a Mac app: its own CGPath, CGColor, NSData and NSString leaks had their
+    // responsible frames in CoreGraphics and Foundation.
+    expect(res.report).toContain(
+      "The app's code can also leak an object that a library of the OS made, for example a " +
+        "Core Graphics or Core Foundation object that it does not release"
+    );
+    expect(res.report).not.toContain("Most likely the OS leaks these objects by itself");
     const advice = res.report.slice(res.report.indexOf("### Memory Leaks"));
     expect(advice).toContain("`ProfLeakNodeA` x1");
-    expect(advice).not.toContain("`xpc_connection_t`");
+    expect(advice).toContain("`xpc_connection_t` x3");
   });
 });
 

@@ -196,7 +196,6 @@ describe("renderLeakStacksIos — leaks of system libraries", () => {
         responsibleLibrary: "Foundation",
         attributed: true,
         systemLibrary: true,
-        severity: "YELLOW",
       });
     const out = renderLeakStacksIos([system(1), system(2), ATTRIBUTED_SMALL], undefined, 2);
 

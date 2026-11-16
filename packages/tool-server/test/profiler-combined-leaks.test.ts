@@ -165,7 +165,7 @@ describe("renderCombinedMemoryLeaks", () => {
     expect(rowCount).toBe(12);
   });
 
-  it("says that the leaks of system libraries are not confirmed app leaks, as analyze does", async () => {
+  it("marks the leaks of system libraries and gives analyze's note on them", async () => {
     const system = leak({
       objectType: "NSXPCInterface",
       totalSizeBytes: 240,
@@ -174,16 +174,14 @@ describe("renderCombinedMemoryLeaks", () => {
       responsibleLibrary: "Foundation",
       attributed: true,
       systemLibrary: true,
-      severity: "YELLOW",
     });
-    // "Interface" is in the object type and the frame: a substring match without the split.
+    // The app's code can have leaked an object of a system library, so a component can explain it.
     const out = renderCombinedMemoryLeaks([ATTRIBUTED, system], new Set(["Interface"])).join("\n");
 
     expect(out).toContain(
       "- **`NSXPCInterface`** 240B (3×) — `+[NSXPCInterface interfaceWithProtocol:]` " +
-        "(system library `Foundation`)\n"
+        "(system library `Foundation`) — may relate to `Interface` mount/unmount\n"
     );
-    expect(out).not.toContain("may relate to `Interface`");
     const { renderNativeProfilerReport } = await import("../src/utils/ios-profiler/render");
     const res = await renderNativeProfilerReport({
       payload: {
