@@ -716,7 +716,8 @@ function renderFullReport(
   if (cpuHotspots.length > 0) {
     // Prefer the top *app* hotspot: on Android the leading hotspot is often a
     // `system` (emulator/kernel) frame the report already flags as not
-    // actionable. iOS hotspots have no `frameClass`, so this picks their first.
+    // actionable. iOS hotspots have no `frameClass`, so this picks their first
+    // that is not system code (`systemCode`), which gets its own step below.
     const callerHotspot = cpuHotspots.find((b) => b.frameClass !== "system" && !b.systemCode);
     if (callerHotspot) {
       // Keep the RAW (possibly mangled) name: function_callers matches against
