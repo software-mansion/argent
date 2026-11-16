@@ -18,6 +18,7 @@ import {
   jsCapturePayload,
   jsCapturesOn,
   networkInspectorBlueprint,
+  pauseJsCapturesOf,
 } from "../src/blueprints/network-inspector";
 import type {
   NativeDevtoolsApi,
@@ -46,6 +47,7 @@ import {
   NETWORK_CAPTURE_MARK_SCRIPT,
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkCaptureControlScript,
+  makeNetworkLogReadScript,
 } from "../src/utils/debugger/scripts/network-interceptor";
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
 import { BUNDLE_ID_MESSAGE } from "../src/utils/bundle-id";
@@ -2364,6 +2366,86 @@ describe("stop-all-simulator-servers", () => {
       expect(rt.paused).toBe(true);
     }
   );
+});
+
+describe("the tool-server's exit", () => {
+  /** What the exit runs in each app's JS runtime, as src/index.ts calls it. */
+  const exit = () => pauseJsCapturesOf(registry, undefined, { atExit: true });
+
+  /** Another tool-server process starts the app's capture in the same JS runtime. */
+  async function otherServerStarts(
+    rt: FakeRuntime
+  ): Promise<typeof import("../src/utils/debugger/scripts/network-interceptor")> {
+    vi.resetModules();
+    const other = await import("../src/utils/debugger/scripts/network-interceptor");
+    rt.evaluate(other.makeNetworkCaptureControlScript(false));
+    rt.evaluate(other.NETWORK_INTERCEPTOR_SCRIPT);
+    return other;
+  }
+
+  it("pauses and empties the JS log of an app no other tool-server captures", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    rt.send("/a");
+
+    await exit();
+
+    expect(rt.paused).toBe(true);
+    expect(await read(IOS_UDID)).not.toContain("rn-net-1");
+  });
+
+  it("leaves the capture as it is while another tool-server still captures the app", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    await otherServerStarts(rt);
+    rt.send("/a");
+
+    await exit();
+    rt.send("/b");
+
+    expect(rt.paused).toBe(false);
+    const text = await read(IOS_UDID);
+    expect(text).toContain("=== NETWORK LOGS (page 1/1, 2 total) ===");
+  });
+
+  it("keeps the log of an app it only stopped while another tool-server still reads it", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    await otherServerStarts(rt);
+    rt.send("/a");
+    await stop(IOS_UDID, APP);
+
+    await exit();
+
+    expect(await read(IOS_UDID)).toContain(
+      "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ==="
+    );
+  });
+
+  it("lets another tool-server's exit end the capture once stop-all-simulator-servers ended this one's", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    const other = await otherServerStarts(rt);
+    await stopAll([IOS_UDID]);
+    // The other tool-server captures again, then exits.
+    rt.evaluate(other.makeNetworkCaptureControlScript(false));
+    rt.send("/a");
+
+    rt.evaluate(other.NETWORK_CAPTURE_RELEASE_SCRIPT);
+
+    expect(rt.paused).toBe(true);
+    expect(JSON.parse(String(rt.evaluate(makeNetworkLogReadScript(0, 10, PORT))))).toMatchObject({
+      total: 0,
+    });
+  });
 });
 
 describe("a JS runtime of another app on the port", () => {

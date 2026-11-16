@@ -352,8 +352,9 @@ export function start(): void {
     await withCaptureSweep(undefined, { maxMs: EXIT_CAPTURE_WAIT_MS }, async () => {
       // The JS network interceptor lives in the app, so the dispose below alone
       // leaves it recording. Pause it and empty its log, as the native layers end
-      // their capture at their dispose. Each runtime gets at most 1 s.
-      await pauseJsCapturesOf(registry).catch(() => {});
+      // their capture at their dispose, unless another tool-server still captures
+      // the app there. Each runtime gets at most 1 s.
+      await pauseJsCapturesOf(registry, undefined, { atExit: true }).catch(() => {});
 
       // Dispose BEFORE recording toolserver:stop, so a crash escalating mid-teardown
       // is reflected in the stop event's reason instead of being lost behind an

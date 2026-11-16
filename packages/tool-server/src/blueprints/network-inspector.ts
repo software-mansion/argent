@@ -15,6 +15,7 @@ import {
 } from "./js-runtime-debugger";
 import {
   NETWORK_CAPTURE_END_SCRIPT,
+  NETWORK_CAPTURE_RELEASE_SCRIPT,
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkCaptureControlScript,
 } from "../utils/debugger/scripts/network-interceptor";
@@ -212,11 +213,13 @@ const PAUSE_BEFORE_FORGET_TIMEOUT_MS = 1_000;
  * recording, and the next start would list the old requests again. A runtime
  * that does not answer in time is left as it is, also one whose debugger is
  * still connecting, and so is the JS runtime of an app other than the entry's.
+ * With `atExit`, a capture that another tool-server still holds stays as it is.
  * Returns the payloads whose runtime answered the pause.
  */
 export async function pauseJsCapturesOf(
   registry: Pick<Registry, "getSnapshot" | "resolveService">,
-  devices?: readonly string[]
+  devices?: readonly string[],
+  { atExit = false }: { atExit?: boolean } = {}
 ): Promise<Set<string>> {
   const services = registry.getSnapshot().services;
   const paused = new Set<string>();
@@ -231,9 +234,12 @@ export async function pauseJsCapturesOf(
         // Another app's runtime on the port is left as it is, as network-capture-stop leaves it.
         const appId = dbg.runtimeApp?.appId;
         if (appId !== undefined && appId !== bundleId) return false;
-        await dbg.cdp.evaluate(NETWORK_CAPTURE_END_SCRIPT, {
-          timeout: PAUSE_BEFORE_FORGET_TIMEOUT_MS,
-        });
+        await dbg.cdp.evaluate(
+          atExit ? NETWORK_CAPTURE_RELEASE_SCRIPT : NETWORK_CAPTURE_END_SCRIPT,
+          {
+            timeout: PAUSE_BEFORE_FORGET_TIMEOUT_MS,
+          }
+        );
         return true;
       })();
       // The timeout counts from here, so it also covers a connect in flight.

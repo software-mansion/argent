@@ -190,7 +190,7 @@ describe("tool-server startup telemetry", () => {
     await vi.waitFor(() => {
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
-    expect(pauseJsCapturesOf).toHaveBeenCalledWith(registryMock);
+    expect(pauseJsCapturesOf).toHaveBeenCalledWith(registryMock, undefined, { atExit: true });
     expect(order).toEqual(["pause", "dispose"]);
   });
 
