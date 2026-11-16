@@ -4,7 +4,7 @@
  * 3 days, as a whole, and nothing else.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -145,5 +145,64 @@ describe("the cleanup in use", () => {
       } as never
     );
     expect(await deleteOldProfilerSessions(dir)).toEqual([]);
+  });
+
+  // macOS deletes a file in the temporary folder that no process used for about 3
+  // days, and it counts only the first read after a write as a use. A load that
+  // marked only the exports kept them, and macOS then deleted the metadata file
+  // alone: a later load gave a report without the saved fields, with no warning.
+  it("marks the metadata file of a loaded iOS or Mac app session as used", async () => {
+    const old = Date.now() - 4 * DAY;
+    const sid = id(old);
+    const hangs = join(dir, `native-profiler-${sid}_raw_hangs.xml`);
+    const metadata = join(dir, `native-profiler-${sid}.trace.metadata.json`);
+    await writeFile(hangs, "<trace-query-result><node></node></trace-query-result>");
+    await writeFile(
+      metadata,
+      JSON.stringify({
+        deviceId: "ios-sim",
+        wallClockStartMs: old,
+        stoppedAtMs: old + 60_000,
+        cpuFilterPid: null,
+        mallocStackLogging: null,
+        appSuspensions: null,
+        recordedMs: null,
+        appEndedDuringCapture: false,
+      })
+    );
+    for (const file of [hangs, metadata]) await utimes(file, old / 1000, old / 1000);
+
+    await profilerLoadTool.execute(
+      { session: await iosSession() } as never,
+      { mode: "load_native", session_id: sid, device_id: "ios-sim" } as never
+    );
+
+    const used = await stat(metadata);
+    expect(used.atimeMs).toBeGreaterThan(Date.now() - DAY);
+    expect(used.mtimeMs).toBeGreaterThan(Date.now() - DAY);
+  });
+
+  it("marks the metadata file of a loaded Android session as used", async () => {
+    const device = { id: "emulator-5554", platform: "android" as const, kind: "emulator" as const };
+    const android = (await nativeProfilerSessionBlueprint.factory({}, device, { device })).api;
+    const old = Date.now() - 4 * DAY;
+    const sid = id(old);
+    const pftrace = join(dir, `native-profiler-${sid}.pftrace`);
+    const metadata = `${pftrace}.metadata.json`;
+    await writeFile(pftrace, "x");
+    await writeFile(
+      metadata,
+      JSON.stringify({ platform: "android", appProcess: "com.example.app", wallClockStartMs: old })
+    );
+    for (const file of [pftrace, metadata]) await utimes(file, old / 1000, old / 1000);
+
+    await profilerLoadTool.execute(
+      { session: android } as never,
+      { mode: "load_native", session_id: sid, device_id: "emulator-5554" } as never
+    );
+
+    const used = await stat(metadata);
+    expect(used.atimeMs).toBeGreaterThan(Date.now() - DAY);
+    expect(used.mtimeMs).toBeGreaterThan(Date.now() - DAY);
   });
 });

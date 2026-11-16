@@ -21,8 +21,14 @@ import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { leaksWereRecorded } from "../native-profiler/platforms/ios";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
-import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
-import { readXctraceSessionMetadata } from "../../../utils/ios-profiler/session-metadata";
+import {
+  androidNativeProfilerMetadataPath,
+  readAndroidNativeProfilerMetadata,
+} from "../../../utils/android-profiler/session-metadata";
+import {
+  readXctraceSessionMetadata,
+  xctraceSessionMetadataPath,
+} from "../../../utils/ios-profiler/session-metadata";
 import {
   nativeRecording,
   pairProfilerSessions,
@@ -374,7 +380,8 @@ async function loadNativeSession(
         }
       );
     }
-    await markProfilerSessionUsed([pftrace]);
+    // The metadata file too: macOS counts only the first read of a file as a use.
+    await markProfilerSessionUsed([pftrace, androidNativeProfilerMetadataPath(pftrace)]);
     assertNoCaptureInFlight(api);
     api.traceFile = pftrace;
     api.exportedFiles = { pftrace };
@@ -438,8 +445,14 @@ async function loadNativeSession(
     );
   }
 
-  await markProfilerSessionUsed([cpuXml, hangsXml, leaksXml]);
   const traceFile = path.join(debugDir, `native-profiler-${sessionId}.trace`);
+  // The metadata file too: macOS counts only the first read of a file as a use.
+  await markProfilerSessionUsed([
+    cpuXml,
+    hangsXml,
+    leaksXml,
+    xctraceSessionMetadataPath(traceFile),
+  ]);
   // The raw_*.xml carry none of the capture's own fields. The stop saved them next
   // to the trace; a session saved before that has none, and its fields stay empty.
   const metadata = await readXctraceSessionMetadata(traceFile);

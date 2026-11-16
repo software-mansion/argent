@@ -26,7 +26,7 @@ const xctraceSessionMetadataSchema = z.object({
 
 export type XctraceSessionMetadata = z.infer<typeof xctraceSessionMetadataSchema>;
 
-function xctraceSessionMetadataPath(traceFile: string): string {
+export function xctraceSessionMetadataPath(traceFile: string): string {
   return `${traceFile}.metadata.json`;
 }
 
