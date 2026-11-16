@@ -1229,6 +1229,76 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
     });
 
+    it("says the gap once per start that found the app running, not at a later start while capture runs", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      await start();
+      expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid}; ${GAP})`);
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect((await readLog()).header).toBe(`macos-native: armed, 0 requests (pid ${pid})`);
+    });
+
+    it("says that capture is off when stop-simulator-server comes while a start reconnects to the app", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // A new tool-server meets the app paused, so the start waits for its handshake.
+      await registry.disposeService(macosAppRef(resolveDevice(DEVICE_ID)).urn);
+      process.kill(pid, "SIGSTOP");
+      let starting: Promise<Capture>;
+      try {
+        // The start waits up to 5 s for the paused app's handshake.
+        starting = start();
+        await new Promise((r) => setTimeout(r, 1_000));
+        await run("stop-simulator-server", { udid: DEVICE_ID });
+      } finally {
+        process.kill(pid, "SIGCONT");
+      }
+      expect((await starting).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED },
+      ]);
+      expect(await readLog()).toMatchObject({ started: false });
+    }, 20_000);
+
+    const NOT_CONNECTED =
+      "macos-native: not armed, 0 requests (the app is not connected; capture arms when argent starts the app or connects to it, as network-capture-start does)";
+
+    it("says no gap after a start that finds the app gone, when argent reached the app before any start", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // A new tool-server reaches the running app before capture is started.
+      await registry.disposeService(macosAppRef(resolveDevice(DEVICE_ID)).urn);
+      await (await macosApp()).call("Echo");
+      await quit(pid);
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      expect((await readLog()).header).toBe(NOT_CONNECTED);
+    });
+
+    it("says no gap after a start that finds the app gone, when a stop came after a start that found it running", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // The gap of this start is not read before the stop.
+      await start();
+      await stop();
+      await quit(pid);
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      expect((await readLog()).header).toBe(NOT_CONNECTED);
+    });
+
+    it("arms and stops an app that acknowledges Network.enable and Network.disable after 4 s", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--cdp-delay=4000"] });
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect((await stop()).layers).toEqual([{ layer: "macos-native", armed: false, total: 0 }]);
+    }, 30_000);
+
+    it("names native-network-logs for an unknown macos- id after a stop", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await stop();
+      expect(await details("macos-0000-999999")).toBe(
+        "Request macos-0000-999999 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
+      );
+    });
+
     it("refuses another app's bundle id", async () => {
       const refusal = async (tool: string) =>
         codeOf(
