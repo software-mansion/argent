@@ -1,12 +1,13 @@
 /**
- * Runs one trusted local JavaScript file in a fresh Node.js child process.
+ * Runs one trusted local JavaScript or TypeScript file in a fresh Node.js child
+ * process.
  *
  * The child is a *reliability* boundary, not a security one: a script is as
  * trusted as a local npm script, and all the process buys is that an infinite
  * loop, a heap exhaustion or a `process.exit` cannot take the server down.
  */
 
-import { fork, spawn, type ChildProcess, type ForkOptions } from "node:child_process";
+import { execFile, fork, spawn, type ChildProcess, type ForkOptions } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -57,6 +58,8 @@ const FORCE_GRACE_MS = 500;
 const QUEUE_DEPTH_LIMIT = 32;
 const QUEUE_WAIT_REPORT_MS = 5_000;
 const MAX_BUFFERED_LINE_CHARS = 8 * 1024;
+/** Far above a Node start, so a loaded host does not turn the answer into "unknown". */
+const TYPE_STRIPPING_PROBE_TIMEOUT_MS = 10_000;
 /**
  * V8's heap-exhaustion banner. Coarse on purpose: the wording is not a
  * stability contract, and an unrecognized abort degrades to the signal report
@@ -299,6 +302,7 @@ export class FlowScriptExecutor {
   private running = 0;
   private readonly waiting: QueueWaiter[] = [];
   private concurrencyLimit: number | undefined;
+  private typeStripping: Promise<boolean | undefined> | undefined;
 
   constructor(private readonly options: FlowScriptExecutorOptions = {}) {}
 
@@ -344,6 +348,25 @@ export class FlowScriptExecutor {
 
   get activeCount(): number {
     return this.running;
+  }
+
+  /**
+   * Whether a script process started here runs a TypeScript file: `true`,
+   * `false`, or `undefined` when the question could not be asked.
+   *
+   * Asked of a child, because neither thing this process knows answers it. The
+   * Node version does not: a build configured `--without-amaro` — the `nodejs`
+   * package of Debian and Ubuntu — carries a version that strips types and
+   * cannot. This process's own `process.features.typescript` does not either:
+   * a script's process gets its own `execArgv` and no `NODE_OPTIONS`, so a flag
+   * that turned stripping on or off here says nothing about it.
+   *
+   * Asked once: the binary and the way a script is started are fixed for the
+   * life of the process.
+   */
+  stripsTypes(): Promise<boolean | undefined> {
+    this.typeStripping ??= probeTypeStripping();
+    return this.typeStripping;
   }
 
   async execute(request: FlowScriptRequest): Promise<FlowScriptResult> {
@@ -512,11 +535,17 @@ export class FlowScriptExecutor {
         // The runner rides in as a preload, not as the entry module, so the
         // *script* is what `process.argv[1]`/`require.main` name and an "am I
         // the main module?" guard runs its body. Node awaits an `--import`
-        // module before the entry, which leaves room for the handshake.
+        // module before the entry, which leaves room for the handshake. The
+        // preload also sends a CommonJS entry through the ESM loader, which
+        // leaves `module.id` and `module.parent` unlike a main module's; the
+        // runner's `claimMainModuleIdentity` puts those back. A CommonJS `.ts`
+        // entry also gets a reduced `require` there, so the runner loads that
+        // one itself: see its `loadEntryAsPlainNodeDoes`.
         execArgv: [
           `--max-old-space-size=${bounds.heapLimitMb}`,
           "--import",
           pathToFileURL(runnerPath).href,
+          ...typelessPackageWarningFlags(),
         ],
         // Index 3 is a sink, and the protocol channel sits above it. The
         // channel is inherited by the script, Node parses it inside its own
@@ -1062,6 +1091,26 @@ function realPathOrSelf(candidate: string): string {
 }
 
 /**
+ * The flag that silences one Node warning by its code. A `.js` or `.ts` script
+ * with `import` in a project whose package.json sets no `type` — the ordinary
+ * React Native layout — makes Node print it on every run, into the step's log,
+ * and what it advises is setting `type` on the whole project for the sake of
+ * one e2e script.
+ *
+ * Only where Node knows the flag. `--disable-warning` arrived in 20.11 and
+ * 21.3, and Node exits on an option it does not know, so on 21.0 to 21.2 —
+ * which the package's `engines` admit — the flag would fail every script step
+ * before the runner started. Those releases never read a `.js` file's syntax,
+ * so they have no such warning to silence. Asked of the binary rather than of
+ * a version table: the script's process is this same binary.
+ */
+function typelessPackageWarningFlags(): string[] {
+  return process.allowedNodeEnvironmentFlags.has("--disable-warning")
+    ? ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON"]
+    : [];
+}
+
+/**
  * The three layouts the runner can be in — the published bundle (beside
  * `tool-server.cjs` in `dist`), the compiled package and the workspace source
  * — are all `path.join(__dirname, name)`. The tool-server package is CommonJS,
@@ -1077,6 +1126,42 @@ function resolveRunnerPath(runnerDir: string | undefined): string {
     );
   }
   return runner;
+}
+
+/**
+ * `process.features.typescript`, read in a process started the way a script's
+ * is: this binary, the environment {@link buildChildEnv} leaves, and none of
+ * this process's own flags. Any failure to ask is `undefined`, never `false`:
+ * a refusal has to rest on an answer.
+ */
+function probeTypeStripping(): Promise<boolean | undefined> {
+  return new Promise((resolve) => {
+    let env: NodeJS.ProcessEnv;
+    try {
+      env = buildChildEnv(undefined);
+    } catch {
+      resolve(undefined);
+      return;
+    }
+    // No runner is preloaded here, so nothing would read the activation flag.
+    delete env[RUNNER_ACTIVATION_ENV];
+    try {
+      execFile(
+        process.execPath,
+        ["-p", "process.features.typescript"],
+        { env, timeout: TYPE_STRIPPING_PROBE_TIMEOUT_MS, windowsHide: true },
+        (err, stdout) => {
+          const answer = err ? "" : stdout.trim();
+          if (answer === "strip" || answer === "transform") resolve(true);
+          // `undefined` is a release older than the property itself.
+          else if (answer === "false" || answer === "undefined") resolve(false);
+          else resolve(undefined);
+        }
+      );
+    } catch {
+      resolve(undefined);
+    }
+  });
 }
 
 function buildChildEnv(overrides: Record<string, string> | undefined): NodeJS.ProcessEnv {
