@@ -42,6 +42,7 @@
     "ffmpeg",
     "ffprobe",
     "locale",
+    "mkfifo",
     "netstat",
     "pgrep",
     "pkill",
