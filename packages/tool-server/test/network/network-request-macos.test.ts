@@ -3,6 +3,12 @@ import { findMacosNativeRecord, hasMacosNetworkCapture } from "../../src/bluepri
 import type { IosNetworkRecords } from "../../src/blueprints/ios-network-records";
 import type { NativeNetworkBody, NativeNetworkRecord } from "../../src/utils/native-network-record";
 import { networkRequestTool } from "../../src/tools/network/network-request";
+import { canonicalDeviceId } from "../../src/utils/debugger/device-alias";
+import {
+  forgetJsCapturesOf,
+  jsCapturePayload,
+  setJsCapture,
+} from "../../src/blueprints/network-inspector";
 
 /**
  * How view-network-request-details routes a macos- ID and the IDs it gets under
@@ -120,6 +126,25 @@ describe("view-network-request-details: Mac app IDs", () => {
     expect(await details(ID)).toBe(
       `Request ${ID} not found. Native network capture is not started, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then list the requests with native-network-logs.`
     );
+  });
+
+  it("answers a malformed macos- ID under an iOS UDID from the native layer, not the JS layer", async () => {
+    const UDID = "6F9619FF-8B86-D011-B42D-00C04FC964FF";
+    // A JS capture on the device would give the JS layer's debugger to any other ID.
+    setJsCapture(jsCapturePayload(8081, canonicalDeviceId(UDID)!), {
+      bundleId: "com.example.demo",
+      intent: "started",
+      installed: true,
+    });
+    try {
+      const params = { device_id: UDID, requestId: "macos-1a2b", includeBody: true } as never;
+      expect(networkRequestTool.services!(params)).toEqual({});
+      expect(await details("macos-1a2b", UDID)).toBe(
+        "Request macos-1a2b not found. Use native-network-logs to list the requests the Mac app native layer recorded."
+      );
+    } finally {
+      forgetJsCapturesOf();
+    }
   });
 
   it("answers an ID that no native layer issued under a Mac app id without a debugger", async () => {
