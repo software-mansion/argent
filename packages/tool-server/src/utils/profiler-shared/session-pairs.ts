@@ -93,7 +93,7 @@ export async function nativeRecording(
  * Whether two ids name one device. A provider's device has an `ext:` id, which
  * the native session saves, and the serial or UDID that Metro and adb know it by.
  */
-function sameDevice(a: string, b: string): boolean {
+export function sameDevice(a: string, b: string): boolean {
   return a === b || externalNativeId(a) === b || a === externalNativeId(b);
 }
 

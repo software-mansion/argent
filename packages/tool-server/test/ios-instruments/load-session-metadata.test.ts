@@ -167,6 +167,25 @@ describe("profiler-load restores an xctrace session's own fields", () => {
     expect(reportFile).toBe(join(dir, `native-profiler-${SESSION_ID}-report.md`));
   });
 
+  it("a session loaded with another device's device_id leaves its report file as it is", async () => {
+    const live = await stoppedLiveSession();
+    const { reportFile: liveReportFile } = await analyzeNativeProfilerIos(live);
+    const liveReport = await readFile(liveReportFile!, "utf8");
+
+    const device = { id: "ios-sim", platform: "ios" as const, kind: "simulator" as const };
+    const ios = (await nativeProfilerSessionBlueprint.factory({}, device, { device })).api;
+    await profilerLoadTool.execute(
+      { session: ios } as never,
+      { mode: "load_native", session_id: SESSION_ID, device_id: "ios-sim" } as never
+    );
+    const { report, reportFile } = await analyzeNativeProfilerIos(ios);
+
+    // Analyze on an iOS simulator gives another report of the Mac app's trace.
+    expect(report).toContain("# iOS Instruments Analysis");
+    expect(reportFile).toBeNull();
+    expect(await readFile(liveReportFile!, "utf8")).toBe(liveReport);
+  });
+
   it("a reloaded Mac app session reports its leaks as the live session did", async () => {
     // The Time Profiler template on Xcode 26.6: a leaks export with no Leaks detail.
     await writeFile(

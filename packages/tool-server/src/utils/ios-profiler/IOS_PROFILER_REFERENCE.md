@@ -113,7 +113,7 @@ All three are wired through `native-profiler-session` (per-device service, keyed
 
 ### `native-profiler-analyze`
 
-Runs the post-processing pipeline, caches the parsed data on the session (so `profiler-stack-query` can reuse it), and renders the markdown report. Returns `{ report, reportFile, bottlenecksTotal }`. The full report is also written to `<base>-report.md` so the agent can re-read it later without re-analysing. A session loaded from disk without its `<trace>.metadata.json` gets no report file, so the live report stays: `reportFile` is null.
+Runs the post-processing pipeline, caches the parsed data on the session (so `profiler-stack-query` can reuse it), and renders the markdown report. Returns `{ report, reportFile, bottlenecksTotal }`. The full report is also written to `<base>-report.md` so the agent can re-read it later without re-analysing. A session loaded from disk without its `<trace>.metadata.json`, or loaded with the `device_id` of another device than the one in that file, gets no report file, so the live report stays: `reportFile` is null.
 
 ---
 

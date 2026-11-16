@@ -33,6 +33,7 @@ import {
   nativeRecording,
   pairProfilerSessions,
   reactRecording,
+  sameDevice,
   sameRunSessions,
   type NativeTrace,
 } from "../../../utils/profiler-shared/session-pairs";
@@ -460,6 +461,10 @@ async function loadNativeSession(
   const appSuspensions = metadata?.appSuspensions ?? null;
   const mallocStackLogging = metadata?.mallocStackLogging ?? null;
   const wallClockStartMs = metadata?.wallClockStartMs ?? null;
+  // A session that another device recorded keeps its report file: on this device,
+  // for example an iOS simulator for a Mac app's trace, analyze gives another title,
+  // other hangs and other notes.
+  const ownTrace = !metadata?.deviceId || sameDevice(metadata.deviceId, api.deviceId);
   const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files, {
     cpuFilterPid,
     appSuspensions,
@@ -482,9 +487,10 @@ async function loadNativeSession(
   api.exportedFiles = files;
   // Replace every per-capture field an earlier live capture left behind, or analyze
   // attributes them to the loaded trace: mislabeled capture mode, samples dropped
-  // by a stale CPU filter PID, and a stale-trace note. The trace is this session's
-  // own, so the report names it. Without the saved start time, analyze writes no
-  // report .md: it would replace the live report with one that lacks those fields.
+  // by a stale CPU filter PID, and a stale-trace note. The trace of a session of
+  // this device is its own, so the report names it. Without the saved start time,
+  // or without the trace, analyze writes no report .md: it would replace the live
+  // report with one that lacks those fields.
   api.mallocStackLogging = mallocStackLogging;
   api.cpuFilterPid = cpuFilterPid;
   api.appEndedDuringCapture = metadata?.appEndedDuringCapture ?? false;
@@ -492,7 +498,7 @@ async function loadNativeSession(
   api.recordedMs = metadata?.recordedMs ?? null;
   api.appSuspensions = appSuspensions;
   api.wallClockStartMs = wallClockStartMs;
-  api.traceFile = traceFile;
+  api.traceFile = ownTrace ? traceFile : null;
 
   const lines: string[] = [
     `Loaded native profiler session \`${sessionId}\`.`,
