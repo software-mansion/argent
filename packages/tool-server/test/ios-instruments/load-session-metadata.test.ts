@@ -160,7 +160,7 @@ describe("profiler-load restores an xctrace session's own fields", () => {
     expect(loaded.parsedData?.uiHangs[0]?.suspendedMs).toBeGreaterThan(0);
     const { report: loadedReport, reportFile } = await analyzeNativeProfilerIos(loaded);
 
-    expect(liveReport).toContain("not counting 6300ms when the app was suspended");
+    expect(liveReport).toContain("6300ms of it while the app was suspended");
     expect(withoutAnalyzedTime(loadedReport)).toBe(withoutAnalyzedTime(liveReport));
     // As exact as the live report, so it may take its place.
     expect(reportFile).toBe(liveReportFile);
