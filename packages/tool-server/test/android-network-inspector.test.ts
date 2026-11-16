@@ -4633,6 +4633,35 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     });
   });
 
+  it("forgets a stop the agent did not acknowledge once it acknowledges the Network.disable that follows its late Network.enable reply", async () => {
+    device.agentOptions = { unanswered: ["Network.enable", "Network.disable"] };
+    const api = await createInspector();
+    expect(await startUnarmed(api)).toMatchObject({ armed: false });
+    const agent = agents[0]!;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+    vi.useRealTimers();
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
+
+    // The agent answers the enable at last, and the Network.disable its reply brings.
+    agent.options.unanswered!.length = 0;
+    agent.answer("Network.enable");
+    await vi.waitFor(() =>
+      expect(agent.received).toEqual([
+        "Control",
+        "Network.enable",
+        "Network.disable",
+        "Network.disable",
+      ])
+    );
+
+    await vi.waitFor(() => expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]));
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+  });
+
   it("gives the plain stopped note at a launch when the agent acknowledges a later Network.disable during the launch's process read", async () => {
     const { api, agent } = await stopUnacknowledged();
     const processRead = holdOnce();
