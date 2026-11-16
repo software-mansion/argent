@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import semver from "semver";
 import { describe, expect, it } from "vitest";
 
 describe("package manifest", () => {
@@ -13,6 +14,30 @@ describe("package manifest", () => {
     expect(pkg.files).toContain("dylibs/");
     expect(pkg.files).toContain("bin/");
     expect(pkg.files).toContain("skills/");
+  });
+
+  it("admits only Node releases that run TypeScript and have zstd, in both published packages", () => {
+    const engines = (dir: string) =>
+      (
+        JSON.parse(
+          fs.readFileSync(
+            path.resolve(import.meta.dirname, "..", "..", dir, "package.json"),
+            "utf8"
+          )
+        ) as { engines: { node: string } }
+      ).engines.node;
+    const range = engines("argent");
+
+    expect(engines("argent-alias")).toBe(range);
+    // Node runs TypeScript with no flag from 22.18.0 and 23.6.0, which a
+    // `script:` step of an e2e test needs. zstd in node:zlib landed in 22.15.0
+    // and 23.8.0.
+    for (const v of ["22.18.0", "22.99.0", "23.8.0", "24.0.0", "26.0.0"]) {
+      expect(semver.satisfies(v, range), v).toBe(true);
+    }
+    for (const v of ["20.19.0", "22.14.0", "22.17.1", "23.0.0", "23.7.0"]) {
+      expect(semver.satisfies(v, range), v).toBe(false);
+    }
   });
 
   it("exports the client and keeps deep paths resolvable", () => {
@@ -35,7 +60,6 @@ describe("package manifest", () => {
     // lists, so each of these needs its own.
     const extensionless: Record<string, string> = {
       "assets/manifest": "assets/manifest.json",
-      "assets/trace-processor/engine": "assets/trace-processor/engine.mjs",
       "assets/trace-processor/engine_bundle.node": "assets/trace-processor/engine_bundle.node.js",
       "bin/argent-simulator-server": "bin/argent-simulator-server.cjs",
       "dist/bundled-paths": "dist/bundled-paths.js",

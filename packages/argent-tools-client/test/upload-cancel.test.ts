@@ -9,9 +9,9 @@ vi.mock("@argent/archive", async (importOriginal) => {
   const real = await importOriginal<typeof import("@argent/archive")>();
   return {
     ...real,
-    createTarGzFile: async (...args: Parameters<typeof real.createTarGzFile>) => {
-      afterTar.signal = args[2];
-      await real.createTarGzFile(...args);
+    createArchiveFile: async (...args: Parameters<typeof real.createArchiveFile>) => {
+      afterTar.signal = args[3];
+      await real.createArchiveFile(...args);
       afterTar.run();
     },
   };
