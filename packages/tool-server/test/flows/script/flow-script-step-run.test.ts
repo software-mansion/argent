@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
 import { stepRequiresDevice } from "../../../src/tools/flows/flow-device";
+import { FlowScriptExecutor } from "../../../src/tools/flows/script/flow-script-executor";
 import { hostRunsTypeScript } from "../../helpers/host-typescript";
 
 /**
@@ -15,6 +16,23 @@ import { hostRunsTypeScript } from "../../helpers/host-typescript";
  */
 
 vi.setConfig({ testTimeout: 30_000 });
+
+/**
+ * The executor a run uses, when a group of tests puts its own in place of the
+ * shared one. Every other test gets the shared one, as the product does.
+ */
+const executorInPlace = vi.hoisted(() => ({ current: undefined as unknown }));
+
+vi.mock("../../../src/tools/flows/script/flow-script-executor", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../src/tools/flows/script/flow-script-executor")>();
+  return {
+    ...actual,
+    flowScriptExecutor: () =>
+      (executorInPlace.current as InstanceType<typeof actual.FlowScriptExecutor> | undefined) ??
+      actual.flowScriptExecutor(),
+  };
+});
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 
@@ -830,85 +848,6 @@ describe("a TypeScript script step", () => {
     expect(result.steps[0]!.reason).toContain("does not provide an export named 'seedRow'");
   });
 
-  for (const ext of ["mts", "ts"]) {
-    it.runIf(!stripsTypes)(
-      `refuses a .${ext} script on a Node that cannot run it, before any step`,
-      async () => {
-        const marker = path.join(root, "ran.txt");
-        await write(
-          "scripts/before.mjs",
-          `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\n`
-        );
-        await write(`scripts/seed.${ext}`, `const seeded: boolean = true;\nconsole.log(seeded);\n`);
-        await flow(
-          "oldnode",
-          `steps:\n  - script: { path: ../../scripts/before.mjs }\n  - script: { path: ../../scripts/seed.${ext} }\n`
-        );
-
-        const refused = await runFlow("oldnode").then(
-          () => "",
-          (thrown: Error) => thrown.message
-        );
-
-        expect(refused).toContain(
-          `E2E test "oldnode" was not run. Script "../../scripts/seed.${ext}" is TypeScript, and the tool-server runs on `
-        );
-        // The JavaScript spelling with the same module type: `.mjs` would
-        // break a `.ts` script that is CommonJS.
-        expect(refused).toContain(
-          ext === "mts"
-            ? "or use JavaScript (.mjs) for the script and for the files it imports."
-            : "or use JavaScript (.js, or .mjs for an ES module) for the script and for the files it imports."
-        );
-        expect(fsSync.existsSync(marker)).toBe(false);
-      }
-    );
-  }
-
-  it.runIf(!stripsTypes)(
-    "errors on TypeScript a .mjs script imports, as the host's limit",
-    async () => {
-      await write("scripts/helpers.mts", "export const orderId: number = 4711;\n");
-      await write(
-        "scripts/entry.mjs",
-        `import { orderId } from "./helpers.mts";\nconsole.log(orderId);\n`
-      );
-      await flow("entry", "steps:\n  - script: { path: ../../scripts/entry.mjs }\n");
-
-      const { result } = await runFlow("entry");
-
-      expect(result.steps[0]).toMatchObject({ kind: "script", status: "error" });
-      expect(result.steps[0]!.reason).toContain(
-        'Script "../../scripts/entry.mjs" loads the TypeScript file "scripts/helpers.mts", and the tool-server runs on '
-      );
-    }
-  );
-
-  it.runIf(!stripsTypes)(
-    "errors on TypeScript a CommonJS script requires, as the host's limit",
-    async () => {
-      // No loader refuses the extension here: Node compiles the file as
-      // JavaScript and stops at its first type.
-      await write("package.json", `{ "type": "commonjs" }`);
-      await write(
-        "scripts/helpers.ts",
-        "const orderId: number = 4711;\nmodule.exports = orderId;\n"
-      );
-      await write("scripts/entry.js", `console.log(require("./helpers.ts"));\n`);
-      await flow("requires", "steps:\n  - script: { path: ../../scripts/entry.js }\n");
-
-      const { result } = await runFlow("requires");
-
-      expect(result.steps[0]).toMatchObject({ kind: "script", status: "error" });
-      expect(result.steps[0]!.reason).toContain(
-        'Script "../../scripts/entry.js" loads the TypeScript file "scripts/helpers.ts", and the tool-server runs on '
-      );
-      expect(result.steps[0]!.reason).toContain(
-        "or use JavaScript (.js, or .mjs for an ES module) for the script"
-      );
-    }
-  );
-
   // Where Node cannot run it, the run is refused before the file is looked for.
   it.runIf(stripsTypes)("reports a missing TypeScript file as missing", async () => {
     await flow("gonets", "steps:\n  - script: { path: ../../scripts/gone.mts }\n");
@@ -917,6 +856,93 @@ describe("a TypeScript script step", () => {
 
     expect(result.steps[0]).toMatchObject({ status: "fail", kind: "script" });
     expect(result.steps[0]!.reason).toContain('Script "../../scripts/gone.mts" does not exist');
+  });
+});
+
+/**
+ * A host whose Node has no TypeScript support: the `nodejs` package of Debian
+ * and Ubuntu, or a Node older than Argent supports. Real child processes, so
+ * the refusal is read from what Node itself answers and fails with.
+ *
+ * On a Node that runs TypeScript, `--no-experimental-strip-types` makes a
+ * script's process one that cannot, which is the same state by Node's own
+ * switch. On a Node that cannot, there is nothing to turn off.
+ */
+describe("a TypeScript script step on a host without TypeScript support", () => {
+  beforeAll(() => {
+    executorInPlace.current = new FlowScriptExecutor({
+      nodeOptions: hostRunsTypeScript ? ["--no-experimental-strip-types"] : [],
+    });
+  });
+  afterAll(() => {
+    executorInPlace.current = undefined;
+  });
+
+  for (const ext of ["mts", "ts"]) {
+    it(`refuses a .${ext} script on a Node that cannot run it, before any step`, async () => {
+      const marker = path.join(root, "ran.txt");
+      await write(
+        "scripts/before.mjs",
+        `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\n`
+      );
+      await write(`scripts/seed.${ext}`, `const seeded: boolean = true;\nconsole.log(seeded);\n`);
+      await flow(
+        "oldnode",
+        `steps:\n  - script: { path: ../../scripts/before.mjs }\n  - script: { path: ../../scripts/seed.${ext} }\n`
+      );
+
+      const refused = await runFlow("oldnode").then(
+        () => "",
+        (thrown: Error) => thrown.message
+      );
+
+      expect(refused).toContain(
+        `E2E test "oldnode" was not run. Script "../../scripts/seed.${ext}" is TypeScript, and the tool-server runs on `
+      );
+      // The JavaScript spelling with the same module type: `.mjs` would
+      // break a `.ts` script that is CommonJS.
+      expect(refused).toContain(
+        ext === "mts"
+          ? "or use JavaScript (.mjs) for the script and for the files it imports."
+          : "or use JavaScript (.js, or .mjs for an ES module) for the script and for the files it imports."
+      );
+      expect(fsSync.existsSync(marker)).toBe(false);
+    });
+  }
+
+  it("errors on TypeScript a .mjs script imports, as the host's limit", async () => {
+    await write("scripts/helpers.mts", "export const orderId: number = 4711;\n");
+    await write(
+      "scripts/entry.mjs",
+      `import { orderId } from "./helpers.mts";\nconsole.log(orderId);\n`
+    );
+    await flow("entry", "steps:\n  - script: { path: ../../scripts/entry.mjs }\n");
+
+    const { result } = await runFlow("entry");
+
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "error" });
+    expect(result.steps[0]!.reason).toContain(
+      'Script "../../scripts/entry.mjs" loads the TypeScript file "scripts/helpers.mts", and the tool-server runs on '
+    );
+  });
+
+  it("errors on TypeScript a CommonJS script requires, as the host's limit", async () => {
+    // No loader refuses the extension here: Node compiles the file as
+    // JavaScript and stops at its first type.
+    await write("package.json", `{ "type": "commonjs" }`);
+    await write("scripts/helpers.ts", "const orderId: number = 4711;\nmodule.exports = orderId;\n");
+    await write("scripts/entry.js", `console.log(require("./helpers.ts"));\n`);
+    await flow("requires", "steps:\n  - script: { path: ../../scripts/entry.js }\n");
+
+    const { result } = await runFlow("requires");
+
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "error" });
+    expect(result.steps[0]!.reason).toContain(
+      'Script "../../scripts/entry.js" loads the TypeScript file "scripts/helpers.ts", and the tool-server runs on '
+    );
+    expect(result.steps[0]!.reason).toContain(
+      "or use JavaScript (.js, or .mjs for an ES module) for the script"
+    );
   });
 });
 

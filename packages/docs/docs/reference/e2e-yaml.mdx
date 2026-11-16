@@ -500,7 +500,7 @@ Use the `.mjs` or `.mts` extension for a script that must behave the same in eve
 
 Node runs a `.ts` or `.mts` script without a build step. Node removes the type annotations and runs the code that remains. Argent adds no compiler.
 
-Each Node version that Argent supports runs TypeScript, but the Node build must include TypeScript support. The `nodejs` package of Debian and of Ubuntu does not include it. On such a host, use a Node build from nodejs.org.
+Each Node version that Argent supports runs TypeScript. The Node build must also include TypeScript support. The `nodejs` package of Debian and of Ubuntu does not include it. On such a host, use a Node build from nodejs.org.
 
 A script that imports a TypeScript file has the same requirement, also when the script is an `.mjs` or `.js` file.
 
