@@ -620,6 +620,8 @@ describe("selectTarget on a Mac app id", () => {
       "No JS runtime of the Mac app com.example.app is connected to Metro on port 8081. " +
         `Metro lists: Mac app com.example.other (${other.reactNative!.logicalDeviceId}).`
     );
+    // The usual cause: the app quit, crashed or was not started yet.
+    expect(err.message).toContain("If the app does not run, start it (launch-app)");
     expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
   });
 

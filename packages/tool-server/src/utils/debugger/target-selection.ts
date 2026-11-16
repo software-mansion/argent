@@ -86,9 +86,10 @@ function macosAppTargets(pool: CDPTarget[], bundleId: string, port: number): CDP
   throw new FailureError(
     `No JS runtime of the Mac app ${bundleId} is connected to Metro on port ${port}. ` +
       `Metro lists: ${[...devices.values()].join(", ")}. ` +
-      `The app must be a Debug build of react-native-macos 0.76 or later that loads its ` +
-      `bundle from this Metro; a Release build has no JS debugger. If the app uses another ` +
-      `Metro, pass that port.`,
+      `If the app does not run, start it (launch-app), wait a few seconds for the bundle ` +
+      `to load, then retry. Otherwise the app must be a Debug build of react-native-macos ` +
+      `0.76 or later that loads its bundle from this Metro; a Release build has no JS ` +
+      `debugger. If the app uses another Metro, pass that port.`,
     {
       error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
       failure_stage: "debugger_select_target",
