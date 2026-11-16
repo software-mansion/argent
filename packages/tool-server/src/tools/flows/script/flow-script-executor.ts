@@ -538,7 +538,9 @@ export class FlowScriptExecutor {
         // module before the entry, which leaves room for the handshake. The
         // preload also sends a CommonJS entry through the ESM loader, which
         // leaves `module.id` and `module.parent` unlike a main module's; the
-        // runner's `claimMainModuleIdentity` puts those back.
+        // runner's `claimMainModuleIdentity` puts those back. A CommonJS `.ts`
+        // entry also gets a reduced `require` there, so the runner loads that
+        // one itself: see its `loadEntryAsPlainNodeDoes`.
         execArgv: [
           `--max-old-space-size=${bounds.heapLimitMb}`,
           "--import",

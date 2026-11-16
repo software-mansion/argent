@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import { Module } from "node:module";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, Worker } from "node:worker_threads";
 
@@ -22,6 +23,7 @@ let finished = false;
 let maxOutputBytes = 0;
 
 let probing = false;
+let entryThrew = false;
 
 let idleResources = [];
 
@@ -66,11 +68,6 @@ const encodeJson = JSON.stringify;
 const decodeJson = JSON.parse;
 
 const runnerListeners = [];
-
-if (isMainThread && process.env[ACTIVATION_ENV] === "1") {
-  delete process.env[ACTIVATION_ENV];
-  await prepare();
-}
 
 async function prepare() {
   const raw = await nextRequest();
@@ -131,7 +128,8 @@ async function prepare() {
   });
 
   closeChannelToScript();
-  claimMainModuleIdentity(request.scriptUrl);
+  const commonJsLoaderEntry = entryForCommonJsLoader(request.scriptUrl);
+  if (commonJsLoaderEntry === undefined) claimMainModuleIdentity(request.scriptUrl);
 
   // Registered here rather than at module scope: Node references the IPC
   // channel while a `message` or `disconnect` listener exists, and in the
@@ -154,6 +152,8 @@ async function prepare() {
   // Read last, so it is the loop as the script inherits it. Node awaits this
   // module before it loads the entry, so there is no later point that holds.
   idleResources = process.getActiveResourcesInfo();
+
+  if (commonJsLoaderEntry !== undefined) return loadEntryAsPlainNodeDoes(commonJsLoaderEntry);
 }
 
 /**
@@ -212,7 +212,81 @@ function reportWhenEntrySettled(scriptUrl) {
         : { type: "result", outputJson: encoded.json }
     );
   };
-  import(scriptUrl).then(report, report);
+  // An entry that threw in `loadEntryAsPlainNodeDoes` left no module behind, so
+  // an import here would run the script a second time.
+  (entryThrew ? Promise.resolve() : import(scriptUrl)).then(report, report);
+}
+
+/**
+ * The path of a `.ts` entry that Node may run as CommonJS, which this preload
+ * then loads itself (see {@link loadEntryAsPlainNodeDoes}); undefined for every
+ * other entry.
+ *
+ * `.mts` cannot be CommonJS, and neither can a `.ts` file under
+ * `"type": "module"`. A `.js` entry stays with Node: its `require` is whole
+ * either way, and `claimMainModuleIdentity` covers what differs.
+ */
+function entryForCommonJsLoader(scriptUrl) {
+  if (typeof Module._load !== "function") return undefined;
+  let entryPath;
+  try {
+    entryPath = fileURLToPath(scriptUrl);
+  } catch {
+    return undefined;
+  }
+  if (!entryPath.endsWith(".ts")) return undefined;
+  return nearestPackageType(entryPath) === "module" ? undefined : entryPath;
+}
+
+/**
+ * The `type` of the `package.json` nearest to `file`, as Node looks it up: the
+ * first one found going up, and never past a `node_modules` directory. A file
+ * that will not read or parse counts as no answer: Node then decides, and
+ * reports that file itself.
+ */
+function nearestPackageType(file) {
+  let dir = path.dirname(file);
+  for (;;) {
+    if (path.basename(dir) === "node_modules") return undefined;
+    try {
+      return decodeJson(fs.readFileSync(path.join(dir, "package.json"), "utf8"))?.type;
+    } catch (err) {
+      if (err?.code !== "ENOENT") return undefined;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+/**
+ * Loads the entry through the CommonJS loader, which is where plain `node`
+ * starts a `.ts` file outside `"type": "module"`. Node decides the module type
+ * there as it does with no preload: a file with ES module syntax goes on to
+ * the ESM loader, and anything else runs as CommonJS, as the main module.
+ *
+ * Left to Node, the `--import` that carries this preload sends the entry
+ * through the ESM loader instead, and on Node 22, 24.0 to 24.17 and 25 that
+ * loader gives a CommonJS TypeScript file a reduced `require`: no
+ * `require.cache`, no `require.extensions`, and an undefined `module.parent`
+ * in every module the script loads. Node still imports the entry after this
+ * preload, and finds the module this call left in its cache, so the script
+ * runs once.
+ *
+ * A script that throws leaves no module in that cache, and Node would run it
+ * again. So the preload never settles, which keeps Node from the entry, and
+ * the error goes where plain `node` sends it: to `uncaughtException`.
+ */
+function loadEntryAsPlainNodeDoes(entryPath) {
+  try {
+    Module._load(entryPath, null, true);
+  } catch (err) {
+    entryThrew = true;
+    queueMicrotask(() => {
+      throw err;
+    });
+    return never();
+  }
 }
 
 /**
@@ -234,7 +308,9 @@ function reportWhenEntrySettled(scriptUrl) {
  * unless the script calls `createRequire` on its own path first, whose hidden
  * parent module then carries the entry's identity, which is what it stands for.
  *
- * `.mjs` and `.mts` are skipped: neither can be CommonJS.
+ * `.mjs` and `.mts` are skipped: neither can be CommonJS. A `.ts` entry that
+ * may be CommonJS does not come here at all: `loadEntryAsPlainNodeDoes` makes
+ * it the main module the way Node does.
  */
 function claimMainModuleIdentity(scriptUrl) {
   let entryPath;
@@ -845,4 +921,11 @@ function sendToParent(message, callback) {
   } finally {
     runnerIsSending = false;
   }
+}
+
+// Last in the file: `prepare` may never settle, and a handler that runs while
+// this module is parked there reads the constants declared above.
+if (isMainThread && process.env[ACTIVATION_ENV] === "1") {
+  delete process.env[ACTIVATION_ENV];
+  await prepare();
 }

@@ -558,6 +558,78 @@ describe("a script whose module type the project decides", () => {
         expect(log).toContain("helper true,false");
       });
 
+      for (const type of ["commonjs", undefined]) {
+        const where = type === undefined ? "no type" : `type: ${type}`;
+
+        it(`gives a CommonJS script the require of plain node under ${where}`, async () => {
+          // On Node 22, 24.0 to 24.17 and 25, the ESM loader that `--import`
+          // sends the entry through gives a CommonJS TypeScript file a reduced
+          // `require`, and every module it loads an undefined `module.parent`.
+          await write("scripts/dep.js", `module.exports = { parent: module.parent };`);
+          const step = await runScript(
+            `seed.${ext}`,
+            typed(
+              [
+                `const dep = require("./dep.js");`,
+                `console.log("cache " + typeof require.cache);`,
+                `console.log("extensions " + typeof require.extensions);`,
+                `console.log("paths " + typeof require.resolve.paths);`,
+                `console.log("parent " + (dep.parent === module));`,
+              ].join("\n")
+            ),
+            type
+          );
+
+          expect(step).toMatchObject({ kind: "script", status: "pass" });
+          const log = step.scriptLog!;
+          expect(log).toContain("cache object");
+          expect(log).toContain("extensions object");
+          expect(log).toContain("paths function");
+          expect(log).toContain("parent true");
+        });
+
+        it(`runs a CommonJS script that throws once under ${where}`, async () => {
+          const step = await runScript(
+            `seed.${ext}`,
+            typed(
+              [
+                `const fs = require("node:fs");`,
+                `fs.appendFileSync(__dirname + "/runs.txt", "ran\\n");`,
+                `function seed() { throw new Error("backend said 500"); }`,
+                `seed();`,
+              ].join("\n")
+            ),
+            type
+          );
+
+          expect(step).toMatchObject({ kind: "script", status: "fail" });
+          expect(step.reason).toContain("backend said 500");
+          // `typed` puts two lines above a TypeScript script's own.
+          expect(step.reason).toContain(`at seed (scripts/seed.${ext}:${ext === "ts" ? 5 : 3}:`);
+          expect(step.reason).not.toContain("flow-script-runner");
+          expect(await fs.readFile(path.join(root, "scripts/runs.txt"), "utf8")).toBe("ran\n");
+        });
+
+        it(`lets a CommonJS script handle its own throw under ${where}`, async () => {
+          const step = await runScript(
+            `seed.${ext}`,
+            typed(
+              [
+                `const fs = require("node:fs");`,
+                `fs.appendFileSync(__dirname + "/runs.txt", "ran\\n");`,
+                `process.on("uncaughtException", (err) => console.log("handled " + err.message));`,
+                `throw new Error("backend said 500");`,
+              ].join("\n")
+            ),
+            type
+          );
+
+          expect(step).toMatchObject({ kind: "script", status: "pass" });
+          expect(step.scriptLog).toContain("handled backend said 500");
+          expect(await fs.readFile(path.join(root, "scripts/runs.txt"), "utf8")).toBe("ran\n");
+        });
+      }
+
       it("leaves the modules of an ES module script as Node made them", async () => {
         // The script is not a CommonJS module, so nothing is the main one and
         // the first module Node builds is the dependency's own.
