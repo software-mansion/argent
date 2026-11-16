@@ -9,6 +9,7 @@ import {
 } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { parseChromiumCdpPort } from "../../../utils/device-info";
+import { signalGroup } from "../../../utils/process-kill";
 import { CHROMIUM_CDP_NAMESPACE } from "../../../blueprints/chromium-cdp";
 import {
   assertElectronAppLaunchable,
@@ -31,10 +32,12 @@ export function makeChromiumImpl(
   async function restart(port: number, params: RestartAppParams): Promise<RestartAppResult> {
     const spec = electronLaunchSpec(port);
     if (!spec) throw notBooted(params.udid);
-    // The pid is cleared when the app exits, as after a crash.
-    const wasRunning = spec.pid !== undefined;
+    // The pid is cleared when the launcher exits, as after a crash, but the
+    // rest of its group can live on and hold the port.
+    const wasRunning =
+      spec.pid !== undefined || (spec.pgid !== undefined && signalGroup(spec.pgid, 0));
     try {
-      assertElectronAppLaunchable(spec.appPath);
+      await assertElectronAppLaunchable(spec);
     } catch (err) {
       throw withPrefix(
         err,
@@ -43,11 +46,11 @@ export function makeChromiumImpl(
           : "restart-app did not relaunch the app, whose process has exited: "
       );
     }
-    await killChromiumByPortAndWait(port, spec.pid);
+    await killChromiumByPortAndWait(port, wasRunning ? spec.pgid : undefined);
     await assertPortReleased(
       port,
       wasRunning
-        ? "restart-app stopped the app but did not relaunch it"
+        ? "restart-app stopped the copy of the app that Argent started but did not relaunch it"
         : "restart-app did not relaunch the app"
     );
     // After the kill, so a frozen renderer cannot stall the dispose's CDP calls.
@@ -108,9 +111,10 @@ async function assertPortReleased(port: number, lead: string): Promise<void> {
   if (!held) return;
   throw new FailureError(
     `${lead}: port ${port} is still held ` +
-      `(${held.code ?? held.message}), so a new copy could not bind it. Quit the ` +
-      `process listening on port ${port}, then retry restart-app. It can be a process of the ` +
-      `app that outlived the one Argent started, or a copy the app relaunched itself.`,
+      `(${held.code ?? held.message}), so a new copy could not bind it. Check which process ` +
+      `listens on port ${port} before you quit it: a copy the app relaunched itself runs ` +
+      `outside the process group Argent started, and any other program there may be one you ` +
+      `did not start. Once the port is free, retry restart-app.`,
     {
       error_code: FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE,
       failure_stage: "chromium_restart_port_check",

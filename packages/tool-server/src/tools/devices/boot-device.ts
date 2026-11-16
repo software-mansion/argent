@@ -101,7 +101,7 @@ import { resolveHdc } from "../../utils/harmony-hdc";
 import { HARMONY_FLAG } from "../../utils/harmony-flag";
 import { FLAG_META_KEY, renderFlagGated } from "../../utils/flag-gated-text";
 import { UITEST_TIMEOUT_MS, harmonyDisplay, harmonyDumpLayout } from "../../utils/harmony-uitest";
-import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
+import { bootElectronApp, withPortLock, type ElectronBootResult } from "./boot-electron";
 import { bootMacosApp, type MacosBootResult } from "./boot-macos";
 
 const execFileAsync = promisify(execFile);
@@ -2459,11 +2459,16 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
           force: params.force,
         });
       }
-      return bootElectronApp({
-        appPath: params.electronAppPath!,
-        port: params.electronPort,
-        extraArgs: params.electronArgs,
-      });
+      const electronBoot = () =>
+        bootElectronApp({
+          appPath: params.electronAppPath!,
+          port: params.electronPort,
+          extraArgs: params.electronArgs,
+        });
+      // A fixed port can be one a restart-app or e2e teardown is working on.
+      return params.electronPort === undefined
+        ? electronBoot()
+        : withPortLock(params.electronPort, electronBoot);
     },
   };
 }

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { ensureCdpReachable } from "../../blueprints/chromium-cdp";
+import { commandOnPath } from "../../utils/command-on-path";
 import { chromiumIdFromPort } from "../../utils/device-info";
 import { trackChromiumPort } from "../../utils/chromium-discovery";
 import { electronGuiChildEnv } from "../../utils/electron-env";
@@ -185,14 +186,16 @@ const liveChildren = new Map<number, ChildProcess>();
 export interface ElectronLaunchSpec {
   appPath: string;
   extraArgs: string[];
+  /** The launcher the boot ran ({@link resolveLauncher}). */
+  command: string;
   /**
    * Group leader of the most recent boot while it runs; see
    * {@link killChromiumByPort}. Cleared on exit, as the pid may be recycled.
    */
   pid?: number;
   /**
-   * That boot's process group, kept after the leader exits: a run's teardown
-   * still reaps processes that outlived their launcher.
+   * That boot's process group, kept after the leader exits: restart-app and a
+   * run's teardown still reap processes that outlived their launcher.
    */
   pgid?: number;
 }
@@ -210,9 +213,9 @@ export function electronLaunchSpec(port: number): ElectronLaunchSpec | undefined
 }
 
 /**
- * Restarts and run teardowns of one instance, keyed by port: overlapping, they
- * would spawn two instances on one port (the readiness probe accepts either),
- * or leave a relaunched copy running after its teardown.
+ * Restarts, run teardowns and fixed-port boots, keyed by port: overlapping,
+ * they would spawn two instances on one port (the readiness probe accepts
+ * either), or leave a relaunched copy running after its teardown.
  */
 const portLocks = new Map<string, Promise<unknown>>();
 
@@ -228,43 +231,43 @@ export function forgetElectronLaunchSpec(port: number): void {
 
 /**
  * Throws the boot's own path errors without launching anything, and fails when
- * a project directory's fallback `electron` command is not on PATH, which the
- * boot would only discover as a spawn ENOENT.
+ * the launcher `spec`'s boot ran is gone (which the boot would only discover
+ * as a spawn ENOENT) or another one would run in its place (a project
+ * directory's node_modules/.bin/electron added, or removed while an `electron`
+ * is on PATH).
  */
-export function assertElectronAppLaunchable(appPath: string): void {
-  const { command } = resolveLauncher(appPath);
-  if (command !== "electron") {
-    if (isExecutableFile(command)) return;
-    throw new FailureError(`Electron boot: ${command} is not an executable file.`, {
+export async function assertElectronAppLaunchable(spec: ElectronLaunchSpec): Promise<void> {
+  const { command } = resolveLauncher(spec.appPath);
+  const fail = (message: string, stage: string) =>
+    new FailureError(`Electron boot: ${message}`, {
       error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
-      failure_stage: "electron_launcher_not_executable",
+      failure_stage: stage,
       failure_area: "tool_server",
       error_kind: "validation",
     });
-  }
-  if (isOnPath(command)) return;
-  throw new FailureError(
-    `Electron boot: ${path.resolve(appPath)} has no node_modules/.bin/electron and no ` +
-      `'electron' is on PATH. Run npm install in the app directory, or install electron globally.`,
-    {
-      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
-      failure_stage: "electron_launcher_missing",
-      failure_area: "tool_server",
-      error_kind: "validation",
+  if (spec.command === "electron") {
+    if ((await commandOnPath(spec.command)) === null) {
+      throw fail(
+        `${spec.appPath} was booted with the 'electron' command, and no 'electron' is on PATH ` +
+          `now. Install electron globally, or run npm install in the app directory and boot ` +
+          `the app again with boot-device.`,
+        "electron_launcher_missing"
+      );
     }
-  );
-}
-
-/**
- * Whether spawn() would find `command` on PATH, which searches an empty entry
- * as the cwd (libuv also tries .com/.exe on Windows).
- */
-function isOnPath(command: string): boolean {
-  const exts = process.platform === "win32" ? ["", ".com", ".exe"] : [""];
-  const dirs = process.env.PATH ? process.env.PATH.split(path.delimiter) : [];
-  return dirs.some((dir) =>
-    exts.some((ext) => isExecutableFile(path.join(dir || process.cwd(), command + ext)))
-  );
+  } else if (!isExecutableFile(spec.command)) {
+    throw fail(
+      `${spec.command}, the launcher this app was booted with, is not an executable file.`,
+      "electron_launcher_not_executable"
+    );
+  }
+  if (command !== spec.command) {
+    const name = (c: string) => (c === "electron" ? "the 'electron' on PATH" : c);
+    throw fail(
+      `${spec.appPath} would now launch with ${name(command)}, not with ${name(spec.command)} ` +
+        `it was booted with. Quit the app and boot it again with boot-device to switch.`,
+      "electron_launcher_changed"
+    );
+  }
 }
 
 function isExecutableFile(file: string): boolean {
@@ -549,7 +552,13 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // inert; the identity check keeps a stale child's exit from evicting a newer
   // boot that reused the same fixed port.
   const appPath = path.resolve(options.appPath);
-  const spec: ElectronLaunchSpec = { appPath, extraArgs: extra, pid: child.pid, pgid: child.pid };
+  const spec: ElectronLaunchSpec = {
+    appPath,
+    extraArgs: extra,
+    command: launcher.command,
+    pid: child.pid,
+    pgid: child.pid,
+  };
   launchSpecs.set(port, spec);
   liveChildren.set(port, child);
   child.once("exit", () => {

@@ -41,7 +41,21 @@ The SDK and `argent run` return the full JSON object.
 
 `launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators, physical iPhones and Mac apps. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a local iOS simulator, the tool fails if that termination does not finish within 15 seconds. On a remote simulator, `launch-app` and `restart-app` fail if the termination fails for a reason other than the app not running, and launch nothing. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply. On a Mac app, `launch-app` applies `launchArgs` only when it starts the app. See [Mac apps](#mac-apps).
 
-On Chromium, `restart-app` relaunches an Electron app that `boot-device` or an e2e run started, with the same arguments and on the same port, so the device id does not change. The tool fails and does not stop the app when Argent did not start it, when the tool-server restarted after the boot, or when the app path or its `electron` launcher is gone or is not executable. A failure after the app quits leaves the app stopped: another process still holds the port (`CHROMIUM_RESTART_PORT_IN_USE`), or the new copy does not start. The error message says whether the tool stopped the app.
+On Chromium, `restart-app` relaunches an Electron app that `boot-device` or an e2e run started. The new copy gets the same arguments and the same port, so the device id does not change. Argent stops all processes in the process group of the app, also when the first process of the app has exited.
+
+The tool fails and does not stop the app in these cases:
+
+- Argent did not start the app.
+- The tool-server restarted after the boot.
+- The app path or its `electron` launcher is gone or is not executable.
+- The app would start with a different `electron` launcher than at the boot.
+
+A failure after the app quits leaves the app stopped:
+
+- Another process still holds the port (`CHROMIUM_RESTART_PORT_IN_USE`).
+- The new copy does not start.
+
+The error message tells if the tool stopped the app. A copy that the app starts itself, for example with `app.relaunch()`, runs outside the process group of the app. `restart-app` does not stop this copy, so it fails with `CHROMIUM_RESTART_PORT_IN_USE`.
 
 `reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
 
@@ -648,7 +662,7 @@ Argent hides these tools from MCP, so the agent does not see them. Call them wit
 
 Some agent tools do not always give the same result as the hidden tool:
 
-- `restart-app` always relaunches the app. No agent tool leaves an app stopped. When the app is not installed, `restart-app` fails and `terminate-app` succeeds.
+- `restart-app` relaunches the app. Only a failed Chromium relaunch leaves the app stopped. When the app is not installed, `restart-app` fails and `terminate-app` succeeds.
 - `describe` returns pruned text with one line for each element, not the raw tree. On an iOS simulator, the text does not show which element contains which. `describe` does not give the `hidden`, `covered`, `alertVisible`, `keyboardVisible` or `foregroundApp` fields.
 - `keyboard` types at the cursor and keeps the text that the field holds. `fill` replaces that text. With no focused field, `keyboard` drops the text and succeeds, and `fill` fails with `FILL_NO_FOCUSED_FIELD`. `fill` reads the field back, except on a physical iPhone. `keyboard` does not.
 - `native-describe-screen`, `native-find-views`, `native-full-hierarchy`, `native-view-at-point`, `native-user-interactable-view-at-point` and, on iOS, `native-network-logs` return the same `message` as `native-devtools-status` when native devtools are not connected. Their `status` names the remedy, where `native-devtools-status` gives `state`. They fail instead for an Apple system app and for an app that a device provider did not lend. `native-profiler-*` do not use native devtools.
