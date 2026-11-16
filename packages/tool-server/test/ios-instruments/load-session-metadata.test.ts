@@ -93,6 +93,18 @@ beforeEach(async () => {
   });
 });
 
+/** The export of a trace whose start date is `traceStartMs`, as xctrace gives it. */
+function exportWithTraceStart(traceStartMs: number): void {
+  vi.mocked(exportIosTraceData).mockResolvedValue({
+    files: {
+      cpu: null,
+      hangs: join(dir, `native-profiler-${SESSION_ID}_raw_hangs.xml`),
+      leaks: join(dir, `native-profiler-${SESSION_ID}_raw_leaks.xml`),
+    },
+    diagnostics: { tocSchemas: [], cpuSchemaUsed: null, errors: {}, traceStartMs },
+  });
+}
+
 afterEach(async () => {
   clearCachedProfilerPaths(PORT, DEVICE);
   await rm(dir, { recursive: true, force: true });
@@ -136,7 +148,8 @@ describe("profiler-load restores an xctrace session's own fields", () => {
     const saved = JSON.parse(await readFile(`${traceFile}.metadata.json`, "utf8"));
     expect(saved).toEqual({
       deviceId: DEVICE,
-      wallClockStartMs: wallStart,
+      // A Mac app's start is the trace's start date, which the hang times count from.
+      wallClockStartMs: wallStart - 1_500,
       // xctrace ended on its own: the end of the trace it wrote, not the later stop.
       stoppedAtMs: wallStart - 1_500 + 30_000,
       cpuFilterPid: null,
@@ -154,7 +167,8 @@ describe("profiler-load restores an xctrace session's own fields", () => {
 
     const loaded = await buildMacSession();
     await load(loaded);
-    expect(loaded.wallClockStartMs).toBe(wallStart);
+    expect(loaded.wallClockStartMs).toBe(wallStart - 1_500);
+    expect(loaded.wallClockStartMs).toBe(live.wallClockStartMs);
     expect(loaded.mallocStackLogging).toBe(true);
     expect(loaded.appSuspensions).toEqual(live.appSuspensions);
     expect(loaded.parsedData?.uiHangs[0]?.suspendedMs).toBeGreaterThan(0);
@@ -221,27 +235,35 @@ describe("profiler-load restores an xctrace session's own fields", () => {
     api.captureProcess = child as unknown as ChildProcess;
     api.capturePid = child.pid;
     api.traceFile = traceFile;
-    api.wallClockStartMs = Date.now() - 20_000;
+    // The start's commit; the trace began 1.5 s before it.
+    const committedAtMs = Date.now() - 20_000;
+    exportWithTraceStart(committedAtMs - 1_500);
+    api.wallClockStartMs = committedAtMs;
     api.recordingMallocStackLogging = false;
     await stopNativeProfilerIos(api);
 
     const saved = JSON.parse(await readFile(`${traceFile}.metadata.json`, "utf8"));
-    expect(saved.wallClockStartMs).toBe(api.wallClockStartMs);
+    expect(saved.wallClockStartMs).toBe(committedAtMs - 1_500);
     expect(saved.mallocStackLogging).toBe(false);
     expect(saved.recordedMs).toBe(api.recordedMs);
+    // The length counts from the start's return, as the short-recording note does.
     expect(saved.recordedMs).toBeGreaterThanOrEqual(20_000);
-    expect(saved.stoppedAtMs).toBe(api.wallClockStartMs! + api.recordedMs!);
+    expect(saved.stoppedAtMs).toBe(committedAtMs + api.recordedMs!);
   });
 
   it("a recording that ran into the cap ends at the cap, not at the later stop", async () => {
     const api = await buildMacSession();
     api.traceFile = traceFile;
     api.recordingTimedOut = true;
-    api.wallClockStartMs = wallStart - RECORDING_CAP_MS - 600_000;
+    // The cap counts from the start's commit, not from the trace's start date.
+    const committedAtMs = wallStart - RECORDING_CAP_MS - 600_000;
+    exportWithTraceStart(committedAtMs - 1_500);
+    api.wallClockStartMs = committedAtMs;
     await stopNativeProfilerIos(api);
 
     const saved = JSON.parse(await readFile(`${traceFile}.metadata.json`, "utf8"));
-    expect(saved.stoppedAtMs).toBe(api.wallClockStartMs + RECORDING_CAP_MS);
+    expect(saved.wallClockStartMs).toBe(committedAtMs - 1_500);
+    expect(saved.stoppedAtMs).toBe(committedAtMs + RECORDING_CAP_MS);
   });
 
   it("profiler-combined-report works on a reloaded session", async () => {
@@ -284,7 +306,8 @@ describe("profiler-load restores an xctrace session's own fields", () => {
       port: PORT,
       device_id: DEVICE,
     })) as string;
-    expect(report).toContain("**Clock offset:** React started 0.5s after native profiler");
+    // The native start is the trace's start date, 1.5 s before the start's commit.
+    expect(report).toContain("**Clock offset:** React started 2.0s after native profiler");
   });
 
   it("restores each saved field as it was saved", async () => {

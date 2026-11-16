@@ -683,12 +683,14 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     api.recordedMs = null;
     api.appSuspensions = suspensionSpans(suspensions, diagnostics);
     // When the recording ended: the cap's own time, or the end of the trace that
-    // xctrace wrote before it exited.
+    // xctrace wrote before it exited. The cap counts from the start's commit, so
+    // before the anchor moves the start to the trace's start date.
     const traceEndMs =
       diagnostics.traceStartMs !== undefined && diagnostics.traceDurationMs !== undefined
         ? diagnostics.traceStartMs + diagnostics.traceDurationMs
         : null;
     const capEndMs = api.wallClockStartMs !== null ? api.wallClockStartMs + RECORDING_CAP_MS : null;
+    anchorAtTraceStart(api, diagnostics);
     await saveSessionMetadata(api, traceFile, wasTimeout ? capEndMs : traceEndMs);
 
     let warning = wasTimeout
@@ -805,6 +807,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   api.exportSkipReason = diagnostics.skipped ?? null;
   api.recordedMs = api.platform === "macos" && api.wallClockStartMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
+  anchorAtTraceStart(api, diagnostics);
   await saveSessionMetadata(api, api.traceFile, stoppedAtMs);
   if (ended) {
     // xctrace keeps recording when the app crashes, and the trace then lacks
@@ -852,6 +855,18 @@ function endSuspensionWatch(api: NativeProfilerSessionApi): AppSuspensionWindow[
   const watch = api.suspensionWatch;
   api.suspensionWatch = null;
   return watch ? watch.end() : null;
+}
+
+/**
+ * A Mac app's start returns, and stamps wallClockStartMs, only after it waited
+ * for tracing to start and then ARM_SETTLE_MS: about 2 s after the trace's time
+ * 0, from which the hangs count. The combined report places the hangs on the
+ * wall clock from this anchor, so it takes the trace's `<start-date>` instead.
+ */
+function anchorAtTraceStart(api: NativeProfilerSessionApi, diagnostics: ExportDiagnostics): void {
+  if (api.platform === "macos" && diagnostics.traceStartMs !== undefined) {
+    api.wallClockStartMs = diagnostics.traceStartMs;
+  }
 }
 
 function suspensionSpans(

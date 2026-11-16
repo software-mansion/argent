@@ -404,7 +404,8 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
           mountComponents,
           // From parsedData, not the live session field: a recording started
           // after analyze must not re-label the data rendered here.
-          nativeApi.parsedData?.mallocStackLogging ?? null
+          nativeApi.parsedData?.mallocStackLogging ?? null,
+          nativeApi.platform === "macos"
         )
       );
     }
@@ -448,12 +449,14 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
  * That caveat comes from render.ts's shared `renderUnattributedLeaksNote`, so
  * its wording and capture-mode handling cannot drift from the analyze report.
  * A null/undefined `mallocStackLogging` makes it infer the capture mode from
- * the attributed count. Exported for unit testing.
+ * the attributed count; `macApp` gives a Mac app's note, as analyze does.
+ * Exported for unit testing.
  */
 export function renderCombinedMemoryLeaks(
   memoryLeaks: MemoryLeak[],
   mountComponents: Set<string>,
-  mallocStackLogging?: boolean | null
+  mallocStackLogging?: boolean | null,
+  macApp = false
 ): string[] {
   if (memoryLeaks.length === 0) return [];
 
@@ -482,7 +485,12 @@ export function renderCombinedMemoryLeaks(
   if (unattributedLeaks.length > 0) {
     lines.push(
       ``,
-      renderUnattributedLeaksNote(unattributedLeaks, attributedLeaks.length, mallocStackLogging)
+      renderUnattributedLeaksNote(
+        unattributedLeaks,
+        attributedLeaks.length,
+        mallocStackLogging,
+        macApp
+      )
     );
   }
 
