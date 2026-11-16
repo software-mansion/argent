@@ -78,7 +78,7 @@ Each request has an ID such as `ios-3f9a-12`. The agent uses this ID to read hea
 
 If Argent cannot read a request body before the response arrives, the details tell the agent to read the body again later. Then the agent reads the details again after the request ends.
 
-The capture stays on until `stop-all-simulator-servers` stops the services of the simulator, or until a local simulator shuts down. The agent cannot stop the capture for one app. The running process of the app keeps the capture until the app restarts. Thus restart the app after the services stop.
+On a simulator without a device provider, the capture stays on until `stop-all-simulator-servers` stops the services of the simulator, or until a local simulator shuts down. The agent cannot stop the capture for one app. The running process of the app keeps the capture until the app restarts. Thus restart the app after the services stop. On a simulator where Argent uses the socket of a device provider, `stop-all-simulator-servers` does not stop the capture of the provider. There, turn off the capture in the provider.
 
 ## The request record
 
@@ -130,7 +130,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - Argent does not capture the requests that the app sends before the capture starts. Do the operation again after the capture starts. Argent starts the capture at these moments:
   - JS runtime layer: the agent reads the network log for the first time.
   - Chrome DevTools Protocol layer: Argent attaches to the Chromium app.
-  - Native `NSURLProtocol` layer: the agent reads the network log of this layer for the first time. On a Mac app, the native capture stays on when the app restarts after the first read. On a Mac app, the native capture stops when the tool-server disconnects from the app. The next read of the network log starts the capture again.
+  - Native `NSURLProtocol` layer: the agent reads the network log of this layer for the first time. On a simulator where Argent uses the socket of a device provider, Argent records the requests from the time that Argent connects to the in-app agent of the provider. This time can be before the first read. On a Mac app, the native capture stays on when the app restarts after the first read. On a Mac app, the native capture stops when the tool-server disconnects from the app. The next read of the network log starts the capture again.
   - Native network capture: the in-app agent connects to Argent. This occurs a short time after Argent attaches the in-app agent to a process of the app.
 - A reload or a restart of the app clears the network log of the JS runtime layer. Argent starts the capture again when the agent reads the network log.
 - After an upgrade of Argent, the network capture of the earlier version stays in the app until the app reloads. The earlier network capture keeps no records, but it still reads a copy of each `fetch()` response. Reload the app to remove the earlier network capture.
