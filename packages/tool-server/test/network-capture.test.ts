@@ -1143,6 +1143,41 @@ describe("network-capture-start", () => {
         expect(rt.paused).toBe(true);
       }
     );
+
+    it.each(NOT_REACHED)(
+      "keeps a stop and its requests when a later start finds $found, so the kept ids still resolve",
+      async ({ answer, reason }) => {
+        const rt = new FakeRuntime(APP);
+        serve(PORT, IOS_UDID, rt);
+        ios.connected.add(APP);
+        await start(IOS_UDID, APP);
+        rt.send("/a");
+        await stop(IOS_UDID, APP);
+        const capture = findJsCapture(IOS_UDID, APP);
+        expect(capture).toMatchObject({ intent: "stopped", installed: true, paused: true });
+
+        await reconnect(PORT, IOS_UDID, answer());
+        const result = await start(IOS_UDID, APP);
+
+        expect(layer(result, "js")).toEqual({
+          layer: "js",
+          armed: false,
+          unavailable: true,
+          reason,
+        });
+        expect(findJsCapture(IOS_UDID, APP)).toEqual(capture);
+
+        // The app's runtime answers again, with the log the stop kept.
+        await reconnect(PORT, IOS_UDID, rt);
+        expect((await read(IOS_UDID)).split("\n")[0]).toBe(
+          "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ==="
+        );
+        expect(await details(IOS_UDID, "rn-net-1")).toMatchObject({
+          request: { url: "https://api.test/a" },
+        });
+        expect(rt.paused).toBe(true);
+      }
+    );
   });
 
   describe("on the iOS native layer", () => {

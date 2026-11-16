@@ -192,9 +192,11 @@ async function startJsLayer(
       };
     }
     if (lost) {
+      const text = jsNotReached(reason, port, err);
+      // A stop's pause, and the requests it kept, stay with that interceptor.
+      if (installedHere) return unavailable("js", text);
       // No mark stays for a layer that is unavailable; a read says why.
       forgetJsCapture(device, bundleId);
-      const text = jsNotReached(reason, port, err);
       setJsUnavailable(payload, bundleId, text);
       return unavailable("js", text);
     }
@@ -225,9 +227,11 @@ async function startJsLayer(
       };
     }
     if (other) return unavailable("js", `${notOurs}; ${otherPortHint(bundleId, other.port)}`);
+    const text = `${notOurs}; if that runtime is the app, pass bundleId ${appId}; otherwise pass the port of ${bundleId}'s Metro`;
+    // A stop's pause, and the requests it kept, stay with that interceptor.
+    if (installedHere) return unavailable("js", text);
     // That app's own capture on this port stays as it is; a read says why this app has none.
     forgetJsCapture(device, bundleId);
-    const text = `${notOurs}; if that runtime is the app, pass bundleId ${appId}; otherwise pass the port of ${bundleId}'s Metro`;
     setJsUnavailable(payload, bundleId, text);
     return unavailable("js", text);
   }
