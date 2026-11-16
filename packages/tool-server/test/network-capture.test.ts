@@ -1610,6 +1610,33 @@ describe("network-capture-stop", () => {
     }
   );
 
+  it.each([
+    { platform: "a local iOS simulator", udid: IOS_UDID, own: localIosHost, other: remoteIosHost },
+    {
+      platform: "a remote iOS simulator",
+      udid: REMOTE_UDID,
+      own: remoteIosHost,
+      other: localIosHost,
+    },
+  ])(
+    "on $platform, reads the app's processes through that simulator's own host",
+    async ({ udid, own, other }) => {
+      serve(PORT, udid, new FakeRuntime(APP));
+      await start(udid, APP);
+      await reconnect(PORT, udid, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      // Only the simulator's own host knows that the app exited.
+      vi.mocked(own.listRunningBundleIds).mockResolvedValue(new Set([OTHER]));
+      vi.mocked(other.listRunningBundleIds).mockResolvedValue(new Set([APP, OTHER]));
+
+      const result = await stop(udid, APP);
+
+      expect(layer(result, "js")).toMatchObject({
+        armed: false,
+        reason: `no app is connected to Metro on port ${PORT} yet; ${APP} is not running, so nothing records; while capture is stopped, its next JS runtime gets no interceptor`,
+      });
+    }
+  );
+
   it.each(
     PROCESS_PLATFORMS.flatMap((platform) => [
       { ...platform, device: "lists a process of the app", answers: true },
