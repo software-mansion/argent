@@ -211,7 +211,8 @@ const PAUSE_BEFORE_FORGET_TIMEOUT_MS = 1_000;
  * log. The interceptor lives in the app, so forgetting the entry alone leaves it
  * recording, and the next start would list the old requests again. A runtime
  * that does not answer in time is left as it is, also one whose debugger is
- * still connecting. Returns the payloads whose runtime answered the pause.
+ * still connecting, and so is the JS runtime of an app other than the entry's.
+ * Returns the payloads whose runtime answered the pause.
  */
 export async function pauseJsCapturesOf(
   registry: Pick<Registry, "getSnapshot" | "resolveService">,
@@ -224,8 +225,12 @@ export async function pauseJsCapturesOf(
       const urn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`;
       const state = services.get(urn)?.state;
       if (state === undefined || !isLiveServiceState(state)) return;
+      const { bundleId } = jsCaptures.get(payload)!;
       const pause = (async () => {
         const dbg = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+        // Another app's runtime on the port is left as it is, as network-capture-stop leaves it.
+        const appId = dbg.runtimeApp?.appId;
+        if (appId !== undefined && appId !== bundleId) return false;
         await dbg.cdp.evaluate(NETWORK_CAPTURE_END_SCRIPT, {
           timeout: PAUSE_BEFORE_FORGET_TIMEOUT_MS,
         });

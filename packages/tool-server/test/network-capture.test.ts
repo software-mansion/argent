@@ -2069,6 +2069,37 @@ describe("stop-all-simulator-servers", () => {
     expect(await details(IOS_UDID, "rn-net-2")).toMatchObject({ requestId: "rn-net-2" });
   });
 
+  it.each(PLATFORMS)(
+    "on $platform, leaves another app's JS runtime on the port as it is, and keeps the app's capture stopped",
+    async ({ udid, connect }) => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, udid, rt);
+      connect();
+      await start(udid, APP);
+      rt.send("/before");
+      const { mark } = findJsCapture(udid, APP)!;
+      // Another app's runtime answers on the port now, and its debugger is live.
+      const otherRuntime = new FakeRuntime(OTHER);
+      await reconnect(PORT, udid, otherRuntime);
+      await registry.resolveService(`JsRuntimeDebugger:${jsCapturePayload(PORT, udid)}`);
+
+      await stopAll([udid]);
+
+      expect(otherRuntime.evaluated).toEqual([]);
+      expect(findJsCapture(udid, APP)).toEqual({
+        bundleId: APP,
+        intent: "stopped",
+        mark,
+        installed: true,
+        port: PORT,
+      });
+      // Once the app's runtime answers again, a stop pauses it and still counts its request.
+      await reconnect(PORT, udid, rt);
+      expect(layer(await stop(udid, APP), "js")).toEqual({ layer: "js", armed: false, total: 1 });
+      expect(rt.paused).toBe(true);
+    }
+  );
+
   it("waits at most 1 s for a JS runtime whose debugger another call is still connecting, then disposes that debugger", async () => {
     const rt = new FakeRuntime(APP);
     serve(PORT, IOS_UDID, rt);
