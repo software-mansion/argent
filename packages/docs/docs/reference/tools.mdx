@@ -429,11 +429,11 @@ The result contains `header`, `armed`, `count`, `total` and `requests`. After a 
 
 On a simulator of a device provider, Argent does not send `Network.enable`. Argent asks the agent of the app if the capture is on. When the state is `not armed`, the `header` line gives one of these reasons:
 
-- Argent waits for the agent to tell if the capture is on.
 - The agent did not tell within 5 seconds if the capture is on. The next call of `native-network-logs` asks the agent again.
 - The request to the agent failed. The `header` line gives the error. The next call of `native-network-logs` asks the agent again.
 - The provider has the capture off. Turn the capture on in the provider.
-- The app is not connected.
+
+On a simulator of a device provider, while the capture is started for the app, a call for an app that is not connected fails with the error `NATIVE_DEVTOOLS_NOT_CONNECTED`.
 
 If the capture started while the app was already running, the `header` line of the first result says that Argent did not record the launch of the app. To capture the launch, call `restart-app`, then call `network-capture-start` again, because a relaunch ends the capture of the JS runtime layer. Then call `native-network-logs` again. On a simulator where Argent uses the socket of a device provider, Argent records the requests from the time that it connects to the agent of the app. This time can be before the call of `network-capture-start`. If the app already ran when Argent connected, the `header` line of the first result says that Argent did not record the requests from before this time. It also says that a relaunch ends the capture there, and it tells you not to restart the app.
 
