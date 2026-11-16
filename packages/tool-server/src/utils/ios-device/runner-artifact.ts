@@ -51,9 +51,16 @@ export function resolveRunnerProjectPath(): string {
 }
 
 /**
- * Local Xcode and SwiftPM state plus Finder metadata. Never part of the fingerprint.
- * `build` and `Build` are what a Legacy or Custom build location in Xcode's
- * settings left next to the project before the build pinned its location.
+ * Local Xcode and SwiftPM state, build output and Finder metadata. Never part
+ * of the fingerprint. `build` (Legacy) and `Build` (Custom, relative to
+ * workspace) are what those build locations in Xcode's settings left next to
+ * the project before the build pinned its location, and what building the
+ * project in Xcode still leaves there.
+ *
+ * The bundler skips the same names when it copies this tree into the package
+ * (`IOS_RUNNER_SKIP_NAMES` in `packages/argent/scripts/bundle-tools.cjs`): what
+ * is not hashed must not ship. A test in `packages/argent` holds the two lists
+ * equal.
  */
 const FINGERPRINT_NOISE = new Set([
   "xcuserdata",

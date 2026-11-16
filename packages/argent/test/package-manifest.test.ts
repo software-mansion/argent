@@ -157,3 +157,39 @@ describe("native-binary placement (producer/consumer path agreement)", () => {
     expect(MACOS_DYLIBS_DIR).toBe(path.posix.join(dylibsSrc!, "macos"));
   });
 });
+
+// The runner's Xcode project ships as source, and the tool-server hashes that
+// tree into the runner's cache key. Both walk it by entry name: the bundler
+// with IOS_RUNNER_SKIP_NAMES, the fingerprint with FINGERPRINT_NOISE. A name
+// only the fingerprint knew (`build` and `Build`, once) made the bundler copy
+// a leftover Xcode build, stale `.xctestrun` included, into `dist/` and from
+// there into a locally packed tarball.
+describe("iOS runner tree (bundler/fingerprint agreement)", () => {
+  const workspaceRoot = path.resolve(import.meta.dirname, "..", "..", "..");
+  const bundleTools = fs.readFileSync(
+    path.join(workspaceRoot, "packages/argent/scripts/bundle-tools.cjs"),
+    "utf8"
+  );
+  const runnerArtifact = fs.readFileSync(
+    path.join(workspaceRoot, "packages/tool-server/src/utils/ios-device/runner-artifact.ts"),
+    "utf8"
+  );
+
+  // The string entries of a `const NAME = new Set([...])` literal.
+  function setLiteral(src: string, name: string): string[] {
+    const m = src.match(new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`));
+    if (!m) throw new Error(`set literal ${name} not found`);
+    return [...m[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]).sort();
+  }
+
+  it("the bundler skips exactly the names the fingerprint leaves out", () => {
+    const skipped = setLiteral(bundleTools, "IOS_RUNNER_SKIP_NAMES");
+
+    expect(skipped).toEqual(setLiteral(runnerArtifact, "FINGERPRINT_NOISE"));
+    expect(skipped).toEqual(expect.arrayContaining(["build", "Build"]));
+    // By entry name at any depth, the way the fingerprint walks the tree.
+    expect(bundleTools).toContain(
+      "filter: (src) => !IOS_RUNNER_SKIP_NAMES.has(path.basename(src)),"
+    );
+  });
+});
