@@ -5,6 +5,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
+import { Readable } from "node:stream";
+import { buffer } from "node:stream/consumers";
 import { promisify } from "node:util";
 import zlib from "node:zlib";
 import {
@@ -12,6 +14,7 @@ import {
   ArchiveError,
   archiveFormatsFromAccept,
   createArchiveFile,
+  createCompressor,
   createTarArgs,
   pickArchiveFormat,
   safeExtractArchive,
@@ -99,7 +102,12 @@ const UNREADING_TAR = [
 
 describe("createTarArgs", () => {
   it("archives the source's basename as the single top-level member", () => {
-    expect(createTarArgs("/a/b/MyApp.app")).toEqual(["-cf", "-", "-C", "/a/b", "./MyApp.app"]);
+    expect(createTarArgs("/a/b/MyApp.app")).toEqual(["-cf", "-", "-C", "/a/b", "MyApp.app"]);
+  });
+
+  // GNU tar would archive the whole disk for `./`.
+  it("leaves the root's empty name for tar to refuse", () => {
+    expect(createTarArgs("/")).toEqual(["-cf", "-", "-C", "/", ""]);
   });
 });
 
@@ -242,6 +250,32 @@ describe("safeExtractArchive input", () => {
       "Could not read archive: tar -t listed more than 262144 members or 32 MiB"
     );
     expect(await fs.readdir(dest)).toEqual([]);
+  });
+
+  it("accepts a listing of exactly 262144 members and 32 MiB", async () => {
+    const archivePath = path.join(tmpDir, "small.archive");
+    await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "zstd"));
+    // 128-byte lines.
+    await tarOnPath(
+      UNREADING_TAR.replace(
+        "echo Bundle.app/",
+        `yes "Bundle.app/${"f".repeat(116)}" | head -n 262144`
+      )
+    );
+    expect(path.basename(await safeExtractArchive(archivePath, tmpDir, "Bundle.app"))).toBe(
+      "Bundle.app"
+    );
+  });
+
+  it("applies the limits to the verbose listing too", async () => {
+    const archivePath = path.join(tmpDir, "small.archive");
+    await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "zstd"));
+    await tarOnPath(
+      UNREADING_TAR.replace(/echo "drwx.*"/, `yes "${"d".repeat(127)}" | head -n 262145`)
+    );
+    await expect(safeExtractArchive(archivePath, tmpDir, "Bundle.app")).rejects.toThrow(
+      "Could not read archive: tar -tv listed more than 262144 members or 32 MiB"
+    );
   });
 
   // A listing of 3.4 MB, under the byte limit; without the kill, the second
@@ -505,17 +539,43 @@ describe("safeExtractArchive zstd framing", () => {
       expect(path.basename(await extract(bytes))).toBe("Bundle.app");
     });
 
-    it("decodes no more than 16 MiB that tar didn't read", async () => {
-      // 64 GiB of zeros in RLE blocks of 128 KiB, under a 128 KiB window.
-      const blocks = 1 << 19;
-      const frame = Buffer.alloc(6 + blocks * 4);
+    /** `mib` MiB of zeros in RLE blocks of 128 KiB, ending in a wrong checksum. */
+    function zerosWithBadChecksum(mib: number): Buffer {
+      const blocks = mib * 8;
+      const frame = Buffer.alloc(6 + blocks * 4 + 4);
       frame.writeUInt32LE(0xfd2fb528, 0);
-      frame[5] = 7 << 3;
+      frame[4] = 1 << 2; // content checksum
+      frame[5] = 7 << 3; // 128 KiB window
       for (let i = 0; i < blocks; i++) {
         frame.writeUIntLE(((128 << 10) << 3) | (1 << 1) | +(i === blocks - 1), 6 + i * 4, 3);
       }
+      return frame;
+    }
+
+    it("decodes no more than 16 MiB that tar didn't read", async () => {
       await tarOnPath(UNREADING_TAR);
-      expect(path.basename(await extract(frame))).toBe("Bundle.app");
+      // Decoding up to the checksum would fail.
+      expect(path.basename(await extract(zerosWithBadChecksum(32)))).toBe("Bundle.app");
+    });
+
+    it("holds decoded data back while tar isn't reading", async () => {
+      // 256 MiB of zeros, compressed a MiB at a time.
+      const zeros = Buffer.alloc(1 << 20);
+      const frame = await buffer(
+        Readable.from(Array(256).fill(zeros)).pipe(createCompressor("zstd"))
+      );
+      await tarOnPath(`[ "$1" = -t ] && sleep 1\n${UNREADING_TAR}`);
+      const before = process.memoryUsage().arrayBuffers;
+      let peak = 0;
+      const sampler = setInterval(() => {
+        peak = Math.max(peak, process.memoryUsage().arrayBuffers - before);
+      }, 5);
+      try {
+        await extract(frame);
+      } finally {
+        clearInterval(sampler);
+      }
+      expect(peak).toBeLessThan(64 << 20);
     });
 
     it.runIf(gnuTar)(
@@ -639,6 +699,23 @@ describe.each(ARCHIVE_FORMATS)("safeExtractArchive hardening (%s)", (format) => 
     const member = await safeExtractArchive(tarPath, dest, "MyApp.app");
     expect(path.basename(member)).toBe("MyApp.app");
     expect(await fs.readlink(path.join(member, "Current"))).toBe("A");
+  });
+
+  // Each target normalizes to `.`, but `b` resolves to the extract dir and `c` above it.
+  it("rejects a chain of symlinks that climbs out through '..'", async () => {
+    const src = path.join(tmpDir, "chain");
+    await fs.mkdir(src);
+    await fs.symlink(".", path.join(src, "a"));
+    await fs.symlink("a/..", path.join(src, "b"));
+    await fs.symlink("b/..", path.join(src, "c"));
+    const tarPath = path.join(tmpDir, "chain.archive");
+    await createArchiveFile(src, tarPath, format);
+
+    const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+    await expect(safeExtractArchive(tarPath, dest, "chain")).rejects.toThrow(
+      "Archive contains a symlink whose target could not be confirmed safe"
+    );
+    expect(await fs.readdir(dest)).toEqual([]);
   });
 
   it("rejects a symlink whose name contains ' -> ' (parser-confusion bypass)", async () => {

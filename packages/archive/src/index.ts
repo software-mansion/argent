@@ -69,8 +69,10 @@ export function createCompressor(format: ArchiveFormat): zlib.Gzip | zlib.ZstdCo
  * archive's single top-level member, to stdout.
  */
 export function createTarArgs(sourcePath: string): string[] {
-  // `./` keeps a name like `-x` or `@list` from reading as an option or a bsdtar archive to copy.
-  return ["-cf", "-", "-C", dirname(sourcePath), `./${basename(sourcePath)}`];
+  const name = basename(sourcePath);
+  // `./` keeps `-x` or `@list` from reading as an option or a bsdtar archive to
+  // copy. Only there: the root's empty name would become `./`, the whole disk.
+  return ["-cf", "-", "-C", dirname(sourcePath), /^[-@]/.test(name) ? `./${name}` : name];
 }
 
 // iMovie.app's 59k members list in 24 MB under GNU tar, which counts bsdtar's
@@ -129,6 +131,24 @@ export async function createArchiveFile(
   // Opened before tar starts, so nothing can recreate the archive after the rm below.
   const out = createWriteStream(archivePath);
   await once(out, "ready");
+  try {
+    await archiveInto(out, sourcePath, format, signal);
+  } catch (err) {
+    // Still open when tar never started.
+    out.destroy();
+    await rm(archivePath, { force: true }).catch(() => {});
+    signal?.throwIfAborted();
+    throw err;
+  }
+}
+
+/** Write tar's archive of `sourcePath`, compressed, to `out`. tar's own failure wins. */
+async function archiveInto(
+  out: Writable,
+  sourcePath: string,
+  format: ArchiveFormat,
+  signal?: AbortSignal
+): Promise<void> {
   const child = spawn("tar", createTarArgs(sourcePath), {
     stdio: ["ignore", "pipe", "pipe"],
     signal,
@@ -142,18 +162,10 @@ export async function createArchiveFile(
     pipeline(child.stdout, createCompressor(format), out),
     exited,
   ]);
-  const err =
-    closed.status === "rejected"
-      ? closed.reason
-      : written.status === "rejected"
-        ? written.reason
-        : closed.value !== 0
-          ? new Error(`tar exited with code ${closed.value}: ${stderr.text().trim()}`)
-          : null;
-  if (err) {
-    await rm(archivePath, { force: true }).catch(() => {});
-    signal?.throwIfAborted();
-    throw err;
+  if (closed.status === "rejected") throw closed.reason;
+  if (written.status === "rejected") throw written.reason;
+  if (closed.value !== 0) {
+    throw new Error(`tar exited with code ${closed.value}: ${stderr.text().trim()}`);
   }
 }
 
@@ -305,30 +317,43 @@ function isSafeTarMember(memberPath: string, destDir: string): boolean {
   return resolved === root || resolved.startsWith(root + sep);
 }
 
+/** {@link runTar} for a vetting pass, whose failure means the archive can't be read. */
+async function readListing(archive: Archive, args: string[]): Promise<string> {
+  try {
+    return await runTar(archive, args);
+  } catch (err) {
+    throw new ArchiveError(
+      `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 /** List an archive's members without extracting, so they can be vetted first. */
 async function listTarMembers(archive: Archive): Promise<string[]> {
-  const stdout = await runTar(archive, ["-t"]);
+  const stdout = await readListing(archive, ["-t"]);
   return stdout
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
 }
 
-/** True when a symlink target would resolve outside the extract dir (absolute or `..`). */
+/** True when a symlink target is absolute or has a `..` segment. */
 function isEscapingLinkTarget(target: string): boolean {
   if (target.startsWith("/") || /^[A-Za-z]:[\\/]/.test(target)) return true;
-  return posix.normalize(target.replace(/\\/g, "/")).split("/").includes("..");
+  // Not normalized: `a/..` reads as `.`, but `..` applies where the link `a` points.
+  return target.replace(/\\/g, "/").split("/").includes("..");
 }
 
 /**
  * Reject members that could write or link outside `destDir`. Regular files and
- * directories pass; symlinks pass only when their target stays inside (a `.app`
- * carries internal ones like `Current -> A`); every other type (hardlink,
- * device, fifo, …) is refused. Only `tar -tv`'s type char and ` -> <target>`
- * are read — the column-formatted name is not stable across tar variants.
+ * directories pass; symlinks pass only with a relative target free of `..` (a
+ * `.app` carries internal ones like `Current -> A`); every other type
+ * (hardlink, device, fifo, …) is refused. Only `tar -tv`'s type char and
+ * ` -> <target>` are read — the column-formatted name is not stable across tar
+ * variants.
  */
 async function assertSafeMemberTypes(archive: Archive): Promise<void> {
-  const stdout = await runTar(archive, ["-tv"]);
+  const stdout = await readListing(archive, ["-tv"]);
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const type = line[0];
@@ -354,14 +379,7 @@ async function assertSafeMemberTypes(archive: Archive): Promise<void> {
 
 /** Throw {@link ArchiveError} unless every member is safe to extract into `destDir`. */
 async function assertSafeArchive(archive: Archive, destDir: string): Promise<void> {
-  let members: string[];
-  try {
-    members = await listTarMembers(archive);
-  } catch (err) {
-    throw new ArchiveError(
-      `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
+  const members = await listTarMembers(archive);
   if (members.length === 0) {
     throw new ArchiveError("Archive is empty.");
   }

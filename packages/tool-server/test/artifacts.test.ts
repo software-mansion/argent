@@ -449,6 +449,49 @@ describe("GET /artifacts/:id", () => {
     }
   );
 
+  // tar exits before its last output is read when the client is slow.
+  it.each(ARCHIVE_FORMATS)(
+    "sends the whole %s archive to a slow client",
+    async (format) => {
+      const root = await mkdtemp(join(tmpdir(), "artifact-slow-"));
+      const server = createServer();
+      try {
+        const bundle = join(root, "B.trace");
+        await mkdir(bundle);
+        const blob = randomBytes(16 << 20);
+        await writeFile(join(bundle, "blob"), blob);
+        const registry = stubRegistry();
+        const artifact = await registry.artifacts.register({
+          hostPath: bundle,
+          kind: "native-profile-trace",
+        });
+        handle = createHttpApp(registry);
+        server.on("request", handle.app);
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const { port } = server.address() as AddressInfo;
+
+        const res = await fetch(`http://127.0.0.1:${port}/artifacts/${artifact.id}`, {
+          headers: { Accept: ARCHIVE_CONTENT_TYPES[format] },
+        });
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of res.body!) {
+          chunks.push(chunk);
+          await new Promise((resolve) => setTimeout(resolve, 3));
+        }
+        const archivePath = join(root, "body");
+        await writeFile(archivePath, Buffer.concat(chunks));
+        const dest = await mkdtemp(join(root, "dest-"));
+        const member = await safeExtractArchive(archivePath, dest, "B.trace");
+        expect((await readFile(join(member, "blob"))).equals(blob)).toBe(true);
+      } finally {
+        server.closeAllConnections();
+        server.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    60_000
+  );
+
   it("404s an unknown artifact id", async () => {
     handle = createHttpApp(stubRegistry());
     const res = await supertest(handle.app).get("/artifacts/does-not-exist");
