@@ -842,7 +842,7 @@ describe("network-capture-start", () => {
       });
 
       expect(text).toBe(
-        "Request rn-net-1 not found. Network capture for this app stopped recording at a JavaScript reload; requests since the reload are not recorded. Call network-capture-start again, repeat the action, then read again."
+        "Request rn-net-1 not found. The JS layer of network capture for this app stopped recording at a JavaScript reload, so it recorded no requests since the reload. native-network-logs lists the requests of the native layer. To record the app's JavaScript requests again, call network-capture-start, repeat the action, then read again."
       );
     });
 
@@ -997,6 +997,24 @@ describe("network-capture-start", () => {
         expect(listed).toContain('"GET /after"');
       }
     );
+
+    it("says a read after a start that reached no app that only the JS layer recorded nothing, and names native-network-logs", async () => {
+      serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      ios.connected.add(APP);
+      const result = await start(IOS_UDID, APP);
+      expect(layer(result, "js")).toMatchObject({ armed: false });
+      expect(layer(result, "ios-native")).toEqual({ layer: "ios-native", armed: true });
+      // The app connects to Metro and sends a request, which the native layer records.
+      const rt = new FakeRuntime(APP);
+      await reconnect(PORT, IOS_UDID, rt);
+      rt.send("/api/checkout");
+      ios.record(APP);
+      const says =
+        "Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so the JS layer recorded no requests. native-network-logs lists the requests of the native layer. To record the app's JavaScript requests, call network-capture-start again, repeat the action, then read again.";
+
+      expect(await read(IOS_UDID)).toBe(says);
+      expect(await details(IOS_UDID, "rn-net-1")).toBe(`Request rn-net-1 not found. ${says}`);
+    });
 
     it("stores a started capture with an empty mark when Metro has no app connected yet", async () => {
       serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);

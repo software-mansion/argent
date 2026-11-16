@@ -84,9 +84,11 @@ export function jsNoLog(capture: JsCapture): string {
       ? `Network capture is stopped for ${capture.bundleId} (network-capture-stop), and the app's JS runtime reloaded since, which cleared its requests. Call network-capture-start to capture again, then repeat the action.`
       : `Network capture is stopped for ${capture.bundleId} (network-capture-stop), and nothing was recorded in the app's current JS runtime. Call network-capture-start to capture again, then repeat the action.`;
   }
+  // The native layer records on, so these texts speak for the JS layer only.
+  const native = "native-network-logs lists the requests of the native layer.";
   return capture.installed
-    ? "Network capture for this app stopped recording at a JavaScript reload; requests since the reload are not recorded. Call network-capture-start again, repeat the action, then read again."
-    : "Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so no requests are recorded. Call network-capture-start again, repeat the action, then read again.";
+    ? `The JS layer of network capture for this app stopped recording at a JavaScript reload, so it recorded no requests since the reload. ${native} To record the app's JavaScript requests again, call network-capture-start, repeat the action, then read again.`
+    : `Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so the JS layer recorded no requests. ${native} To record the app's JavaScript requests, call network-capture-start again, repeat the action, then read again.`;
 }
 
 // Auto-scaled base-1024 units: a big download reads `1.4 GB`, not `1433.6 MB`.
