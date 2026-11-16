@@ -4137,6 +4137,19 @@ describe("the tools on the Android native layer", () => {
     expect(device.files.has(dirFor())).toBe(true);
   });
 
+  it("a launch of an app without capture leaves the started or stopped capture of another app on the device as it is", async () => {
+    device.processes.set(OTHER, { pid: 6100, startTime: 70_000 });
+    const other = await createInspector(8081, OTHER);
+    expect(await other.startCapture(8081)).toEqual({ armed: true });
+    const before = device.commands.length;
+
+    expect(await followNativeNetworkCapture(SERIAL, PKG)).toEqual({});
+    expect(await other.stopCapture()).toEqual({ confirmed: true });
+    expect(await followNativeNetworkCapture(SERIAL, PKG)).toEqual({});
+    // Neither launch read a process or attached anything.
+    expect(device.commands).toHaveLength(before);
+  });
+
   it("a second stop changes nothing", async () => {
     const api = await armedInspector();
     const agent = agents[0]!;
