@@ -252,6 +252,8 @@ class FakeIos implements Pick<
   appState: NativeDevtoolsAppState = "not_running";
   /** What `ensureEnvReady` rejects with. */
   envError: Error | undefined;
+  /** What the service recorded when its env setup failed. */
+  initFailure: NativeDevtoolsInitFailure | null = null;
   /** A connected app acknowledges Network.enable. */
   acknowledges = true;
   /** The note the app's records keep. */
@@ -272,7 +274,7 @@ class FakeIos implements Pick<
   }
 
   getInitFailure(): NativeDevtoolsInitFailure | null {
-    return null;
+    return this.initFailure;
   }
   async ensureEnvReady(): Promise<void> {
     if (this.envError) throw this.envError;
@@ -1269,6 +1271,23 @@ describe("network-capture-start", () => {
       });
       expect(ios.calls).toEqual([]);
       expect(ios.networkCaptureMark(APP)).toBeUndefined();
+    });
+
+    it("reports native devtools that failed to initialize unavailable, so a start with no other layer fails", async () => {
+      serve(PORT, IOS_UDID, undefined);
+      ios.envError = new Error("simctl spawn failed");
+      ios.initFailure = { attempts: 1, lastError: "simctl spawn failed", givenUp: false };
+
+      const err = await start(IOS_UDID, APP).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect(err?.message).toContain(
+        `ios-native: Native devtools failed to initialize for ${IOS_UDID} after 1 attempts. Last error: simctl spawn failed. Try shutting down and re-booting the simulator, or restart CoreSimulatorService.`
+      );
+      expect(ios.calls).toEqual([]);
     });
 
     it.each([
