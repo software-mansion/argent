@@ -996,12 +996,12 @@ describe("network-capture-start", () => {
       {
         logged: "nothing",
         before: 0,
-        says: "No network traffic captured. The app's JS runtime does not record new requests: network-capture-stop paused it, and no network-capture-start reached it since. Call network-capture-start, then repeat the action.",
+        says: "No network traffic captured. The app's JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since. Call network-capture-start, then repeat the action.",
       },
       {
         logged: "a request",
         before: 1,
-        says: "=== NETWORK LOGS (page 1/1, 1 total; the app's JS runtime does not record new requests: network-capture-stop paused it, and no network-capture-start reached it since, so call network-capture-start, then repeat the action) ===",
+        says: "=== NETWORK LOGS (page 1/1, 1 total; the app's JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since, so call network-capture-start, then repeat the action) ===",
       },
     ])(
       "says a read of a started capture with $logged logged that the app's runtime does not record while a stop's pause stays there",
@@ -1079,6 +1079,25 @@ describe("network-capture-start", () => {
         expect(await read(udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
       }
     );
+
+    it("does not name network-capture-stop as the cause of a pause that stop-all-simulator-servers left", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
+      await stopAll([IOS_UDID]);
+      ios.connected.add(APP);
+      await reconnect(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      await start(IOS_UDID, APP);
+
+      // The app connects again with the JS context that stop-all-simulator-servers paused.
+      await reconnect(PORT, IOS_UDID, rt);
+      rt.send("/dropped");
+
+      expect(await read(IOS_UDID)).toBe(
+        "No network traffic captured. The app's JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since. Call network-capture-start, then repeat the action."
+      );
+    });
 
     it("stores a started capture with an empty mark when Metro has no app connected yet", async () => {
       serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);

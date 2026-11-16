@@ -39,7 +39,7 @@ const NOT_STARTED =
   "Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then";
 
 const PAUSED_BY_STOP =
-  "JS runtime does not record new requests: network-capture-stop paused it, and no network-capture-start reached it since";
+  "JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since";
 
 /**
  * The JS capture a read of `payload` reads, or undefined before any start. A runtime of another
