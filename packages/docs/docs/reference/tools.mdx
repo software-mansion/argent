@@ -600,14 +600,14 @@ While `react-profiler-stop` collects a run, wait for its result:
 
 The old `flow-*` names, for example `flow-execute`, still call these tools. See [Record and replay e2e tests](/docs/features/e2e).
 
-| Tool                   | Description                                                         |
-| ---------------------- | ------------------------------------------------------------------- |
-| `e2e-start-recording`  | Start recording a new e2e test, resetting `.argent/e2e/<name>.yaml` |
-| `e2e-add-step`         | Execute a tool call and record it as a step in the open recording   |
-| `e2e-add-echo`         | Record an echo step that prints a message during replay             |
-| `e2e-add-script`       | Run a local `.mjs` file and add it to the open recording            |
-| `e2e-finish-recording` | Finish the recording and write the e2e test to disk                 |
-| `e2e-execute`          | Run a saved e2e test                                                |
+| Tool                   | Description                                                                |
+| ---------------------- | -------------------------------------------------------------------------- |
+| `e2e-start-recording`  | Start recording a new e2e test, resetting `.argent/e2e/<name>.yaml`        |
+| `e2e-add-step`         | Execute a tool call and record it as a step in the open recording          |
+| `e2e-add-echo`         | Record an echo step that prints a message during replay                    |
+| `e2e-add-script`       | Run a local JavaScript or TypeScript file and add it to the open recording |
+| `e2e-finish-recording` | Finish the recording and write the e2e test to disk                        |
+| `e2e-execute`          | Run a saved e2e test                                                       |
 
 ## Design variants
 
