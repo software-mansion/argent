@@ -28,14 +28,12 @@ For implementation tasks that modify visible UI, this workflow also serves as a 
 ## 2. Example: login flow
 
 ```
-1. describe → login screen; frames for the email field, password field and Login button
-2. gesture-tap at the email field's frame centre (x + width/2, y + height/2)
+1. describe → login screen
+2. gesture-tap email field (frame centre from the tree)
 3. keyboard { text: "user@example.com" }
-4. gesture-tap at the password field's centre, from the tree step 3 returned
-5. run-sequence: keyboard { text: "{{secret:APP_PASSWORD}}" }, then gesture-tap at the Login button's centre from step 4's tree
-   (keyboard { key: "enter" } instead if the software keyboard covers the button)
-6. await-ui-element for a home screen element → home screen appeared
-   (a call that types a secret returns no screenshot or tree)
+4. gesture-tap password field (from the returned tree)
+5. run-sequence: keyboard { text: "{{secret:APP_PASSWORD}}" }, gesture-tap Login button
+6. await-ui-element → home screen appeared
 ```
 
 > **Credentials:** never type plaintext credentials; use a `{{secret:<NAME>}}` placeholder (`keyboard`'s `text` parameter lists where it is read from and what to do when a name is missing). Never invent credentials or echo secret values into reports or saved files.
