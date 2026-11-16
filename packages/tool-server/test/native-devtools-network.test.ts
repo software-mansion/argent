@@ -1060,6 +1060,32 @@ describe("native-devtools network capture stop", () => {
     app.close();
     await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
   });
+
+  it("native-network-logs says that the process which did not acknowledge the stop may still intercept, until its connection closes", async () => {
+    const api = await startService();
+    const app = await stopUnacknowledged(api);
+    const tool = createNativeNetworkLogsTool(new Registry());
+    const read = () =>
+      tool.execute(
+        { nativeDevtools: api },
+        { udid: UDID, bundleId: BUNDLE, limit: 50, clear: false }
+      ) as Promise<{ header: string; armed: boolean; stopped?: true }>;
+    const stopped =
+      "capture stopped by network-capture-stop; network-capture-start turns it on again";
+
+    expect(await read()).toMatchObject({
+      header: `ios-native: stopped, 0 requests (${stopped}; the app's process did not acknowledge Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture)`,
+      armed: false,
+      stopped: true,
+    });
+
+    app.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+    expect(await read()).toMatchObject({
+      header: `ios-native: stopped, 0 requests (${stopped})`,
+      stopped: true,
+    });
+  });
 });
 
 describe("native-devtools dispose with network capture", () => {

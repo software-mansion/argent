@@ -16,10 +16,12 @@ import {
 } from "../../blueprints/native-devtools";
 import {
   androidNetworkInspectorRef,
+  liveAndroidNetworkCaptures,
   type AndroidCaptureState,
   type AndroidNetworkInspectorApi,
   type AndroidNetworkInspectorState,
 } from "../../blueprints/android-network-inspector";
+import { liveIosNetworkCaptures } from "../../blueprints/ios-network-records";
 import type { NativeNetworkRecord, NativeRecordState } from "../../utils/native-network-record";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
@@ -180,7 +182,7 @@ Android results also carry capture and captureDetail. When capture is active, ca
         const listing = listNative("ios-native", store?.records(port) ?? [], params.limit, {
           armed: false,
           state: "stopped",
-          detail: [STOPPED_DETAIL],
+          detail: stoppedDetail(liveIosNetworkCaptures(params.udid).includes(params.bundleId)),
         });
         if (params.clear) store?.clear();
         return { ...listing, stopped: true };
@@ -221,6 +223,20 @@ Android results also carry capture and captureDetail. When capture is active, ca
 
 const STOPPED_DETAIL =
   "capture stopped by network-capture-stop; network-capture-start turns it on again";
+
+/**
+ * While stopped, the capture lookups list an app only while its connected
+ * process has not acknowledged the stop, as launch-app and the profiler starts
+ * say.
+ */
+function stoppedDetail(mayIntercept: boolean): string[] {
+  return mayIntercept
+    ? [
+        STOPPED_DETAIL,
+        "the app's process did not acknowledge Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture",
+      ]
+    : [STOPPED_DETAIL];
+}
 
 /** The answer before any start: no service was reached, and nothing was turned on. */
 function notStarted(layer: NativeNetworkRecord["layer"], bundleId: string): NativeListing {
@@ -291,7 +307,9 @@ function listAndroidNative(
         : state.notAttached
           ? "not attached"
           : "not armed",
-    detail: state.stopped ? [STOPPED_DETAIL] : headerDetail(state),
+    detail: state.stopped
+      ? stoppedDetail(liveAndroidNetworkCaptures(params.udid).includes(params.bundleId))
+      : headerDetail(state),
   });
   if (params.clear) api.clear();
   return {

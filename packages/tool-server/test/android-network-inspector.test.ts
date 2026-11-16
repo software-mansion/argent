@@ -77,6 +77,8 @@ const SECRET_SHAPE = /^[0-9a-f]{64}$/;
 const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 const STOPPED_REASON =
   "capture stopped by network-capture-stop; network-capture-start turns it on again";
+const UNACKNOWLEDGED_STOP =
+  "the app's process did not acknowledge Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture";
 const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
 const STOPPED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop); this process runs without it until network-capture-start`;
 const LOADED_NOTE =
@@ -4453,6 +4455,23 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
 
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+  });
+
+  it("native-network-logs says that the process which did not acknowledge the stop may still intercept, until its connection closes", async () => {
+    const { api, agent } = await stopUnacknowledged();
+
+    expect(await listNative(api)).toMatchObject({
+      header: `android-native: stopped, 0 requests (${STOPPED_REASON}; ${UNACKNOWLEDGED_STOP})`,
+      armed: false,
+      stopped: true,
+    });
+
+    await agent.close();
+    await vi.waitFor(() => expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]));
+    expect(await listNative(api)).toMatchObject({
+      header: `android-native: stopped, 0 requests (${STOPPED_REASON})`,
+      stopped: true,
+    });
   });
 
   it("a stop the agent does not acknowledge within 5 s fails the open requests, and its late reply fails none of the next start's", async () => {
