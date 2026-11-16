@@ -1296,6 +1296,49 @@ describe("iOS native network records: request body still being sent", () => {
     expect(await after).toEqual(body("done"));
   });
 
+  /** Ends the upload without a complete response: the body still downloads, or the request failed. */
+  const unfinished: Array<[string, (agent: ReturnType<typeof agentOn>) => void]> = [
+    [
+      "while its response body still downloads",
+      (agent) => agent.responseReceived("upload", "https://api.example.com/upload"),
+    ],
+    ["after the request failed", (agent) => agent.loadingFailed("upload", "cancelled")],
+  ];
+
+  it.each(unfinished)(
+    "says the agent no longer holds the body when the agent holds no request, %s",
+    async (_when, end) => {
+      const { app, store, agent, id } = uploading();
+      end(agent);
+      const read = store.requestPostData(id);
+      await settle();
+      app.sent[0]!.fail(
+        agentError("Network.getRequestPostData", "No request stored for requestId")
+      );
+      expect(await read).toEqual(refused("the agent no longer holds this body"));
+    }
+  );
+
+  it.each(unfinished)(
+    "never asks again for a read sent %s, however late the app answers",
+    async (_when, end) => {
+      const { app, store, agent, id } = uploading();
+      end(agent);
+      const read = track(store.requestPostData(id));
+      await settle();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(read.value).toEqual(refused(NO_ANSWER));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      const later = track(store.requestPostData(id));
+      await settle();
+      expect(app.request).toHaveBeenCalledTimes(1);
+      app.sent[0]!.reply({ postData: "done", base64Encoded: false });
+      await settle();
+      expect(later.value).toEqual(body("done"));
+    }
+  );
+
   it("says the app did not answer, not that it is still sending, once the request has a response", async () => {
     const { app, store, agent, id } = uploading();
     agent.responseReceived("upload", "https://api.example.com/upload");
