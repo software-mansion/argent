@@ -42,7 +42,10 @@ export interface StoppedLayer {
   layer: CaptureLayer;
   /** True only when the layer did not confirm the stop. */
   armed: boolean;
-  /** The requests the layer keeps for the app, as its listing counts them. */
+  /**
+   * The requests the layer keeps for the app, as its listing counts them, or 0
+   * when the stop could not count them, as on a JS runtime it did not reach.
+   */
   total: number;
   /** What kept the stop from reaching the layer, or what it left as it was. */
   reason?: string;

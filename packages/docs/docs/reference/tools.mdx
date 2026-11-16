@@ -234,12 +234,12 @@ Until then, `view-network-logs` says that the capture stopped recording at the r
 
 The result contains `status` and `layers`. Each entry of `layers` contains these fields:
 
-| Field    | Content                                                                                                           |
-| -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `layer`  | `js`, `ios-native` or `android-native`                                                                            |
-| `armed`  | `false` when the layer confirmed the stop. `true` when the layer did not confirm the stop. The `reason` tells why |
-| `total`  | The number of requests that the layer keeps for the app                                                           |
-| `reason` | Why the stop did not reach the layer, what the stop did not change, or `capture was not started for this app`     |
+| Field    | Content                                                                                                                                                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `layer`  | `js`, `ios-native` or `android-native`                                                                                                                                                     |
+| `armed`  | `false` when the layer confirmed the stop. `true` when the layer did not confirm the stop. The `reason` tells why                                                                          |
+| `total`  | The number of requests that the layer keeps for the app. `0` when the stop cannot count the requests, for example when it does not reach the JS runtime of the app. The `reason` tells why |
+| `reason` | Why the stop did not reach the layer, what the stop did not change, or `capture was not started for this app`                                                                              |
 
 If a layer has no started capture, the stop does not start it. A layer that Argent cannot reach does not make the tool fail. The `reason` of the layer tells why.
 
