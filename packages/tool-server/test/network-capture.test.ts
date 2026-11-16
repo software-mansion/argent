@@ -1400,6 +1400,39 @@ describe("network-capture-start", () => {
         expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
       }
     );
+
+    it("starts an app on a remote simulator while this Mac's Xcode first launch is pending, as it arms through sim-remote", async () => {
+      serve(PORT, REMOTE_UDID, new FakeRuntime(APP));
+      xcode.pending = true;
+
+      const result = await start(REMOTE_UDID, APP);
+
+      expect(layer(result, "js")).toEqual({ layer: "js", armed: true });
+      expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
+    });
+
+    it("starts the other layers while Xcode's first launch is pending when the native devtools service cannot start", async () => {
+      serve(PORT, IOS_UDID, new FakeRuntime(APP));
+      xcode.pending = true;
+      const refusal =
+        "NativeDevtools could not attach to the socket its provider published at /tmp/provider.sock: ECONNREFUSED.";
+      ios.factoryError = new Error(refusal);
+
+      const result = await start(IOS_UDID, APP);
+
+      expect(result).toEqual({
+        status: "ok",
+        layers: [
+          { layer: "js", armed: true },
+          {
+            layer: "ios-native",
+            armed: false,
+            unavailable: true,
+            reason: `[NativeDevtools:${IOS_UDID}] ${refusal}`,
+          },
+        ],
+      });
+    });
   });
 });
 
