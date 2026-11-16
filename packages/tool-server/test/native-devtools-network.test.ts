@@ -861,6 +861,29 @@ describe("native-devtools network capture stop", () => {
     ).toEqual(["https://example.com/open"]);
   });
 
+  it("stops only the app it is called for: another app of the simulator still arms at its start and records", async () => {
+    const OTHER = "com.example.other";
+    const api = await startService();
+    await connectArmedApp(api);
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({ confirmed: true });
+
+    const other = await connectApp(api.socketPath, { bundleId: OTHER });
+    await vi.waitFor(() => expect(api.isConnected(OTHER)).toBe(true));
+    await expect(api.startNetworkCapture(OTHER, 8081)).resolves.toBe(true);
+    expect(api.networkRecords(OTHER)!.state().armed).toBe(true);
+
+    for (const frame of requestEvents("other", "https://example.com/other")) other.send(frame);
+    await vi.waitFor(() =>
+      expect(
+        api
+          .networkRecords(OTHER)
+          ?.records(8081)
+          .map((r) => r.request.url)
+      ).toEqual(["https://example.com/other"])
+    );
+    expect(api.isNetworkCaptureStopped(BUNDLE)).toBe(true);
+  });
+
   it("does not arm an app whose Network.enable reply comes after its stop, and sends Network.enable again at the next start", async () => {
     const api = await startService();
     const app = await connectApp(api.socketPath, { acknowledge: false });
