@@ -1745,6 +1745,30 @@ describe("network-capture-stop", () => {
     expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", installed: true });
   });
 
+  it("says the JS layer confirmed the stop when only the count after the pause throws", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    await start(SERIAL, APP);
+    rt.send("/a");
+    const evaluate = rt.evaluate.bind(rt);
+    rt.evaluate = (expr: string) => {
+      if (scriptName(expr) === "read") throw new Error("CDP disconnected");
+      return evaluate(expr);
+    };
+
+    const result = await stop(SERIAL, APP);
+
+    expect(layer(result, "js")).toEqual({
+      layer: "js",
+      armed: false,
+      total: 0,
+      reason:
+        "the app's JS runtime paused capture, but did not answer the count of its requests: CDP disconnected",
+    });
+    expect(rt.paused).toBe(true);
+    expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", paused: true });
+  });
+
   it("stores a stopped JS layer, with no interceptor to pause, after a start that installed none when the runtime cannot be reached", async () => {
     // The start found Metro with no app connected, so it installed nothing.
     serve(PORT, SERIAL, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);

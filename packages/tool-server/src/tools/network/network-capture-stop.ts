@@ -205,7 +205,16 @@ async function stopJsLayer(
   const stored = storeStopped(false);
   try {
     await dbg.cdp.evaluate(makeNetworkCaptureControlScript(true), { timeout: JS_ANSWER_WAIT_MS });
-    stored.paused = true;
+  } catch (err) {
+    return {
+      layer: "js",
+      armed: true,
+      total: 0,
+      reason: `the app's JS runtime did not pause capture: ${errorMessage(err)}`,
+    };
+  }
+  stored.paused = true;
+  try {
     const { total, interceptorInstalled } = JSON.parse(
       String(await dbg.cdp.evaluate(makeNetworkLogReadScript(0, 0, port)))
     ) as { total: number; interceptorInstalled: boolean };
@@ -216,11 +225,13 @@ async function stopJsLayer(
       ...(prior ? {} : { reason: NOT_STARTED }),
     };
   } catch (err) {
+    // The pause took; only the count is missing.
+    const uncounted = `the app's JS runtime paused capture, but did not answer the count of its requests: ${errorMessage(err)}`;
     return {
       layer: "js",
-      armed: true,
+      armed: false,
       total: 0,
-      reason: `the app's JS runtime did not pause capture: ${errorMessage(err)}`,
+      reason: prior ? uncounted : `${uncounted}; ${NOT_STARTED}`,
     };
   }
 }
