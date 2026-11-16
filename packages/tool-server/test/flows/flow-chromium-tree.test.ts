@@ -163,7 +163,9 @@ describe("adaptChromiumTreeForFlows", () => {
           el({
             identifier: "form",
             frame: row,
-            children: [el({ role: "input", password: true, clickable: true, frame: row })],
+            children: [
+              el({ role: "input", label: "Password", password: true, clickable: true, frame: row }),
+            ],
           }),
           el({
             identifier: "offscreen",

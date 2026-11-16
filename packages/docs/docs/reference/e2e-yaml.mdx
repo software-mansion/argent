@@ -132,6 +132,7 @@ The own text of these elements can hold the text of their children. A `text` sel
 
 - A React Native view with the text of its children as its label, on Android and iOS
 - An element in a Vega WebView with the text of its children as its label
+- An element in web content on Android, such as a link, with the text of its children as its content description
 - A Chromium element with an `aria-labelledby` label that names the element itself, a child or an ancestor
 - In the web content of a Mac app:
   - An element that a browser names from its content, such as a button, link, heading, table cell, label, tab, option or menu item
@@ -340,18 +341,18 @@ On every platform except Vega, Argent leaves an element without width or height 
 
 In a `text` condition, the text of an element includes the text of its children. When the text of its children holds the own text as whole words, the element reads only the text of its children. It does not include the text of these children:
 
-- A child with its own `id`. On Vega, an `id` made only of digits does not keep the text of a child out, also when the app sets it.
+- A child with its own `id`. On Vega, an `id` made only of digits does not keep the text of a child out, also when the app sets it. On a physical iPhone, a child with its own `id` and no size does not keep the text of its children out.
 - A password field on Android, Chromium or a Mac app
 - A child that is off screen
 - On Android, iOS and a Mac app, a child scrolled out of its scroll view
 
 So `'^$'` passes on a container that has all its text in such children.
 
-In the web content of a Mac app, an element reads all the text that shows under it. This includes the text of children with their own `id`. It does not include the text in an `input`, `textarea` or `select`, a shadow root or an `iframe`. So `'^$'` can pass on an element there that has all its text in a shadow root or an `iframe`. A Mac view with an identifier that is not an accessibility element also reads all the text that shows under it. An example is a React Native view with a `testID`.
+In the web content of a Mac app, an element reads all the text that shows under it. This includes the text of children with their own `id`. It does not include the text in an `input`, `textarea` or `select`, a shadow root or an `iframe`. So `'^$'` can pass on an element there that has all its text in a shadow root or an `iframe`. This text also does not include the `aria-label` of the element. A comparator that matches only the `aria-label` still passes. A Mac view with an identifier that is not an accessibility element also reads all the text that shows under it. An example is a React Native view with a `testID`.
 
-React Native can give a view, such as a `Pressable`, the text of all its children as its label. On iOS, this is the accessibility label. On Android, it is the content description. Android, and iOS from React Native 0.81 on the new architecture, join the texts with `, `. This label also holds the text of children with their own `id` or off screen. So `'^$'` does not pass on such a view. On Vega, an element in a WebView can get the text of all its children as its label. This label also holds the text of children that are off screen.
+React Native can give a view, such as a `Pressable`, the text of all its children as its label. On iOS, this is the accessibility label. On Android, it is the content description. Android, and iOS from React Native 0.81 on the new architecture, join the texts with `, `. This label also holds the text of children with their own `id` or off screen. So `'^$'` does not pass on such a view. On Vega, an element in a WebView can get the text of all its children as its label. This label also holds the text of children that are off screen. Web content on Android can also give an element, such as a link, the text of its children as its content description.
 
-On iOS, a scroll view with scroll bars also reads their labels, for example `Vertical scroll bar, 1 page 0%`. On a physical iPhone, it always reads them. On an iOS simulator, it reads them only while the scroll bars show, for example during a scroll. So `'^$'` does not pass then on a scroll view, or on a container that holds a scroll view without its own `id`.
+On iOS, a scroll view with scroll bars also reads their labels, for example `Vertical scroll bar, 1 page`. On a physical iPhone, it always reads them. On an iOS simulator, it reads them only while the scroll bars show, for example during a scroll. So `'^$'` does not pass then on a scroll view, or on a container that holds a scroll view without its own `id`.
 
 A `text` condition also passes when its comparator matches only the own text of the element, without the text of its children. This applies only when the own text is not empty, for example a label. So `equals: Cart` passes on a button with the label `Cart` and a child with the text `3`. A negative pattern, such as `'^[^@]*$'`, can also pass on an element with a label when only a child contains `@`.
 
@@ -386,7 +387,7 @@ When an element holds text, Argent reads it like this:
 
 - A password field on Android, Chromium or a Mac app reads `[password]`, also when it has a label.
 - A Chromium `input` or `textarea` with an `aria-label`, `aria-labelledby` or `placeholder` reads that label or placeholder, not the typed text.
-- A Chromium element other than an `input` or `textarea`, with an `aria-label`, `aria-labelledby` or `title`, reads that label or title, and then its text. When the text between its tags is the same as the label, it reads the label once. This applies only to a label of up to 200 characters. An `img` with an `alt` reads the `alt` in place of the `title`.
+- A Chromium element other than an `input` or `textarea`, with an `aria-label`, `aria-labelledby` or `title`, reads that label or title, and then its text. When the text between its tags, outside its child elements, is the same as the label, it reads the label once. This applies only to a label of up to 200 characters. An `img` with an `alt` reads the `alt` in place of the `title`.
 - An Android element with a content description reads the description, and then its text. When its text is the same as the description, it reads the description once.
 - An iOS element with an accessibility label reads the label and no value on a simulator. On a physical iPhone, it reads the label and then its value.
 
