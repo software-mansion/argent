@@ -169,6 +169,8 @@ function refused(reason: string): NativeNetworkBody {
 
 const STILL_SENDING = "the app is still sending this request body; read it again later";
 const NO_ANSWER = "the app did not answer within 5 s; read it again later";
+const NO_RESPONSE_ANSWER =
+  "the app did not answer an earlier body read within 10 s; read it again later";
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
 
 interface RequestInit {
@@ -1711,6 +1713,91 @@ describe("iOS native network records: one body read at a time", () => {
     expect(await a).toEqual(refused(PROCESS_GONE));
     expect(await b).toEqual(refused(PROCESS_GONE));
     expect(app.sent).toHaveLength(1);
+  });
+
+  it("answers the response body reads that wait behind a read the app leaves unanswered when that read times out, and sends none of them", async () => {
+    vi.useFakeTimers();
+    const { app, store, agent } = bodyStore();
+    const rids = ["a", "b", "c", "d"];
+    for (const rid of rids) agent.complete(rid, `https://api.example.com/${rid}`);
+
+    // The app answers nothing, as when it is stopped in the debugger.
+    const reads = rids.map((rid) => track(store.responseBody(idOf(store, rid))));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reads.map((read) => read.value)).toEqual([
+      refused(
+        `the agent did not return the body: ${LABEL}: Network.getResponseBody got no reply within 10000 ms`
+      ),
+      refused(NO_RESPONSE_ANSWER),
+      refused(NO_RESPONSE_ANSWER),
+      refused(NO_RESPONSE_ANSWER),
+    ]);
+    expect(app.request).toHaveBeenCalledTimes(1);
+
+    // No reason is kept, so a read asked after the timeout asks the app again.
+    const again = store.responseBody(idOf(store, "b"));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    expect(app.sent[1]!.params).toEqual({ requestId: "b" });
+    app.sent[1]!.reply({ body: "B", base64Encoded: false, wasTruncated: false });
+    expect(await again).toEqual(body("B"));
+  });
+
+  /** A response read the app leaves unanswered, then a request body read and a response read behind it. */
+  async function behindAStall() {
+    vi.useFakeTimers();
+    const { app, store, agent } = bodyStore();
+    agent.complete("a", "https://api.example.com/a");
+    agent.requestWillBeSent("upload", "https://api.example.com/upload", {
+      method: "POST",
+      hasPostData: true,
+    });
+    agent.complete("b", "https://api.example.com/b");
+
+    const a = track(store.responseBody(idOf(store, "a")));
+    const upload = track(store.requestPostData(idOf(store, "upload")));
+    const b = track(store.responseBody(idOf(store, "b")));
+    await settle();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(a.value).toMatchObject({ available: false });
+    // A request body read still goes out.
+    expect(app.sent.map((read) => read.method)).toEqual([
+      "Network.getResponseBody",
+      "Network.getRequestPostData",
+    ]);
+    return { app, upload, b };
+  }
+
+  it.each<[string, (read: SentRead) => void]>([
+    ["with the body", (read) => read.reply({ postData: "U", base64Encoded: false })],
+    [
+      "with an error",
+      (read) => read.fail(agentError(read.method, "No request post data available for requestId")),
+    ],
+  ])(
+    "sends a response body read that waited behind a read the app left unanswered once the app answers a later read %s",
+    async (_how, answer) => {
+      const { app, upload, b } = await behindAStall();
+      answer(app.sent[1]!);
+      await settle();
+      expect(upload.settled).toBe(true);
+
+      expect(app.request).toHaveBeenCalledTimes(3);
+      expect(app.sent[2]!.params).toEqual({ requestId: "b" });
+      app.sent[2]!.reply({ body: "B", base64Encoded: false, wasTruncated: false });
+      await settle();
+      expect(b.value).toEqual(body("B"));
+    }
+  );
+
+  it("gives a response body read that waited behind a read the app left unanswered the closed-connection reason once the connection closes", async () => {
+    const { app, b } = await behindAStall();
+    app.setLive(undefined);
+    app.sent[1]!.fail(closedError(app.sent[1]!.method));
+    await settle();
+    expect(b.value).toEqual(refused(CONNECTION_CLOSED));
   });
 });
 

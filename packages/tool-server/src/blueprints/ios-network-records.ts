@@ -56,6 +56,8 @@ export const KEPT_BODY_CHARS_BUDGET = 64 * 1024 * 1024;
 const STILL_SENDING = "the app is still sending this request body; read it again later";
 /** A request body read of a request that has ended, which the app did not answer in time. */
 const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; read it again later`;
+/** A response body read that waited behind a read the app did not answer in time. */
+const NO_EARLIER_ANSWER = `the app did not answer an earlier body read within ${RESPONSE_BODY_TIMEOUT_MS / 1000} s; read it again later`;
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
 const REQUEST_BODY_GONE = "the agent holds no body for this request";
 const BODY_NO_LONGER_HELD = "the agent no longer holds this body";
@@ -156,6 +158,12 @@ export function createIosNetworkRecords(
    * other replies and events on the connection while it is sent.
    */
   const bodyReads = new Map<string, Promise<unknown>>();
+  /**
+   * Per connection, when a body read last got no reply in time, until the app
+   * answers a later read. A response body read asked before then is not sent
+   * when its turn comes: each read would wait its own 10 s, one after another.
+   */
+  const stalls = new Map<number, number>();
   /** Closed connections whose process the host found ended. */
   const endedConnections = new Set<number>();
   /** The newest connection of the app seen, live or closed since. */
@@ -324,7 +332,13 @@ export function createIosNetworkRecords(
       if (!body.available && bodies.get(cacheKey) === read) bodies.delete(cacheKey);
       dropOldBodies();
     });
+    const askedAt = performance.now();
     void withKeyedLock(bodyReads, String(record.connection), () => {
+      if (kind === "response" && (stalls.get(record.connection) ?? -Infinity) > askedAt) {
+        adoptAnswer(unavailable(NO_EARLIER_ANSWER));
+        markSent();
+        return answer;
+      }
       read.heldOpen = kind === "post" && record.state === "pending";
       void sendBodyRead(record, kind).then(adoptAnswer);
       markSent();
@@ -391,8 +405,18 @@ export function createIosNetworkRecords(
         )
       );
     }).then(
-      (result) => toBody(result, kind),
-      (err: unknown) => unavailable(failureReason(record, kind, method, err))
+      (result) => {
+        stalls.delete(record.connection);
+        return toBody(result, kind);
+      },
+      (err: unknown) => {
+        if (getFailureSignal(err)?.error_code === FAILURE_CODES.NDJSON_CDP_REQUEST_TIMEOUT) {
+          stalls.set(record.connection, performance.now());
+        } else {
+          stalls.delete(record.connection);
+        }
+        return unavailable(failureReason(record, kind, method, err));
+      }
     );
   }
 
