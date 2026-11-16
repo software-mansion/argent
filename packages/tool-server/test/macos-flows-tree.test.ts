@@ -579,6 +579,23 @@ describe("macOS describe and flow trees of one read", () => {
     expect(JSON.stringify(describe) + JSON.stringify(flow)).not.toMatch(/hunter2|•/);
   });
 
+  // Documented in reference/e2e-yaml.mdx.
+  it("keeps a secure field's placeholder out of the container around it, so '^$' passes there", async () => {
+    const tree = probeTree();
+    (windowRoot(tree).children as Json[]).push(
+      axNode("AXGroup", rect(0.6, 0.9, 0.3, 0.06), { identifier: "login" }, [
+        axNode("AXTextField", rect(0.61, 0.91, 0.28, 0.04), {
+          subrole: "AXSecureTextField",
+          placeholder: "Password",
+          value: "•••",
+        }),
+      ])
+    );
+    const group = findAll(await flowTree({ trees: [tree] }), { identifier: "login" });
+    expect(group.map(assertText)).toEqual([""]);
+    expect(evaluateCondition("text", "^$", group, "matches", undefined, true)).toBe(true);
+  });
+
   it.each([
     "_NS:87",
     "_popUpItemAction:",
