@@ -15,6 +15,7 @@ import {
   listArgentSkillsInLock,
   listBundledSkills,
   npxChildEnv,
+  removePath,
   withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
@@ -199,10 +200,8 @@ export function pruneLegacySkillDirs(
     for (const name of legacy) {
       const dir = path.join(targetPath, name);
       try {
-        // lstat: an editor link into an emptied .agents/skills dangles.
-        if (!fs.lstatSync(dir, { throwIfNoEntry: false })) continue;
-        fs.rmSync(dir, { recursive: true, force: true });
-        removed.add(name);
+        // An editor link into an emptied .agents/skills dangles, and goes too.
+        if (removePath(dir)) removed.add(name);
       } catch {
         // non-fatal
       }
