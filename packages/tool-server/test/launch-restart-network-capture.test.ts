@@ -974,5 +974,46 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
         await expect(pending).resolves.toBe(NOT_CONNECTED_NOTE);
       });
     });
+
+    /**
+     * The host check after a close runs without a caller to catch its errors.
+     * A failed check is no answer: the wait goes on, and no unhandled
+     * rejection stops the tool-server.
+     */
+    it("keeps waiting when a connection closes and the host cannot list the running apps", async () => {
+      const unhandled: unknown[] = [];
+      const record = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", record);
+      try {
+        await withService(async (api) => {
+          await expect(api.activateNetworkInspection(APP)).resolves.toBe(false);
+          const app = await dial(api, { acknowledge: false });
+          await vi.waitFor(() => expect(api.networkRecords(APP)?.state().pid).toBe(PID));
+
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          const note = api.networkCaptureAfterLaunch(APP);
+          await launchWaitStarted();
+
+          // As when the simulator stops answering during the launch.
+          sim.launchctlFails = true;
+          const probes = probeCalls().length;
+          app.close();
+          const deadline = performance.now() + 2_000;
+          while (probeCalls().length === probes && performance.now() < deadline) {
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          expect(probeCalls().length).toBeGreaterThan(probes);
+
+          expect(await settledWithin(note, 50)).toBe("still waiting");
+          await vi.advanceTimersByTimeAsync(LAUNCH_ARM_WAIT_MS);
+          await expect(note).resolves.toBe(NOT_CONNECTED_NOTE);
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", record);
+      }
+    });
   });
 });
