@@ -861,6 +861,29 @@ describe("native-devtools network capture stop", () => {
     ).toEqual(["https://example.com/open"]);
   });
 
+  it("stops only the app it is called for: another app of the simulator still arms at its start and records", async () => {
+    const OTHER = "com.example.other";
+    const api = await startService();
+    await connectArmedApp(api);
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({ confirmed: true });
+
+    const other = await connectApp(api.socketPath, { bundleId: OTHER });
+    await vi.waitFor(() => expect(api.isConnected(OTHER)).toBe(true));
+    await expect(api.startNetworkCapture(OTHER, 8081)).resolves.toBe(true);
+    expect(api.networkRecords(OTHER)!.state().armed).toBe(true);
+
+    for (const frame of requestEvents("other", "https://example.com/other")) other.send(frame);
+    await vi.waitFor(() =>
+      expect(
+        api
+          .networkRecords(OTHER)
+          ?.records(8081)
+          .map((r) => r.request.url)
+      ).toEqual(["https://example.com/other"])
+    );
+    expect(api.isNetworkCaptureStopped(BUNDLE)).toBe(true);
+  });
+
   it("does not arm an app whose Network.enable reply comes after its stop, and sends Network.enable again at the next start", async () => {
     const api = await startService();
     const app = await connectApp(api.socketPath, { acknowledge: false });
@@ -1037,6 +1060,32 @@ describe("native-devtools network capture stop", () => {
     app.close();
     await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
   });
+
+  it("native-network-logs says that the process which did not acknowledge the stop may still intercept, until its connection closes", async () => {
+    const api = await startService();
+    const app = await stopUnacknowledged(api);
+    const tool = createNativeNetworkLogsTool(new Registry());
+    const read = () =>
+      tool.execute(
+        { nativeDevtools: api },
+        { udid: UDID, bundleId: BUNDLE, limit: 50, clear: false }
+      ) as Promise<{ header: string; armed: boolean; stopped?: true }>;
+    const stopped =
+      "capture stopped by network-capture-stop; network-capture-start turns it on again";
+
+    expect(await read()).toMatchObject({
+      header: `ios-native: stopped, 0 requests (${stopped}; the app's process did not acknowledge Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture)`,
+      armed: false,
+      stopped: true,
+    });
+
+    app.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+    expect(await read()).toMatchObject({
+      header: `ios-native: stopped, 0 requests (${stopped})`,
+      stopped: true,
+    });
+  });
 });
 
 describe("native-devtools dispose with network capture", () => {
@@ -1129,9 +1178,10 @@ describe("native-devtools network capture on a lent agent", () => {
   /**
    * Plays a device provider that lends the app's agent: it publishes the
    * device and serves the socket the service dials, opening with the app's
-   * handshake and answering every CDP request.
+   * handshake and answering every CDP request. `handshakeDelayMs` holds the handshake back
+   * after the accept, as a provider that is a moment late to hand the app over.
    */
-  async function lendAgent(): Promise<LentAgent> {
+  async function lendAgent({ handshakeDelayMs = 0 } = {}): Promise<LentAgent> {
     const socketPath = path.join(dir, "agent.sock");
     const sockets: net.Socket[] = [];
     const write = (socket: net.Socket, frame: Frame) => socket.write(JSON.stringify(frame) + "\n");
@@ -1146,7 +1196,9 @@ describe("native-devtools network capture on a lent agent", () => {
             : {};
         write(socket, { type: "CDP", payload: { id: frame.payload.id, result } });
       });
-      write(socket, { type: "Control", payload: { bundleId: BUNDLE } });
+      const handshake = () => write(socket, { type: "Control", payload: { bundleId: BUNDLE } });
+      if (handshakeDelayMs > 0) setTimeout(handshake, handshakeDelayMs);
+      else handshake();
     });
     const lent: LentAgent = {
       received: [],
@@ -1310,6 +1362,61 @@ describe("native-devtools network capture on a lent agent", () => {
     }
   });
 
+  /**
+   * Runs network-capture-start on a registry where nothing answers on the Metro port and no
+   * native devtools service runs yet, so the start is the call that connects to the lent agent.
+   */
+  async function firstLentStart(): Promise<unknown> {
+    const metroDown: ServiceBlueprint<unknown, string> = {
+      namespace: "JsRuntimeDebugger",
+      getURN: (payload) => `JsRuntimeDebugger:${payload}`,
+      factory: () =>
+        Promise.reject(
+          new FailureError("nothing answers on port 8081", {
+            error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
+            failure_stage: "test_metro",
+            failure_area: "tool_server",
+            error_kind: "network",
+          })
+        ),
+    };
+    const registry = new Registry();
+    registry.registerBlueprint(nativeDevtoolsBlueprint);
+    registry.registerBlueprint(metroDown);
+    registry.registerTool(createNetworkCaptureStartTool(registry));
+    try {
+      return await registry
+        .invokeTool("network-capture-start", { udid: LENT_DEVICE_ID, bundleId: BUNDLE })
+        .catch((e: unknown) => e);
+    } finally {
+      await registry.dispose();
+    }
+  }
+
+  it("waits at a first start, which connects to the lent agent, until the provider says capture is on", async () => {
+    await lendAgent({ handshakeDelayMs: 50 });
+
+    await expect(firstLentStart()).resolves.toMatchObject({
+      status: "ok",
+      layers: [expect.objectContaining({ layer: "js" }), { layer: "ios-native", armed: true }],
+    });
+  });
+
+  it("fails a first start, which connects to the lent agent, with NETWORK_CAPTURE_UNAVAILABLE when the provider has capture off and Metro is not running", async () => {
+    const lent = await lendAgent({ handshakeDelayMs: 50 });
+    lent.captureOn = false;
+
+    const startedAt = performance.now();
+    const err = await firstLentStart();
+
+    // The provider's answer ends the wait: the start does not wait the 5 s out.
+    expect(performance.now() - startedAt).toBeLessThan(2_500);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+    expect((err as Error).message).toMatch(
+      /; ios-native: the device provider has capture off for the app; .*turn capture on in the provider$/
+    );
+  });
+
   it("asks the provider again at each read of a started app whether capture is on", async () => {
     const lent = await lendAgent();
     const api = await startLentService();
@@ -1393,7 +1500,9 @@ describe("native-devtools body reads", () => {
       params: { requestId: "upload" },
     });
     await vi.advanceTimersByTimeAsync(5_000);
-    const stillSending = noBody("the app is still sending this request body; read it again later");
+    const stillSending = noBody(
+      "the app may still be sending this request body; read it again after the request ends"
+    );
     await expect(first).resolves.toEqual(stillSending);
 
     const second = records.requestPostData(id);
@@ -1534,6 +1643,36 @@ describe("native-devtools body reads", () => {
     await expect(records.responseBody(unread)).resolves.toEqual(noBody(PROCESS_GONE));
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(responseBodyReads(next)).toHaveLength(0);
+  });
+
+  it("answers a body never read as gone after a newer process connected and closed with no request and no read", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.state().pid).toBe(4711));
+    for (const frame of [
+      ...requestEvents("unread", "https://example.com/unread"),
+      ...finishEvents("unread"),
+      ...requestEvents("open", "https://example.com/open"),
+    ]) {
+      app.send(frame);
+    }
+    const unread = await recordOf(api, "https://example.com/unread");
+    const open = await recordOf(api, "https://example.com/open", "pending");
+    const records = api.networkRecords(BUNDLE)!;
+
+    // The host still lists the same process after the close.
+    app.close();
+    await vi.waitFor(() => expect(records.record(open)?.state).toBe("failed"));
+
+    // A newer process connects, makes no request, and closes before any read.
+    appRunsAs(4712);
+    const next = await connectArmedApp(api);
+    await vi.waitFor(() => expect(records.state().pid).toBe(4712));
+    next.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+
+    await expect(records.responseBody(unread)).resolves.toEqual(noBody(PROCESS_GONE));
   });
 
   it("never sends a body read queued on a connection that a relaunch replaced to the new process", async () => {

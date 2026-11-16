@@ -24,9 +24,11 @@ import {
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { metroPort } from "../../utils/debugger/metro-port";
 import { resolveDevice } from "../../utils/device-info";
+import { assertSupported } from "../../utils/capability";
 import { localIosHost, remoteIosHost } from "../../utils/ios-host";
 import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
 import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
+import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../utils/simctl-config";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
@@ -43,6 +45,8 @@ import {
 } from "./network-capture";
 
 const NOT_STARTED = "capture was not started for this app";
+/** How long a stop waits for the app's JS runtime to answer the pause, as a start waits for the mark. */
+const JS_ANSWER_WAIT_MS = 5_000;
 
 export function createNetworkCaptureStopTool(
   registry: Registry
@@ -50,9 +54,9 @@ export function createNetworkCaptureStopTool(
   return {
     id: "network-capture-stop",
     description: `Stop network capture for an app on every layer and keep what was captured.
-Use when you have the requests you need, before you profile, or to end capture in an e2e test. Unlike stop-all-simulator-servers, the requests stay listed in native-network-logs and view-network-logs, and their ids keep working in view-network-request-details.
+Use when you have the requests you need, before you profile, or to end capture in an e2e test. Unlike stop-all-simulator-servers, the requests stay listed in native-network-logs and view-network-logs, and their ids keep working in view-network-request-details (a view-network-logs id until the app's JS runtime reloads).
 Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. A request in flight at the stop completes in the list on iOS<flag:macos-apps> and Mac apps</flag:macos-apps> and in the JS runtime; on Android the list marks it failed, while the app's own request goes on. On Android, a body that view-network-request-details did not read before the stop is no longer available.
-Returns { status, layers }: per layer, armed (false once the layer confirmed the stop), total (the requests it keeps for the app) and a reason when the layer was not reached or was not started.`,
+Returns { status, layers }: per layer, armed (false once the layer confirmed the stop), total (the requests it keeps for the app, or 0 when the stop could not count them, as on a JS runtime it did not reach) and a reason when the layer was not reached or was not started.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
     interaction: {
@@ -65,6 +69,8 @@ Returns { status, layers }: per layer, armed (false once the layer confirmed the
     services: () => ({}),
     async execute(_services, params) {
       const device = resolveDevice(params.udid);
+      // Only the HTTP gate checks the capability, and an e2e `tool:` step does not pass it.
+      assertSupported("network-capture-stop", CAPTURE_CAPABILITY, device);
       const port = metroPort({ device_id: params.udid, port: params.port });
       if (device.platform === "macos") {
         const layer = await withCaptureLock(params.udid, params.bundleId, () =>
@@ -108,6 +114,10 @@ async function stopJsLayer(
   const kept = prior?.port === port ? prior : undefined;
   // A capture on another port moves here only once the app's runtime answers here.
   const other = prior && !kept ? prior : undefined;
+  // It may still record when it is started, or when a stop there did not reach its interceptor.
+  const otherArmed =
+    other !== undefined &&
+    (other.intent === "started" || (other.installed && other.paused !== true));
   // The port's capture of another app stays as it is: a runtime that names no
   // app can be that app's, so a stop here could pause or replace it.
   const here = jsCapture(payload);
@@ -116,7 +126,7 @@ async function stopJsLayer(
     if (other) {
       return {
         layer: "js",
-        armed: other.intent === "started",
+        armed: otherArmed,
         total: 0,
         reason: `${stays}; ${otherPortHint(bundleId, other.port)}`,
       };
@@ -151,7 +161,7 @@ async function stopJsLayer(
     if (other) {
       return {
         layer: "js",
-        armed: other.intent === "started",
+        armed: otherArmed,
         total: 0,
         reason: `${notReached}; ${otherPortHint(bundleId, other.port)}`,
       };
@@ -181,7 +191,7 @@ async function stopJsLayer(
     if (other) {
       return {
         layer: "js",
-        armed: other.intent === "started",
+        armed: otherArmed,
         total: 0,
         reason: `${notOurs}, so nothing changed there; ${otherPortHint(bundleId, other.port)}`,
       };
@@ -191,7 +201,7 @@ async function stopJsLayer(
         layer: "js",
         armed: false,
         total: 0,
-        reason: `${notOurs}, so nothing changed there; pass the port of ${bundleId}'s Metro`,
+        reason: `${notOurs}, so nothing changed there; if that runtime is the app, pass bundleId ${appId}; otherwise pass the port of ${bundleId}'s Metro`,
       };
     }
     const stored = storeStopped(kept.paused === true);
@@ -209,8 +219,17 @@ async function stopJsLayer(
   }
   const stored = storeStopped(false);
   try {
-    await dbg.cdp.evaluate(makeNetworkCaptureControlScript(true));
-    stored.paused = true;
+    await dbg.cdp.evaluate(makeNetworkCaptureControlScript(true), { timeout: JS_ANSWER_WAIT_MS });
+  } catch (err) {
+    return {
+      layer: "js",
+      armed: true,
+      total: 0,
+      reason: `the app's JS runtime did not pause capture: ${errorMessage(err)}`,
+    };
+  }
+  stored.paused = true;
+  try {
     const { total, interceptorInstalled } = JSON.parse(
       String(await dbg.cdp.evaluate(makeNetworkLogReadScript(0, 0, port)))
     ) as { total: number; interceptorInstalled: boolean };
@@ -221,11 +240,13 @@ async function stopJsLayer(
       ...(prior ? {} : { reason: NOT_STARTED }),
     };
   } catch (err) {
+    // The pause took; only the count is missing.
+    const uncounted = `the app's JS runtime paused capture, but did not answer the count of its requests: ${errorMessage(err)}`;
     return {
       layer: "js",
-      armed: true,
+      armed: false,
       total: 0,
-      reason: `the app's JS runtime did not pause capture: ${errorMessage(err)}`,
+      reason: prior ? uncounted : `${uncounted}; ${NOT_STARTED}`,
     };
   }
 }
@@ -239,7 +260,18 @@ async function appRuns(udid: string, bundleId: string): Promise<boolean | undefi
     }
     if (platform === "ios") return (await localIosHost.listRunningBundleIds(udid)).has(bundleId);
     if (platform === "ios-remote") {
-      return (await remoteIosHost.listRunningBundleIds(udid)).has(bundleId);
+      // The remote host waits up to 60 s; the stop waits as long as for a local simulator.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), SIMCTL_SPAWN_TIMEOUT_MS);
+      });
+      try {
+        return (await Promise.race([remoteIosHost.listRunningBundleIds(udid), late]))?.has(
+          bundleId
+        );
+      } finally {
+        clearTimeout(timer);
+      }
     }
   } catch {
     // A device that does not answer tells nothing about the app.

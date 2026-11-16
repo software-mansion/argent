@@ -58,6 +58,18 @@ describe("assertSupported", () => {
       );
     }
   );
+
+  it("gives another tool with no Vega or Chromium block the stock reason there, not the capture one", () => {
+    const vega: DeviceInfo = { id: "amazon-1", platform: "vega", kind: "vvd" };
+    const chromium: DeviceInfo = { id: "chromium-cdp-9222", platform: "chromium", kind: "app" };
+
+    expect(() => assertSupported("reinstall-app", CAPTURE_CAPABILITY, vega)).toThrow(
+      "Tool 'reinstall-app' is not supported on vega vvd (no vega support declared)."
+    );
+    expect(() => assertSupported("reinstall-app", CAPTURE_CAPABILITY, chromium)).toThrow(
+      "Tool 'reinstall-app' is not supported on chromium app (no chromium support declared)."
+    );
+  });
 });
 
 describe("NotImplementedOnPlatformError", () => {

@@ -18,6 +18,7 @@ import {
   jsCapturePayload,
   jsCapturesOn,
   networkInspectorBlueprint,
+  pauseJsCapturesOf,
 } from "../src/blueprints/network-inspector";
 import type {
   NativeDevtoolsApi,
@@ -46,8 +47,11 @@ import {
   NETWORK_CAPTURE_MARK_SCRIPT,
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkCaptureControlScript,
+  makeNetworkLogReadScript,
 } from "../src/utils/debugger/scripts/network-interceptor";
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
+import { BUNDLE_ID_MESSAGE } from "../src/utils/bundle-id";
+import { forgetDeviceAlias, rememberDeviceAlias } from "../src/utils/debugger/device-alias";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
@@ -78,11 +82,19 @@ vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
 const REMOTE_UDID = "remote:66666666-7777-8888-9999-000000000000";
 const SERIAL = "emulator-5554";
+/** An Android device on adb over Wi-Fi. */
+const WIFI_SERIAL = "192.168.1.5:5555";
+/** The id a Metro gives the device at SERIAL. */
+const LOGICAL_ID = "b1946ac92492d2347c6235b4d2611184";
+/** The id a device provider gives the device at SERIAL. */
+const EXT_ID = `ext:acme-3f2a9c:${SERIAL}`;
 const APP = "com.example.shop";
 const OTHER = "com.example.other";
 const PORT = 8081;
 const NOT_STARTED = "capture was not started for this app";
 const METRO_DOWN = `Metro is not running on port ${PORT}; start it, or pass the port of the app's Metro`;
+const RESTART_REASON =
+  "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app";
 
 // ── The app's JS runtime ────────────────────────────────────────────────────
 
@@ -251,6 +263,10 @@ class FakeIos implements Pick<
   appState: NativeDevtoolsAppState = "not_running";
   /** What `ensureEnvReady` rejects with. */
   envError: Error | undefined;
+  /** What the service recorded when its env setup failed. */
+  initFailure: NativeDevtoolsInitFailure | null = null;
+  /** What the service factory throws, as the real one does when it cannot attach. */
+  factoryError: Error | undefined;
   /** A connected app acknowledges Network.enable. */
   acknowledges = true;
   /** The note the app's records keep. */
@@ -271,7 +287,7 @@ class FakeIos implements Pick<
   }
 
   getInitFailure(): NativeDevtoolsInitFailure | null {
-    return null;
+    return this.initFailure;
   }
   async ensureEnvReady(): Promise<void> {
     if (this.envError) throw this.envError;
@@ -394,6 +410,7 @@ const fakeNativeDevtoolsBlueprint: ServiceBlueprint<unknown, string> = {
   namespace: "NativeDevtools",
   getURN: (payload) => `NativeDevtools:${payload}`,
   async factory() {
+    if (ios.factoryError) throw ios.factoryError;
     return { api: ios, dispose: async () => {}, events: new TypedEventEmitter<ServiceEvents>() };
   },
 };
@@ -480,10 +497,11 @@ function stop(udid: string, bundleId: string, port?: number) {
   });
 }
 
-function stopAll(devices: string[], signal?: AbortSignal) {
+/** Without `devices`, the machine-wide sweep. */
+function stopAll(devices: string[] | undefined, signal?: AbortSignal) {
   return registry.invokeTool<{ stopped: string[]; aborted?: true }>(
     "stop-all-simulator-servers",
-    { devices },
+    devices === undefined ? {} : { devices },
     signal ? { signal } : undefined
   );
 }
@@ -654,6 +672,78 @@ describe("network-capture-start", () => {
       expect(androidFor(APP).calls).toEqual([]);
     });
 
+    it.each([
+      {
+        refusal: "does not grant the JS debugger",
+        code: FAILURE_CODES.EXTERNAL_DEVICE_CAPABILITY_DENIED,
+      },
+      { refusal: "no longer offers the device", code: FAILURE_CODES.EXTERNAL_DEVICE_UNAVAILABLE },
+    ])(
+      "fails with NETWORK_CAPTURE_UNAVAILABLE when the device provider $refusal and the native layer is unavailable",
+      async ({ code }) => {
+        serve(PORT, IOS_UDID, code);
+        ios.appState = "unregistered";
+
+        const err = await start(IOS_UDID, APP).then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+        expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+        expect(err?.message).toContain(
+          `js: the JS debugger could not connect: [JsRuntimeDebugger:${PORT}:${IOS_UDID}] Metro on port ${PORT}: ${code}; ios-native: `
+        );
+        expect(err?.message).not.toContain("call network-capture-start again");
+        expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
+      }
+    );
+
+    it("does not fail while the interceptor an earlier start installed may still record", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, SERIAL, rt);
+      const noOkHttp = {
+        armed: false,
+        unavailable: true as const,
+        reason: "the app has no OkHttp",
+      };
+      androidFor(APP).startAnswer = () => noOkHttp;
+      expect(layer(await start(SERIAL, APP), "js")).toEqual({ layer: "js", armed: true });
+      await reconnect(PORT, SERIAL, undefined);
+
+      const result = await start(SERIAL, APP);
+
+      expect(result).toEqual({
+        status: "ok",
+        layers: [
+          {
+            layer: "js",
+            armed: false,
+            reason: `${METRO_DOWN}; the interceptor already in the app's JS runtime may still record, so call network-capture-start again once the app answers`,
+          },
+          { layer: "android-native", ...noOkHttp },
+        ],
+      });
+      expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "started", installed: true });
+      expect(rt.paused).toBe(false);
+    });
+
+    it("fails with NETWORK_CAPTURE_UNAVAILABLE on iOS when the native devtools service cannot start", async () => {
+      const refusal =
+        "NativeDevtools could not attach to the socket its provider published at /tmp/provider.sock: ECONNREFUSED.";
+      ios.factoryError = new Error(refusal);
+
+      const err = await start(IOS_UDID, APP).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect(err?.message).toContain(
+        `js: ${METRO_DOWN}; ios-native: [NativeDevtools:${IOS_UDID}] ${refusal}`
+      );
+      expect(ios.calls).toEqual([]);
+    });
+
     it("does not fail while a layer is only waiting for the app", async () => {
       ios.appState = "connecting";
 
@@ -756,6 +846,24 @@ describe("network-capture-start", () => {
       expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
     });
 
+    it("does not take an earlier start that installed nothing for an installed interceptor when a later start does not reach the runtime, so a stop says nothing records", async () => {
+      serve(PORT, IOS_UDID, new FakeRuntime(APP, { loaded: false }));
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
+      expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ installed: false });
+
+      await reconnect(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      await start(IOS_UDID, APP);
+
+      expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "started", installed: false });
+      expect(layer(await stop(IOS_UDID, APP), "js")).toEqual({
+        layer: "js",
+        armed: false,
+        total: 0,
+        reason: `no app is connected to Metro on port ${PORT} yet; while capture is stopped, the app's JS runtime gets no interceptor`,
+      });
+    });
+
     it("lets view-network-request-details say that capture stopped recording at a reload, in the runtime the reload left without the interceptor", async () => {
       serve(PORT, IOS_UDID, new FakeRuntime(APP));
       ios.connected.add(APP);
@@ -768,7 +876,7 @@ describe("network-capture-start", () => {
       });
 
       expect(text).toBe(
-        "Request rn-net-1 not found. Network capture for this app stopped recording at a JavaScript reload; requests since the reload are not recorded. Call network-capture-start again, repeat the action, then read again."
+        "Request rn-net-1 not found. The JS layer of network capture for this app stopped recording at a JavaScript reload, so it recorded no requests since the reload. native-network-logs lists the requests of the native layer. To record the app's JavaScript requests again, call network-capture-start, repeat the action, then read again."
       );
     });
 
@@ -888,12 +996,12 @@ describe("network-capture-start", () => {
       {
         logged: "nothing",
         before: 0,
-        says: "No network traffic captured. The app's JS runtime does not record new requests: network-capture-stop paused it, and no network-capture-start reached it since. Call network-capture-start, then repeat the action.",
+        says: "No network traffic captured. The app's JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since. Call network-capture-start, then repeat the action.",
       },
       {
         logged: "a request",
         before: 1,
-        says: "=== NETWORK LOGS (page 1/1, 1 total; the app's JS runtime does not record new requests: network-capture-stop paused it, and no network-capture-start reached it since, so call network-capture-start, then repeat the action) ===",
+        says: "=== NETWORK LOGS (page 1/1, 1 total; the app's JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since, so call network-capture-start, then repeat the action) ===",
       },
     ])(
       "says a read of a started capture with $logged logged that the app's runtime does not record while a stop's pause stays there",
@@ -924,6 +1032,73 @@ describe("network-capture-start", () => {
       }
     );
 
+    it("says a read after a start that reached no app that only the JS layer recorded nothing, and names native-network-logs", async () => {
+      serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      ios.connected.add(APP);
+      const result = await start(IOS_UDID, APP);
+      expect(layer(result, "js")).toMatchObject({ armed: false });
+      expect(layer(result, "ios-native")).toEqual({ layer: "ios-native", armed: true });
+      // The app connects to Metro and sends a request, which the native layer records.
+      const rt = new FakeRuntime(APP);
+      await reconnect(PORT, IOS_UDID, rt);
+      rt.send("/api/checkout");
+      ios.record(APP);
+      const says =
+        "Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so the JS layer recorded no requests. native-network-logs lists the requests of the native layer. To record the app's JavaScript requests, call network-capture-start again, repeat the action, then read again.";
+
+      expect(await read(IOS_UDID)).toBe(says);
+      expect(await details(IOS_UDID, "rn-net-1")).toBe(`Request rn-net-1 not found. ${says}`);
+    });
+
+    it.each(PLATFORMS)(
+      "on $platform, lets a read after a start that found Metro down give that reason, until stop-all-simulator-servers or a start that reaches the app",
+      async ({ udid, native, connect }) => {
+        connect();
+        const result = await start(udid, APP);
+        expect(result.layers).toEqual([
+          { layer: "js", armed: false, unavailable: true, reason: METRO_DOWN },
+          { layer: native, armed: true },
+        ]);
+        const unavailable = `Network capture is not started on the JS layer: network-capture-start for ${APP} found it unavailable (${METRO_DOWN}). native-network-logs lists the requests of the native layer. Once the JS layer can start, call network-capture-start again, repeat the action, then`;
+
+        expect(await read(udid)).toBe(`${unavailable} call view-network-logs again.`);
+        expect(await details(udid, "rn-net-1")).toBe(
+          `Request rn-net-1 not found. ${unavailable} list the requests with view-network-logs.`
+        );
+
+        await stopAll([udid]);
+        expect(await read(udid)).toBe(
+          "Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then call view-network-logs again."
+        );
+
+        await start(udid, APP);
+        const rt = new FakeRuntime(APP);
+        serve(PORT, udid, rt);
+        await start(udid, APP);
+        rt.send("/a");
+        expect(await read(udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+      }
+    );
+
+    it("does not name network-capture-stop as the cause of a pause that stop-all-simulator-servers left", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
+      await stopAll([IOS_UDID]);
+      ios.connected.add(APP);
+      await reconnect(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      await start(IOS_UDID, APP);
+
+      // The app connects again with the JS context that stop-all-simulator-servers paused.
+      await reconnect(PORT, IOS_UDID, rt);
+      rt.send("/dropped");
+
+      expect(await read(IOS_UDID)).toBe(
+        "No network traffic captured. The app's JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since. Call network-capture-start, then repeat the action."
+      );
+    });
+
     it("stores a started capture with an empty mark when Metro has no app connected yet", async () => {
       serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
       ios.connected.add(APP);
@@ -944,22 +1119,28 @@ describe("network-capture-start", () => {
       });
     });
 
+    const SHARED_METRO = `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; give each device its own Metro port (udid takes the id from list-devices, not a logicalDeviceId)`;
+    const STILL_RECORDS =
+      "the interceptor already in the app's JS runtime may still record, so call network-capture-start again once the app answers";
     const NOT_REACHED = [
       {
         found: "no Metro",
         answer: (): FakeRuntime | FailureCode | undefined => undefined,
         reason: METRO_DOWN,
+        kept: `${METRO_DOWN}; ${STILL_RECORDS}`,
       },
       {
         found: "a Metro with no runtime of this device",
         answer: (): FakeRuntime | FailureCode | undefined =>
           FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
-        reason: `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; give each device its own Metro port (udid takes the id from list-devices, not a logicalDeviceId)`,
+        reason: SHARED_METRO,
+        kept: `${SHARED_METRO}; ${STILL_RECORDS}`,
       },
       {
         found: "another app's runtime",
         answer: (): FakeRuntime | FailureCode | undefined => new FakeRuntime(OTHER),
-        reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; pass the port of ${APP}'s Metro`,
+        reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; if that runtime is the app, pass bundleId ${OTHER}; otherwise pass the port of ${APP}'s Metro`,
+        kept: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; the interceptor already in ${APP}'s JS runtime may still record, so call network-capture-start again once that runtime answers on this port`,
       },
     ];
 
@@ -986,8 +1167,8 @@ describe("network-capture-start", () => {
     );
 
     it.each(NOT_REACHED)(
-      "keeps the capture an earlier start installed when it finds $found, so a stop still says the interceptor may record",
-      async ({ answer, reason }) => {
+      "is not unavailable, and keeps the capture an earlier start installed, when it finds $found, so a stop still says the interceptor may record",
+      async ({ answer, kept }) => {
         const rt = new FakeRuntime(APP);
         serve(PORT, IOS_UDID, rt);
         ios.connected.add(APP);
@@ -998,12 +1179,7 @@ describe("network-capture-start", () => {
         await reconnect(PORT, IOS_UDID, answer());
         const result = await start(IOS_UDID, APP);
 
-        expect(layer(result, "js")).toEqual({
-          layer: "js",
-          armed: false,
-          unavailable: true,
-          reason,
-        });
+        expect(layer(result, "js")).toEqual({ layer: "js", armed: false, reason: kept });
         expect(findJsCapture(IOS_UDID, APP)).toEqual(capture);
 
         // The app's interceptor still records, so a stop that does not reach it is not confirmed.
@@ -1017,6 +1193,41 @@ describe("network-capture-start", () => {
         // Once the app's runtime answers again, the next stop pauses it.
         await reconnect(PORT, IOS_UDID, rt);
         expect(layer(await stop(IOS_UDID, APP), "js")).toMatchObject({ armed: false });
+        expect(rt.paused).toBe(true);
+      }
+    );
+
+    it.each(NOT_REACHED)(
+      "keeps a stop and its requests when a later start finds $found, so the kept ids still resolve",
+      async ({ answer, reason }) => {
+        const rt = new FakeRuntime(APP);
+        serve(PORT, IOS_UDID, rt);
+        ios.connected.add(APP);
+        await start(IOS_UDID, APP);
+        rt.send("/a");
+        await stop(IOS_UDID, APP);
+        const capture = findJsCapture(IOS_UDID, APP);
+        expect(capture).toMatchObject({ intent: "stopped", installed: true, paused: true });
+
+        await reconnect(PORT, IOS_UDID, answer());
+        const result = await start(IOS_UDID, APP);
+
+        expect(layer(result, "js")).toEqual({
+          layer: "js",
+          armed: false,
+          unavailable: true,
+          reason,
+        });
+        expect(findJsCapture(IOS_UDID, APP)).toEqual(capture);
+
+        // The app's runtime answers again, with the log the stop kept.
+        await reconnect(PORT, IOS_UDID, rt);
+        expect((await read(IOS_UDID)).split("\n")[0]).toBe(
+          "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ==="
+        );
+        expect(await details(IOS_UDID, "rn-net-1")).toMatchObject({
+          request: { url: "https://api.test/a" },
+        });
         expect(rt.paused).toBe(true);
       }
     );
@@ -1067,7 +1278,8 @@ describe("network-capture-start", () => {
         reason:
           "the app has not connected through the device's devtools agent; it arms when it does",
       });
-      expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
+      // The start waits up to 5 s for the provider's agent to connect and say whether capture is on.
+      expect(ios.calls).toEqual([`start ${APP} ${PORT} 5000`]);
     });
 
     it("tells to restart an app whose running process cannot be armed, then to start again for the JS layer the relaunch ends", async () => {
@@ -1077,12 +1289,7 @@ describe("network-capture-start", () => {
 
       expect(result.layers).toEqual([
         { layer: "js", armed: true },
-        {
-          layer: "ios-native",
-          armed: false,
-          reason:
-            "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture",
-        },
+        { layer: "ios-native", armed: false, reason: RESTART_REASON },
       ]);
       // Capture is on, so the next launch arms it.
       expect(ios.isNetworkCaptureStarted(APP)).toBe(true);
@@ -1099,6 +1306,22 @@ describe("network-capture-start", () => {
       expect(await read(IOS_UDID)).toContain('"GET /after-restart"');
     });
 
+    it("says what a failed restart-app means for an app with no running process, which may not be installed", async () => {
+      const typo = "com.example.shopp";
+      ios.appState = "not_running";
+
+      const result = await start(IOS_UDID, typo);
+
+      expect(layer(result, "ios-native")).toEqual({
+        layer: "ios-native",
+        armed: false,
+        reason: RESTART_REASON,
+      });
+      expect(RESTART_REASON).toContain(
+        "if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app"
+      );
+    });
+
     it("reports a service the app no longer dials unavailable and starts nothing", async () => {
       ios.appState = "unregistered";
 
@@ -1111,6 +1334,23 @@ describe("network-capture-start", () => {
       });
       expect(ios.calls).toEqual([]);
       expect(ios.networkCaptureMark(APP)).toBeUndefined();
+    });
+
+    it("reports native devtools that failed to initialize unavailable, so a start with no other layer fails", async () => {
+      serve(PORT, IOS_UDID, undefined);
+      ios.envError = new Error("simctl spawn failed");
+      ios.initFailure = { attempts: 1, lastError: "simctl spawn failed", givenUp: false };
+
+      const err = await start(IOS_UDID, APP).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect(err?.message).toContain(
+        `ios-native: Native devtools failed to initialize for ${IOS_UDID} after 1 attempts. Last error: simctl spawn failed. Try shutting down and re-booting the simulator, or restart CoreSimulatorService.`
+      );
+      expect(ios.calls).toEqual([]);
     });
 
     it.each([
@@ -1144,6 +1384,46 @@ describe("network-capture-start", () => {
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
       expect(err?.cause).toBeInstanceOf(XcodeFirstLaunchPendingError);
       expect(ios.calls).toEqual([]);
+    });
+
+    it("fails with Xcode's refusal only once the JS layer ends, and holds a stop of the app until then", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.envError = new XcodeFirstLaunchPendingError("simctl");
+      // The JS layer is still at the read of the mark when the iOS layer throws.
+      let releaseMark!: () => void;
+      const markHeld = new Promise<void>((resolve) => (releaseMark = resolve));
+      let markAsked = false;
+      const evaluate = rt.evaluate.bind(rt);
+      rt.evaluate = async (expr: string, timeout?: number) => {
+        if (scriptName(expr) === "mark") {
+          markAsked = true;
+          await markHeld;
+        }
+        return evaluate(expr, timeout);
+      };
+
+      let failed = false;
+      const starting = start(IOS_UDID, APP).then(
+        () => undefined,
+        (e: unknown) => {
+          failed = true;
+          return e as Error;
+        }
+      );
+      await vi.waitFor(() => expect(markAsked).toBe(true));
+      const stopping = stop(IOS_UDID, APP);
+      await settle();
+
+      expect(failed).toBe(false);
+      expect(rt.evaluated).toEqual([]);
+
+      releaseMark();
+      const err = await starting;
+      await stopping;
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(rt.evaluated.indexOf("pause")).toBeGreaterThan(rt.evaluated.indexOf("install"));
     });
 
     it("fails while Xcode's first launch is pending before the JS layer reaches the app's runtime", async () => {
@@ -1182,9 +1462,10 @@ describe("network-capture-start", () => {
     });
 
     it.each([
-      { app: "a connected app", prepare: () => ios.connected.add(APP) },
+      { app: "a connected app", wait: 0, prepare: () => ios.connected.add(APP) },
       {
         app: "an app on a device provider's simulator",
+        wait: 5000,
         prepare: () => {
           ios.armsEnv = false;
           ios.appState = "provider_attached";
@@ -1192,7 +1473,7 @@ describe("network-capture-start", () => {
       },
     ])(
       "starts $app while Xcode's first launch is pending, as it needs no simctl",
-      async ({ prepare }) => {
+      async ({ prepare, wait }) => {
         serve(PORT, IOS_UDID, new FakeRuntime(APP));
         xcode.pending = true;
         prepare();
@@ -1200,9 +1481,42 @@ describe("network-capture-start", () => {
         const result = await start(IOS_UDID, APP);
 
         expect(layer(result, "js")).toEqual({ layer: "js", armed: true });
-        expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
+        expect(ios.calls).toEqual([`start ${APP} ${PORT} ${wait}`]);
       }
     );
+
+    it("starts an app on a remote simulator while this Mac's Xcode first launch is pending, as it arms through sim-remote", async () => {
+      serve(PORT, REMOTE_UDID, new FakeRuntime(APP));
+      xcode.pending = true;
+
+      const result = await start(REMOTE_UDID, APP);
+
+      expect(layer(result, "js")).toEqual({ layer: "js", armed: true });
+      expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
+    });
+
+    it("starts the other layers while Xcode's first launch is pending when the native devtools service cannot start", async () => {
+      serve(PORT, IOS_UDID, new FakeRuntime(APP));
+      xcode.pending = true;
+      const refusal =
+        "NativeDevtools could not attach to the socket its provider published at /tmp/provider.sock: ECONNREFUSED.";
+      ios.factoryError = new Error(refusal);
+
+      const result = await start(IOS_UDID, APP);
+
+      expect(result).toEqual({
+        status: "ok",
+        layers: [
+          { layer: "js", armed: true },
+          {
+            layer: "ios-native",
+            armed: false,
+            unavailable: true,
+            reason: `[NativeDevtools:${IOS_UDID}] ${refusal}`,
+          },
+        ],
+      });
+    });
   });
 });
 
@@ -1317,6 +1631,63 @@ describe("network-capture-stop", () => {
     }
   );
 
+  it.each([
+    { platform: "a local iOS simulator", udid: IOS_UDID, own: localIosHost, other: remoteIosHost },
+    {
+      platform: "a remote iOS simulator",
+      udid: REMOTE_UDID,
+      own: remoteIosHost,
+      other: localIosHost,
+    },
+  ])(
+    "on $platform, reads the app's processes through that simulator's own host",
+    async ({ udid, own, other }) => {
+      serve(PORT, udid, new FakeRuntime(APP));
+      await start(udid, APP);
+      await reconnect(PORT, udid, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      // Only the simulator's own host knows that the app exited.
+      vi.mocked(own.listRunningBundleIds).mockResolvedValue(new Set([OTHER]));
+      vi.mocked(other.listRunningBundleIds).mockResolvedValue(new Set([APP, OTHER]));
+
+      const result = await stop(udid, APP);
+
+      expect(layer(result, "js")).toMatchObject({
+        armed: false,
+        reason: `no app is connected to Metro on port ${PORT} yet; ${APP} is not running, so nothing records; while capture is stopped, its next JS runtime gets no interceptor`,
+      });
+    }
+  );
+
+  it("waits at most 10 s for a remote simulator's process list, as for the other devices", async () => {
+    serve(PORT, REMOTE_UDID, new FakeRuntime(APP));
+    await start(REMOTE_UDID, APP);
+    await reconnect(PORT, REMOTE_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // The remote host answers only at its own 60 s limit.
+      vi.mocked(remoteIosHost.listRunningBundleIds).mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(new Set([OTHER])), 60_000))
+      );
+      let settled = false;
+      const pending = stop(REMOTE_UDID, APP).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(settled).toBe(true);
+      expect(layer(await pending, "js")).toEqual({
+        layer: "js",
+        armed: true,
+        total: 0,
+        reason: `no app is connected to Metro on port ${PORT} yet; the interceptor already in the app's JS runtime may still record, so call network-capture-stop again once the app answers`,
+      });
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(
     PROCESS_PLATFORMS.flatMap((platform) => [
       { ...platform, device: "lists a process of the app", answers: true },
@@ -1363,6 +1734,60 @@ describe("network-capture-stop", () => {
     expect(rt.paused).toBe(false);
     expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", installed: true });
     expect(findJsCapture(SERIAL, APP)).not.toHaveProperty("paused");
+  });
+
+  it("says the JS layer is still armed within 5 s on a runtime that does not answer the pause", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    await start(SERIAL, APP);
+    // The runtime keeps the connection but is busy or frozen.
+    rt.frozen = true;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      const pending = stop(SERIAL, APP).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(settled).toBe(true);
+      expect(layer(await pending, "js")).toEqual({
+        layer: "js",
+        armed: true,
+        total: 0,
+        reason:
+          "the app's JS runtime did not pause capture: Runtime.evaluate timed out after 5000 ms",
+      });
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+    expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", installed: true });
+  });
+
+  it("says the JS layer confirmed the stop when only the count after the pause throws", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    await start(SERIAL, APP);
+    rt.send("/a");
+    const evaluate = rt.evaluate.bind(rt);
+    rt.evaluate = (expr: string) => {
+      if (scriptName(expr) === "read") throw new Error("CDP disconnected");
+      return evaluate(expr);
+    };
+
+    const result = await stop(SERIAL, APP);
+
+    expect(layer(result, "js")).toEqual({
+      layer: "js",
+      armed: false,
+      total: 0,
+      reason:
+        "the app's JS runtime paused capture, but did not answer the count of its requests: CDP disconnected",
+    });
+    expect(rt.paused).toBe(true);
+    expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", paused: true });
   });
 
   it("stores a stopped JS layer, with no interceptor to pause, after a start that installed none when the runtime cannot be reached", async () => {
@@ -1567,6 +1992,25 @@ describe("network-capture-stop", () => {
     ]);
   });
 
+  it("stops and reads with the serial the capture a start stored with the device's ext: id", async () => {
+    const rt = new FakeRuntime(APP);
+    // Metro has one runtime for the device, which a debugger reaches with either id.
+    serve(PORT, EXT_ID, rt);
+    serve(PORT, SERIAL, rt);
+    await start(EXT_ID, APP);
+    rt.send("/a");
+
+    expect(await read(SERIAL)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+    expect(layer(await stop(SERIAL, APP), "js")).toEqual({ layer: "js", armed: false, total: 1 });
+    expect(rt.paused).toBe(true);
+    expect(await read(EXT_ID)).toContain(
+      "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ==="
+    );
+    expect(jsCapturesOn(SERIAL)).toEqual([
+      expect.objectContaining({ bundleId: APP, intent: "stopped", port: PORT }),
+    ]);
+  });
+
   it.each(PLATFORMS)(
     "on $platform, a second stop changes nothing",
     async ({ udid, connect, nativeRecord, nativeCalls }) => {
@@ -1646,6 +2090,37 @@ describe("stop-all-simulator-servers", () => {
     expect(await details(IOS_UDID, "rn-net-2")).toMatchObject({ requestId: "rn-net-2" });
   });
 
+  it.each(PLATFORMS)(
+    "on $platform, leaves another app's JS runtime on the port as it is, and keeps the app's capture stopped",
+    async ({ udid, connect }) => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, udid, rt);
+      connect();
+      await start(udid, APP);
+      rt.send("/before");
+      const { mark } = findJsCapture(udid, APP)!;
+      // Another app's runtime answers on the port now, and its debugger is live.
+      const otherRuntime = new FakeRuntime(OTHER);
+      await reconnect(PORT, udid, otherRuntime);
+      await registry.resolveService(`JsRuntimeDebugger:${jsCapturePayload(PORT, udid)}`);
+
+      await stopAll([udid]);
+
+      expect(otherRuntime.evaluated).toEqual([]);
+      expect(findJsCapture(udid, APP)).toEqual({
+        bundleId: APP,
+        intent: "stopped",
+        mark,
+        installed: true,
+        port: PORT,
+      });
+      // Once the app's runtime answers again, a stop pauses it and still counts its request.
+      await reconnect(PORT, udid, rt);
+      expect(layer(await stop(udid, APP), "js")).toEqual({ layer: "js", armed: false, total: 1 });
+      expect(rt.paused).toBe(true);
+    }
+  );
+
   it("waits at most 1 s for a JS runtime whose debugger another call is still connecting, then disposes that debugger", async () => {
     const rt = new FakeRuntime(APP);
     serve(PORT, IOS_UDID, rt);
@@ -1686,6 +2161,58 @@ describe("stop-all-simulator-servers", () => {
       installed: true,
     });
     expect(rt.paused).toBe(false);
+  });
+
+  it("ends no JS capture when the call was cancelled before it began", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    rt.send("/a");
+    const capture = structuredClone(findJsCapture(IOS_UDID, APP));
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await stopAll([IOS_UDID], controller.signal);
+
+    expect(result).toEqual({ stopped: [], aborted: true });
+    expect(rt.evaluated).not.toContain("end");
+    expect(rt.paused).toBe(false);
+    expect(findJsCapture(IOS_UDID, APP)).toEqual(capture);
+    expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+  });
+
+  it("ends no JS capture when the call is cancelled while it waits for a stop under way", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    await start(SERIAL, APP);
+    rt.send("/a");
+    // The Android layer's stop takes a while.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const android = androidFor(APP);
+    const stopNative = android.stopCapture.bind(android);
+    android.stopCapture = async () => {
+      await held;
+      return stopNative();
+    };
+    const stopping = stop(SERIAL, APP);
+    await settle();
+    const controller = new AbortController();
+    const sweep = stopAll([SERIAL], controller.signal);
+    await settle();
+
+    controller.abort();
+    release();
+    await stopping;
+    const result = await sweep;
+
+    expect(result).toEqual({ stopped: [], aborted: true });
+    expect(rt.evaluated).not.toContain("end");
+    expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", paused: true });
+    expect(await read(SERIAL)).toContain(
+      "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ==="
+    );
   });
 
   it("waits for a start under way before it pauses or disposes anything, so the start's answer holds until the teardown ends it", async () => {
@@ -1753,44 +2280,87 @@ describe("stop-all-simulator-servers", () => {
     expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
   });
 
-  it("holds a start called during its teardown until the teardown ends, so the start's capture stays", async () => {
-    let releaseServer!: () => void;
-    const serverDisposed = new Promise<void>((resolve) => (releaseServer = resolve));
-    registry.registerBlueprint({
-      namespace: "SimulatorServer",
-      getURN: (payload: string) => `SimulatorServer:${payload}`,
-      async factory() {
-        return {
-          api: {},
-          dispose: () => serverDisposed,
-          events: new TypedEventEmitter<ServiceEvents>(),
-        };
-      },
-    });
-    await registry.resolveService(`SimulatorServer:${IOS_UDID}`);
+  it.each([
+    { scope: "the device", devices: [IOS_UDID] },
+    { scope: "every device", devices: undefined },
+  ])(
+    "holds a start called during its teardown of $scope until the teardown ends, so the start's capture stays",
+    async ({ devices }) => {
+      let releaseServer!: () => void;
+      const serverDisposed = new Promise<void>((resolve) => (releaseServer = resolve));
+      registry.registerBlueprint({
+        namespace: "SimulatorServer",
+        getURN: (payload: string) => `SimulatorServer:${payload}`,
+        async factory() {
+          return {
+            api: {},
+            dispose: () => serverDisposed,
+            events: new TypedEventEmitter<ServiceEvents>(),
+          };
+        },
+      });
+      await registry.resolveService(`SimulatorServer:${IOS_UDID}`);
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
+
+      const sweep = stopAll(devices);
+      await settle();
+      expect(rt.paused).toBe(true);
+      const started = start(IOS_UDID, APP);
+      await settle();
+      releaseServer();
+      await sweep;
+      const result = await started;
+
+      expect(result.layers).toEqual([
+        { layer: "js", armed: true },
+        { layer: "ios-native", armed: true },
+      ]);
+      expect(rt.paused).toBe(false);
+      expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "started", installed: true });
+      rt.send("/after-start");
+      expect(await read(IOS_UDID)).toContain('"GET /after-start"');
+    }
+  );
+
+  it("ends the JS capture a start stored with the device's ext: id when it names the device by its serial", async () => {
     const rt = new FakeRuntime(APP);
-    serve(PORT, IOS_UDID, rt);
-    ios.connected.add(APP);
-    await start(IOS_UDID, APP);
+    serve(PORT, EXT_ID, rt);
+    serve(PORT, SERIAL, rt);
+    await start(EXT_ID, APP);
+    rt.send("/a");
 
-    const sweep = stopAll([IOS_UDID]);
-    await settle();
+    await stopAll([SERIAL]);
+
     expect(rt.paused).toBe(true);
-    const started = start(IOS_UDID, APP);
-    await settle();
-    releaseServer();
-    await sweep;
-    const result = await started;
-
-    expect(result.layers).toEqual([
-      { layer: "js", armed: true },
-      { layer: "ios-native", armed: true },
-    ]);
-    expect(rt.paused).toBe(false);
-    expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "started", installed: true });
-    rt.send("/after-start");
-    expect(await read(IOS_UDID)).toContain('"GET /after-start"');
+    expect(findJsCapture(EXT_ID, APP)).toBeUndefined();
+    expect(await read(EXT_ID)).toContain("Network capture is not started for this app");
   });
+
+  it.each(PLATFORMS)(
+    "leaves the $platform native service it disposed as it is at a later stop, which says capture was not started",
+    async ({ udid, native, connect }) => {
+      serve(PORT, udid, new FakeRuntime(APP));
+      connect();
+      await start(udid, APP);
+      await stopAll([udid]);
+      const disposed = nativeUrns();
+      expect(disposed).toHaveLength(1);
+
+      const stopped = await stop(udid, APP);
+
+      // The stop builds no new service, which would bind the device's socket again.
+      expect(registry.getSnapshot().services.get(disposed[0]!)?.state).toBe(ServiceState.IDLE);
+      expect(layer(stopped, native)).toEqual({
+        layer: native,
+        armed: false,
+        total: 0,
+        reason: NOT_STARTED,
+      });
+    }
+  );
 
   it("disposes a service of the device that another call creates while the pause runs", async () => {
     const rt = new FakeRuntime(APP);
@@ -1869,6 +2439,86 @@ describe("stop-all-simulator-servers", () => {
   );
 });
 
+describe("the tool-server's exit", () => {
+  /** What the exit runs in each app's JS runtime, as src/index.ts calls it. */
+  const exit = () => pauseJsCapturesOf(registry, undefined, { atExit: true });
+
+  /** Another tool-server process starts the app's capture in the same JS runtime. */
+  async function otherServerStarts(
+    rt: FakeRuntime
+  ): Promise<typeof import("../src/utils/debugger/scripts/network-interceptor")> {
+    vi.resetModules();
+    const other = await import("../src/utils/debugger/scripts/network-interceptor");
+    rt.evaluate(other.makeNetworkCaptureControlScript(false));
+    rt.evaluate(other.NETWORK_INTERCEPTOR_SCRIPT);
+    return other;
+  }
+
+  it("pauses and empties the JS log of an app no other tool-server captures", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    rt.send("/a");
+
+    await exit();
+
+    expect(rt.paused).toBe(true);
+    expect(await read(IOS_UDID)).not.toContain("rn-net-1");
+  });
+
+  it("leaves the capture as it is while another tool-server still captures the app", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    await otherServerStarts(rt);
+    rt.send("/a");
+
+    await exit();
+    rt.send("/b");
+
+    expect(rt.paused).toBe(false);
+    const text = await read(IOS_UDID);
+    expect(text).toContain("=== NETWORK LOGS (page 1/1, 2 total) ===");
+  });
+
+  it("keeps the log of an app it only stopped while another tool-server still reads it", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    await otherServerStarts(rt);
+    rt.send("/a");
+    await stop(IOS_UDID, APP);
+
+    await exit();
+
+    expect(await read(IOS_UDID)).toContain(
+      "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ==="
+    );
+  });
+
+  it("lets another tool-server's exit end the capture once stop-all-simulator-servers ended this one's", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    const other = await otherServerStarts(rt);
+    await stopAll([IOS_UDID]);
+    // The other tool-server captures again, then exits.
+    rt.evaluate(other.makeNetworkCaptureControlScript(false));
+    rt.send("/a");
+
+    rt.evaluate(other.NETWORK_CAPTURE_RELEASE_SCRIPT);
+
+    expect(rt.paused).toBe(true);
+    expect(JSON.parse(String(rt.evaluate(makeNetworkLogReadScript(0, 10, PORT))))).toMatchObject({
+      total: 0,
+    });
+  });
+});
+
 describe("a JS runtime of another app on the port", () => {
   it("is left as it is by a start, with that app's stopped capture, which a read still reports", async () => {
     const rt = new FakeRuntime(OTHER);
@@ -1885,7 +2535,7 @@ describe("a JS runtime of another app on the port", () => {
       layer: "js",
       armed: false,
       unavailable: true,
-      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; pass the port of ${APP}'s Metro`,
+      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; if that runtime is the app, pass bundleId ${OTHER}; otherwise pass the port of ${APP}'s Metro`,
     });
     expect(jsCapture(payload)).toEqual(otherCapture);
     expect(rt.evaluated).toHaveLength(evaluated);
@@ -1931,6 +2581,29 @@ describe("a JS runtime of another app on the port", () => {
     expect(rt.paused).toBe(true);
   });
 
+  it("does not say an interceptor may still record when an earlier stop already paused it", async () => {
+    serve(PORT, IOS_UDID, new FakeRuntime(APP));
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    expect(layer(await stop(IOS_UDID, APP), "js")).toMatchObject({ armed: false });
+    await reconnect(PORT, IOS_UDID, new FakeRuntime(OTHER));
+    const paused = {
+      layer: "js",
+      armed: false,
+      total: 0,
+      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; while capture is stopped, ${APP}'s JS runtime gets no interceptor`,
+    };
+
+    // Each stop there keeps the pause the first one confirmed.
+    expect(layer(await stop(IOS_UDID, APP), "js")).toEqual(paused);
+    expect(layer(await stop(IOS_UDID, APP), "js")).toEqual(paused);
+    expect(findJsCapture(IOS_UDID, APP)).toMatchObject({
+      intent: "stopped",
+      installed: true,
+      paused: true,
+    });
+  });
+
   it.each(PLATFORMS)(
     "on $platform, stores the stop of this app's started capture there, and says nothing records, when the app is not running",
     async ({ udid }) => {
@@ -1957,7 +2630,7 @@ describe("a JS runtime of another app on the port", () => {
     }
   );
 
-  it("gets nothing from a stop and a start of this app, and a read then says capture is not started", async () => {
+  it("gets nothing from a stop and a start of this app, and a read then gives the start's reason", async () => {
     const rt = new FakeRuntime(OTHER);
     serve(PORT, IOS_UDID, rt);
     ios.connected.add(APP);
@@ -1970,14 +2643,14 @@ describe("a JS runtime of another app on the port", () => {
       layer: "js",
       armed: false,
       total: 0,
-      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s, so nothing changed there; pass the port of ${APP}'s Metro`,
+      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s, so nothing changed there; if that runtime is the app, pass bundleId ${OTHER}; otherwise pass the port of ${APP}'s Metro`,
     });
     expect(layer(started, "js")).toMatchObject({ armed: false, unavailable: true });
     expect(jsCapturesOn(IOS_UDID)).toEqual([]);
     expect(rt.evaluated).toEqual([]);
     expect(urns()).not.toContain(`NetworkInspector:${jsCapturePayload(PORT, IOS_UDID)}`);
     expect(text).toBe(
-      "Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then call view-network-logs again."
+      `Network capture is not started on the JS layer: network-capture-start for ${APP} found it unavailable (${layer(started, "js").reason}). native-network-logs lists the requests of the native layer. Once the JS layer can start, call network-capture-start again, repeat the action, then call view-network-logs again.`
     );
   });
 });
@@ -2076,6 +2749,24 @@ describe("a JS capture on another Metro port", () => {
     expect(otherRuntime.evaluated).toEqual([]);
   });
 
+  it("stays as it is when stopped there, through a start against another app's runtime, which names its port", async () => {
+    await startedOnNewPort();
+    await stop(IOS_UDID, APP, NEW_PORT);
+    const capture = findJsCapture(IOS_UDID, APP);
+    expect(capture).toMatchObject({ intent: "stopped", installed: true, paused: true });
+    serve(PORT, IOS_UDID, new FakeRuntime(OTHER));
+
+    const started = await start(IOS_UDID, APP);
+
+    expect(layer(started, "js")).toEqual({
+      layer: "js",
+      armed: false,
+      unavailable: true,
+      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; ${hint}`,
+    });
+    expect(jsCapturesOn(IOS_UDID)).toEqual([capture]);
+  });
+
   it("stays as it is, with another app's capture on the port, through a stop there on runtimes that name no app", async () => {
     const rt = new FakeRuntime(undefined);
     serve(NEW_PORT, IOS_UDID, rt);
@@ -2105,6 +2796,32 @@ describe("a JS capture on another Metro port", () => {
     expect(rt.paused).toBe(false);
   });
 
+  it.each([
+    { there: "Metro is down", answer: undefined },
+    { there: "another app's runtime answers", answer: () => new FakeRuntime(OTHER) },
+    { there: "no app is connected", answer: () => FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS },
+    {
+      there: "another app's capture is on the port",
+      answer: () => new FakeRuntime(OTHER),
+      otherStarts: true,
+    },
+  ])(
+    "says a stop on another port may leave it recording after a stop on its own port did not reach it, when $there",
+    async ({ answer, otherStarts }) => {
+      const rt = await startedOnNewPort();
+      await reconnect(NEW_PORT, IOS_UDID, undefined);
+      expect(layer(await stop(IOS_UDID, APP, NEW_PORT), "js")).toMatchObject({ armed: true });
+      serve(PORT, IOS_UDID, answer?.());
+      if (otherStarts) await start(IOS_UDID, OTHER);
+
+      const stopped = await stop(IOS_UDID, APP);
+
+      expect(layer(stopped, "js")).toMatchObject({ armed: true, total: 0 });
+      expect(layer(stopped, "js").reason).toContain(hint);
+      expect(rt.paused).toBe(false);
+    }
+  );
+
   it("moves to a new port once the app's own runtime answers there", async () => {
     await startedOnNewPort();
     serve(PORT, IOS_UDID, new FakeRuntime(APP));
@@ -2121,12 +2838,12 @@ describe("a JS capture on another Metro port", () => {
 describe("a start and a stop of one app", () => {
   /** Holds the app's Android start in its attach until `release` is called. */
   function holdStart(packageName: string): { release: () => void } {
-    let release!: () => void;
+    let release: (() => void) | undefined;
     androidFor(packageName).startAnswer = () =>
       new Promise((resolve) => {
         release = () => resolve({ armed: true });
       });
-    return { release: () => release() };
+    return { release: () => release?.() };
   }
 
   it("run one after the other", async () => {
@@ -2150,6 +2867,108 @@ describe("a start and a stop of one app", () => {
     expect(rt.paused).toBe(true);
   });
 
+  it.each([
+    { how: "with no devices", udid: SERIAL, devices: undefined },
+    { how: "with the serial in another case", udid: SERIAL, devices: ["EMULATOR-5554"] },
+    {
+      how: "with the serial, for a start under a logicalDeviceId Metro gave the device",
+      udid: LOGICAL_ID,
+      devices: [SERIAL],
+    },
+    { how: "with a serial that has a colon", udid: WIFI_SERIAL, devices: [WIFI_SERIAL] },
+    {
+      how: "with the serial, for a start under the device's ext: id",
+      udid: EXT_ID,
+      devices: [SERIAL],
+    },
+  ])("hold stop-all-simulator-servers $how until they end", async ({ udid, devices }) => {
+    const device = udid === LOGICAL_ID ? SERIAL : udid;
+    if (udid === LOGICAL_ID) rememberDeviceAlias(LOGICAL_ID, SERIAL);
+    const rt = new FakeRuntime(APP);
+    serve(PORT, device, rt);
+    const held = holdStart(APP);
+    try {
+      const starting = start(udid, APP);
+      await vi.waitFor(() => expect(androidFor(APP).calls).toEqual([`start ${PORT}`]));
+      let swept = false;
+      const sweep = stopAll(devices).finally(() => {
+        swept = true;
+      });
+      await settle();
+
+      expect(swept).toBe(false);
+      expect(rt.evaluated).not.toContain("end");
+
+      held.release();
+      await starting;
+      await sweep;
+
+      expect(rt.evaluated.indexOf("end")).toBeGreaterThan(rt.evaluated.indexOf("install"));
+      expect(findJsCapture(device, APP)).toBeUndefined();
+    } finally {
+      held.release();
+      forgetDeviceAlias(LOGICAL_ID);
+    }
+  });
+
+  it("let a stop-all-simulator-servers that is cancelled while it waits for them end at once, with nothing stopped", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    const held = holdStart(APP);
+    const inspector = androidNetworkInspectorRef(resolveDevice(SERIAL), APP, PORT).urn;
+    try {
+      const starting = start(SERIAL, APP);
+      await vi.waitFor(() => expect(androidFor(APP).calls).toEqual([`start ${PORT}`]));
+      const controller = new AbortController();
+      let swept = false;
+      const sweep = stopAll([SERIAL], controller.signal).finally(() => {
+        swept = true;
+      });
+      await settle();
+      controller.abort();
+      await settle();
+
+      expect(swept).toBe(true);
+      expect(await sweep).toEqual({ stopped: [], aborted: true });
+
+      held.release();
+      expect(layer(await starting, "js")).toEqual({ layer: "js", armed: true });
+      await settle();
+      expect(rt.evaluated).not.toContain("end");
+      expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "started", installed: true });
+      expect(registry.getSnapshot().services.get(inspector)?.state).toBe(ServiceState.RUNNING);
+    } finally {
+      held.release();
+    }
+  });
+
+  it("let stop-all-simulator-servers end when it comes in while a second start of the app waits behind the first", async () => {
+    // An app of its own, so a lock this test leaves held holds up no other test.
+    const app = "com.example.queued";
+    serve(PORT, SERIAL, new FakeRuntime(app));
+    const held = holdStart(app);
+
+    const first = start(SERIAL, app);
+    await vi.waitFor(() => expect(androidFor(app).calls).toEqual([`start ${PORT}`]));
+    // The second start waits on the lock before the sweep comes in.
+    const second = start(SERIAL, app);
+    await settle();
+    const sweep = stopAll([SERIAL]);
+    await settle();
+    held.release();
+    // The second start runs once the first ends, and the sweep waits for it.
+    await vi.waitFor(() =>
+      expect(androidFor(app).calls).toEqual([`start ${PORT}`, `start ${PORT}`])
+    );
+    held.release();
+
+    await expect(first).resolves.toMatchObject({ status: "ok" });
+    await expect(second).resolves.toMatchObject({ status: "ok" });
+    expect((await sweep).stopped).toContain(
+      androidNetworkInspectorRef(resolveDevice(SERIAL), app, PORT).urn
+    );
+  });
+
   it("do not hold up a start of another app on the device", async () => {
     serve(PORT, SERIAL, new FakeRuntime(APP));
     const held = holdStart(APP);
@@ -2163,6 +2982,33 @@ describe("a start and a stop of one app", () => {
     held.release();
     await expect(starting).resolves.toMatchObject({ status: "ok" });
   });
+});
+
+describe("a device the capture tools do not cover", () => {
+  // A call made inside the tool-server, as an e2e `tool:` step makes it, skips the HTTP gate.
+  it.each([
+    { platform: "Vega", udid: "amazon-0123456789" },
+    { platform: "Chromium", udid: "chromium-cdp-9222" },
+  ])(
+    "on $platform, refuses a start and a stop called inside the tool-server, and leaves the app's JS runtime as it is",
+    async ({ udid }) => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, udid, rt);
+
+      for (const call of [start, stop]) {
+        const err = await call(udid, APP).then(
+          () => undefined,
+          (e: unknown) => e
+        );
+        expect((err as Error | undefined)?.cause).toBeInstanceOf(UnsupportedOperationError);
+        expect(String(err)).toContain("network capture has no start or stop");
+      }
+
+      expect(rt.evaluated).toEqual([]);
+      expect(rt.paused).toBeUndefined();
+      expect(jsCapturesOn(udid)).toEqual([]);
+    }
+  );
 });
 
 describe("the tool definitions", () => {
@@ -2191,6 +3037,26 @@ describe("the tool definitions", () => {
       `Failed to ${verb[2]} network capture for ${APP}: ${FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE}`
     );
   });
+
+  it.each(tools)(
+    "network-capture-$verb.2 refuses a bundleId outside the app id alphabet before any layer runs",
+    async ({ verb }) => {
+      serve(PORT, IOS_UDID, new FakeRuntime(APP));
+      const call = verb[2] === "start" ? start : stop;
+
+      for (const bundleId of [`${APP} `, `${APP}/.MainActivity`, ""]) {
+        const err = await call(IOS_UDID, bundleId).then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+        expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+        expect(err?.message).toContain(BUNDLE_ID_MESSAGE);
+      }
+      expect(jsCapturesOn(IOS_UDID)).toEqual([]);
+      expect(urns()).toEqual([]);
+    }
+  );
 
   it.each(tools)(
     "network-capture-$verb.2 runs on iOS simulators, remote simulators, Android and Mac apps, and refuses the rest",

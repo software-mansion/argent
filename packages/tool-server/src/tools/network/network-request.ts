@@ -225,8 +225,8 @@ export const networkRequestTool: ToolDefinition<
   id: "view-network-request-details",
   description: `Get full details of a specific network request by its requestId: one from view-network-logs, or a native ID (ios-, android-<flag:macos-apps> or macos-</flag:macos-apps>) from native-network-logs, which needs no debugger connection.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
-Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of a native ID. For a native ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app is still sending the request body, call again once the upload has finished. Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found; on iOS<flag:macos-apps>, a Mac app</flag:macos-apps> and Android it also says when network capture is not started, which network-capture-start does. IDs keep working after network-capture-stop.`,
+Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of a native ID. For a native ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app may still be sending the request body, call again once the request has ended. Use when you need headers, body, or timing for a specific request after listing logs.
+Returns an error message string if the requestId is not found; on iOS<flag:macos-apps>, a Mac app</flag:macos-apps> and Android it also says when network capture is not started, which network-capture-start does. IDs keep working after network-capture-stop. A view-network-logs ID holds until the app's JS runtime reloads: the new runtime numbers its requests from rn-net-1 again, so an old ID can name a new request. Native IDs are not affected.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -612,9 +612,10 @@ async function readNativeBody(
     return inlineBody(body.body, body.inlineChars, mimeType, framing);
   }
   if (!body.base64Encoded) {
+    const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
     return body.truncated
-      ? cutByAgent(body.body, mimeType, Buffer.byteLength(body.body), framing)
-      : truncateBody(body.body, mimeType);
+      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing)
+      : truncateBody(text, mimeType);
   }
 
   const kept = Buffer.from(body.body, "base64");
@@ -631,6 +632,17 @@ async function readNativeBody(
   return body.truncated
     ? cutByAgent(text, mimeType, kept.length, framing)
     : truncateBody(text, mimeType);
+}
+
+/**
+ * A body the agent sent as text, because its bytes are valid UTF-8. UTF-16
+ * bytes with no BOM often are. Its UTF-8 bytes are the body's own, so they
+ * decode in the declared charset, as the bytes of a base64 body do.
+ */
+function inDeclaredCharset(text: string, contentType: string, truncated: boolean): string {
+  const charset = charsetOf(contentType);
+  if (!charset || /^utf-?8$/i.test(charset)) return text;
+  return decodeText(Buffer.from(text, "utf8"), charset, truncated) ?? text;
 }
 
 /**

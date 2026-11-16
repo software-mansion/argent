@@ -2,8 +2,10 @@ import { z } from "zod";
 import { isLiveServiceState, type Registry, type ToolCapability } from "@argent/registry";
 import type { DebuggerNotConnectedReason } from "@argent/telemetry";
 import { metroPortField } from "../../utils/debugger/metro-port";
-import { canonicalDeviceId } from "../../utils/debugger/device-alias";
+import { deviceKeyOf } from "../../utils/native-network-record";
 import { withKeyedLock } from "../../utils/keyed-lock";
+import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
+import { settleWithin } from "../../utils/timing";
 
 export const captureSchema = z.object({
   udid: z
@@ -13,6 +15,7 @@ export const captureSchema = z.object({
     ),
   bundleId: z
     .string()
+    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
       "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
     ),
@@ -46,7 +49,10 @@ export interface StoppedLayer {
   layer: CaptureLayer;
   /** True only when the layer did not confirm the stop. */
   armed: boolean;
-  /** The requests the layer keeps for the app, as its listing counts them. */
+  /**
+   * The requests the layer keeps for the app, as its listing counts them, or 0
+   * when the stop could not count them, as on a JS runtime it did not reach.
+   */
   total: number;
   /** What kept the stop from reaching the layer, or what it left as it was. */
   reason?: string;
@@ -67,7 +73,7 @@ const captureLocks = new Map<string, Promise<unknown>>();
 const captureSweeps = new Set<{ devices?: ReadonlySet<string>; done: Promise<void> }>();
 
 function lockDevice(udid: string): string {
-  return (canonicalDeviceId(udid) ?? udid).toLowerCase();
+  return deviceKeyOf(udid).toLowerCase();
 }
 
 export function withCaptureLock<T>(
@@ -88,11 +94,13 @@ export function withCaptureLock<T>(
 
 /**
  * Runs `fn`, a teardown of the devices (every device without them), once each
- * start and stop of their apps under way has ended. A start or stop of their
+ * start and stop of their apps under way has ended, or once `signal` aborts,
+ * which `fn` then checks, or once `maxMs` has passed. A start or stop of their
  * apps called meanwhile waits until `fn` ends.
  */
 export async function withCaptureSweep<T>(
   devices: readonly string[] | undefined,
+  wait: { signal?: AbortSignal; maxMs?: number },
   fn: () => Promise<T>
 ): Promise<T> {
   const covered = devices && new Set(devices.map(lockDevice));
@@ -104,7 +112,7 @@ export async function withCaptureSweep<T>(
   const sweep = { devices: covered, done: new Promise<void>((resolve) => (end = resolve)) };
   captureSweeps.add(sweep);
   try {
-    await Promise.all(underWay);
+    await settleWithin(Promise.all(underWay), wait.maxMs, wait.signal);
     return await fn();
   } finally {
     captureSweeps.delete(sweep);

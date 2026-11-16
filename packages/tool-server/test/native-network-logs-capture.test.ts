@@ -167,7 +167,10 @@ describe("native network capture started through the blueprint", () => {
 
       const first = await callTool(api);
       expect(first).toMatchObject({ status: "ok", armed: true, count: 0 });
-      expect(headerOf(first)).toMatch(/were not recorded.*restart-app/);
+      // A relaunch ends the JS layer's capture, so the caller is told to start again after it.
+      expect(headerOf(first)).toMatch(
+        /were not recorded; to capture the launch, call restart-app, then network-capture-start again, since a relaunch ends the JS layer's capture, then call this again/
+      );
 
       // Capture was already on for the second read, so its count is the truth.
       const second = await callTool(api);

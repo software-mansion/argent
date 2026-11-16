@@ -3465,6 +3465,20 @@ describe("flow composition (run:)", () => {
         expect(reason).not.toContain(`${NATIVE_READY_TIMEOUT_MS} ms`);
       }
     );
+
+    // A launch step passes the time it measured from the start of its
+    // restart-app call, which also counts restart-app's wait for native
+    // network capture. Each remedy that quotes a time quotes that one.
+    it.each(["not_running", "connecting", "unregistered", "provider_attached"] as const)(
+      "quotes the time the step measured in the %s remedy",
+      (state) => {
+        const spentMs = LAUNCH_TO_VERDICT_MS + 5_000;
+        const reason = flowLaunchGateReason("com.acme.app", state, spentMs);
+
+        expect(reason).toContain(`${spentMs} ms`);
+        expect(reason).not.toContain(`${LAUNCH_TO_VERDICT_MS} ms`);
+      }
+    );
   });
 
   // The connection can land between the final poll and the measurement. Without
