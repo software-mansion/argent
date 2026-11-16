@@ -499,7 +499,7 @@ const timeRangeSchema = z.object({
 const zodSchema = z.object({
   port: metroPortField,
   device_id: metroDeviceIdParam(
-    "Device logicalDeviceId from debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android logicalDeviceId)."
+    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)<flag:macos-apps>, or a Mac app id, which needs no debugger-connect</flag:macos-apps>."
   ),
   mode: z
     .enum(["by_component", "by_time_range", "by_index", "cascade_tree", "render_counts"])

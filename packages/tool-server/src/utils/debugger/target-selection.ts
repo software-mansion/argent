@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { parseMacosAppBundleId } from "../device-info";
+import { MACOS_APP_ID_PREFIX } from "../device-info";
 import type { CDPTarget } from "./discovery";
 
 interface SelectedTarget {
@@ -88,9 +88,10 @@ function macosAppTargets(pool: CDPTarget[], bundleId: string, port: number): CDP
   throw new FailureError(
     `No JS runtime of the Mac app ${bundleId} is connected to Metro on port ${port}. ` +
       `Metro lists: ${[...devices.values()].join(", ")}. ` +
-      `The app must be a Debug build of react-native-macos 0.76 or later that loads its ` +
-      `bundle from this Metro; a Release build has no JS debugger. If the app uses another ` +
-      `Metro, pass that port.`,
+      `If the app does not run, start it (launch-app), wait a few seconds for the bundle ` +
+      `to load, then retry. Otherwise the app must be a Debug build of react-native-macos ` +
+      `0.76 or later that loads its bundle from this Metro; a Release build has no JS ` +
+      `debugger. If the app uses another Metro, pass that port.`,
     {
       error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
       failure_stage: "debugger_select_target",
@@ -118,9 +119,13 @@ export function selectTarget(
   let candidates = pool;
   let matchedDeviceId = false;
 
+  // By the prefix alone, as the capability gate classifies the id, so that a
+  // Mac app id with a bundle id macOS does not accept takes no fallback either.
   const macosBundleId =
-    typeof options?.deviceId === "string" ? parseMacosAppBundleId(options.deviceId) : null;
-  if (macosBundleId) {
+    typeof options?.deviceId === "string" && options.deviceId.startsWith(MACOS_APP_ID_PREFIX)
+      ? options.deviceId.slice(MACOS_APP_ID_PREFIX.length)
+      : null;
+  if (macosBundleId !== null) {
     candidates = macosAppTargets(pool, macosBundleId, port);
     matchedDeviceId = true;
   } else if (typeof options?.deviceId === "string" && options.deviceId) {

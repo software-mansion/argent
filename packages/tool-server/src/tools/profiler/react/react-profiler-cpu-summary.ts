@@ -102,7 +102,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android logicalDeviceId)."
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)<flag:macos-apps>, or a Mac app id, which needs no debugger-connect</flag:macos-apps>."
     ),
   top_n: z.coerce
     .number()
