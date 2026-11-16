@@ -239,10 +239,18 @@ export function runnerBuildStaticArgs(projectPath: string, config: RunnerSigning
  *
  * `-derivedDataPath` alone does not decide where products and intermediates go.
  * A Custom or Legacy build location in Xcode's settings (Locations > Advanced)
- * moves them out of it, for one next to the project, which is inside the
- * installed package. Build settings on the command line win over that
- * preference. They name the layout Xcode uses by default, so a build made
- * without them stays valid.
+ * moves them out of it:
+ *
+ * - Legacy: `<project dir>/build`
+ * - Custom, relative to workspace: `<project dir>/Build` by default
+ * - Custom, relative to derived data: `~/Library/Developer/Xcode/DerivedData/<name>`
+ * - Custom, absolute: the folder the user chose
+ *
+ * The project dir is inside the installed package, unless
+ * `ARGENT_IOS_RUNNER_PROJECT` points elsewhere. So besides the build not being
+ * found, it would land in the package or in the user's own build folders.
+ * Build settings on the command line win over that preference. They name the
+ * layout Xcode uses by default, so a build made without them stays valid.
  *
  * Kept out of the static args: the directory follows from the team, which the
  * cache key already covers, and a new key would cost every user a rebuild.

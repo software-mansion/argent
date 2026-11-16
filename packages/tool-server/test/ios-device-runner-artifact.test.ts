@@ -407,7 +407,8 @@ describe("ensureRunnerArtifact", () => {
         // Per-user Xcode state, build output and Finder metadata never enter
         // the key, whether they sit at the root or deeper in the tree.
         // `build` and `Build` hold a build an earlier version made next to the
-        // project under a Legacy or Custom Xcode build location.
+        // project under a Legacy or a Custom, relative to workspace Xcode build
+        // location.
         for (const dir of [
           "xcuserdata",
           "DerivedData",
