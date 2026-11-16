@@ -4633,6 +4633,26 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     });
   });
 
+  it("gives the plain stopped note at a launch when the agent acknowledges a later Network.disable during the launch's process read", async () => {
+    const { api, agent } = await stopUnacknowledged();
+    const processRead = holdOnce();
+    const answer = vi.mocked(adbShell).getMockImplementation()!;
+    vi.mocked(adbShell).mockImplementationOnce(async (...args) => {
+      await processRead.gate();
+      return answer(...args);
+    });
+    const calls = vi.mocked(adbShell).mock.calls.length;
+    const launching = attachAndroidNetworkInspectorToLaunch(SERIAL, PKG);
+    await vi.waitFor(() => expect(vi.mocked(adbShell).mock.calls).toHaveLength(calls + 1));
+    expect(vi.mocked(adbShell).mock.lastCall?.[1]).toContain("pidof");
+
+    agent.options.unanswered!.length = 0;
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    processRead.release();
+
+    expect(await launching).toBe(STOPPED_LAUNCH_NOTE);
+  });
+
   it("a stop the agent does not acknowledge within 5 s fails the open requests, and its late reply fails none of the next start's", async () => {
     device.agentOptions = { unanswered: ["Network.disable"] };
     const api = await armedInspector();
