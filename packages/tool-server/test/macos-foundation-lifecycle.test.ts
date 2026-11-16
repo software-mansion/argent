@@ -97,6 +97,7 @@ import { createNetworkCaptureStartTool } from "../src/tools/network/network-capt
 import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
+import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { resolveDevice } from "../src/utils/device-info";
 import { PROCESS_ENDED } from "../src/utils/native-network-record";
 import { MACOS_CONNECTION_DROPPED, MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
@@ -260,6 +261,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       "network-capture-stop": createNetworkCaptureStopTool(registry),
       "view-network-request-details": networkRequestTool,
       "stop-simulator-server": createStopSimulatorServerTool(registry),
+      "stop-all-simulator-servers": createStopAllSimulatorServersTool(registry),
     };
     for (const tool of Object.values(tools)) registry.registerTool(tool);
   });
@@ -1013,6 +1015,22 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
       expect(await readLog()).toMatchObject({ started: false });
     }, 15_000);
+
+    it("arms the next service when a start comes during a stop-all-simulator-servers of the app", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--cdp-delay=1500"] });
+      const first = start();
+      await new Promise((r) => setTimeout(r, 200));
+      // The sweep waits for the first start, and the second start waits for the sweep.
+      const sweep = run("stop-all-simulator-servers", { devices: [DEVICE_ID] });
+      await new Promise((r) => setTimeout(r, 200));
+      const second = start();
+      expect((await first).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      await sweep;
+      expect((await second).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect(await readLog()).toMatchObject({ armed: true, total: 0 });
+      expect((await request("https://example.com/x")).active).toBe(true);
+      expect(urls(await readLog())).toEqual(["https://example.com/x"]);
+    }, 20_000);
 
     it("sends Network.enable again at a start after a stop on the same process", async () => {
       await run("boot-device", { macosAppPath: appPath });

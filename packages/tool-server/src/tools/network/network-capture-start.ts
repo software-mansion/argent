@@ -35,7 +35,7 @@ import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
 import { xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
-import { macosAppServices } from "../../utils/macos-input";
+import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
 import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
@@ -74,33 +74,13 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
         `Failed to start network capture for ${params.bundleId}: ${failureSignal.error_code}`,
     },
     // Each layer resolves its own service, so one that fails leaves the others running.
-    // A Mac app has one layer, in the app's own service.
-    services: (params) => {
-      const device = resolveDevice(params.udid);
-      return device.platform === "macos" ? macosAppServices(device) : {};
-    },
-    async execute(services, params) {
+    services: () => ({}),
+    async execute(_services, params) {
       const device = resolveDevice(params.udid);
       if (device.platform === "macos") {
-        const app = requireMacosAppOfBundle(
-          services,
-          device,
-          "network-capture-start",
-          params.bundleId
+        const layer = await withCaptureLock(params.udid, params.bundleId, () =>
+          startMacosLayer(registry, device, params)
         );
-        // No launch of an Apple app loads argent's library, so nothing arms it.
-        if (!isInjectableBundleId(params.bundleId)) {
-          throw unavailableError(params, [
-            unavailable(
-              "macos-native",
-              `${params.bundleId} is an Apple app; argent captures only apps it can load its library into, such as your own builds`
-            ),
-          ]);
-        }
-        const layer = await withCaptureLock(params.udid, params.bundleId, async () => {
-          const { armed, reason } = await app.startNetworkCapture();
-          return { layer: "macos-native" as const, armed, ...(reason ? { reason } : {}) };
-        });
         return { status: "ok", layers: [layer] };
       }
       await ensureDeps(
@@ -133,6 +113,36 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
       return { status: "ok", layers };
     },
   };
+}
+
+/**
+ * A Mac app has one layer, in the app's own service. It is resolved under the
+ * lock, so a start that waited for a stop-all-simulator-servers of the app arms
+ * the service that comes after it.
+ */
+async function startMacosLayer(
+  registry: Registry,
+  device: DeviceInfo,
+  params: CaptureParams
+): Promise<StartedLayer> {
+  const ref = macosAppRef(device);
+  const app = requireMacosAppOfBundle(
+    { macosApp: await registry.resolveService<MacosAppApi>(ref.urn, ref.options) },
+    device,
+    "network-capture-start",
+    params.bundleId
+  );
+  // No launch of an Apple app loads argent's library, so nothing arms it.
+  if (!isInjectableBundleId(params.bundleId)) {
+    throw unavailableError(params, [
+      unavailable(
+        "macos-native",
+        `${params.bundleId} is an Apple app; argent captures only apps it can load its library into, such as your own builds`
+      ),
+    ]);
+  }
+  const { armed, reason } = await app.startNetworkCapture();
+  return { layer: "macos-native", armed, ...(reason ? { reason } : {}) };
 }
 
 function unavailableError(params: CaptureParams, layers: StartedLayer[]): FailureError {
