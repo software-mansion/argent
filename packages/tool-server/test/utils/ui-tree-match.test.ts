@@ -480,6 +480,26 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("text", "Max", matches, "contains")).toBe(true);
   });
 
+  // Documented in reference/e2e-yaml.mdx.
+  it("a text selector tests a node's label and value one at a time, never joined", () => {
+    const tree = node({
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({
+          label: "Tip",
+          value: "Hello",
+          identifier: "tip",
+          frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.1 },
+        }),
+      ],
+    });
+    expect(findAll(tree, { textMatches: "^Hello$" }).map((n) => n.identifier)).toEqual(["tip"]);
+    expect(findAll(tree, { text: "Hello" }).map((n) => n.identifier)).toEqual(["tip"]);
+    expect(findAll(tree, { textMatches: "^Tip Hello$" })).toEqual([]);
+    expect(findAll(tree, { text: "Tip Hello" })).toEqual([]);
+  });
+
   it("evaluateCondition `text` falls back to all matches when none is visible", () => {
     const tree = node({
       role: "AXGroup",
