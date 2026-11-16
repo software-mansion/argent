@@ -2597,6 +2597,37 @@ describe("a start and a stop of one app", () => {
     }
   });
 
+  it("let a stop-all-simulator-servers that is cancelled while it waits for them end at once, with nothing stopped", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    const held = holdStart(APP);
+    const inspector = androidNetworkInspectorRef(resolveDevice(SERIAL), APP, PORT).urn;
+    try {
+      const starting = start(SERIAL, APP);
+      await vi.waitFor(() => expect(androidFor(APP).calls).toEqual([`start ${PORT}`]));
+      const controller = new AbortController();
+      let swept = false;
+      const sweep = stopAll([SERIAL], controller.signal).finally(() => {
+        swept = true;
+      });
+      await settle();
+      controller.abort();
+      await settle();
+
+      expect(swept).toBe(true);
+      expect(await sweep).toEqual({ stopped: [], aborted: true });
+
+      held.release();
+      expect(layer(await starting, "js")).toEqual({ layer: "js", armed: true });
+      await settle();
+      expect(rt.evaluated).not.toContain("end");
+      expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "started", installed: true });
+      expect(registry.getSnapshot().services.get(inspector)?.state).toBe(ServiceState.RUNNING);
+    } finally {
+      held.release();
+    }
+  });
+
   it("let stop-all-simulator-servers end when it comes in while a second start of the app waits behind the first", async () => {
     // An app of its own, so a lock this test leaves held holds up no other test.
     const app = "com.example.queued";

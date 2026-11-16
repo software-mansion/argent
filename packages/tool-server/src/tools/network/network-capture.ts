@@ -5,6 +5,7 @@ import { metroPortField } from "../../utils/debugger/metro-port";
 import { deviceKeyOf } from "../../utils/native-network-record";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
+import { settleWithin } from "../../utils/timing";
 
 export const captureSchema = z.object({
   udid: z.string().describe("Device ID from list-devices: an iOS simulator UDID or Android serial"),
@@ -83,11 +84,13 @@ export function withCaptureLock<T>(
 
 /**
  * Runs `fn`, a teardown of the devices (every device without them), once each
- * start and stop of their apps under way has ended. A start or stop of their
- * apps called meanwhile waits until `fn` ends.
+ * start and stop of their apps under way has ended, or once `signal` aborts,
+ * which `fn` then checks. A start or stop of their apps called meanwhile waits
+ * until `fn` ends.
  */
 export async function withCaptureSweep<T>(
   devices: readonly string[] | undefined,
+  wait: { signal?: AbortSignal },
   fn: () => Promise<T>
 ): Promise<T> {
   const covered = devices && new Set(devices.map(lockDevice));
@@ -99,7 +102,7 @@ export async function withCaptureSweep<T>(
   const sweep = { devices: covered, done: new Promise<void>((resolve) => (end = resolve)) };
   captureSweeps.add(sweep);
   try {
-    await Promise.all(underWay);
+    await settleWithin(Promise.all(underWay), undefined, wait.signal);
     return await fn();
   } finally {
     captureSweeps.delete(sweep);
