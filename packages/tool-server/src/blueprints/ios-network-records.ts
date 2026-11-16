@@ -320,11 +320,7 @@ export function createIosNetworkRecords(
     bodies.set(cacheKey, read);
     // The lost read can still bring the body, as when the app answers it after
     // the request's end: its body answers this read too, if it comes first.
-    if (cached) {
-      void cached.answer.then((body) => {
-        if (body.available) adoptAnswer(body);
-      });
-    }
+    if (cached) adoptLateBody(cached.answer, answer, adoptAnswer);
     // Only a body is kept: every reason may change at the next read.
     void answer.then((body) => {
       read.settled = true;
@@ -571,6 +567,27 @@ interface BodyRead {
   chars: number;
   /** A request body read that went out while the app was still sending the body. */
   heldOpen?: boolean;
+}
+
+/**
+ * Lets the body that a lost read brings answer the read that replaced it, if
+ * it comes first. The lost read can stay open until its connection closes, so
+ * it must not keep the replacing read's body after the store drops it. Its
+ * callback holds only `take`, which is cleared once the replacing read
+ * settles, and not the caller's scope, which holds the body.
+ */
+function adoptLateBody(
+  lost: Promise<NativeNetworkBody>,
+  replacing: Promise<NativeNetworkBody>,
+  adopt: (body: NativeNetworkBody) => void
+): void {
+  let take: typeof adopt | undefined = adopt;
+  void replacing.then(() => {
+    take = undefined;
+  });
+  void lost.then((body) => {
+    if (body.available) take?.(body);
+  });
 }
 
 /**

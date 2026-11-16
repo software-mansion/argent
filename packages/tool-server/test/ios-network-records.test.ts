@@ -1395,6 +1395,49 @@ describe("iOS native network records: request body still being sent", () => {
     expect(app.request).toHaveBeenCalledTimes(2);
   });
 
+  it("frees the body of a read asked again once it is no longer kept, while the read it replaced stays open", async () => {
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const { app, store, agent, id } = uploading();
+    const lastSent = (): SentRead => app.sent[app.sent.length - 1]!;
+
+    /** Reads the body asked again, and pushes it out of the bodies kept. */
+    const readThenDrop = async (): Promise<WeakRef<NativeNetworkBody>> => {
+      void store.requestPostData(id);
+      await settle();
+      await vi.advanceTimersByTimeAsync(5_000);
+      agent.responseReceived("upload", "https://api.example.com/upload");
+      agent.loadingFinished("upload", 2);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      const again = store.requestPostData(id);
+      await settle();
+      lastSent().reply({ postData: "done", base64Encoded: false });
+      const shown = new WeakRef(await again);
+      for (let i = 0; i < MAX_CACHED_BODIES; i++) {
+        agent.complete(`r${i}`, `https://e.com/${i}`);
+        const read = store.responseBody(idOf(store, `r${i}`));
+        await settle();
+        lastSent().reply({ body: `body ${i}`, base64Encoded: false, wasTruncated: false });
+        await read;
+      }
+      return shown;
+    };
+    const shown = await readThenDrop();
+    vi.useRealTimers();
+    // The body asked again is no longer kept: a read asks the app for it once more.
+    void store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 3);
+
+    // A WeakRef keeps its target alive until the current job ends.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    gc();
+    expect(shown.deref()).toBeUndefined();
+    // The read the app left open is still pending, as the agent's connection holds it.
+    expect(app.sent[0]!.method).toBe("Network.getRequestPostData");
+  });
+
   it("keeps the body of a read asked again when the read it replaced fails later, as at a relaunch", async () => {
     const { app, store, agent, id } = uploading();
     const during = track(store.requestPostData(id));
