@@ -4730,6 +4730,18 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(await api.stopCapture()).toEqual({ confirmed: false, reason: AWAY_AT_STOP });
   });
 
+  it("a stop is confirmed after a start attached again to a known process that lost its agent: that agent is not away", async () => {
+    const api = await armedInspector();
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    // An emulator snapshot load took the agent out of the process, which keeps its pid and start time.
+    device.loaded.clear();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    expect(attachCommands()).toHaveLength(2);
+
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+  });
+
   it("an agent that connects while stopped gets Network.enable, then Network.disable, is never armed, and fails the open requests it resumes on the reply", async () => {
     const api = await armedInspector();
     const first = agents[0]!;
