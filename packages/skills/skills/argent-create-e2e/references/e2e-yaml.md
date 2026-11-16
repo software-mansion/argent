@@ -252,19 +252,17 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-`path` is relative to the test file that contains the step. Include the extension (`.mjs` or `.js`, or `.mts` or `.ts` for TypeScript) and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
+`path` is relative to the test file that contains the step. Use an `.mjs` or `.js` file, or an `.mts` or `.ts` file for TypeScript, and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
 
 `.mjs` and `.mts` are always ES modules. `.js` and `.ts` take their module type from the project's `package.json` `type` field; with no `type`, Node 20.19+ and 22.7+ read a file with `import`, `export` or top-level `await` as an ES module, and older Node reads every such file as CommonJS. So prefer `.mjs` or `.mts` for a new script and use `.js` or `.ts` for a script the project already has. `.cjs` and `.cts` are invalid: under `"type": "module"`, use `import` in the script, not `require`.
 
-Node runs `.mts` and `.ts` by stripping types. It does no type check and ignores `tsconfig.json`, so a `paths` alias does not resolve. Write the script so that stripping is enough:
+Node runs `.mts` and `.ts` by removing the types, and it does not read `tsconfig.json`. In an `.mts` or `.ts` script:
 
-- Use no `enum`, runtime `namespace` or parameter property.
-- Write the extension in each relative import: `./helpers.mts`.
+- Use no `enum`, runtime `namespace`, parameter property or `paths` alias.
+- Write the extension in each relative import (`./helpers.mts`), and import shared code only from `.mts` or `.mjs` files.
 - Import a type with `import type`.
-- Import no TypeScript from `node_modules`.
-- Import shared code from `.mts` or `.mjs` files. An imported `.ts` or `.js` file takes its module type from `package.json`, as a `.ts` or `.js` script does: under `"type": "commonjs"` its exports are missing, and with no `type` Node older than 20.19 or 22.7 reads it as CommonJS too.
 
-TypeScript needs Node 22.18+ on the tool-server, but not 23.0 to 23.5, and not a Node build without TypeScript support such as the Debian or Ubuntu `nodejs` package. This also applies to an `.mjs` or `.js` script that imports TypeScript. Otherwise the test is rejected before step 1, or the step errors, and the reason names the Node version. Then use JavaScript files (`.mjs` for `.mts`; `.js` for `.ts`, or `.mjs` if the file is an ES module), or stop the tool-server with `argent server stop` and run Argent on another Node.
+If the reason says that the Node.js of the tool-server cannot run TypeScript, use `.mjs` or `.js` files.
 
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
 
