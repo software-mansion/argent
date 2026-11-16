@@ -266,7 +266,11 @@ export function localInstallCommand(pm: PackageManager, pkg: string): ShellComma
     case "yarn":
       return { bin: "yarn", args: ["add", "--dev", pkg] };
     case "pnpm":
-      return { bin: "pnpm", args: ["add", "-D", pkg] };
+      // At a workspace root pnpm refuses a bare `add` (ERR_PNPM_ADDING_TO_ROOT).
+      // Not `-w`: from a package inside a workspace it retargets the install to
+      // the root, and outside a workspace pnpm rejects it. This flag only skips
+      // the check, so the dependency still lands in the cwd's manifest.
+      return { bin: "pnpm", args: ["add", "-D", "--ignore-workspace-root-check", pkg] };
     case "bun":
       return { bin: "bun", args: ["add", "-d", pkg] };
     default:
