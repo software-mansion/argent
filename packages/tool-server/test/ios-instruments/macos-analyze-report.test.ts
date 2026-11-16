@@ -132,7 +132,8 @@ describe("the CPU sampling note on the tools' time", () => {
         `describe and taps, while the trace recorded. They are left out of the CPU hotspots.`
     );
     expect(report).toContain(
-      `A hang whose suspects are marked "argent's own library" was caused by argent, not the app.`
+      `A hang whose suspects are marked "argent's own library" was caused by argent, not the ` +
+        `app, unless the report says that its main thread very possibly waited.`
     );
     expect(report).not.toContain("Instruments loads into the app");
   });

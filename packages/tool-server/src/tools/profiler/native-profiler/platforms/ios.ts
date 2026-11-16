@@ -1330,7 +1330,8 @@ function toolingNote(
   return (
     `Of the CPU samples, ${parts.join(", and ")}. They are left out of the CPU hotspots.` +
     (toolingMs.argent > 0
-      ? ` A hang whose suspects are marked "argent's own library" was caused by argent, not the app.`
+      ? ` A hang whose suspects are marked "argent's own library" was caused by argent, not the ` +
+        `app, unless the report says that its main thread very possibly waited.`
       : ``)
   );
 }
