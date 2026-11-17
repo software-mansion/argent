@@ -106,7 +106,7 @@ On an iOS simulator, a line of `describe` can show:
 - `[selected]` for a selected control.
 - `hint="..."` for an element that has a VoiceOver hint. `describe` omits a hint that is identical to the label. A physical iPhone does not report the VoiceOver hint.
 
-On a physical iPhone, a web sign-in sheet (`ASWebAuthenticationSession`) or an in-app Safari view (`SFSafariViewController`) runs in the system process `com.apple.SafariViewService`. From iOS 26, the tree of the app does not contain the sheet. `describe` then adds the tree of the sheet under the root as an `Application "Safari"` node, with frames in the same space as the rest of the tree. The app stays the target, so do not call `launch-app com.apple.SafariViewService`: that fronts the service and the screen goes black. While the sheet opens or closes, `describe` leaves the sheet out. The system alert that asks to sign in with a website shows in `describe` only after `launch-app com.apple.springboard`.
+On a physical iPhone, `describe` includes a web sign-in sheet or an in-app Safari view that covers the app. The system alert that asks to sign in with a website shows only after `launch-app com.apple.springboard`.
 
 ## Interacting
 
