@@ -39,7 +39,7 @@ import {
   CAPTURE_TIMEOUT_MS,
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
-import { createTreeMemory, describedTree } from "./unchanged-tree.js";
+import { createTreeMemory, describedTree, treeIdLine } from "./unchanged-tree.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { listDevicesText } from "./list-devices-text.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
@@ -210,7 +210,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
    * round-trip before its next tap. Measured on Sonnet over 70 runs: −21%
    * turns, −23% wall time, −17% cost at equal task success (see PR #958). The
    * tree is a few hundred tokens per action. A tree identical to the last one
-   * the agent received for the device is replaced by a note (unchanged-tree.ts).
+   * sent for the device is replaced by a note (unchanged-tree.ts).
    */
   async function captureTreeBlocks(
     udid: string,
@@ -228,7 +228,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         name: toolName,
         durationMs: Date.now() - t1,
         chars: tree?.length ?? 0,
-        unchanged: shown?.unchanged ?? false,
+        // `identical` is the repeat rate; `note` is what the agent was spared.
+        identical: shown?.identical ?? false,
+        note: shown?.note ?? false,
       });
       if (shown === undefined) return [];
       return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${shown.text}` }];
@@ -272,8 +274,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal: cancelled }) => {
     const t0 = Date.now();
+    // The device whose tree memory this call wrote to, if any.
+    let treeUdid: string | undefined;
     await spyLog({
       ts: new Date().toISOString(),
       event: "tool_called",
@@ -318,10 +322,15 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
-      if (udid && canonicalToolId(params.name) === "describe") {
-        // The agent now has this tree, so the next action's tree is compared with it.
+      if (udid && autoDescribeOn && canonicalToolId(params.name) === "describe") {
+        // The agent now has this tree, so the next action's tree is compared
+        // with it. The id lets a later note name it.
         const tree = describedTree(result);
-        if (tree !== undefined) trees.sent(udid, tree, "describe");
+        if (tree !== undefined) {
+          treeUdid = udid;
+          const id = trees.sent(udid, tree, "describe");
+          content = [...content, { type: "text" as const, text: treeIdLine(id) }];
+        }
       }
       const wantScreenshot =
         autoScreenshotOn && shouldAutoScreenshot(params.name, params.arguments);
@@ -361,6 +370,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         // An unsettled screen can leave a tree read in flight, which a
         // concurrent describe would reuse (physical iPhone).
         if (!screenSettled) await screenshot;
+        if (wantTree) treeUdid = udid;
         const tree = wantTree ? captureTreeBlocks(udid, params.name, signal) : Promise.resolve([]);
         content = [...content, ...(await screenshot), ...(await tree)];
       }
@@ -369,8 +379,14 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         content = [{ type: "text" as const, text: note }, ...content];
       }
 
+      // The client gave up on this call (an interrupt, its tool timeout), and
+      // the SDK drops the response. The agent never gets the tree recorded
+      // above, so a later note must not name it.
+      if (treeUdid !== undefined && cancelled.aborted) trees.forget(treeUdid);
+
       return { content };
     } catch (err) {
+      if (treeUdid !== undefined) trees.forget(treeUdid);
       await spyLog({
         ts: new Date().toISOString(),
         event: "tool_result",
