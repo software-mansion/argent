@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
+import { unchangedTreeNote } from "../src/unchanged-tree.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -594,6 +595,39 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content.at(-1)!.text).toBe(`--- Elements after action (describe) ---\n${describeText}`);
+  });
+
+  it("sends a note in place of a tree identical to the last one, and the screenshot still", async () => {
+    await tap();
+
+    const second = await wait();
+
+    const content = second.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)!.text).toBe(
+      `${AUTO_DESCRIBE_HEADER}\n${unchangedTreeNote("gesture-tap")}`
+    );
+    expect(textOf(second)).not.toContain("button Done");
+    expect(content.some((c) => c.type === "image")).toBe(true);
+  });
+
+  it("sends a changed tree in full", async () => {
+    await tap();
+    describeText = "button Save (0.1,0.2,0.3,0.1)";
+
+    const second = await tap();
+
+    const content = second.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)!.text).toBe(`${AUTO_DESCRIBE_HEADER}\n${describeText}`);
+  });
+
+  it("compares the tree after an action with the one the agent's describe call returned", async () => {
+    const described = await client.callTool({ name: "describe", arguments: { udid: "u" } });
+    expect(textOf(described)).toContain("button Done");
+
+    const result = await tap();
+
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)!.text).toBe(`${AUTO_DESCRIBE_HEADER}\n${unchangedTreeNote("describe")}`);
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {
