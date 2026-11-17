@@ -38,7 +38,7 @@ interface SentTree {
   notes: number;
 }
 
-export interface AfterAction {
+interface AfterAction {
   /** The text to append: the tree under its id line, or the note. */
   text: string;
   /** The tree is the one last sent in full for the device, whether or not a note replaced it. */
