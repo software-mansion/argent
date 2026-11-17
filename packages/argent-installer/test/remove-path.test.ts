@@ -1,22 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { removePath } from "../src/utils.js";
-
-// Every link handed to fs.rmSync, which then runs as it always does.
-const linksGivenToRmSync = vi.hoisted(() => [] as string[]);
-
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  const rmSync: typeof actual.rmSync = (target, options) => {
-    if (actual.lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
-      linksGivenToRmSync.push(String(target));
-    }
-    actual.rmSync(target, options);
-  };
-  return { ...actual, rmSync };
-});
 
 let tmpDir: string;
 let dir: string;
@@ -30,7 +16,6 @@ beforeEach(() => {
   link = path.join(tmpDir, "link");
   fs.mkdirSync(dir);
   fs.writeFileSync(file, "kept");
-  linksGivenToRmSync.length = 0;
 });
 
 afterEach(() => {
@@ -41,6 +26,9 @@ function isGone(target: string): boolean {
   return fs.lstatSync(target, { throwIfNoEntry: false }) === undefined;
 }
 
+// On a Node whose fs.rmSync removes a link, the link tests pass whichever call
+// removePath makes. The check in setup.ts is what fails them there if it hands
+// the link to fs.rmSync.
 describe("removePath", () => {
   it("removes a link to a directory and keeps the directory", () => {
     fs.symlinkSync(dir, link);
@@ -71,18 +59,6 @@ describe("removePath", () => {
 
     expect(removePath(link)).toBe(true);
     expect(isGone(link)).toBe(true);
-  });
-
-  // The tests above pass on Node 22, and on 24.13.1 and later, whichever call
-  // removes the link. Node 23.0 to 24.13.0 and 25.0 to 25.3 are where
-  // fs.rmSync keeps one, so this is the check that holds on every Node.
-  it("never hands a link to fs.rmSync", () => {
-    for (const target of [dir, file, path.join(tmpDir, "missing")]) {
-      fs.symlinkSync(target, link);
-      removePath(link);
-    }
-
-    expect(linksGivenToRmSync).toEqual([]);
   });
 
   it("removes a directory with its contents", () => {
