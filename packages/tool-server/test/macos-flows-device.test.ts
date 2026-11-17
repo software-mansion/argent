@@ -512,6 +512,24 @@ describe("raw tool steps on a Mac app", () => {
     expect(calls.map((c) => c.tool)).not.toContain("native-find-views");
   });
 
+  it("gates the steps after a launch by the kind that launch recorded: a Mac Catalyst app rebuilt as an AppKit app", async () => {
+    await recordKind(true);
+    const { registry, calls } = makeRegistry({
+      capabilityOf: catalystCapabilityOf,
+      onStart: () => recordKind(false),
+    });
+    await writeFlow("rebuilt", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { macos: APP } },
+        { kind: "tool", name: "native-find-views", args: { bundleId: APP, identifier: "x" } },
+      ],
+    });
+    const result = await run(registry, "rebuilt");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "tool:pass"]);
+    expect(calls.map((c) => c.tool)).toContain("native-find-views");
+  });
+
   it.each(["launch-app", "restart-app"])(
     "gates the steps after a raw %s step by the kind that start recorded",
     async (tool) => {

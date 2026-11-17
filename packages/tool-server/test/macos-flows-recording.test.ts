@@ -25,6 +25,10 @@ import {
   readMacosTree,
 } from "../src/tools/describe/platforms/macos";
 import { adaptMacosTreeForFlows } from "../src/tools/flows/flow-macos-tree";
+import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
+import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
+import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
+import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { fakeMacosLibrary, rect, webTree } from "./helpers/macos-tree-fixture";
 
@@ -187,6 +191,45 @@ describe("a tap recorded on a Mac app", () => {
 
     expect(String(err)).toMatch(/no macos support declared/);
     expect(reg.invokeTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("a native view tool recorded on a Mac Catalyst app", () => {
+  beforeEach(async () => {
+    // As boot-device records a Mac Catalyst app in ~/.argent/macos-apps.json.
+    const file = path.join(os.homedir(), ".argent", "macos-apps.json");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify([{ bundleId: BUNDLE, catalyst: true }]));
+  });
+
+  it.each([
+    nativeFindViewsTool,
+    nativeFullHierarchyTool,
+    nativeViewAtPointTool,
+    nativeUserInteractableViewAtPointTool,
+  ])("refuses $id before it runs, as the runner does", async (tool) => {
+    serve([], "macos-devtools");
+    await start("native");
+    // The tool's own capability, which leaves out Mac Catalyst apps.
+    const reg = {
+      ...registry(),
+      getTool: vi.fn(() => ({
+        inputSchema: { properties: { udid: {} } },
+        capability: tool.capability,
+      })),
+    } as unknown as Registry;
+
+    const err = await record("native", tool.id, { bundleId: BUNDLE }, reg).catch((e: unknown) => e);
+
+    expect(String(err)).toContain(
+      `Tool '${tool.id}' is not supported on macos catalyst (a Mac Catalyst app's UIKit views ` +
+        "are not in its AppKit view tree: use describe"
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION
+    );
+    expect(reg.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps("native")).toEqual([]);
   });
 });
 
