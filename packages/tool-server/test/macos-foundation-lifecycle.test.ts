@@ -702,6 +702,30 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     });
   });
 
+  it("refuses an iPad or iPhone app that runs on the Mac (Designed for iPad) with its own message", async () => {
+    const wrapper = path.join(root, `ipad-${Date.now()}`, "Pad.app");
+    const inner = path.join(wrapper, "Wrapper", "Pad.app");
+    fs.mkdirSync(inner, { recursive: true });
+    fs.writeFileSync(path.join(inner, "Info.plist"), "<plist/>");
+    fs.symlinkSync("Wrapper/Pad.app", path.join(wrapper, "WrappedBundle"));
+    const err = await run("boot-device", { macosAppPath: wrapper }).catch((e: unknown) => e);
+    expect((err as Error).message).toContain(
+      `${wrapper} is an iPad or iPhone app that runs on the Mac ("Designed for iPad")`
+    );
+    expect((err as Error).message).toMatch(/Build the app's Mac Catalyst target.*iOS simulator/);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.MACOS_APP_BUNDLE_INVALID,
+      error_kind: "unsupported",
+    });
+
+    // Without the link it is no wrapper: the message for any folder without Contents/Info.plist.
+    fs.rmSync(path.join(wrapper, "WrappedBundle"));
+    await expect(run("boot-device", { macosAppPath: wrapper })).rejects.toThrow(
+      "expected a .app directory with Contents/Info.plist"
+    );
+    expect(helperRuns()).toBe(0);
+  });
+
   it("restart-app starts a new process under the same device id", async () => {
     const { pid } = await run("boot-device", { macosAppPath: appPath });
     const restarted = await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });

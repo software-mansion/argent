@@ -769,6 +769,22 @@ export function parseCodesignDisplay(
 }
 
 /**
+ * The wrapper macOS puts around an iOS app that runs on the Mac ("Designed for
+ * iPad"): the iOS bundle in `Wrapper/`, the link `WrappedBundle` to it, and no
+ * `Contents/`.
+ */
+function isIosAppWrapper(dir: string): boolean {
+  try {
+    return (
+      fs.statSync(path.join(dir, "Wrapper")).isDirectory() &&
+      fs.lstatSync(path.join(dir, "WrappedBundle")).isSymbolicLink()
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Reads what a launch needs from the bundle: `Info.plist` (bundle id,
  * executable, name) and the code signature. An unsigned app is neither
  * hardened nor sandboxed.
@@ -789,6 +805,16 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
   }
   const plist = path.join(resolved, "Contents", "Info.plist");
   if (!fs.statSync(resolved).isDirectory() || !fs.existsSync(plist)) {
+    if (isIosAppWrapper(resolved)) {
+      throw invalid(
+        `${appPath} is an iPad or iPhone app that runs on the Mac ("Designed for iPad"). ` +
+          `macOS does not let argent load its library into such an app, so argent cannot ` +
+          `drive it. Build the app's Mac Catalyst target and boot that, or test the app on an ` +
+          `iOS simulator.`,
+        FAILURE_CODES.MACOS_APP_BUNDLE_INVALID,
+        "unsupported"
+      );
+    }
     throw invalid(
       `${appPath} is not a Mac app bundle: expected a .app directory with Contents/Info.plist.`,
       FAILURE_CODES.MACOS_APP_PATH_INVALID
