@@ -8,6 +8,9 @@ import type { CpuCommitHotspot } from "../types/output";
 /** Prefix on argent's injected profiler functions, which are kept out of hotspots. */
 const ARGENT_PROFILER_PREFIX = "__argent_";
 
+/** Shortest first delta that can be a stale clock rather than a sampling interval. */
+const MIN_STALE_GAP_US = 1_000_000;
+
 export function isArgentProfilerFunction(name: string): boolean {
   return name.startsWith(ARGENT_PROFILER_PREFIX);
 }
@@ -23,6 +26,36 @@ export interface CpuSampleIndex {
   durationMs: number;
   /** Parent lookup, built once — queryCpuWindow runs per commit window. */
   childToParent?: Map<number, number>;
+}
+
+/**
+ * Start a profile at its first real sample when the samples before it carry a
+ * stale clock. Changes the profile in place; a normal one is left as it is.
+ *
+ * Hermes stamps a sample taken during a VM suspension with the time that
+ * suspension was recorded, and records it only while sampling is on. If the VM
+ * was already suspended when sampling started, the first samples carry the
+ * stamp of a suspension from an earlier recording, or 0 when there was none.
+ * The first positive delta is then the jump from that stamp to the first real
+ * sample, not an interval: one profile here reads as 27,954 s instead of 11 s.
+ *
+ * A stamp does not say whether it is stale, so this goes by size: the first
+ * positive delta is a jump when it is at least 1 s and longer than everything
+ * after it. An ordinary first interval is about 21 ms at most on the recorded
+ * profiles, but that can be most of a very short recording and is all of a
+ * 2-sample one, so the length comparison alone is not enough. A stale jump
+ * under either limit is missed, which leaves the recording under 1 s too long
+ * or under twice its real length.
+ */
+export function dropStaleLeadingGap(profile: HermesCpuProfile): void {
+  const { timeDeltas } = profile;
+  // timeDeltas[0] is the first sample against itself, always 0.
+  const first = timeDeltas.findIndex((delta, i) => i > 0 && delta > 0);
+  if (first < 0) return;
+  const gap = timeDeltas[first]!;
+  if (gap < MIN_STALE_GAP_US || gap <= profile.endTime - profile.startTime - gap) return;
+  timeDeltas[first] = 0;
+  profile.startTime += gap;
 }
 
 /** Pre-compute sample timestamps so windowed queries are a binary search. */

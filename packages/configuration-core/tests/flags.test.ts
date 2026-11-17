@@ -355,4 +355,11 @@ describe("opt-out (default-on) flags", () => {
     setFlag("ios-audio-always-inserted", false, "global"); // what `argent disable` stores
     expect(isFeatureEnabled("ios-audio-always-inserted")).toBe(false);
   });
+
+  it("the shipped macos-apps flag is declared opt-out (on by default)", () => {
+    expect(getFlagDefinition("macos-apps")?.defaultEnabled).toBe(true);
+    expect(isFeatureEnabled("macos-apps")).toBe(true); // unset ⇒ on
+    setFlag("macos-apps", false, "global");
+    expect(isFeatureEnabled("macos-apps")).toBe(false);
+  });
 });

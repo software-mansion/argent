@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import semver from "semver";
 import { describe, expect, it } from "vitest";
 
 describe("package manifest", () => {
@@ -13,6 +14,30 @@ describe("package manifest", () => {
     expect(pkg.files).toContain("dylibs/");
     expect(pkg.files).toContain("bin/");
     expect(pkg.files).toContain("skills/");
+  });
+
+  it("admits only Node releases that run TypeScript and have zstd, in both published packages", () => {
+    const engines = (dir: string) =>
+      (
+        JSON.parse(
+          fs.readFileSync(
+            path.resolve(import.meta.dirname, "..", "..", dir, "package.json"),
+            "utf8"
+          )
+        ) as { engines: { node: string } }
+      ).engines.node;
+    const range = engines("argent");
+
+    expect(engines("argent-alias")).toBe(range);
+    // Node runs TypeScript with no flag from 22.18.0 and 23.6.0, which a
+    // `script:` step of an e2e test needs. zstd in node:zlib landed in 22.15.0
+    // and 23.8.0.
+    for (const v of ["22.18.0", "22.99.0", "23.8.0", "24.0.0", "26.0.0"]) {
+      expect(semver.satisfies(v, range), v).toBe(true);
+    }
+    for (const v of ["20.19.0", "22.14.0", "22.17.1", "23.0.0", "23.7.0"]) {
+      expect(semver.satisfies(v, range), v).toBe(false);
+    }
   });
 
   it("exports the client and keeps deep paths resolvable", () => {
@@ -35,7 +60,6 @@ describe("package manifest", () => {
     // lists, so each of these needs its own.
     const extensionless: Record<string, string> = {
       "assets/manifest": "assets/manifest.json",
-      "assets/trace-processor/engine": "assets/trace-processor/engine.mjs",
       "assets/trace-processor/engine_bundle.node": "assets/trace-processor/engine_bundle.node.js",
       "bin/argent-simulator-server": "bin/argent-simulator-server.cjs",
       "dist/bundled-paths": "dist/bundled-paths.js",
@@ -91,7 +115,7 @@ describe("package manifest", () => {
 // failed and fell back to native-devtools (or an empty tree), with a misleading
 // "not booted through argent" hint. This test pins the producer→consumer path
 // agreement so the two can never drift apart again.
-describe("ax-service native-binary placement (producer/consumer path agreement)", () => {
+describe("native-binary placement (producer/consumer path agreement)", () => {
   const workspaceRoot = path.resolve(import.meta.dirname, "..", "..", "..");
   const downloadScript = fs.readFileSync(
     path.join(workspaceRoot, "scripts/download-native-binaries.sh"),
@@ -134,5 +158,26 @@ describe("ax-service native-binary placement (producer/consumer path agreement)"
     // The two MUST agree: producer dir + ax-service === consumer source file.
     expect(path.posix.join(producerDir, "ax-service")).toBe(consumerFile);
     expect(producerDir.endsWith("/darwin")).toBe(true);
+  });
+
+  it("download-native-binaries.sh installs the macOS artifacts where bundle-tools.cjs copies them from", () => {
+    // Producer: the tarball goes to dylibs/macos/, the helper then to bin/darwin/.
+    const BIN_DIR = shVar(downloadScript, "BIN_DIR", {});
+    const IOS_BIN_DIR = shVar(downloadScript, "IOS_BIN_DIR", { BIN_DIR });
+    const DYLIBS_DIR = shVar(downloadScript, "DYLIBS_DIR", {});
+    const MACOS_DYLIBS_DIR = shVar(downloadScript, "MACOS_DYLIBS_DIR", { DYLIBS_DIR });
+    expect(downloadScript).toContain(`tar -xzf "\${TMP_MACOS_TARBALL}" -C "\${MACOS_DYLIBS_DIR}"`);
+    expect(downloadScript).toContain(
+      `mv -f "\${MACOS_DYLIBS_DIR}/argent-macos-helper" "\${IOS_BIN_DIR}/argent-macos-helper"`
+    );
+
+    // Consumer: bundle-tools copies the helper from bin/darwin/ and the whole dylibs/ tree.
+    const binSrcRoot = bundleTools.match(/BIN_SRC_ROOT = path\.resolve\([^,]+,\s*"([^"]+)"\)/)?.[1];
+    const dylibsSrc = bundleTools.match(/DYLIBS_SRC = path\.resolve\([^,]+,\s*"([^"]+)"\)/)?.[1];
+    expect(bundleTools).toContain(`src: path.resolve(BIN_SRC_ROOT, "darwin/argent-macos-helper")`);
+    expect(path.posix.join(IOS_BIN_DIR, "argent-macos-helper")).toBe(
+      path.posix.join(binSrcRoot!, "darwin/argent-macos-helper")
+    );
+    expect(MACOS_DYLIBS_DIR).toBe(path.posix.join(dylibsSrc!, "macos"));
   });
 });

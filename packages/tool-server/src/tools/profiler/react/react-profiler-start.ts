@@ -11,6 +11,8 @@ import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
   clearCachedProfilerPaths,
+  clearLostProfilerRun,
+  getLostProfilerRun,
 } from "../../../blueprints/react-profiler-session";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-debugger";
 import {
@@ -23,6 +25,8 @@ import {
 import {
   classifyStaleness,
   DEFAULT_STALE_THRESHOLD_MS,
+  STALE_OWN_RUN_NOTE,
+  STOP_IN_PROGRESS_NOTE,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
@@ -79,6 +83,74 @@ type ReadStateResult =
       nowEpochMs: number;
     };
 
+/**
+ * What a start replaced, for its result:
+ * - `stale`: another session whose heartbeat went quiet for 5 minutes
+ * - `unattributed`: a running session with no owner record
+ * - `forced`: a fresh session, replaced because the caller passed force
+ * - `own_unsaved`: a run of this tool-server's that it could no longer stop
+ */
+interface TakeoverReport {
+  session_id: string | null;
+  reason: "stale" | "unattributed" | "forced" | "own_unsaved";
+  heartbeat_age_seconds?: number | null;
+  note: string;
+}
+
+/** What a start answers while a stop collects the run, also with force. */
+function stopInProgress() {
+  return { already_running: true, mine: true, note: STOP_IN_PROGRESS_NOTE };
+}
+
+function describeTakeover(input: {
+  owner: ProfilerSessionOwner | null;
+  mine: boolean;
+  ownRunWasActive: boolean;
+  stale: boolean;
+  heartbeatAgeSeconds: number | null;
+}): TakeoverReport {
+  const { owner, mine, ownRunWasActive, stale, heartbeatAgeSeconds } = input;
+  if (!owner) {
+    return {
+      session_id: null,
+      reason: "unattributed",
+      note: "Stopped a running profiling session that had no owner record (likely a DevTools client outside argent) and started this one.",
+    };
+  }
+  const id = owner.sessionId;
+  if (mine) {
+    return ownRunWasActive
+      ? {
+          session_id: id,
+          reason: "forced",
+          note: `Discarded this tool-server's own running recording (session ${id}) because force: true was passed.`,
+        }
+      : {
+          session_id: id,
+          reason: "own_unsaved",
+          note: `Stopped this tool-server's earlier run (session ${id}), which the app kept recording after it was lost; it was not saved.`,
+        };
+  }
+  return stale
+    ? {
+        session_id: id,
+        reason: "stale",
+        heartbeat_age_seconds: heartbeatAgeSeconds,
+        note: `Took over session ${id} without force: its last heartbeat was ${heartbeatAgeSeconds} s ago (stale after ${DEFAULT_STALE_THRESHOLD_MS / 1000} s), so its owner was presumed gone. Its recorded data was discarded.`,
+      }
+    : {
+        session_id: id,
+        reason: "forced",
+        heartbeat_age_seconds: heartbeatAgeSeconds,
+        note: `Took over session ${id} because force: true was passed. Its recorded data was discarded.`,
+      };
+}
+
+function failedTakeoverText({ session_id, reason }: TakeoverReport): string {
+  const run = session_id ? `session ${session_id}` : "a recording with no owner record";
+  return `Before it failed, this start stopped ${run} (reason: ${reason}), and nothing is recording now.`;
+}
+
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
   try {
     return registry.getServiceState(urn);
@@ -117,7 +189,7 @@ export function createReactProfilerStartTool(
 Use when you need to profile a user interaction.
 On an iOS simulator or Android device, also call native-profiler-start in the same message with the same device_id, unless the user has said no to native profiling. profiler-combined-report then correlates the two.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } instead, without clobbering their data. BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If a session is already running, returns { already_running: true, mine, owner, … } instead, without clobbering its data, unless it is another tool-server's stale run, has no owner record, or is a lost run of this tool-server: start replaces those. mine: true means this tool-server started the run: if it is yours, call react-profiler-stop. With stale: true it may be another agent's: follow the note. Otherwise, BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains. A start that replaces a run reports it in took_over.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     interaction: {
@@ -173,6 +245,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       }
 
       let api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
+      if (api.stopping) return stopInProgress();
       if (!api.cdp.isConnected()) {
         await disposeAndWait();
         api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
@@ -283,6 +356,21 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         }
       }
 
+      // Set when this start replaces a running session, so the result says so.
+      let tookOver: TakeoverReport | undefined;
+
+      // A start that fails after that has still stopped the other recording.
+      const withTakeover = (message: string): string =>
+        tookOver ? `${message} ${failedTakeoverText(tookOver)}` : message;
+      const rethrowWithTakeover = (err: unknown): never => {
+        if (err instanceof Error) err.message = withTakeover(err.message);
+        throw err;
+      };
+
+      // A stop that began while this start awaited the app reads as a run this
+      // tool-server lost, which a start would replace.
+      if (api.stopping) return stopInProgress();
+
       if (state.isRunning) {
         const owner: ProfilerSessionOwner | null = state.owner;
         const staleness = classifyStaleness({
@@ -291,10 +379,36 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
           staleThresholdMs: DEFAULT_STALE_THRESHOLD_MS,
         });
 
-        const canTakeOverSilently = staleness.canReclaimWithoutForce || params.force === true;
+        // A run this tool-server started: the one this session tracks, or
+        // one it lost track of (a reload, a teardown) that the app kept recording.
+        const lostRun = getLostProfilerRun(api.port, api.deviceId);
+        const mine =
+          owner !== null &&
+          ((api.sessionId !== null && owner.sessionId === api.sessionId) ||
+            (lostRun !== undefined &&
+              lostRun.sessionId !== null &&
+              owner.sessionId === lostRun.sessionId));
+
+        if (mine && api.profilingActive && params.force !== true) {
+          return {
+            already_running: true,
+            mine: true,
+            owner,
+            age_seconds: staleness.ageSeconds,
+            stale: staleness.stale,
+            heartbeat_age_seconds: staleness.heartbeatAgeSeconds,
+            note: staleness.stale
+              ? STALE_OWN_RUN_NOTE
+              : "A recording started through this tool-server is still running: yours, unless another agent shares this tool-server. Call react-profiler-stop to collect it. To discard it and start over, call react-profiler-start again with { force: true }.",
+          };
+        }
+
+        const canTakeOverSilently =
+          mine || staleness.canReclaimWithoutForce || params.force === true;
         if (!canTakeOverSilently) {
           return {
             already_running: true,
+            mine: false,
             owner,
             age_seconds: staleness.ageSeconds,
             stale: staleness.stale,
@@ -304,12 +418,23 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         }
 
         await cdp.evaluate(STOP_FOR_TAKEOVER_SCRIPT).catch(ignore);
+        tookOver = describeTakeover({
+          owner,
+          mine,
+          ownRunWasActive: mine && api.profilingActive,
+          stale: staleness.stale,
+          heartbeatAgeSeconds: staleness.heartbeatAgeSeconds,
+        });
       }
 
-      if (api.profilingActive) {
-        await cdp.send("Profiler.stop").catch(ignore);
-        api.profilingActive = false;
-      }
+      // Hermes ignores `Profiler.start` while its sampler runs and clears
+      // samples only on `Profiler.stop`, so a sampler left on would start the
+      // new profile early. A replaced run leaves one on, and so does a run
+      // whose connection dropped before a JS reload: the app then reports no
+      // recording, so nothing here can tell. Always stop first; with no
+      // sampler on, Hermes only returns an empty profile.
+      await cdp.send("Profiler.stop").catch(ignore);
+      api.profilingActive = false;
 
       // A session keyed by Metro's logicalDeviceId (two or more devices on one
       // Metro) is not what the tools that drive the device name: they pass its
@@ -329,17 +454,28 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       };
 
       await cdp.send("Profiler.enable").catch(ignore);
-      await cdp.send("Profiler.start", { interval: params.sample_interval_us });
+      await cdp
+        .send("Profiler.start", { interval: params.sample_interval_us })
+        .catch(rethrowWithTakeover);
 
-      const startJson = (await cdp.evaluate(buildStartScript(JSON.stringify(ownerPayload)))) as
-        string | undefined;
+      // Every failure from here on rolls back the CPU sampler just started.
+      const startJson = (await cdp
+        .evaluate(buildStartScript(JSON.stringify(ownerPayload)))
+        .catch(async (err: unknown) => {
+          await cdp.send("Profiler.stop").catch(ignore);
+          return rethrowWithTakeover(err);
+        })) as string | undefined;
       if (!startJson) {
-        throw new FailureError("Failed to start React profiler (no value returned from runtime).", {
-          error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
-          failure_stage: "react_profiler_start_runtime_start",
-          failure_area: "tool_server",
-          error_kind: "subprocess",
-        });
+        await cdp.send("Profiler.stop").catch(ignore);
+        throw new FailureError(
+          withTakeover("Failed to start React profiler (no value returned from runtime)."),
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
+            failure_stage: "react_profiler_start_runtime_start",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          }
+        );
       }
       const startResult = JSON.parse(startJson) as {
         ok: boolean;
@@ -351,12 +487,13 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       };
 
       if (!startResult.ok) {
-        // Roll back the CPU sampler.
         await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
-          `React profiler failed to start (${startResult.reason ?? "unknown"}${
-            startResult.message ? `: ${startResult.message}` : ""
-          })`,
+          withTakeover(
+            `React profiler failed to start (${startResult.reason ?? "unknown"}${
+              startResult.message ? `: ${startResult.message}` : ""
+            })`
+          ),
           {
             error_code: FAILURE_CODES.REACT_PROFILER_START_FAILED,
             failure_stage: "react_profiler_start_runtime_start",
@@ -369,7 +506,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       if (startResult.isProfilingFlagSet !== true || startResult.ownerInstalled !== true) {
         await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
-          `React profiler failed to start (post-start verification failed: isProfilingFlagSet=${startResult.isProfilingFlagSet === true}, ownerInstalled=${startResult.ownerInstalled === true})`,
+          withTakeover(
+            `React profiler failed to start (post-start verification failed: isProfilingFlagSet=${startResult.isProfilingFlagSet === true}, ownerInstalled=${startResult.ownerInstalled === true})`
+          ),
           {
             error_code: FAILURE_CODES.REACT_PROFILER_START_VERIFY_FAILED,
             failure_stage: "react_profiler_start_verify",
@@ -388,10 +527,12 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         await cdp.evaluate(STOP_FOR_TAKEOVER_SCRIPT).catch(ignore);
         await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
-          `The React profiler session for ${api.deviceId} was torn down while the profiler was ` +
-            `starting, so nothing is recorded. One tool-server serves every agent using this ` +
-            `argent install, so another agent may have run stop-all-simulator-servers. Call ` +
-            `react-profiler-start again.`,
+          withTakeover(
+            `The React profiler session for ${api.deviceId} was torn down while the profiler was ` +
+              `starting, so nothing is recorded. One tool-server serves every agent using this ` +
+              `argent install, so another agent may have run stop-all-simulator-servers. Call ` +
+              `react-profiler-start again.`
+          ),
           {
             error_code: FAILURE_CODES.REACT_PROFILER_SESSION_TORN_DOWN,
             failure_stage: "react_profiler_start_session_torn_down",
@@ -404,6 +545,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       const startedAtEpochMs = startResult.startedAtEpochMs ?? Date.now();
 
       clearCachedProfilerPaths(api.port, api.deviceId);
+      clearLostProfilerRun(api.port, api.deviceId);
       api.sessionPaths = null;
       api.profilingActive = true;
       api.anyCompilerOptimized = null;
@@ -421,6 +563,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         startedAtEpochMs,
         hermes_version: api.hermesVersion,
         detected_architecture: api.detectedArchitecture,
+        ...(tookOver ? { took_over: tookOver } : {}),
         ...(warning ? { warning } : {}),
         ...(isLogicalKeyedDevice(api.deviceId) && !runtimeDevice
           ? { [RESULT_NOTE_KEY]: UNKNOWN_DEVICE_NOTE }

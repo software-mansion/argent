@@ -17,6 +17,10 @@ import {
   type FlowFile,
   type FlowSavedTo,
 } from "./flow-utils";
+import { MACOS_APPS_FLAG } from "../../utils/capability";
+import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
+
+const MACOS_PLATFORM_FLAG = { [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } };
 
 /**
  * `project_root` is the AGENT's project; the probe says whether it also exists
@@ -54,7 +58,10 @@ const zodSchema = z.object({
   requires: z
     .object({
       platform: z
-        .union([z.enum(LAUNCH_PLATFORMS), z.array(z.enum(LAUNCH_PLATFORMS)).min(1)])
+        .union([
+          z.enum(LAUNCH_PLATFORMS).meta(MACOS_PLATFORM_FLAG),
+          z.array(z.enum(LAUNCH_PLATFORMS).meta(MACOS_PLATFORM_FLAG)).min(1),
+        ])
         .optional(),
       runtimeKind: z.enum(RUNTIME_KINDS).optional(),
     })
@@ -98,7 +105,7 @@ standalone e2e test, record a restart-app of the app under test as the FIRST ste
 pass executionPrerequisite instead. Starting over an existing e2e test replaces the
 whole file, including its \`requires:\` block; pass \`requires\` to keep it.
 Use e2e-add-echo to add labels, and
-e2e-add-script to run a local .mjs file and record it as a \`script:\` step.
+e2e-add-script to run a local .mjs, .mts, .js or .ts file and record it as a \`script:\` step.
 Call e2e-finish-recording when done.
 
 To remove or reorder steps, edit the .yaml file after e2e-finish-recording, not

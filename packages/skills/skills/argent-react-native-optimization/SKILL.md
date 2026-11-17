@@ -39,9 +39,8 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 
 ### Phase 3: Profiling
 
-1. For a quick look without a session, `react-profiler-renders` lists how many instances of each component are mounted (not how often they re-render).
-2. Load the `argent-react-native-profiler` skill and follow its workflow (React and native profiling together) on the key user flows: the screens the user named, or all major flows. It covers analysis, drill-down, and re-profiling after each fix.
-3. Cross-reference the profiling results with the Phase 1–2 findings, and fix the highest-impact issues top-down. Re-profile after architectural changes; batch mechanical fixes.
+1. Load the `argent-react-native-profiler` skill and follow its workflow (React and native profiling together) on the key user flows: the screens the user named, or all major flows. It covers analysis, drill-down, and re-profiling after each fix.
+2. Cross-reference the profiling results with the Phase 1–2 findings, and fix the highest-impact issues top-down. Re-profile after architectural changes; batch mechanical fixes.
 
 ### Phase 4: Verify no regressions
 

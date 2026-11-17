@@ -450,13 +450,11 @@ export function resolveLinkedDestination(dest: string): string {
 // (`.claude/agents -> ../.agents/agents`) or a single file inside it (issue
 // #701).
 //
-// `fs.cp` cannot do this: its handling of a symlinked destination depends on
-// the runtime. Node 20 refuses one at any level (ERR_FS_CP_DIR_TO_NON_DIR) and
-// quietly replaces a symlinked file, leaving the canonical copy stale; Node 22
-// writes through both, but aborts the process — an uncatchable C++
-// std::filesystem exception — whenever it has to create a directory and cannot.
-// Argent supports both, and `fs.copyFileSync` reports each failure as a plain,
-// catchable errno.
+// `fs.cp` cannot: depending on the Node version it refuses a symlinked
+// destination (ERR_FS_CP_DIR_TO_NON_DIR), replaces a symlinked file (leaving the
+// canonical copy stale), or aborts the process with an uncatchable C++
+// exception when it cannot create a directory. `fs.copyFileSync` reports each
+// failure as a catchable errno.
 export function copyDir(src: string, dest: string): string | null {
   // A source with no files is nothing to copy either: a bundle that stopped
   // shipping a kind of content must not leave an empty dir at every target.
@@ -618,6 +616,16 @@ export function withNpmForce(npxArgs: string[]): string[] {
 // inherits it and npm then installs <spec> in place of the requested package,
 // so `npx skills add ...` re-runs argent instead of the skills CLI (#1335).
 // The skills commands argent spawns get an environment without it.
+//
+// The pinned source is this whole repository at a release tag, and the skills CLI
+// (1.8.0+) runs `git submodule update --init --recursive` after cloning it. The
+// one submodule is private and has an SSH URL, and no skill lives in it. Without
+// github.com in known_hosts, ssh asks to trust the host on /dev/tty, behind the
+// install spinner, and the install hangs: the CLI's clone timeout signals git,
+// never ssh. Every release tag carries the submodule, so skip it through git's
+// environment config, after any entries the caller already set.
+const SKIPPED_SKILLS_SOURCE_SUBMODULES = ["packages/argent-private"] as const;
+
 export function npxChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const childEnv = { ...env };
   for (const key of Object.keys(childEnv)) {
@@ -625,15 +633,27 @@ export function npxChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
       delete childEnv[key];
     }
   }
+  // A count git would reject breaks every git command anyway, so start over.
+  const existing = Number(childEnv.GIT_CONFIG_COUNT ?? 0);
+  let count = Number.isInteger(existing) && existing >= 0 ? existing : 0;
+  for (const name of SKIPPED_SKILLS_SOURCE_SUBMODULES) {
+    childEnv[`GIT_CONFIG_KEY_${count}`] = `submodule.${name}.update`;
+    childEnv[`GIT_CONFIG_VALUE_${count}`] = "none";
+    count += 1;
+  }
+  childEnv.GIT_CONFIG_COUNT = String(count);
   return childEnv;
 }
 
-export function isSkillsCliAvailable(): boolean {
+// `cwd`: where the `skills` command will run - `npx --no-install` resolves a
+// project-local bin from it.
+export function isSkillsCliAvailable(cwd?: string): boolean {
   try {
     execSync("npx --force --no-install skills --version", {
       env: npxChildEnv(),
       stdio: ["ignore", "ignore", "ignore"],
       timeout: PROBE_TIMEOUT_MS,
+      ...(cwd ? { cwd } : {}),
     });
     return true;
   } catch {

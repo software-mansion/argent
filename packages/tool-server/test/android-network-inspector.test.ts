@@ -3833,6 +3833,27 @@ describe("the tools on the Android native layer", () => {
     expect(registry.getSnapshot().services.size).toBe(0);
   });
 
+  it("native-network-logs rejects stop on a Mac app and names the Mac lifetime of the capture", async () => {
+    const registry = toolRegistry();
+    const err = await registry
+      .invokeTool("native-network-logs", {
+        udid: "macos-app-com.example.mac",
+        bundleId: "com.example.mac",
+        stop: true,
+      })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED
+    );
+    expect((err as Error).message).toContain(
+      "stop applies to Android only. On a Mac app, network capture stays on until stop-all-simulator-servers stops this device's services or the tool-server stops."
+    );
+    expect(registry.getSnapshot().services.size).toBe(0);
+  });
+
   it("routes an android- id in view-network-request-details to the body from the fake socket, and an unknown id to not found", async () => {
     const api = await armedInspector();
     const agent = agents[0]!;
@@ -3884,10 +3905,8 @@ describe("the tools on the Android native layer", () => {
     const codings: Array<[string, Buffer]> = [
       ["gzip", zlib.gzipSync(json)],
       ["br", zlib.brotliCompressSync(json)],
+      ["zstd", zlib.zstdCompressSync(json)],
     ];
-    if (typeof zlib.zstdCompressSync === "function") {
-      codings.push(["zstd", zlib.zstdCompressSync(json)]);
-    }
     for (const coding of codings.map(([name]) => name)) codings.push([coding, Buffer.from(json)]);
     for (const [i, [coding, bytes]] of codings.entries()) {
       const requestId = agent.rid(i + 1);

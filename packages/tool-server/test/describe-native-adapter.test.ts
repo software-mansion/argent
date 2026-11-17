@@ -4,6 +4,7 @@ import {
   adaptNativeDescribeToDescribeResult,
   mapNativeTraitsToDescribeRole,
 } from "../src/tools/describe/platforms/ios/ios-native-adapter";
+import { formatDescribeTree } from "../src/tools/describe/format-tree";
 import type { NativeDescribeScreenResult } from "../src/tools/native-devtools/native-describe-contract";
 
 describe("describe native adapter", () => {
@@ -36,6 +37,85 @@ describe("describe native adapter", () => {
       identifier: "continue-button",
       value: undefined,
     });
+  });
+
+  it("maps notEnabled to disabled and selected to selected, absent otherwise", () => {
+    const element = {
+      frame: { x: 16, y: 80, width: 100, height: 44 },
+      tapPoint: { x: 66, y: 102 },
+      normalizedFrame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+      normalizedTapPoint: { x: 0.25, y: 0.25 },
+    };
+    expect(
+      adaptNativeDescribeElementToDescribeNode({ ...element, traits: ["button", "notEnabled"] })
+    ).toMatchObject({ disabled: true });
+    expect(
+      adaptNativeDescribeElementToDescribeNode({ ...element, traits: ["button", "selected"] })
+    ).toMatchObject({ selected: true });
+    const plain = adaptNativeDescribeElementToDescribeNode({ ...element, traits: ["button"] });
+    expect(plain).not.toHaveProperty("disabled");
+    expect(plain).not.toHaveProperty("selected");
+  });
+
+  it("prints the disabled and selected states on the element's line", () => {
+    const root = adaptNativeDescribeToDescribeResult({
+      screenFrame: { x: 0, y: 0, width: 390, height: 844 },
+      elements: [
+        {
+          frame: { x: 16, y: 80, width: 100, height: 44 },
+          tapPoint: { x: 66, y: 102 },
+          normalizedFrame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          normalizedTapPoint: { x: 0.25, y: 0.25 },
+          traits: ["button", "notEnabled", "selected"],
+          label: "Pay",
+        },
+      ],
+    } satisfies NativeDescribeScreenResult);
+    expect(formatDescribeTree(root, { source: "native-devtools" })).toContain(
+      'AXButton "Pay" [selected,disabled]'
+    );
+  });
+
+  it("carries the VoiceOver hint onto the element's line, and no hint when there is none", () => {
+    const element = {
+      frame: { x: 16, y: 80, width: 100, height: 44 },
+      tapPoint: { x: 66, y: 102 },
+      normalizedFrame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+      normalizedTapPoint: { x: 0.25, y: 0.25 },
+      traits: ["button"],
+    };
+    const root = adaptNativeDescribeToDescribeResult({
+      screenFrame: { x: 0, y: 0, width: 390, height: 844 },
+      elements: [{ ...element, label: "Merge", hint: "Combines both accounts" }],
+    } satisfies NativeDescribeScreenResult);
+    expect(formatDescribeTree(root, { source: "native-devtools" })).toContain(
+      'AXButton "Merge" hint="Combines both accounts"'
+    );
+
+    const noHint = adaptNativeDescribeToDescribeResult({
+      screenFrame: { x: 0, y: 0, width: 390, height: 844 },
+      elements: [{ ...element, label: "Merge" }],
+    } satisfies NativeDescribeScreenResult);
+    expect(formatDescribeTree(noHint, { source: "native-devtools" })).not.toContain("hint=");
+  });
+
+  it("carries the hint of an element with no label, value or id", () => {
+    const root = adaptNativeDescribeToDescribeResult({
+      screenFrame: { x: 0, y: 0, width: 390, height: 844 },
+      elements: [
+        {
+          frame: { x: 16, y: 80, width: 100, height: 44 },
+          tapPoint: { x: 66, y: 102 },
+          normalizedFrame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          normalizedTapPoint: { x: 0.25, y: 0.25 },
+          traits: [],
+          hint: "Opens the menu",
+        },
+      ],
+    } satisfies NativeDescribeScreenResult);
+    expect(formatDescribeTree(root, { source: "native-devtools" })).toContain(
+      'AXGroup hint="Opens the menu"'
+    );
   });
 
   it("clamps partially off-screen normalized frames into the public [0,1] contract", () => {

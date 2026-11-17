@@ -250,8 +250,19 @@ const ASSETS = [
     copiedLabel: "tvos-hid-daemon binary",
     missLabel: "tvos-hid-daemon binary",
   },
+  // argent-macos-helper, the host binary that starts a native Mac app. The two
+  // macOS dylibs ship in dylibs/macos/ with the recursive dylibs/ copy.
+  {
+    kind: "file",
+    src: path.resolve(BIN_SRC_ROOT, "darwin/argent-macos-helper"),
+    dest: path.resolve(BIN_DIR, "darwin/argent-macos-helper"),
+    mode: 0o755,
+    required: false,
+    copiedLabel: "argent-macos-helper binary",
+    missLabel: "argent-macos-helper binary",
+  },
   // Android host-side Perfetto trace processor: the third-party WASM engine
-  // (trace_processor.wasm + emscripten glue + engine.mjs decoder + LICENSE).
+  // (trace_processor.wasm + emscripten glue + LICENSE).
   // wasm-trace-processor.ts resolves them at `<pkg>/assets/trace-processor/`,
   // i.e. this exact destination. Not committed; fetched + sha256-verified by
   // scripts/download-trace-processor.sh.
@@ -262,6 +273,9 @@ const ASSETS = [
     required: true,
     copiedLabel: "trace-processor WASM asset(s)",
     missLabel: "trace-processor WASM assets directory",
+    // A checkout downloaded before argent had its own RPC client still holds
+    // the old engine.mjs decoder; never ship it.
+    filter: (src) => path.basename(src) !== "engine.mjs",
     hint: "Run: bash scripts/download-trace-processor.sh (fetches from argent-private-releases)",
   },
   // iOS native devtools dylibs so the packaged tool-server can inject them at runtime.
