@@ -293,6 +293,42 @@ describe("earliestDyldStartNs", () => {
       "utf8"
     );
     expect(earliestDyldStartNs(xml)).toBe(403_229_208);
+    expect(earliestDyldStartNs(xml, "Ledger")).toBe(403_229_208);
+    expect(earliestDyldStartNs(xml, "Ledg")).toBeNull();
+  });
+
+  // Xcode 27.2, iOS 27.2 simulator: one process, inline "Ledger (52072)" in the
+  // first row, `<process ref="4"/>` in later rows and in each thread cell.
+  it("matches the launched process of a real simulator trace to its dyld rows", () => {
+    const fixture = (name: string) =>
+      readFileSync(join(__dirname, "..", "fixtures", "ios-launch-time", name), "utf8");
+    const processName = launchedProcessName(fixture("xcode-27.2-simulator-toc.xml"));
+    expect(processName).toBe("Ledger");
+    const xml = fixture("xcode-27.2-simulator-dyld.xml");
+    expect(earliestDyldStartNs(xml, processName!)).toBe(536_392_750);
+    expect(earliestDyldStartNs(xml)).toBe(536_392_750);
+  });
+
+  // Process cell as in a real dyld export: inline "<name> (<pid>)" with a nested pid, then refs.
+  const TWO_PROCESSES = `<node>
+<row><start-time id="1">50000000</start-time><process id="2" fmt="AppleSpell (123)"><pid id="3" fmt="123">123</pid></process></row>
+<row><start-time id="4">120000000</start-time><process id="5" fmt="Ledger (14775)"><pid id="6" fmt="14775">14775</pid></process></row>
+<row><start-time id="7">90000000</start-time><process ref="2"/></row>
+<row><start-time id="8">200000000</start-time><process ref="5"/></row>
+</node>`;
+
+  it("ignores dyld rows of other processes, resolving process refs", () => {
+    expect(earliestDyldStartNs(TWO_PROCESSES, "Ledger")).toBe(120_000_000);
+    expect(earliestDyldStartNs(TWO_PROCESSES, "AppleSpell")).toBe(50_000_000);
+  });
+
+  it("returns null when no dyld row belongs to the process", () => {
+    expect(earliestDyldStartNs(TWO_PROCESSES, "Missing")).toBeNull();
+    expect(earliestDyldStartNs(TWO_PROCESSES, "App")).toBeNull();
+  });
+
+  it("takes every process when no process is given", () => {
+    expect(earliestDyldStartNs(TWO_PROCESSES)).toBe(50_000_000);
   });
 });
 

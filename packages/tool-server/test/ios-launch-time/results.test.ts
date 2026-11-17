@@ -6,10 +6,10 @@ import {
   deviceLaunchWindow,
   failedCoreExport,
   launchSampleStats,
+  noSimulatorEstimateNote,
   optionalExportCrashNote,
   processCreationNote,
-  simulatorLaunchWindow,
-  simulatorProfileNote,
+  simulatorLaunchEstimateMs,
   stalledAtRecordingStart,
   stallsSimulatorLaunchRecording,
 } from "../../src/utils/ios-launch-time/results";
@@ -95,26 +95,14 @@ describe("stallsSimulatorLaunchRecording", () => {
   });
 });
 
-describe("simulatorLaunchWindow", () => {
-  it("ends at the signpost and estimates from the earliest dyld activity", () => {
-    expect(simulatorLaunchWindow(1_396_637_875, 396_637_875)).toEqual({
-      endNs: 1_396_637_875,
-      simulatorLaunchEstimateMs: 1000,
-      signpostMissing: false,
-    });
+describe("simulatorLaunchEstimateMs", () => {
+  it("runs from the earliest dyld activity to the signpost", () => {
+    expect(simulatorLaunchEstimateMs(1_396_637_875, 396_637_875)).toBe(1000);
   });
 
-  it("has no estimate without dyld activity or when dyld starts after the signpost", () => {
-    expect(simulatorLaunchWindow(400_000_000, null).simulatorLaunchEstimateMs).toBeNull();
-    expect(simulatorLaunchWindow(400_000_000, 500_000_000).simulatorLaunchEstimateMs).toBeNull();
-  });
-
-  it("leaves the session uncut without the signpost", () => {
-    expect(simulatorLaunchWindow(null, 396_637_875)).toEqual({
-      endNs: null,
-      simulatorLaunchEstimateMs: null,
-      signpostMissing: true,
-    });
+  it("is null without dyld activity or when dyld starts after the signpost", () => {
+    expect(simulatorLaunchEstimateMs(400_000_000, null)).toBeNull();
+    expect(simulatorLaunchEstimateMs(400_000_000, 500_000_000)).toBeNull();
   });
 });
 
@@ -127,7 +115,7 @@ function realTrace(xcode: "26.4.1" | "27.0") {
       "utf8"
     );
   const phases = parseLifecyclePhases(fixture("lifecycle"));
-  return { phases, endNs: launchEndNs(phases) };
+  return { phases, endNs: launchEndNs(phases)! };
 }
 
 describe("deviceLaunchWindow", () => {
@@ -163,12 +151,7 @@ describe("deviceLaunchWindow", () => {
     expect(window).toMatchObject({ launchMs: 200, processCreation: true });
   });
 
-  it("is null without a first frame, without a phase after Process Creation or with a later start", () => {
-    expect(deviceLaunchWindow({ ...realTrace("26.4.1"), endNs: null })).toEqual({
-      launchMs: null,
-      startNs: null,
-      processCreation: true,
-    });
+  it("is null without a phase after Process Creation or with a later start", () => {
     expect(
       deviceLaunchWindow({
         phases: [{ startNs: 0, period: "Initializing - Process Creation" }],
@@ -196,21 +179,14 @@ describe("processCreationNote", () => {
   });
 });
 
-describe("simulatorProfileNote", () => {
-  it("adds the missing-signpost sentence only when the signpost is missing", () => {
-    expect(simulatorProfileNote(false)).toContain("ApplicationFirstFramePresentation");
-    expect(simulatorProfileNote(false)).not.toContain("is missing");
-    expect(simulatorProfileNote(true)).toContain("The signpost is missing");
-  });
-});
-
 describe("failedCoreExport", () => {
-  const none = { cpu: false, lifecycle: false, simulator: false };
+  const none = { cpu: false, lifecycle: false, signpost: false, simulator: false };
 
   it("names the TOC first, then the CPU samples", () => {
     expect(failedCoreExport({ toc: "crashed" }, none)).toBe("toc");
     expect(failedCoreExport({ cpu: "Trace TOC has no table for this export." }, none)).toBe("cpu");
     expect(failedCoreExport({}, none)).toBe("cpu");
+    expect(failedCoreExport({}, { ...none, simulator: true })).toBe("cpu");
   });
 
   it("requires the lifecycle phases on an iPhone", () => {
@@ -222,12 +198,16 @@ describe("failedCoreExport", () => {
     expect(failedCoreExport({ dyld: "y" }, { ...none, cpu: true, lifecycle: true })).toBeNull();
   });
 
-  it("does not require lifecycle on a simulator, where Instruments never records it", () => {
+  it("requires the first-frame signpost on a simulator, not lifecycle", () => {
+    const simulator = { ...none, cpu: true, simulator: true };
+    expect(failedCoreExport({ signpost: "xcrun was killed by SIGSEGV" }, simulator)).toBe(
+      "signpost"
+    );
     expect(
-      failedCoreExport(
-        { lifecycle: "x", dyld: "y", signpost: "z" },
-        { ...none, cpu: true, simulator: true }
-      )
+      failedCoreExport({ signpost: "Trace TOC has no table for this export." }, simulator)
+    ).toBe("signpost");
+    expect(
+      failedCoreExport({ lifecycle: "x", dyld: "y" }, { ...simulator, signpost: true })
     ).toBeNull();
   });
 });
@@ -274,5 +254,27 @@ describe("optionalExportCrashNote", () => {
     expect(note).toContain("lifecycle, dyld");
     expect(note).toContain("Xcode 26.4.1 Build version 17E202");
     expect(note).toContain("Run the tool again");
+    expect(note).toContain("so that data is missing.");
+  });
+
+  it("names the null simulator estimate as the missing data", () => {
+    const note = optionalExportCrashNote(["dyld"], "Xcode 26.4.1 Build version 17E202", {
+      noSimulatorEstimate: true,
+    });
+    expect(note).toContain(
+      "xctrace export of dyld crashed with Xcode 26.4.1 Build version 17E202, so simulatorLaunchEstimateMs is null. The CPU session is complete."
+    );
+    expect(note).not.toContain("that data is missing");
+  });
+});
+
+describe("noSimulatorEstimateNote", () => {
+  it("states why the estimate is null and that the CPU session is complete", () => {
+    expect(noSimulatorEstimateNote(false)).toBe(
+      "No dyld activity for the app before the first frame, so simulatorLaunchEstimateMs is null. The CPU session is complete."
+    );
+    expect(noSimulatorEstimateNote(true)).toBe(
+      "The dyld export failed, so simulatorLaunchEstimateMs is null. The CPU session is complete."
+    );
   });
 });

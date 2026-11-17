@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -189,9 +189,10 @@ afterEach(async () => {
 type ProfileResult = {
   launchMs: number | null;
   simulatorLaunchEstimateMs?: number | null;
-  firstFrameEndMs: number | null;
+  firstFrameEndMs: number;
   exportErrors?: Record<string, string>;
   profilerSession: { cpuXml: string; cpuSamples: number };
+  warning: string | null;
 };
 
 async function profile(overrides: Partial<NativeProfilerLaunchAnalysisParams> = {}) {
@@ -260,7 +261,8 @@ describe('mode "profile" on a simulator', () => {
 
   it("takes the signpost of the process the trace launched", async () => {
     state.stdout.set("toc", TOC.replace('name="App"', 'name="Other App"'));
-    expect((await profile()).firstFrameEndMs).toBeNull();
+    const { signal } = await failure(profileLaunch(params()));
+    expect(signal.error_code).toBe(FAILURE_CODES.LAUNCH_ANALYSIS_NO_FIRST_FRAME);
   });
 
   it("records for 8 seconds by default", async () => {
@@ -268,11 +270,123 @@ describe('mode "profile" on a simulator', () => {
     expect(recordArgs()[recordArgs().indexOf("--time-limit") + 1]).toBe("8s");
   });
 
-  it("keeps and counts the whole recording without the signpost", async () => {
+  it("fails without the first-frame signpost and writes no CPU session", async () => {
     state.exports.set("signpost", "<trace-query-result><node></node></trace-query-result>");
+    const { error, signal } = await failure(profileLaunch(params({ duration_seconds: 12 })));
+    expect(error.message).toContain(
+      "The recording has no first frame of com.example.app. The app may have crashed, " +
+        "or the launch took longer than duration_seconds (12 s)."
+    );
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_NO_FIRST_FRAME,
+      failure_stage: "launch_analysis_read_trace",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    });
+    // The full CPU export is removed only after the session is written.
+    expect(existsSync(join(state.runDir, "cpu.xml"))).toBe(true);
+  });
+
+  it("fails as an export failure when the trace has no signpost table", async () => {
+    state.stdout.set("toc", TOC.replace('<table schema="os-signpost"/>', ""));
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toContain("could not export the first-frame signpost");
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_EXPORT_FAILED,
+      failure_stage: "launch_analysis_export",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+      failure_command: "xctrace",
+    });
+  });
+
+  it("reports a signpost export that crashed on every attempt as a crash", async () => {
+    state.exports.set("signpost", new CommandExitError("xcrun exited with 139", 139, null));
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toContain("xctrace export of the first-frame signpost crashed 3 times");
+    expect(signal).toMatchObject({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_EXPORT_FAILED,
+      error_kind: "crash",
+      failure_exit_code: 139,
+    });
+  });
+
+  const NO_DYLD_NOTE =
+    "No dyld activity for the app before the first frame, so simulatorLaunchEstimateMs is null. The CPU session is complete.";
+
+  it("keeps the result without dyld activity, with no launch estimate", async () => {
+    state.exports.set("dyld", "<trace-query-result><node></node></trace-query-result>");
     const result = await profile();
-    expect(result.firstFrameEndMs).toBeNull();
-    expect(result.profilerSession.cpuSamples).toBe(3);
+    expect(result.simulatorLaunchEstimateMs).toBeNull();
+    expect(result.firstFrameEndMs).toBe(300);
+    expect(result.profilerSession.cpuSamples).toBe(2);
+    expect(result.warning).toContain(NO_DYLD_NOTE);
+  });
+
+  it("has no estimate note when the estimate is set", async () => {
+    const result = await profile();
+    expect(result.warning).not.toContain("simulatorLaunchEstimateMs");
+  });
+
+  it("starts the estimate at the launched app's dyld activity, not another process's", async () => {
+    state.exports.set(
+      "dyld",
+      '<trace-query-result><node><row><start-time id="1">50000000</start-time><process id="2" fmt="Other (9)"/></row>' +
+        '<row><start-time id="3">100000000</start-time><process id="4" fmt="App (123)"/></row></node></trace-query-result>'
+    );
+    expect((await profile()).simulatorLaunchEstimateMs).toBe(200);
+  });
+
+  it("notes the null estimate when no dyld row is the launched app's", async () => {
+    state.exports.set(
+      "dyld",
+      '<trace-query-result><node><row><start-time id="1">50000000</start-time><process id="2" fmt="Other (9)"/></row></node></trace-query-result>'
+    );
+    const result = await profile();
+    expect(result.simulatorLaunchEstimateMs).toBeNull();
+    expect(result.profilerSession.cpuSamples).toBe(2);
+    expect(result.warning).toContain(NO_DYLD_NOTE);
+  });
+
+  it("notes the null estimate when dyld starts after the first frame", async () => {
+    state.exports.set("dyld", DYLD.replace("100000000", "350000000"));
+    const result = await profile();
+    expect(result.simulatorLaunchEstimateMs).toBeNull();
+    expect(result.warning).toContain(NO_DYLD_NOTE);
+  });
+
+  it("notes the null estimate when the trace has no dyld table", async () => {
+    state.stdout.set("toc", TOC.replace('<table schema="dyld-activity-interval"/>', ""));
+    const result = await profile();
+    expect(result.simulatorLaunchEstimateMs).toBeNull();
+    expect(result.exportErrors).toHaveProperty("dyld");
+    expect(result.profilerSession.cpuSamples).toBe(2);
+    expect(result.warning).toContain(NO_DYLD_NOTE);
+  });
+
+  it("notes the null estimate when the dyld export fails", async () => {
+    state.exports.set("dyld", new CommandExitError("xcrun exited with 1", 1, null));
+    const result = await profile();
+    expect(result.simulatorLaunchEstimateMs).toBeNull();
+    expect(result.exportErrors).toHaveProperty("dyld");
+    expect(result.profilerSession.cpuSamples).toBe(2);
+    expect(result.warning).toContain(
+      "The dyld export failed, so simulatorLaunchEstimateMs is null. The CPU session is complete."
+    );
+    expect(result.warning).not.toContain("No dyld activity");
+  });
+
+  it("gives one note for the null estimate when the dyld export crashed", async () => {
+    state.exports.set("dyld", new CommandExitError("xcrun exited with 139", 139, null));
+    const result = await profile();
+    expect(result.simulatorLaunchEstimateMs).toBeNull();
+    expect(result.profilerSession.cpuSamples).toBe(2);
+    expect(result.warning).toContain(
+      "xctrace export of dyld crashed with Xcode 27.0\nBuild version 27A1, so simulatorLaunchEstimateMs is null. The CPU session is complete."
+    );
+    expect(result.warning!.match(/simulatorLaunchEstimateMs is null/g)).toHaveLength(1);
+    expect(result.warning).not.toContain("No dyld activity");
+    expect(result.warning).not.toContain("that data is missing");
   });
 
   it("stops the launched app when the recording fails", async () => {
@@ -377,6 +491,19 @@ describe('mode "profile" on an iPhone', () => {
     expect(recordArgs()).not.toContain("os_signpost");
     expect(result.launchMs).toBe(268.5);
     expect(result.profilerSession.cpuSamples).toBe(1);
+  });
+
+  it("fails when the lifecycle phases have no first frame", async () => {
+    state.exports.set("lifecycle", "<trace-query-result><node></node></trace-query-result>");
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toContain("duration_seconds (8 s)");
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_NO_FIRST_FRAME,
+      failure_stage: "launch_analysis_read_trace",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    });
+    expect(existsSync(join(state.runDir, "cpu.xml"))).toBe(true);
   });
 
   it("gives the same launchMs when the dyld export fails", async () => {

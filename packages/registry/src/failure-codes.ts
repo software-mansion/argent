@@ -306,8 +306,10 @@ export const FAILURE_CODES = {
   // simctl could not wait for boot, find, launch or terminate the app.
   LAUNCH_ANALYSIS_SIMCTL_FAILED: "LAUNCH_ANALYSIS_SIMCTL_FAILED",
   LAUNCH_ANALYSIS_RECORD_FAILED: "LAUNCH_ANALYSIS_RECORD_FAILED",
-  // xctrace could not export the TOC, the CPU samples or the lifecycle phases.
+  // xctrace could not export the TOC, the CPU samples or the first-frame marker.
   LAUNCH_ANALYSIS_EXPORT_FAILED: "LAUNCH_ANALYSIS_EXPORT_FAILED",
+  // The App Launch trace has no first frame of the app, so it has no launch window.
+  LAUNCH_ANALYSIS_NO_FIRST_FRAME: "LAUNCH_ANALYSIS_NO_FIRST_FRAME",
   // The XCTest launch run of Argent's runner failed.
   LAUNCH_ANALYSIS_RUNNER_TEST_FAILED: "LAUNCH_ANALYSIS_RUNNER_TEST_FAILED",
   // The launch test ran, but Argent read no launch measurements from its result.

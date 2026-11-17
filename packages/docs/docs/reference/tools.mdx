@@ -513,22 +513,22 @@ Each window in the Window menu has an identifier. Use it to choose one of two wi
 
 ## Profiling
 
-| Tool                              | Description                                                                         |
-| --------------------------------- | ----------------------------------------------------------------------------------- |
-| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime        |
-| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                          |
-| `react-profiler-status`           | Check if a React profiler run records, was saved, was lost or taken over            |
-| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report                    |
-| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                                |
-| `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android                     |
-| `native-profiler-stop`            | Stop native profiling and export the trace                                          |
-| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                             |
-| `native-profiler-launch-analysis` | Measure iOS app launch times with XCTest or record a launch with Xcode Instruments  |
-| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                             |
-| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it           |
-| `profiler-commit-query`           | Query React commit data, or the render counts of each component                     |
-| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                                   |
-| `profiler-stack-query`            | Query native trace data for iterative native investigation                          |
+| Tool                              | Description                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime       |
+| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                         |
+| `react-profiler-status`           | Check if a React profiler run records, was saved, was lost or taken over           |
+| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report                   |
+| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                               |
+| `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android                    |
+| `native-profiler-stop`            | Stop native profiling and export the trace                                         |
+| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                            |
+| `native-profiler-launch-analysis` | Measure iOS app launch times with XCTest or record a launch with Xcode Instruments |
+| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                            |
+| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it          |
+| `profiler-commit-query`           | Query React commit data, or the render counts of each component                    |
+| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                                  |
+| `profiler-stack-query`            | Query native trace data for iterative native investigation                         |
 
 In the `top_functions` and `time_window` modes, `profiler-cpu-query` gives the self time of each call-tree node as a share of the sampled time. A function that runs on several call paths has one row for each path, and `top_n` counts rows. With `react_only`, `profiler-cpu-query` lists only the functions with a PascalCase name, which is the name format of a React component.
 
@@ -633,8 +633,10 @@ The result includes:
 - `launchMs`: on an iPhone, launch time through the first frame, excluding the Process Creation phase because it includes profiler attachment time. On a simulator, this is `null`; `simulatorLaunchEstimateMs` gives a rough estimate instead.
 - `phases` and `firstFrameEndMs`: lifecycle phases and the end of the first frame, in milliseconds from the start of the trace. On a simulator, `phases` is empty.
 - `tracePath` and `exports`: the Instruments trace and exported tables.
-- `profilerSession`: the CPU session, including its `cpuXml` path and suggested `next` tool calls. If the first frame cannot be identified, the session covers the whole recording.
+- `profilerSession`: the CPU session, including its `cpuXml` path and suggested `next` tool calls.
 - `warning` and optional `exportErrors`: notes about the recording and unavailable exports.
+
+If the trace has no first frame of the app, the tool fails with `LAUNCH_ANALYSIS_NO_FIRST_FRAME`. This occurs when the app stops before its first frame, or when the launch takes longer than `duration_seconds`.
 
 Load the CPU session with `profiler-load` in `load_native` mode, then use `profiler-stack-query` to inspect functions and threads. The trace also opens in Instruments. See [iOS launch performance](/docs/features/ios-launch-performance).
 

@@ -28,11 +28,8 @@ import { withKeyedLock } from "../keyed-lock";
 import { getDebugDir } from "../react-profiler/debug/dump";
 
 const execFileAsync = promisify(execFile);
-// A clean build of Argent's runner takes minutes. The tools are long running
-// and cancel through the abort signal, so this only catches a hung xcodebuild.
+// Only catches a hung xcodebuild; callers cancel through the abort signal.
 const BUILD_TIMEOUT_MS = 60 * 60_000;
-// `simctl bootstatus -b` waits until the selected (booted) simulator has
-// finished booting.
 const BOOTSTATUS_TIMEOUT_MS = 180_000;
 
 /** DerivedData for builds of Argent's launch test runner. */
@@ -40,18 +37,14 @@ export function runnerBuildCacheDir(key: string): string {
   return path.join(argentHomeDir(), "build-cache", "ios-launch-time-runner", key);
 }
 
-// Two builds into one DerivedData at the same time fail with "database is
-// locked", so builds that share a DerivedData directory run one at a time.
+// Concurrent builds into one DerivedData fail with "database is locked".
 const runnerBuildLocks = new Map<string, Promise<unknown>>();
 
 export function withRunnerBuildLock<T>(derivedDataPath: string, fn: () => Promise<T>): Promise<T> {
   return withKeyedLock(runnerBuildLocks, derivedDataPath, fn);
 }
 
-/**
- * A new `launch-analysis-<datetime>` directory in the directory where the
- * other native-profiler tools save their traces.
- */
+/** A new run directory beside the other native-profiler traces. */
 async function createRunDir(): Promise<string> {
   const runDir = path.join(
     await getDebugDir(),
@@ -84,16 +77,13 @@ interface LaunchContext {
 
 const FREE_PROFILE_LIMIT = "maximum number of installed apps using a free developer profile";
 
-/** True when the text reports the free developer profile's installed-app cap. */
 function isFreeProfileLimit(text: string): boolean {
   return text.toLowerCase().includes(FREE_PROFILE_LIMIT);
 }
 
 /**
- * Bundle IDs that the free-profile cap error lists as installed. Xcode prints
- * them on the lines after the cap text, inside `{( ... )}`, each with its team
- * prefix ("5W6H93822S.com.argent.runner.t5w6h93822s..."). Without that block,
- * the cap lines themselves are scanned.
+ * The installed apps the free-profile cap error lists. Xcode prints them after
+ * the cap text inside `{( ... )}`, each with its team prefix.
  */
 function installedAppText(text: string): string {
   const blocks = [...text.matchAll(/free developer profile[^\n]*?\{\(([\s\S]*?)\)\}/gi)].map(
@@ -107,11 +97,9 @@ function installedAppText(text: string): string {
 }
 
 /**
- * The friendly error for the free-profile app cap that stops Argent's runner,
- * or null for other text. `text` should be the full xcodebuild log, so the
- * installed bundle IDs that follow the cap line are in it. `ownBundleIdPrefix`
- * is this setup's runner bundle ID; another `com.argent.runner.t<team>` among
- * the installed apps is a likely leftover of a different team.
+ * Pass the full xcodebuild log: the installed bundle IDs follow the cap line.
+ * A `com.argent.runner.t<team>` other than `ownBundleIdPrefix` is likely a
+ * leftover runner of a different team.
  */
 export function freeProfileLimitMessage(
   text: string,
@@ -152,10 +140,7 @@ export class CommandTimeoutError extends Error {
   }
 }
 
-/**
- * Thrown by {@link runLogged} when the command exits with a non-zero code or is
- * killed by a signal. `code` and `signal` match the fields of an execFile error.
- */
+/** `code` and `signal` match the fields of an execFile error. */
 export class CommandExitError extends Error {
   constructor(
     message: string,
@@ -171,10 +156,7 @@ export class CommandExitError extends Error {
 const CRASH_EXIT_CODES = new Set([134, 138, 139]);
 const CRASH_SIGNALS = new Set(["SIGABRT", "SIGBUS", "SIGSEGV"]);
 
-/**
- * True when a failed runLogged or execFile command crashed, not when it timed
- * out, was cancelled or exited with an ordinary error code.
- */
+/** True when a failed runLogged or execFile command crashed. */
 export function isCrash(error: unknown): boolean {
   if (error instanceof CommandTimeoutError) return false;
   const { code, signal, name } = (error ?? {}) as {
@@ -200,9 +182,8 @@ export function commandFailureKind(error: unknown): FailureKind {
 export const XCTRACE_EXPORT_ATTEMPTS = 3;
 
 /**
- * Runs an `xctrace export` again when xctrace crashes. Xcode 26.4.1 xctrace
- * intermittently segfaults while it loads a valid trace, and a later attempt
- * on the same trace succeeds. Use it for exports only, never for a recording.
+ * Xcode 26.4.1 xctrace intermittently segfaults loading a valid trace, and a
+ * later attempt succeeds. For exports only, never a recording.
  */
 export async function withXctraceCrashRetry<T>(
   run: () => Promise<T>,
@@ -221,9 +202,7 @@ export async function withXctraceCrashRetry<T>(
 // How long an aborted command gets to exit on SIGTERM before SIGKILL.
 const ABORT_KILL_GRACE_MS = 5_000;
 
-// Process groups of the logged commands that run now. They run detached, so
-// without this a tool-server that exits mid-call would leave a build or a
-// recording running with no owner. An exit handler cannot wait, so it kills.
+// Logged commands run detached; kill their groups if the tool-server exits mid-call.
 const runningGroups = new Set<number>();
 let exitHookInstalled = false;
 
@@ -434,8 +413,6 @@ async function selectDevice(
       "not_found"
     );
   }
-  // xcodebuild and xctrace see only the default device set, so a simulator from
-  // an additional set (ios.additionalDeviceSets) cannot run the runner or be recorded.
   if (requested?.deviceSet) {
     throw deviceUnavailable(
       `Simulator ${requested.udid} is in the device set ${requested.deviceSet}. xcodebuild and xctrace ` +
@@ -497,7 +474,6 @@ function appNotInstalled(
   );
 }
 
-/** Where the app is installed on the selected device; fails when it is not installed. */
 async function findInstalledApp(
   device: { id: string; simulator: boolean; deviceSet: string | null },
   bundleId: string,
@@ -722,11 +698,7 @@ async function runSimctl(
 // Bounds the cleanup, whose device path alone could otherwise take 90 s.
 const TERMINATE_LAUNCHED_APP_TIMEOUT_MS = 15_000;
 
-/**
- * Best-effort stop of the launched app after a failed, stalled or cancelled
- * recording, so it is not left suspended. Errors are ignored. It ignores the
- * tool's abort signal and gives up after 15 s.
- */
+/** Best-effort; ignores the tool's abort signal so a cancelled recording is still cleaned up. */
 export async function terminateLaunchedApp(context: LaunchContext): Promise<void> {
   await terminateForWarmLaunch(
     context,

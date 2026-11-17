@@ -1,7 +1,4 @@
-/**
- * Mechanical helpers over App Launch template exports. They flatten and cut the
- * data; ranking and interpretation are left to the agent and the profiler query tools.
- */
+/** Parsing and cutting of App Launch exports; ranking is left to the profiler query tools. */
 
 interface LifecyclePhase {
   startNs: number;
@@ -72,9 +69,8 @@ interface RowCell {
 }
 
 /**
- * Every cell of every row of an xctrace export, refs resolved. A cell's value is
- * its text, else its `fmt`. Cells nested in a cell (a process's pid) come out as
- * cells of their own, which is harmless for lookups by tag.
+ * Cells of every row, refs resolved; a value is the text, else `fmt`. Nested
+ * cells (a process's pid) come out as their own cells, harmless for lookups by tag.
  */
 function resolvedRows(xml: string): RowCell[][] {
   const registry = new Map<string, string>();
@@ -100,16 +96,22 @@ function resolvedRows(xml: string): RowCell[][] {
 }
 
 /**
- * Time of the first `ApplicationFirstFramePresentation` End signpost the system
- * emits for the launched process, in trace-relative ns (the clock of CPU sample
- * times). It exists on simulators too, where the lifecycle table stays empty.
- * `processName` keeps signposts of other apps out by matching the process
- * column, formatted "<name> (<pid>)"; rows with no process cell pass.
+ * Whether a row belongs to `processName`, matched against the process column,
+ * formatted "<name> (<pid>)". Rows with no process cell, and every row when
+ * `processName` is undefined, pass.
  */
+function processFilter(processName?: string): (cells: RowCell[]) => boolean {
+  if (!processName) return () => true;
+  const pattern = new RegExp(`^${processName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(`);
+  return (cells) => {
+    const process = cells.find((cell) => cell.tag === "process");
+    return !process || pattern.test(process.value);
+  };
+}
+
+/** Earliest `ApplicationFirstFramePresentation` End signpost of `processName`, trace-relative ns. */
 export function parseFirstFrameSignpostNs(xml: string, processName?: string): number | null {
-  const processPattern = processName
-    ? new RegExp(`^${processName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(`)
-    : null;
+  const ofProcess = processFilter(processName);
   let earliest: number | null = null;
   for (const cells of resolvedRows(xml)) {
     const values = cells.map((cell) => cell.value);
@@ -120,42 +122,38 @@ export function parseFirstFrameSignpostNs(xml: string, processName?: string): nu
     ) {
       continue;
     }
-    const process = cells.find((cell) => cell.tag === "process");
-    if (processPattern && process && !processPattern.test(process.value)) continue;
+    if (!ofProcess(cells)) continue;
     const time = Number(cells.find((cell) => /time$/.test(cell.tag))?.value);
     if (Number.isFinite(time) && (earliest === null || time < earliest)) earliest = time;
   }
   return earliest;
 }
 
-/**
- * Name of the process `xctrace record --launch` started, from the trace TOC.
- * It is the name the signpost process column uses, which can differ from
- * CFBundleExecutable (Instruments shows "My App" for the executable MyApp).
- */
+/** The launched process's name in the TOC, as the signpost process column spells it. */
 export function launchedProcessName(tocXml: string): string | null {
   const tag = tocXml.match(/<process\s[^>]*type="launched"[^>]*>/)?.[0];
   const name = tag?.match(/\sname="([^"]*)"/)?.[1];
   return name ? decodeXml(name) : null;
 }
 
-/** Earliest `start-time` among `dyld-activity-interval` rows, trace-relative ns. */
-export function earliestDyldStartNs(xml: string): number | null {
-  const registry = valueRegistry(xml, ["start-time"]);
+/** Earliest `start-time` among `processName`'s `dyld-activity-interval` rows, trace-relative ns. */
+export function earliestDyldStartNs(xml: string, processName?: string): number | null {
+  const ofProcess = processFilter(processName);
   let earliest: number | null = null;
-  for (const [row] of xml.matchAll(/<row>.*?<\/row>/gs)) {
-    const start = Number(rowValue(row, "start-time", registry));
-    if (rowValue(row, "start-time", registry) !== null && Number.isFinite(start)) {
-      earliest = earliest === null ? start : Math.min(earliest, start);
+  for (const cells of resolvedRows(xml)) {
+    if (!ofProcess(cells)) continue;
+    const start = cells.find((cell) => cell.tag === "start-time");
+    const ns = Number(start?.value);
+    if (start && start.value !== "" && Number.isFinite(ns)) {
+      earliest = earliest === null ? ns : Math.min(earliest, ns);
     }
   }
   return earliest;
 }
 
 /**
- * A row the CPU parser counts as a sample. It skips a row whose `<sample-time>`
- * is a ref (a second sample at the same instant), so these counts match the
- * session that profiler-load reports.
+ * Like the CPU parser, skips a row whose `<sample-time>` is a ref, so these
+ * counts match what profiler-load reports.
  */
 function isParsedSample(row: string): boolean {
   return !/<sample-time\s+ref="\d+"\s*\/>/.test(row);
@@ -163,11 +161,9 @@ function isParsedSample(row: string): boolean {
 
 /**
  * Keeps `time-profile` rows up to the last sample inside the launch. Refs only
- * point back to earlier rows, so cutting the tail keeps every remaining ref
- * resolvable. Cutting after the LAST in-window row, not before the first
- * out-of-window one, drops no launch sample even if rows are out of time order;
- * `laterRows` counts post-launch samples kept before the cut in that case.
- * Pass `Infinity` to keep every row and only count the samples.
+ * point back, so cutting the tail keeps every ref resolvable. Cutting after the
+ * last in-window row drops no launch sample if rows are out of time order;
+ * `laterRows` counts the post-launch samples that keeps.
  */
 export function truncateCpuXml(
   xml: string,
@@ -226,13 +222,11 @@ function definitions(text: string): Map<string, string> {
 }
 
 /**
- * Keeps only the `time-profile` rows of running threads. The App Launch
- * template on a simulator records only a table with waiting threads, whose
- * Blocked and Runnable rows carry the time a thread waited as weight, so the
- * profiler tools would rank idle waits as CPU work. A later ref to an element a
- * dropped row defined gets that definition in its place, so every ref stays
- * resolvable. Rows without a thread state are kept. Also removes the
- * thread-state cells, which the CPU parser could read as a thread name.
+ * Keeps only `time-profile` rows of running threads: on a simulator the only
+ * table includes waiting threads, whose Blocked and Runnable rows weigh the wait,
+ * so idle waits would rank as CPU work. A ref to a dropped row's definition gets
+ * that definition inlined. Also removes thread-state cells, which the CPU parser
+ * could read as a thread name.
  */
 export function keepRunningRows(xml: string): { xml: string; droppedRows: number } {
   const states = valueRegistry(xml, ["thread-state"]);
@@ -263,10 +257,9 @@ export function keepRunningRows(xml: string): { xml: string; droppedRows: number
 }
 
 /**
- * XPath for the CPU samples. The App Launch template writes two time-profile
- * tables with the same running samples, the second adding waiting threads, so
- * exporting both would double count. Picks the running-only table when the TOC
- * marks it, else the first time-profile table.
+ * The App Launch template can write two time-profile tables with the same
+ * running samples, the second adding waiting threads; exporting both would
+ * double count.
  */
 export function cpuTableXpath(tocXml: string): string | null {
   const tables = [...tocXml.matchAll(/<table\s[^>]*schema="time-profile"[^>]*>/g)].map((m) => m[0]);

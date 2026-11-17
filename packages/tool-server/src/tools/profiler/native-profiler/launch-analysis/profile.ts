@@ -36,10 +36,11 @@ import {
   coreExportFailureMessage,
   deviceLaunchWindow,
   failedCoreExport,
-  simulatorLaunchWindow,
+  noSimulatorEstimateNote,
   optionalExportCrashNote,
   processCreationNote,
-  simulatorProfileNote,
+  simulatorLaunchEstimateMs,
+  SIMULATOR_PROFILE_NOTE,
   stalledAtRecordingStart,
   stallsSimulatorLaunchRecording,
 } from "../../../../utils/ios-launch-time/results";
@@ -83,7 +84,6 @@ const RECORD_TIMEOUT_MS = 180_000;
 
 const ms = (ns: number) => Math.round(ns / 100_000) / 10;
 
-// Recording length when duration_seconds is not set.
 export const DEFAULT_PROFILE_SECONDS = 8;
 
 /** mode "profile": one Instruments App Launch recording, cut at the first frame. */
@@ -120,6 +120,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     (message) => ctx?.emitProgress?.({ type: "device-action", message }),
     ctx?.signal
   );
+  const durationSeconds = params.duration_seconds ?? DEFAULT_PROFILE_SECONDS;
   const tracePath = path.join(context.runDir, "app-launch.trace");
   const recordLog = path.join(context.runDir, "xctrace-record.log");
   try {
@@ -137,7 +138,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
         "--output",
         tracePath,
         "--time-limit",
-        `${params.duration_seconds ?? DEFAULT_PROFILE_SECONDS}s`,
+        `${durationSeconds}s`,
         "--no-prompt",
         "--launch",
         "--",
@@ -151,8 +152,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
       }
     );
   } catch (error) {
-    // A stalled or aborted recording leaves the launched app suspended.
-    // The cleanup is bounded, so a cancel still returns quickly.
+    // A stalled or aborted recording leaves the launched app suspended; the cleanup is bounded.
     await terminateLaunchedApp(context);
     ctx?.signal?.throwIfAborted();
     const recordFailure = {
@@ -190,7 +190,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     });
   }
   const exportErrors: Record<string, string> = {};
-  // The error of each export that failed, for crash detection and telemetry.
+  // For crash detection and telemetry.
   const exportFailures: Record<string, unknown> = {};
   const exported: Partial<Record<"lifecycle" | "dyld" | "cpu" | "signpost", string>> = {};
   let toc = "";
@@ -255,12 +255,11 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   }
   ctx?.signal?.throwIfAborted();
 
-  // Without the TOC or the CPU samples the result has no launch data. Fail so
-  // the agent does not read an empty result as "nothing ran at launch".
-  // Lifecycle, dyld and signpost stay optional and are reported in exportErrors.
+  // Fail so the agent does not read a result without launch data as "nothing ran at launch".
   const failedExport = failedCoreExport(exportErrors, {
     cpu: Boolean(exported.cpu),
     lifecycle: Boolean(exported.lifecycle),
+    signpost: Boolean(exported.signpost),
     simulator: context.simulator,
   });
   if (failedExport) {
@@ -290,37 +289,48 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   const phases = exported.lifecycle
     ? parseLifecyclePhases(await fsp.readFile(exported.lifecycle, "utf8"))
     : [];
-  let endNs = launchEndNs(phases);
-  let simulatorLaunchEstimateMs: number | null = null;
-  let signpostMissing = false;
-  if (context.simulator) {
-    const signpostNs = exported.signpost
-      ? parseFirstFrameSignpostNs(
-          await fsp.readFile(exported.signpost, "utf8"),
-          launchedProcessName(toc) ?? undefined
+  const processName = launchedProcessName(toc) ?? undefined;
+  // failedCoreExport guarantees the signpost export on a simulator.
+  const endNs = context.simulator
+    ? parseFirstFrameSignpostNs(await fsp.readFile(exported.signpost!, "utf8"), processName)
+    : launchEndNs(phases);
+  if (endNs === null) {
+    throw new FailureError(
+      `The recording has no first frame of ${context.bundleId}. ` +
+        `The app may have crashed, or the launch took longer than duration_seconds (${durationSeconds} s). ` +
+        `Check that the app starts, or raise duration_seconds. Trace: ${tracePath}`,
+      {
+        error_code: FAILURE_CODES.LAUNCH_ANALYSIS_NO_FIRST_FRAME,
+        failure_stage: "launch_analysis_read_trace",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
+  }
+  const simulatorEstimateMs =
+    context.simulator && exported.dyld
+      ? simulatorLaunchEstimateMs(
+          endNs,
+          earliestDyldStartNs(await fsp.readFile(exported.dyld, "utf8"), processName)
         )
       : null;
-    // Optional: the simulator estimate starts at dyld.
-    const dyldStartNs = exported.dyld
-      ? earliestDyldStartNs(await fsp.readFile(exported.dyld, "utf8"))
-      : null;
-    ({ endNs, simulatorLaunchEstimateMs, signpostMissing } = simulatorLaunchWindow(
-      signpostNs,
-      dyldStartNs
-    ));
-  } else if (exported.lifecycle && endNs === null) {
-    exportErrors.lifecycle = "Lifecycle export has no first-frame phase; CPU samples are not cut.";
-  }
+  const noSimulatorEstimate = context.simulator && simulatorEstimateMs === null;
   const launch = context.simulator ? null : deviceLaunchWindow({ phases, endNs });
   const crashedOptional = Object.keys(exportFailures).filter(
     (table) => isCrash(exportFailures[table]) && table in exportErrors
   );
+  const dyldCrashed = crashedOptional.includes("dyld");
   const notes = [
     context.warning,
-    context.simulator ? simulatorProfileNote(signpostMissing) : null,
+    context.simulator ? SIMULATOR_PROFILE_NOTE : null,
     launch ? processCreationNote(launch.processCreation, launch.launchMs) : null,
+    noSimulatorEstimate && !dyldCrashed
+      ? noSimulatorEstimateNote(exportFailures.dyld !== undefined)
+      : null,
     crashedOptional.length > 0
-      ? optionalExportCrashNote(crashedOptional, await xcodeVersion())
+      ? optionalExportCrashNote(crashedOptional, await xcodeVersion(), {
+          noSimulatorEstimate: noSimulatorEstimate && dyldCrashed,
+        })
       : null,
   ].filter(Boolean);
 
@@ -330,8 +340,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   let laterRows = 0;
   if (exported.cpu) {
     const running = keepRunningRows(await fsp.readFile(exported.cpu, "utf8"));
-    // Without a first-frame end the session keeps the whole recording.
-    const cut = truncateCpuXml(running.xml, endNs ?? Infinity);
+    const cut = truncateCpuXml(running.xml, endNs);
     ({ sessionId, cpuXmlPath } = await writeProfilerSession(cut.xml));
     // The launch-window copy is the one to analyze; drop the full export.
     await fsp.rm(exported.cpu, { force: true });
@@ -340,17 +349,15 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     laterRows = cut.laterRows;
   }
 
-  const launchPhases = phases.filter((phase) => endNs === null || phase.startNs < endNs);
+  const launchPhases = phases.filter((phase) => phase.startNs < endNs);
   ctx?.emitProgress?.({ type: "artifact", tracePath });
   return {
-    // First lifecycle phase after Process Creation to the end of the first frame. Null on simulators.
     launchMs: launch?.launchMs ?? null,
-    // Simulator only: earliest dyld activity to the first-frame signpost.
-    ...(context.simulator && { simulatorLaunchEstimateMs }),
+    ...(context.simulator && { simulatorLaunchEstimateMs: simulatorEstimateMs }),
     device: { id: context.deviceId, name: context.deviceName, simulator: context.simulator },
     bundleId: context.bundleId,
     // Trace-relative ms, the same clock as CPU sample times.
-    firstFrameEndMs: endNs === null ? null : ms(endNs),
+    firstFrameEndMs: ms(endNs),
     phases: launchPhases.map(
       (phase) => `${ms(phase.startNs)}–${ms(phase.startNs + phase.durationNs)} ms ${phase.period}`
     ),
