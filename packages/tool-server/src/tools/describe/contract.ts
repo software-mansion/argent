@@ -25,6 +25,11 @@ export interface DescribeNode {
   // The describe tool leaves it unset; the tree the await tools judge on a Mac
   // app carries the flow tree's value.
   subtreeText?: string;
+  // `value` is the text a text field holds, typed or set by the app, not the
+  // placeholder of an empty field. A selector does not match the field by this
+  // text, except a `type` step's `into`. Set by the iOS simulator flow adapter
+  // only; the describe tool leaves it unset.
+  typedValue?: boolean;
   clickable?: boolean;
   longClickable?: boolean;
   scrollable?: boolean;
@@ -55,6 +60,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       identifier: z.string().optional(),
       value: z.string().optional(),
       subtreeText: z.string().optional(),
+      typedValue: z.boolean().optional(),
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),

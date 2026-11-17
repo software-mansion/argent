@@ -467,11 +467,13 @@ function nearestAfter(
 //
 // `orientation` is how the UI lies on the frame space, for the relations that
 // go by reading order (see the module comment); the tree's own space when
-// absent.
+// absent. `matchFieldValues` is for a `type` step's `into` only (see
+// {@link resolveSelector}).
 export function findAll(
   root: DescribeNode,
   selector: Selector,
-  orientation?: UiOrientation
+  orientation?: UiOrientation,
+  matchFieldValues = false
 ): DescribeNode[] {
   const all: DescribeNode[] = [];
   const collect = (node: DescribeNode): void => {
@@ -479,7 +481,7 @@ export function findAll(
     for (const child of node.children) collect(child);
   };
   for (const child of root.children) collect(child);
-  return resolveSelector(all, selector, readingFrames(orientation));
+  return resolveSelector(all, selector, readingFrames(orientation), matchFieldValues);
 }
 
 /**
@@ -510,14 +512,29 @@ const RELATION_RESOLVERS: Record<
   next: (matches, scope, reading) => nearestAfter(matches, scope, reading),
 };
 
-/** Own-field matches from `all`, narrowed by every scope the selector carries. */
+/**
+ * Own-field matches from `all`, narrowed by every scope the selector carries.
+ *
+ * A text field that matches only by the text it holds (`typedValue`) is no
+ * match: after typing "Paris", `tap: { text: Paris }` means the result that
+ * shows it, not the field. The field still matches by its id, label or role.
+ * `matchFieldValues` keeps such a match for the selector itself, never for its
+ * scopes: a `type` step's `into` names the field it types into.
+ */
 function resolveSelector(
   all: DescribeNode[],
   selector: Selector,
-  reading: ReadingFrame
+  reading: ReadingFrame,
+  matchFieldValues = false
 ): DescribeNode[] {
   const regex = selectorTextRegex(selector);
-  let matches = all.filter((n) => matchNodeWithRegex(n, selector, regex));
+  let matches = all.filter(
+    (n) =>
+      matchNodeWithRegex(n, selector, regex) &&
+      (matchFieldValues ||
+        n.typedValue !== true ||
+        matchNodeWithRegex({ ...n, value: undefined }, selector, regex))
+  );
   for (const relation of SELECTOR_RELATIONS) {
     const scope = selector[relation];
     if (scope === undefined) continue;
@@ -791,14 +808,17 @@ function exactFieldCount(
  * Reading order, here and in the relations `findAll` resolves, is the UI's
  * when `orientation` says how the UI lies on the frame space (see the module
  * comment). The frame returned is the node's own, in the frame space: the one
- * to act on.
+ * to act on. `matchFieldValues` is as in {@link findAll}.
  */
 export function selectorToFrame(
   root: DescribeNode,
   selector: Selector,
-  orientation?: UiOrientation
+  orientation?: UiOrientation,
+  matchFieldValues = false
 ): DescribeFrame | undefined {
-  const visible = frontmost(findAll(root, selector, orientation).filter(isVisible));
+  const visible = frontmost(
+    findAll(root, selector, orientation, matchFieldValues).filter(isVisible)
+  );
   if (visible.length === 0) return undefined;
   const reading = readingFrames(orientation);
   if (!hasOwnConstraint(selector)) {
@@ -861,13 +881,15 @@ export function deriveSelector(node: DescribeNode): Selector | null {
 // even the node it came from. Label first: a value like "50%" is the volatile
 // part of a control. Icon-font labels are invisible in YAML (see
 // hasVisibleText), so a node carrying only those falls through to role. A
-// toggle's "0"/"1" is its state and flips with the tap, and a password's value
-// is the secret, so neither value names the node.
+// toggle's "0"/"1" is its state and flips with the tap, a password's value is
+// the secret, and a selector does not match a text field by the text it holds
+// (see resolveSelector), so none of these values names the node.
 function ownSelectors(node: DescribeNode): Selector[] {
   const out: Selector[] = [];
   if (node.identifier && node.identifier.trim()) out.push({ identifier: node.identifier });
   const skipValue =
     node.password === true ||
+    node.typedValue === true ||
     (node.checked !== undefined && (node.value === "0" || node.value === "1"));
   const text = [node.label, skipValue ? undefined : node.value]
     .map((t) => t?.replace(/\s+/g, " ").trim())

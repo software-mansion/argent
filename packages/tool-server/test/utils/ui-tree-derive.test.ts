@@ -206,6 +206,18 @@ describe("deriveUniqueSelector", () => {
     if (selector) expect(selectorToFrame(root, selector)).toEqual(root.children[2]!.frame);
   });
 
+  it("on an iOS simulator, records a tapped row by its text, and a tapped field not by the text it holds", () => {
+    const root = screen([
+      leaf("AXTextField", [0.05, 0.12, 0.9, 0.04], { value: "Paris", typedValue: true }),
+      leaf("AXButton", [0.05, 0.25, 0.9, 0.064], { label: "Paris" }),
+    ]);
+    // The field holds the same text, but no selector matches it by that text.
+    expect(derive(root, 0.5, 0.28)).toEqual({ text: "Paris" });
+    const field = derive(root, 0.5, 0.14);
+    expect(JSON.stringify(field)).not.toContain("Paris");
+    expect(selectorToFrame(root, field!)).toEqual(root.children[0]!.frame);
+  });
+
   it("anchors on a Chromium text element that carries its text only as value", () => {
     const root = screen([
       leaf("span", [0.05, 0.12, 0.3, 0.05], { value: "Row A" }),

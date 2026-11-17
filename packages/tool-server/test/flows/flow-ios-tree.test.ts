@@ -264,6 +264,64 @@ describe("iOS simulator flow tree projection", () => {
     expect(filled.value).toBeUndefined();
   });
 
+  it("marks the text a filled field holds, never a placeholder or a value that is not typed", () => {
+    const tree = adaptIosUiTreeForFlows(
+      adaptAxTree(
+        reply([
+          app,
+          {
+            index: 1,
+            parentIndex: 0,
+            value: "Paris",
+            placeholder: "Search",
+            traits: ["textEntry", "isEditing"],
+            frame: frame(0.05, 0.12, 0.9, 0.04),
+          },
+          {
+            index: 2,
+            parentIndex: 0,
+            value: "Search",
+            placeholder: "Search",
+            hintShowing: true,
+            traits: ["textEntry"],
+            frame: frame(0.05, 0.2, 0.9, 0.04),
+          },
+          {
+            index: 3,
+            parentIndex: 0,
+            label: "Volume",
+            value: "50%",
+            traits: ["adjustable"],
+            frame: frame(0.05, 0.3, 0.9, 0.04),
+          },
+          {
+            index: 4,
+            parentIndex: 0,
+            label: "Paris",
+            traits: ["button"],
+            frame: frame(0.05, 0.4, 0.9, 0.064),
+          },
+        ])
+      )
+    );
+    const [filled, empty, slider] = tree.children;
+    expect(filled).toMatchObject({ value: "Paris", typedValue: true });
+    expect(empty).toMatchObject({ value: "Search" });
+    expect(empty!.typedValue).toBeUndefined();
+    expect(slider!.typedValue).toBeUndefined();
+    // The row gets the tap; a type step's into still finds the field.
+    expect(selectorToFrame(tree, { text: "Paris" })).toEqual(frame(0.05, 0.4, 0.9, 0.064));
+    expect(selectorToFrame(tree, { text: "Paris" }, undefined, true)).toEqual(
+      frame(0.05, 0.12, 0.9, 0.04)
+    );
+    // Its placeholder still names an empty field; a value that is not typed still matches.
+    expect(selectorToFrame(tree, { text: "Search" })).toEqual(frame(0.05, 0.2, 0.9, 0.04));
+    expect(findAll(tree, { text: "50%" })).toEqual([slider]);
+    // The field still matches by its role, and a regex is held to the same rule.
+    expect(findAll(tree, { role: "AXTextField", textMatches: "^Par" })).toEqual([]);
+    expect(findAll(tree, { role: "AXTextField" })).toEqual([filled, empty]);
+  });
+
   it("drops a scroll indicator from the leaves and the hoisted text, but keeps sliders", () => {
     const tree = adaptIosUiTreeForFlows(
       adaptAxTree(

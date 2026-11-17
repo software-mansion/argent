@@ -132,6 +132,9 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
       ...(node.label !== undefined ? { label: node.label } : {}),
       // A secure field's placeholder is not its secret.
       ...(value !== undefined && (!node.password || node.hintShowing) ? { value } : {}),
+      // The text a filled field holds names no element (see `resolveSelector`).
+      // `node.value` is unset while the field shows its placeholder.
+      ...(node.editable && node.value !== undefined && !node.password ? { typedValue: true } : {}),
       ...(node.identifier !== undefined ? { identifier: node.identifier } : {}),
       ...(node.focused ? { focused: true } : {}),
       ...(node.disabled ? { disabled: true } : {}),
