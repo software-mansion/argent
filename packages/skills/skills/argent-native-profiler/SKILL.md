@@ -9,7 +9,7 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues, and iOS
 - `profiler-stack-query`: drill into the analyzed data (hang stacks, function callers, thread breakdown, leaks).
 - `profiler-load`: reload an earlier session from disk.
 
-**iOS** (Instruments via `xctrace`): the `native-profiler-*` session tools use a simulator only; a physical iPhone is not supported. For app launch time, see §4. Needs full Xcode (`xcrun xctrace version`). Reports CPU hotspots, UI hangs and memory leaks.
+**iOS** (Instruments via `xctrace`): the profiling session (`native-profiler-start`) runs on a simulator only; launch analysis (§4) also runs on a physical iPhone. Needs full Xcode (`xcrun xctrace version`). Reports CPU hotspots, UI hangs and memory leaks.
 
 **Android** (Perfetto): emulator or physical device. Reports CPU hotspots and UI hangs (with jank reasons and the main thread's blocking function), plus an RSS-growth signal for memory pressure: treat it as a hint to confirm, not a confirmed leak. The app must be debuggable or declare `<profileable android:shell="true"/>` in its manifest, or no `perf_sample` callstacks are captured.
 
@@ -43,18 +43,10 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues, and iOS
 
 For any iOS app (Swift, Objective-C, React Native, Flutter) when the user asks about launch or startup time.
 
-The tool does not build or install the app. Do it yourself first:
+1. Build a Release build and install it yourself with the project's own scripts or build setup (for React Native, find them as `argent-react-native-app-workflow` describes); the tool only measures an installed build. Debug-build timings are not meaningful, and the tool cannot detect them.
+2. Target a physical iPhone on USB. Ask the user before you use a booted simulator: its timings reflect the Mac.
+3. Run `native-profiler-launch-analysis`: `mode: "measure"` for the baseline and to verify fixes, `mode: "profile"` to find the cause of a slow launch.
+4. For a profile, run `profiler-stack-query` `thread_breakdown` on the main thread, then `function_callers` for the dominant function. Typical causes: static initializers, dylib loading, heavy `didFinishLaunching` work.
+5. Rebuild and reinstall the Release build after each native or JS change, before you measure again.
 
-1. Build a Release build with the project's own build flow and install it on the target device: a physical iPhone on a USB cable by default, a booted simulator only when the user accepts Mac-hardware timings. Debug-build timings are not meaningful, and the tool cannot detect them. For example:
-   - Expo: `npx expo run:ios --configuration Release --device <udid>`
-   - React Native CLI: `npx react-native run-ios --mode Release --udid <udid>`
-   - Xcode project: `xcodebuild -workspace <App>.xcworkspace -scheme <App> -configuration Release -destination id=<udid> -derivedDataPath <dir> build`, then `xcrun devicectl device install app --device <udid> <app path>` (iPhone) or `xcrun simctl install <udid> <app path>` (simulator)
-2. Call `native-profiler-launch-analysis` with `bundle_id` (the installed app), `device_id` (the UDID) and `mode`; on a simulator add `allow_simulator: true`.
-3. After you change native code or JS, rebuild and reinstall the Release build before you measure again.
-
-`mode` is required:
-
-- `mode: "measure"`: five XCTest launch samples (`averageMs`, `samplesMs`). Use as the baseline and to verify fixes. Do not pass `duration_seconds`; this mode rejects it.
-- `mode: "profile"`: Instruments App Launch trace: phases up to the first frame plus a CPU session. Optional `duration_seconds` (5–60, default 8) sets the recording length. Follow `profilerSession.next` (`profiler-load` `load_native` → `profiler-stack-query` `thread_breakdown` with `thread: "Main Thread"`), then `function_callers` for the dominant function. Typical causes: static initializers, dylib loading, heavy `didFinishLaunching` work.
-- Both modes launch the installed app once first, so the measured launch is usually warm. `LAUNCH_ANALYSIS_APP_NOT_INSTALLED` means `bundle_id` is not on that device: install the Release build and retry.
-- The launch ends at the first frame. Framework work before it (e.g. React Native runtime creation) appears in the launch profile; work after it belongs to that framework's profiler.
+The launch ends at the first frame. Framework work before it (e.g. React Native runtime creation) appears in the launch profile; work after it belongs to that framework's profiler.
