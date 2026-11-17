@@ -559,6 +559,7 @@ Most other tools work as in other Mac apps. These tools work differently:
 | Alerts            | Return does nothing on an alert with no preferred action. Escape does nothing on a UIKit alert with a text field. UIKit behaves the same way for a user. Tap the button. |
 | Password fields   | When an empty password field gets focus, macOS can show its Passwords AutoFill popup on your screen. The popup does not block input.                                     |
 | SwiftUI Tab order | The Tab key can move focus in an order that differs from the order a user sees. Tap the target field instead.                                                            |
+| Toolbar menus     | With the Optimize Interface for Mac setting, a UIKit bar button item that has a menu shows in the toolbar without its identifier. Select it by its label.                |
 | React Native      | The Metro debugger and the React profiler tools do not support React Native apps on Mac Catalyst yet.                                                                    |
 
 An iPad or iPhone app that runs on the Mac without changes ("Designed for iPad") is not a Mac Catalyst app. `boot-device` refuses it, because macOS does not let Argent load its library into such an app. Build the Mac Catalyst target of the app, or test the app on an iOS simulator.
