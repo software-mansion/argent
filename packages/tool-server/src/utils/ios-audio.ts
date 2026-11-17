@@ -156,11 +156,10 @@ export async function armAudio(
   const failure = devtools.getInitFailure();
   if (failure) {
     throw new FailureError(
-      `Could not set up the simulator's injection environment for ${session.udid}: ${failure.lastError}. ` +
+      `Could not set up audio injection for ${session.udid} (${failure.lastError}): ` +
         (failure.givenUp
-          ? `Argent stopped retrying after ${failure.attempts} attempts: call stop-all-simulator-servers ` +
-            `with devices: ["${session.udid}"], then retry.`
-          : `Retry; if it keeps failing, shut the simulator down and boot it again with boot-device.`),
+          ? `call stop-all-simulator-servers with devices: ["${session.udid}"], then retry.`
+          : `retry, or reboot the simulator with boot-device.`),
       {
         error_code: FAILURE_CODES.AUDIO_ENV_SETUP_FAILED,
         failure_stage: "audio_env_setup",
@@ -349,7 +348,7 @@ export async function setAudioInput(
       const info = readClipInfo(fd);
       if (info.frames > MAX_CLIP_SECONDS * STREAM_RATE) {
         throw new InvalidToolInputError(
-          `${source.path} is longer than ${MAX_CLIP_SECONDS / 60} minutes. Cut it shorter.`
+          `${source.path} is longer than ${MAX_CLIP_SECONDS / 60} minutes.`
         );
       }
       feederSource = { kind: "clip", fd, info, plays: source.plays };
@@ -419,8 +418,8 @@ function ownsInput(inputFile: string): boolean {
 export function assertHookProto(status: AppAudioStatus | null, bundleId: string): void {
   if (!status || status.proto === AUDIO_HOOK_PROTO) return;
   throw new FailureError(
-    `${bundleId} runs an older audio hook (protocol ${status.proto || "none"}, this tool-server needs ` +
-      `${AUDIO_HOOK_PROTO}). Call restart-app for ${bundleId} so it loads the current hook, then retry.`,
+    `${bundleId} runs an older audio hook (protocol ${status.proto || "none"}, need ${AUDIO_HOOK_PROTO}): ` +
+      `call restart-app for it, then retry.`,
     {
       error_code: FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE,
       failure_stage: "audio_hook_status",

@@ -19,13 +19,9 @@ const zodSchema = z
     source: z
       .enum(["file", "tone", "microphone"])
       .describe(
-        "What apps hear as microphone input. `file`: the audio file in `path`. `tone`: a generated sine wave. " +
-          "`microphone`: release the override, apps hear the host's real microphone again."
+        "`file` plays `path`, `tone` a sine wave, `microphone` restores the real microphone."
       ),
-    path: z
-      .string()
-      .optional()
-      .describe("Audio file to play as the microphone: wav, mp3, m4a, caf, aiff, flac."),
+    path: z.string().optional().describe("Audio file, required for source=file."),
     // Not .int(): zod's int stops at 2^53, and any count must work. Advertised as an integer all the same.
     plays: z
       .number()
@@ -33,25 +29,15 @@ const zodSchema = z
       .refine(Number.isInteger, { message: "Must be a whole number." })
       .meta({ type: "integer" })
       .optional()
-      .describe("source=file only. Times the file plays, then silence. Default 1."),
+      .describe("source=file only. Times the file plays. Default 1."),
     frequencyHz: z
       .number()
       .min(20)
       .max(20000)
       .optional()
       .describe("source=tone only. Default 1000."),
-    amplitude: z
-      .number()
-      .min(0.01)
-      .max(1)
-      .optional()
-      .describe("source=tone only, linear. Default 0.4."),
-    bundleId: z
-      .string()
-      .optional()
-      .describe(
-        "App you are about to test. When set, the result says whether the audio hook is live in that app."
-      ),
+    amplitude: z.number().min(0.01).max(1).optional().describe("source=tone only. Default 0.4."),
+    bundleId: z.string().optional().describe("App under test; the result then reports `appReady`."),
   })
   .superRefine((params, ctx) => {
     if (params.source === "file" && !params.path) {
@@ -84,12 +70,8 @@ const fileInputs: FileInputSpec[] = [
 export function createAudioInputTool(registry: Registry): ToolDefinition<Params, AudioInputResult> {
   return {
     id: "audio-input",
-    description: `Choose what apps in an iOS Simulator hear as microphone input: an audio file, a generated tone, or the real host microphone.
-Use when testing recording, voice, speech recognition or call features without speaking into the host microphone. The app needs no change.
-Apps launched after Argent armed the simulator carry the audio hook; pass bundleId to check (appReady). Call restart-app for an app launched before that. The setting applies to every armed app and survives app restarts.
-A file starts over, with its full play count, when you call this tool and each time an app opens a new audio input. An app that keeps its audio session open does not restart the file: call this tool again right before the action that makes the app record. source=file requires path.
-Returns { source, durationMs?, liveApps, appReady?, message? }.
-Fails if the file cannot be decoded, the simulator is not booted, or the target is not a local iOS Simulator. Does not cover web content or AVCaptureSession audio.`,
+    description: `Set what apps in an iOS Simulator hear as microphone input: an audio file, a tone, or the real microphone.
+A file starts playing on this call, so call it right before the action that makes the app record.`,
     zodSchema,
     searchHint:
       "audio microphone input mock fake inject voice speech sound file tone simulator mic",
@@ -154,10 +136,8 @@ function withApps(
     if (!out.appReady) {
       out.message =
         hook === "stale"
-          ? `${params.bundleId} has not reported its audio hook since it last started (or is not running). ` +
-            `Retry in a moment; if it persists, call restart-app for it.`
-          : `The audio hook is not live in ${params.bundleId}: it was launched before the simulator was armed. ` +
-            `Call restart-app for it; the input is already set and applies as soon as it runs again.`;
+          ? `${params.bundleId} has not loaded the audio hook yet: retry, then call restart-app if it persists.`
+          : `The audio hook is not live in ${params.bundleId}: call restart-app for it.`;
     }
   }
   return out;

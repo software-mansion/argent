@@ -42,15 +42,13 @@ function notBooted(message: string, kind: "not_found" | "validation"): FailureEr
 export async function resolveAudioDevice(toolId: string, udid: string): Promise<DeviceInfo> {
   const device = resolveDevice(udid);
   if (device.platform === "ios-remote") {
-    throw wrongPlatform(
-      "Audio mocking needs a simulator on the same Mac as the tool-server; hosted (remote:) simulators are not supported."
-    );
+    throw wrongPlatform("Audio mocking needs a simulator on the same Mac as the tool-server.");
   }
   assertSupported(toolId, audioCapability, device);
   const simulator = await findIosSimulator(udid);
   if (!simulator) {
     throw notBooted(
-      `No iOS simulator with UDID ${udid} was found. Call list-devices for the available simulators.`,
+      `No iOS simulator with UDID ${udid} was found: call list-devices.`,
       "not_found"
     );
   }
@@ -59,8 +57,7 @@ export async function resolveAudioDevice(toolId: string, udid: string): Promise<
   }
   if (simulator.state !== "Booted") {
     throw notBooted(
-      `Simulator '${simulator.name}' (${udid}) is not booted (state: ${simulator.state}). ` +
-        `Boot it first with boot-device, then call ${toolId} again.`,
+      `Simulator '${simulator.name}' (${udid}) is not booted (state: ${simulator.state}): call boot-device first.`,
       "validation"
     );
   }
