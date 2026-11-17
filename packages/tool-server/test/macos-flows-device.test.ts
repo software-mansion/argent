@@ -47,6 +47,8 @@ function makeRegistry(
     devices?: unknown[];
     /** restart-app's answer: its note, or the error it fails with. */
     restart?: { note?: string } | Error;
+    /** Runs before restart-app answers, as the real one writes its record. */
+    onRestart?: () => Promise<void>;
     capabilityOf?: (tool: string) => unknown;
   } = {}
 ): { registry: Registry; calls: Call[] } {
@@ -59,6 +61,7 @@ function makeRegistry(
       if (tool === "list-devices") return { devices: opts.devices ?? [] };
       if (tool === "restart-app") {
         if (opts.restart instanceof Error) throw opts.restart;
+        await opts.onRestart?.();
         return { restarted: true, bundleId: args.bundleId, ...opts.restart };
       }
       return { ok: true };
@@ -471,5 +474,32 @@ describe("raw tool steps on a Mac app", () => {
     const result = await run(registry, "tap", { device: MAC_DEVICE });
     expect(result.steps[0]?.status).toBe("pass");
     expect(calls.find((c) => c.tool === "gesture-tap")?.args.udid).toBe(MAC_DEVICE);
+  });
+
+  it("gates the steps after a launch by the kind that launch recorded: a Mac Catalyst app's first start", async () => {
+    const { registry, calls } = makeRegistry({
+      capabilityOf: (tool) =>
+        tool === "native-find-views"
+          ? { apple: { simulator: true }, macos: { app: true, catalyst: false } }
+          : { apple: { simulator: true }, macos: { app: true, catalyst: true } },
+      // As the real restart-app: the start records the kind in ~/.argent/macos-apps.json.
+      onRestart: async () => {
+        const file = path.join(os.homedir(), ".argent", "macos-apps.json");
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(`${file}.tmp`, JSON.stringify([{ bundleId: APP, catalyst: true }]));
+        await fs.rename(`${file}.tmp`, file);
+      },
+    });
+    await writeFlow("catalyst", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: { macos: APP } },
+        { kind: "tool", name: "native-find-views", args: { bundleId: APP, identifier: "x" } },
+      ],
+    });
+    const result = await run(registry, "catalyst");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "tool:error"]);
+    expect(result.steps[1]?.reason).toContain("not supported on macos catalyst");
+    expect(calls.map((c) => c.tool)).not.toContain("native-find-views");
   });
 });

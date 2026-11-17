@@ -714,6 +714,9 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   if (isNativeDevtoolsBlockResult("restart-app", restart)) {
     return { ok: false, reason: `restart-app did not start ${bundleId}: ${restart.message}` };
   }
+  // A Mac app's kind, AppKit or Mac Catalyst, is the one this start recorded:
+  // the run resolved its device before it, possibly before the app's first start.
+  if (device.platform === "macos") state.device = resolveDevice(device.id);
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
   // The gate returns null (ready) on abort — check the signal before trusting
