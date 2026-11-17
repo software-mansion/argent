@@ -77,6 +77,10 @@ vi.mock("../src/utils/ios-profiler/startup", () => ({
   waitForXctraceReady: async () => ({ via: "notify" }),
 }));
 
+vi.mock("../src/tools/profiler/native-profiler/platforms/xctrace", async (importOriginal) =>
+  (await import("./helpers/without-settle-after-start")).withoutSettleAfterStart(importOriginal)
+);
+
 vi.mock("../src/utils/ios-profiler/notify", () => ({
   listenForDarwinNotification: () => ({
     cancel: () => {},
@@ -86,6 +90,7 @@ vi.mock("../src/utils/ios-profiler/notify", () => ({
 }));
 
 import { startNativeProfilerIos } from "../src/tools/profiler/native-profiler/platforms/ios";
+import { __resetXctraceRecordingsForTesting } from "../src/tools/profiler/native-profiler/platforms/xctrace";
 import {
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
@@ -146,6 +151,7 @@ function newSession(): NativeProfilerSessionApi {
     appEndedDuringCapture: false,
     exportSkipReason: null,
     recordedMs: null,
+    startReturnedMs: null,
     stopInProgress: null,
     suspensionWatch: null,
     appSuspensions: null,
@@ -156,6 +162,7 @@ function newSession(): NativeProfilerSessionApi {
     recordingMallocStackLogging: null,
     recordingTimedOut: false,
     recordingTimeout: null,
+    cappedEnd: null,
     traceFile: null,
     wallClockStartMs: null,
   };
@@ -191,6 +198,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Each test's fake xctrace keeps running.
+  __resetXctraceRecordingsForTesting();
   delete process.env.ARGENT_DEVICE_PROVIDERS;
   delete process.env.ARGENT_IOS_CAPTURE;
   fs.rmSync(temporaryDirectory, { force: true, recursive: true });

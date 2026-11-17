@@ -36,6 +36,7 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS and
 
 ## 3. Caveats
 
+- **One xctrace recording per Mac:** iOS simulators and Mac apps share it, so profile them one at a time. `NATIVE_PROFILER_HOST_RECORDING_RUNNING` names the recording that runs: stop it if it is yours, otherwise wait or ask the user.
 - **Simulator and emulator timings reflect the host machine**, not device hardware. Compare runs against each other rather than trusting absolute numbers; a physical Android device gives real-hardware numbers.
 - **Profiler overhead:** if `JSLexer`, `JSONEmitter` or Hermes internals dominate the JS thread, that is instrumentation cost, not app work. Discount those entries.
 - **Run-to-run variance:** treat only consistent, directional changes (across 2+ runs, or a >15% delta) as signal.

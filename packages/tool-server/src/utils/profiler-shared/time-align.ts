@@ -1,7 +1,7 @@
 /**
  * React Profiler timestamps are performance.now() ms; native traces (xctrace,
  * perfetto) are trace-relative ns. The only value both record in a common clock
- * is Date.now() at start, so all conversions go through that wall-clock anchor.
+ * is their start on the wall clock, so all conversions go through that anchor.
  */
 
 export interface TimeAnchor {

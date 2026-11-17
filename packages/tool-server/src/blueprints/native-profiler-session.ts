@@ -11,6 +11,7 @@ import { assertExternalCapability } from "../utils/external-devices";
 import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
 import type { AppSuspensionSpan, AppSuspensionWindow } from "../utils/ios-profiler/app-suspensions";
+import type { XctraceEnd } from "../tools/profiler/native-profiler/platforms/xctrace";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { adbShell } from "../utils/adb";
 import { adbCommandPrefix } from "../utils/adb-server";
@@ -77,6 +78,11 @@ export interface NativeProfilerSessionApi {
   traceFile: string | null;
   exportedFiles: Record<string, string | null> | null;
   profilingActive: boolean;
+  /**
+   * Trace time 0 on the wall clock, the anchor of the combined report. xctrace:
+   * when xctrace printed "Starting recording" (else when the start returned), and
+   * after the stop the trace's `<start-date>` when the stop could read it.
+   */
   wallClockStartMs: number | null;
   parsedData: NativeProfilerParsedData | null;
   /**
@@ -120,8 +126,10 @@ export interface NativeProfilerSessionApi {
    */
   appEndedDuringCapture: boolean;
   /**
-   * Why the last stop exported no table (ExportDiagnostics.skipped), for analyze
-   * to say instead of a missing table. Stamped at stop; cleared by profiler-load.
+   * Why the last stop has no table to analyze, for analyze to say instead of a
+   * missing table: it exported none (ExportDiagnostics.skipped), or it had to
+   * kill xctrace before the recording was finished. Stamped at stop; cleared by
+   * profiler-load.
    */
   exportSkipReason: string | null;
   /**
@@ -130,6 +138,8 @@ export interface NativeProfilerSessionApi {
    * cleared by profiler-load.
    */
   recordedMs: number | null;
+  /** xctrace only: when native-profiler-start returned, for `recordedMs`. */
+  startReturnedMs: number | null;
   /**
    * xctrace only: the native-profiler-stop that is ending the recording and
    * exporting its trace, null otherwise. A second stop returns it; analyze waits
@@ -151,17 +161,25 @@ export interface NativeProfilerSessionApi {
    * Set by `dispose()` and never cleared: `Registry._teardown` nulls the
    * node's instance, so the next resolve builds a fresh api.
    *
-   * `native-profiler-start` checks it after its readiness handshake — a
-   * teardown inside that window would otherwise have it report
-   * `status: "recording"` for a session the registry no longer has, whose
-   * owner's `native-profiler-stop` then answers "call native-profiler-start
-   * first".
+   * `native-profiler-start` checks it right before it spawns xctrace, when its
+   * readiness wait fails, and before it commits the recording. A teardown in
+   * the start would otherwise have it report `status: "recording"` for a
+   * session the registry no longer has, whose owner's `native-profiler-stop`
+   * then answers "call native-profiler-start first".
    */
   disposed: boolean;
   recordingTimeout: NodeJS.Timeout | null;
+  /**
+   * xctrace only: the end of the xctrace that the 10-minute cap stopped, null
+   * otherwise. The cap ends it as a stop does, and the stop after the cap waits
+   * for it before it exports the trace. Until xctrace exits, `captureProcess`
+   * stays set, so a teardown can kill it.
+   */
+  cappedEnd: Promise<XctraceEnd> | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
-  lastExitInfo: { code: number | null; signal: string | null } | null;
+  /** `runErrors`, xctrace only: the run errors that it printed before it exited. */
+  lastExitInfo: { code: number | null; signal: string | null; runErrors?: string[] } | null;
   /** Android-only: path of the .pftrace on the device. */
   androidOnDeviceTracePath: string | null;
 }
@@ -174,10 +192,11 @@ const DISPOSE_REAP_MS = 1_000;
 const ANDROID_DISPOSE_ADB_TIMEOUT_MS = 5_000;
 
 /**
- * What survived an iOS teardown. `midCapture` is the arm that was still
- * recording; in the other the 10-minute cap's SIGINT (or xctrace exiting on its
- * own) already ran the finalize pass, so its bundle must not be called
- * half-written.
+ * What survived an iOS teardown. `midCapture` is the arm whose xctrace the
+ * teardown killed: still recording, or still saving after the 10-minute cap's
+ * SIGINT. In the other, xctrace had already exited, after the cap or on its own.
+ * It saved the bundle then, unless it hung after the cap's SIGINT and the cap
+ * ended it as a stop does, so its bundle is not called half-written.
  */
 function iosSalvage(midCapture: boolean, traceFile: string | null): string | undefined {
   if (!traceFile) return undefined;
@@ -185,9 +204,9 @@ function iosSalvage(midCapture: boolean, traceFile: string | null): string | und
     ? `xctrace was killed without its finalize pass, so the partial bundle at ${traceFile} is ` +
         `very likely unreadable — re-profile rather than trying to salvage it.`
     : `The recording had already ended before this teardown (the 10-minute cap, or xctrace ` +
-        `exiting on its own), so the bundle at ${traceFile} was finalized and may well be ` +
-        `readable — but this session was the only thing that could export it, so re-profile ` +
-        `unless you can open that bundle yourself.`;
+        `exiting on its own), so the bundle at ${traceFile} can be readable, unless xctrace ` +
+        `hung after the cap and argent had to end it. This session was the only thing that ` +
+        `could export it, so re-profile unless you can open that bundle yourself.`;
 }
 
 /** The Android twin of {@link iosSalvage}. */
@@ -285,11 +304,13 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       appEndedDuringCapture: false,
       exportSkipReason: null,
       recordedMs: null,
+      startReturnedMs: null,
       stopInProgress: null,
       suspensionWatch: null,
       appSuspensions: null,
       disposed: false,
       recordingTimeout: null,
+      cappedEnd: null,
       recordingTimedOut: false,
       recordingExitedUnexpectedly: false,
       lastExitInfo: null,
@@ -318,9 +339,8 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
         // too: those arms clear `profilingActive` while leaving the trace
         // recoverable via `native-profiler-stop`, so gating on
         // `profilingActive` alone sent that owner back to "you never started
-        // one". It is destroyed DIFFERENTLY too — SIGINT already went out (or
-        // the process exited itself) — so the salvage text below must not call
-        // the bundle half-written.
+        // one". Its xctrace has exited, or still saves the trace after the
+        // cap's SIGINT (`saving` below), and the salvage text tells the two apart.
         const endedCapture =
           (state.recordingTimedOut || state.recordingExitedUnexpectedly) &&
           state.traceFile !== null;
@@ -329,6 +349,9 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
 
         if (recordsWithXctrace(state.platform)) {
           const child = state.captureProcess;
+          // The 10-minute cap's SIGINT went out, but xctrace had not saved the trace yet.
+          const saving =
+            endedCapture && child !== null && child.exitCode === null && child.signalCode === null;
           try {
             // Regardless of `profilingActive`: `attemptStart` hands the child
             // over BEFORE awaiting xctrace's readiness handshake, so a
@@ -349,7 +372,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
               recordReapedSession(
                 "native-profiler",
                 state.deviceId,
-                iosSalvage(midCapture, abandonedTrace)
+                iosSalvage(midCapture || saving, abandonedTrace)
               );
             }
           }

@@ -87,12 +87,13 @@ describe("a native profiling session reaped by stop-all-simulator-servers", () =
   });
 
   it("iOS: still explains a capped capture, and does not call its bundle half-written", async () => {
-    // The 10-minute cap SIGINTs xctrace and clears `profilingActive` while
-    // leaving the trace recoverable — `native-profiler-stop` has a whole branch
-    // for exporting it. Gating the breadcrumb on `profilingActive` sent the
+    // The 10-minute cap ends xctrace as a stop does and clears `profilingActive`
+    // while leaving the trace recoverable: `native-profiler-stop` has a whole
+    // branch for exporting it. Gating the breadcrumb on `profilingActive` sent the
     // owner of such a capture back to "you never started one", and the
     // mid-capture salvage text would have been wrong there too: that arm's
-    // bundle went through a finalize pass.
+    // xctrace had exited and saved the bundle, unless the cap had to end a hung
+    // xctrace, which the salvage text says.
     const instance = await session(iosDevice);
     const api = instance.api as NativeProfilerSessionApi;
     api.profilingActive = false;

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { withoutSettleAfterStart } from "../helpers/without-settle-after-start";
 import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
 import {
@@ -324,6 +325,7 @@ describe("native-profiler-start fresh-start reset", () => {
     vi.doUnmock("../../src/utils/react-profiler/debug/dump");
     vi.doUnmock("../../src/utils/ios-profiler/notify");
     vi.doUnmock("../../src/utils/ios-profiler/startup");
+    vi.doUnmock("../../src/tools/profiler/native-profiler/platforms/xctrace");
   });
 
   it("resets stale recordingExitedUnexpectedly and lastExitInfo before establishing a new session", async () => {
@@ -354,6 +356,10 @@ describe("native-profiler-start fresh-start reset", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
     }));
+    vi.doMock(
+      "../../src/tools/profiler/native-profiler/platforms/xctrace",
+      withoutSettleAfterStart
+    );
     vi.doMock("../../src/utils/check-deps", () => ({
       ensureDeps: vi.fn(async () => {}),
       ensureDep: vi.fn(async () => {}),

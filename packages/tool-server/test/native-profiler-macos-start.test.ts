@@ -77,6 +77,7 @@ import {
 } from "../src/blueprints/native-profiler-session";
 import type { MacosAppApi, MacosLaunchResult } from "../src/blueprints/macos-app";
 import { startNativeProfilerMacos } from "../src/tools/profiler/native-profiler/platforms/macos";
+import { __resetXctraceRecordingsForTesting } from "../src/tools/profiler/native-profiler/platforms/xctrace";
 import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
@@ -240,6 +241,8 @@ afterEach(() => {
     api.profilingActive = false;
   }
   sessions = [];
+  // Each test's fake xctrace keeps running.
+  __resetXctraceRecordingsForTesting();
   vi.useRealTimers();
 });
 

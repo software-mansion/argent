@@ -92,22 +92,23 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    `ARGENT_IOS_CAPTURE=all-processes` on a healthy host is refused the same way, but
    the error names the forced override as the cause (its own failure code) rather
    than blaming a degraded Xcode that isn't present.
-4. **Start gating** — only resolves the tool call once `xctrace` prints `Starting recording` / `Ctrl-C to stop` on stdout. At that point Argent records `Date.now()` (`wallClockStartMs`) — the anchor used later for cross-tool time alignment.
-5. **Safety timeout** — auto-SIGINTs after 10 minutes if `stop` is never called.
+4. **Start gating** - waits until xctrace says that tracing started (its tracing-started notification, or `Ctrl-C to stop` on stdout), at most 10 s after `Starting recording`, and then 1.5 s, because the instruments record only some time after that. The start fails when xctrace quits in that time. The anchor for cross-tool time alignment (`wallClockStartMs`) is the wall clock when xctrace printed `Starting recording`: the trace starts 0.2-0.25 s after that, and the start returns about 2.4 s after it. The stop replaces the anchor with the trace's `<start-date>` from the table of contents.
+5. **Safety timeout** - after 10 minutes with no `stop`, ends xctrace as a stop does: SIGINT, the stall watch, then SIGTERM and SIGKILL. The next `stop` waits for that end, then exports the trace.
 
 ### `native-profiler-stop`
 
-1. `process.kill(xctracePid, "SIGINT")` and poll `process.kill(pid, 0)` until the child exits (xctrace needs a moment to finalise the trace bundle).
-2. Run **schema-aware export**:
+1. **End xctrace** - sends SIGINT and waits until xctrace exits, at most 5 minutes: xctrace saves the trace bundle in that time. Until xctrace prints `Stopping recording`, the stop sends SIGINT again every 5 s, because xctrace ignores a SIGINT that comes before it starts to trace. A stall watch reads xctrace's CPU time and the bytes in the bundle. When neither grows for a fifth of the recording time (30 s to 2 min), xctrace is taken as hung. Until `Stopping recording`, the CPU time counts only when it grows by 1% of a core. After a hang or the 5 minutes, the stop sends SIGTERM, and SIGKILL 5 s later.
+2. **Run errors** - reads the errors that xctrace printed under `Run issues were detected`. After `Failed to attach to target process` or `Failed to start the recording`, the trace holds no data: the stop exports nothing, `exportDiagnostics.skipped` and the error of each table give the reason, and `native-profiler-analyze` reports the analysis as failed.
+3. Otherwise, run **schema-aware export**:
    - First call `xctrace export --toc` to discover what schemas the trace actually contains.
    - Pick the first match from `["time-profile", "cpu-profile", "time-sample"]` for CPU.
    - Fall back to brute-forcing each candidate if TOC parsing fails.
    - For Leaks, a single `xctrace export --xpath` of the `Leaks` track detail — no extra flags.
-3. Three XMLs land next to the `.trace` bundle:
+4. Three XMLs land next to the `.trace` bundle:
    - `<base>_raw_cpu.xml` — `time-profile` table
    - `<base>_raw_hangs.xml` — `potential-hangs` table
    - `<base>_raw_leaks.xml` — `Leaks` track detail
-4. Returns `{ traceFile, exportedFiles, exportDiagnostics }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data.
+5. Returns `{ traceFile, exportedFiles, exportDiagnostics, warning? }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data. `warning` says when argent ended a hung xctrace (the data can be incomplete or missing), which run errors xctrace reported, and when the app ended during the recording.
 
 ### `native-profiler-analyze`
 
@@ -213,7 +214,7 @@ This is what makes before/after comparisons possible without keeping the origina
 When both `react-profiler-analyze` and `native-profiler-analyze` ran on the same session, this tool aligns them on a shared **wall-clock anchor**:
 
 - React Profiler stamps `Date.now()` at start and uses `performance.now()` ms internally.
-- iOS Instruments uses trace-relative ns starting at 0; the wall-clock anchor is `wallClockStartMs` recorded by `native-profiler-start`.
+- iOS Instruments uses trace-relative ns starting at 0; the wall-clock anchor is `wallClockStartMs`, the trace's `<start-date>` after the stop (see Start gating).
 - Helpers in `utils/profiler-shared/time-align.ts` convert in either direction.
 
 For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks for React commits whose `[timestamp, timestamp + totalRenderMs]` overlap (200 ms tolerance for jitter). The output report includes:
