@@ -1129,6 +1129,6 @@ function toolingNote(
   return (
     `Of the CPU samples, ${parts.join(", and ")}. They are left out of the CPU hotspots. A hang ` +
     `whose suspects are marked "argent's own library" or "Instruments' own library" was caused ` +
-    `by that tool, not the app.`
+    `by that tool, not the app, unless the report says that its main thread very possibly waited.`
   );
 }

@@ -120,7 +120,11 @@ describe("the CPU sampling note on the tools' time", () => {
       `${NOTE} Of the CPU samples, 120 ms (30%) were argent's own work inside the app, such as ` +
         `describe and taps, while the trace recorded. They are left out of the CPU hotspots.`
     );
-    expect(report).toContain(`marked "argent's own library" or "Instruments' own library"`);
+    expect(report).toContain(
+      `A hang whose suspects are marked "argent's own library" or "Instruments' own library" ` +
+        `was caused by that tool, not the app, unless the report says that its main thread ` +
+        `very possibly waited.`
+    );
     expect(report).not.toContain("Instruments loads into the app");
   });
 
