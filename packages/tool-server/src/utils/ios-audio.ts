@@ -389,16 +389,30 @@ export async function setAudioInput(
   return { source: source.kind, durationMs };
 }
 
-/** Gives the microphone back to every app. */
-export function clearAudioInput(session: AudioSession): void {
+/**
+ * Gives the microphone back to every app, whichever tool-server set the input: the explicit `source=microphone`.
+ * With `ownedOnly` (the implicit release on dispose) an `input` that another tool-server wrote since stays, as that
+ * one still feeds its ring. One without a `host=` line is not ours either: `clearAudioLeftovers` judges it.
+ */
+export function clearAudioInput(session: AudioSession, ownedOnly = false): void {
   const { dir } = session;
   session.feeder?.stop();
   session.feeder = null;
   if (!fs.existsSync(dir)) return;
+  const inputFile = path.join(dir, "input");
   // Apps keep their mapping of an unlinked ring until they see the input file gone.
-  fs.rmSync(path.join(dir, "input"), { force: true });
+  // Read, then remove: a tool-server that replaces the file in between loses it, and writes it again on its next call.
+  if (!ownedOnly || ownsInput(inputFile)) fs.rmSync(inputFile, { force: true });
   removeFiles(dir, `clip-${process.pid}-`);
   removeFiles(dir, `in-${process.pid}-`);
+}
+
+function ownsInput(inputFile: string): boolean {
+  try {
+    return fs.readFileSync(inputFile, "utf8").split("\n").includes(OWNER_LINE.trim());
+  } catch {
+    return false;
+  }
 }
 
 /** Fails fast when the app runs a hook that speaks another version of the control protocol. */
@@ -419,7 +433,8 @@ export function assertHookProto(status: AppAudioStatus | null, bundleId: string)
 /**
  * Gives the simulator its microphone back. Run when the session is disposed (tool-server exit,
  * stop-all-simulator-servers): a ring nobody feeds would leave the apps silent until the next tool call.
+ * An input that another tool-server set meanwhile stays.
  */
 export function releaseAudio(session: AudioSession): void {
-  if (session.feeder) clearAudioInput(session);
+  if (session.feeder) clearAudioInput(session, true);
 }

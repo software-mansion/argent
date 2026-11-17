@@ -17,7 +17,7 @@ The agent gives the app an audio file or a generated tone in place of the microp
 - A file plays from the moment the agent sets it. The agent sets how many times the file plays. By default, the file plays one time. After the last play, the app hears silence. Each time the app opens a new audio input, the file starts again from the first play. An app that keeps its audio session open between recordings does not open a new input, so the agent sets the file again right before the app records.
 - A tone has a frequency and a level.
 - The agent can change the input while the app records. A new source starts from its beginning.
-- The agent releases the input to give the real microphone back.
+- The agent releases the input to give the real microphone back. The release also removes an input that a different tool server set.
 
 ## How it starts
 
@@ -36,7 +36,7 @@ To load the hook only into simulators where the agent used an audio tool, run `a
 
 - Argent supports iOS simulators on the same Mac as the tool server. Argent does not support tvOS simulators, physical iPhones, or remote simulators.
 - Argent does not cover web content in `WKWebView` such as `getUserMedia`, and does not cover `AVCaptureSession` audio.
-- The tool server feeds the microphone input. When the tool server stops, or when `stop-all-simulator-servers` releases the simulator, Argent gives the real microphone back. If the tool server stops without a clean exit, the app hears silence until a new tool server connects to the simulator. The new tool server then gives the microphone back. It does not change the input of a different tool server that runs.
+- The tool server feeds the microphone input. When the tool server stops, or when `stop-all-simulator-servers` releases the simulator, Argent gives the real microphone back. Argent keeps an input that a different tool server set after this one. If the tool server stops without a clean exit, the app hears silence until a new tool server connects to the simulator. The new tool server then gives the microphone back. It does not change the input of a different tool server that runs.
 - An app that a tool starts with its own injected libraries does not get the hook. Xcode runs with the Main Thread Checker, Detox, and XCUITest do this. Start the app with Argent instead.
 - The audio hook uses private parts of the simulator audio stack that Apple can change. Argent tests it on iOS 26.5, 27.0, and 27.1.
 - Your Mac keeps the real microphone open during a test, so the microphone indicator can show.

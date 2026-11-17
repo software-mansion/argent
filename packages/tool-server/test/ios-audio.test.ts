@@ -471,6 +471,45 @@ describe("setAudioInput", () => {
     expect(fs.readdirSync(dir).filter((n) => n.endsWith(".ring"))).toEqual([]);
   });
 
+  it("releaseAudio keeps the input another tool-server set, and that one's ring and clip", async () => {
+    await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
+    const own = inputRing();
+    const ownClip = path.join(dir, `clip-${process.pid}-1.wav`);
+    const other = process.ppid; // alive, and not this process
+    const otherRing = path.join(dir, `in-${other}-b.ring`);
+    const otherClip = path.join(dir, `clip-${other}-1.wav`);
+    for (const file of [ownClip, otherRing, otherClip]) fs.writeFileSync(file, "");
+    const control = `source=stream\nring=${otherRing}\nhost=${other}\n`;
+    fs.writeFileSync(path.join(dir, "input"), control);
+    releaseAudio(session);
+    expect(fs.readFileSync(path.join(dir, "input"), "utf8")).toBe(control);
+    expect(fs.readdirSync(dir).sort()).toEqual(
+      ["input", path.basename(otherRing), path.basename(otherClip)].sort()
+    );
+    expect(fs.existsSync(own)).toBe(false);
+  });
+
+  it("releaseAudio keeps an input without an owner", async () => {
+    await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
+    const control = `source=stream\nring=${path.join(dir, "in.ring")}\n`;
+    fs.writeFileSync(path.join(dir, "input"), control);
+    releaseAudio(session);
+    expect(fs.readFileSync(path.join(dir, "input"), "utf8")).toBe(control);
+  });
+
+  it("clearAudioInput removes the input another tool-server set", async () => {
+    await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
+    const otherRing = path.join(dir, `in-${process.ppid}-b.ring`);
+    fs.writeFileSync(otherRing, "");
+    fs.writeFileSync(
+      path.join(dir, "input"),
+      `source=stream\nring=${otherRing}\nhost=${process.ppid}\n`
+    );
+    clearAudioInput(session);
+    expect(fs.existsSync(path.join(dir, "input"))).toBe(false);
+    expect(fs.existsSync(otherRing)).toBe(true);
+  });
+
   it("starts a fresh ring after the microphone was given back", async () => {
     await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
     const first = inputRing();
