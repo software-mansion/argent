@@ -59,7 +59,7 @@ const capability: ToolCapability = {
   // Same for HarmonyOS.
   harmony: { device: true },
   // A Mac app takes the mouse and keyboard steps; touch-only steps fail at their own gate.
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 const zodSchema = z.object({

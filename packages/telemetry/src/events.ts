@@ -35,6 +35,7 @@ export const DEVICE_KINDS = [
   "vvd",
   "device",
   "app",
+  "catalyst",
 ] as const satisfies readonly DeviceKind[];
 export type TelemetryDeviceKind = (typeof DEVICE_KINDS)[number];
 

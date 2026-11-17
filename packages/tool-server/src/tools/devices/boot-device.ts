@@ -2207,7 +2207,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { emulator: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 // The exactly-one check over `udid`/`avdName`/`vvdImage`/`harmonyInstance`/`electronAppPath`/

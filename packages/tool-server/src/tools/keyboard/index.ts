@@ -24,7 +24,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 // `text` and `key` are at-most-one, and the advertised JSON Schema cannot say

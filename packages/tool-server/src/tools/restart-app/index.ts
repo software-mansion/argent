@@ -29,7 +29,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 const zodSchema = z.object({
