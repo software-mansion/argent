@@ -649,11 +649,23 @@ function chromiumKind(appPath: string): MacosAppInfo["chromium"] {
 }
 
 const FAT_MAGIC = 0xcafebabe;
+/** A universal binary whose slice offsets and sizes are 64-bit. */
+const FAT_MAGIC_64 = 0xcafebabf;
 const MH_MAGIC_64 = 0xfeedfacf;
 const LC_BUILD_VERSION = 0x32;
 const PLATFORM_MACCATALYST = 6;
+/** More slices than a real universal binary has: the rest of a damaged table is not read. */
+const MAX_FAT_SLICES = 16;
+/** More than the load commands of a real executable take: a damaged size is not allocated. */
+const MAX_LOAD_COMMANDS_BYTES = 1024 * 1024;
 
-/** Whether the platform in the executable's LC_BUILD_VERSION (of its first slice) is Mac Catalyst. */
+/**
+ * Whether the executable is built for Mac Catalyst: the platform in the
+ * LC_BUILD_VERSION of a slice. A universal binary (32- or 64-bit fat header)
+ * counts when any of its slices does, so the answer is the same on Apple
+ * silicon, on Intel and under Rosetta; a universal Catalyst app is Catalyst in
+ * every slice. Anything unreadable counts as no.
+ */
 function isCatalystExecutable(executable: string): boolean {
   let fd: number | undefined;
   try {
@@ -662,21 +674,18 @@ function isCatalystExecutable(executable: string): boolean {
       const buffer = Buffer.alloc(length);
       return buffer.subarray(0, fs.readSync(fd!, buffer, 0, length, position));
     };
-    let slice = 0;
-    let header = read(32, 0);
-    if (header.length === 32 && header.readUInt32BE(0) === FAT_MAGIC) {
-      slice = header.readUInt32BE(16);
-      header = read(32, slice);
-    }
-    if (header.length < 32 || header.readUInt32LE(0) !== MH_MAGIC_64) return false;
-    const commands = read(header.readUInt32LE(20), slice + 32);
-    for (let at = 0; at + 12 <= commands.length;) {
-      if (commands.readUInt32LE(at) === LC_BUILD_VERSION) {
-        return commands.readUInt32LE(at + 8) === PLATFORM_MACCATALYST;
-      }
-      const size = commands.readUInt32LE(at + 4);
-      if (size < 8) break;
-      at += size;
+    const header = read(8, 0);
+    if (header.length < 8) return false;
+    const magic = header.readUInt32BE(0);
+    if (magic !== FAT_MAGIC && magic !== FAT_MAGIC_64) return isCatalystSlice(read, 0);
+    // fat_arch: cputype, cpusubtype, offset, size, align (4 bytes each); fat_arch_64:
+    // the same with an 8-byte offset and size, and 4 reserved bytes. Big-endian.
+    const wide = magic === FAT_MAGIC_64;
+    const entry = wide ? 32 : 20;
+    const table = read(Math.min(header.readUInt32BE(4), MAX_FAT_SLICES) * entry, 8);
+    for (let at = 0; at + entry <= table.length; at += entry) {
+      const offset = wide ? Number(table.readBigUInt64BE(at + 8)) : table.readUInt32BE(at + 8);
+      if (isCatalystSlice(read, offset)) return true;
     }
     return false;
   } catch {
@@ -684,6 +693,25 @@ function isCatalystExecutable(executable: string): boolean {
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
+}
+
+/** Whether the 64-bit Mach-O at `offset` names Mac Catalyst in its first LC_BUILD_VERSION. */
+function isCatalystSlice(
+  read: (length: number, position: number) => Buffer,
+  offset: number
+): boolean {
+  const header = read(32, offset);
+  if (header.length < 32 || header.readUInt32LE(0) !== MH_MAGIC_64) return false;
+  const commands = read(Math.min(header.readUInt32LE(20), MAX_LOAD_COMMANDS_BYTES), offset + 32);
+  for (let at = 0; at + 12 <= commands.length;) {
+    if (commands.readUInt32LE(at) === LC_BUILD_VERSION) {
+      return commands.readUInt32LE(at + 8) === PLATFORM_MACCATALYST;
+    }
+    const size = commands.readUInt32LE(at + 4);
+    if (size < 8) break;
+    at += size;
+  }
+  return false;
 }
 
 async function plistValue(plist: string, key: string): Promise<string | null> {

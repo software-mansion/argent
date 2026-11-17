@@ -149,8 +149,10 @@ function writeBundle(dir: string, bundleId: string, extraPlist = ""): string {
 }
 
 const PLATFORM_MACOS = 1;
+const PLATFORM_IOS = 2;
 const PLATFORM_MACCATALYST = 6;
 const CPU_ARM64 = 0x0100000c;
+const CPU_X86_64 = 0x01000007;
 
 /**
  * A 64-bit Mach-O header with the load commands `before` (each as its first
@@ -165,6 +167,30 @@ function machO(platform: number, cputype = CPU_ARM64, before: number[][] = []): 
   commands.forEach((words, c) =>
     words.forEach((v, i) => file.writeUInt32LE(v, 32 + c * 24 + i * 4))
   );
+  return file;
+}
+
+/** A universal binary of `slices` at 4 KiB boundaries, with 64-bit offsets and sizes when `wide`. */
+function fat(slices: Buffer[], wide = false): Buffer {
+  const entry = wide ? 32 : 20;
+  const file = Buffer.alloc(4096 * (slices.length + 1));
+  file.writeUInt32BE(wide ? 0xcafebabf : 0xcafebabe, 0);
+  file.writeUInt32BE(slices.length, 4);
+  slices.forEach((slice, i) => {
+    const at = 8 + i * entry;
+    const offset = 4096 * (i + 1);
+    file.writeUInt32BE(slice.readUInt32LE(4), at);
+    if (wide) {
+      file.writeBigUInt64BE(BigInt(offset), at + 8);
+      file.writeBigUInt64BE(BigInt(slice.length), at + 16);
+      file.writeUInt32BE(12, at + 24);
+    } else {
+      file.writeUInt32BE(offset, at + 8);
+      file.writeUInt32BE(slice.length, at + 12);
+      file.writeUInt32BE(12, at + 16);
+    }
+    slice.copy(file, offset);
+  });
   return file;
 }
 
@@ -1327,6 +1353,41 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     if (framework)
       fs.mkdirSync(path.join(app, "Contents", "Frameworks", framework), { recursive: true });
     expect((await inspectMacosApp(app)).chromium).toBe(kind);
+  });
+
+  const catalystOnly = machO(PLATFORM_MACCATALYST);
+  const macosOnly = machO(PLATFORM_MACOS);
+  it.each([
+    ["a thin Mac Catalyst binary", true, catalystOnly],
+    [
+      "a universal Mac Catalyst binary",
+      true,
+      fat([catalystOnly, machO(PLATFORM_MACCATALYST, CPU_X86_64)]),
+    ],
+    ["a universal binary with 64-bit offsets", true, fat([catalystOnly], true)],
+    ["a universal binary whose second slice is Mac Catalyst", true, fat([macosOnly, catalystOnly])],
+    ["the same with 64-bit offsets", true, fat([macosOnly, catalystOnly], true)],
+    ["a thin macOS binary", false, macosOnly],
+    ["a universal macOS binary", false, fat([macosOnly, machO(PLATFORM_MACOS, CPU_X86_64)], true)],
+    ["an iOS binary", false, machO(PLATFORM_IOS)],
+    // Platform 6 in the same place of a load command that is not LC_BUILD_VERSION.
+    [
+      "a macOS binary with a 6 in another load command",
+      false,
+      machO(PLATFORM_MACOS, CPU_ARM64, [[0x19, 24, 6]]),
+    ],
+    ["a slice offset past the end of the file", false, fat([catalystOnly]).subarray(0, 64)],
+    // A Java class file starts with the same magic as a universal binary.
+    ["a Java class file", false, Buffer.from("cafebabe00000034000a0a", "hex")],
+    ["a shell script", false, Buffer.from("#!/bin/sh\nexit 0\n")],
+    ["an empty file", false, Buffer.alloc(0)],
+  ])("reads %s as Mac Catalyst: %s", async (_label, catalyst, executable) => {
+    const app = writeBundle(
+      path.join(root, `macho-${Math.random().toString(36).slice(2, 8)}`),
+      BUNDLE_ID
+    );
+    fs.writeFileSync(path.join(app, "Contents", "MacOS", "FakeApp"), executable);
+    expect((await inspectMacosApp(app)).catalyst).toBe(catalyst);
   });
 });
 
