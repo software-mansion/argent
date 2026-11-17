@@ -201,6 +201,9 @@ export function audioDir(udid: string): string {
 
 const AUDIO_ALWAYS_INSERTED_FLAG = "ios-audio-always-inserted";
 
+/** Basename of the audio hook, to recognise a copy an older install inserted from another path. */
+const AUDIO_DYLIB_BASENAME = "libArgentAudio.dylib";
+
 /**
  * Whether arming a simulator also inserts the audio hook, so audio tools work on any app launched after arming
  * without a restart. The hook stays dormant (no thread, no CoreAudio load) until the app opens audio. Read per arming
@@ -240,7 +243,9 @@ export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: st
 
 /**
  * What `DYLD_INSERT_LIBRARIES` should become once we hand the simulator back;
- * the same preserved entries, with nothing of ours appended. `null` means the
+ * the same preserved entries, with nothing of ours appended. The audio hook goes
+ * too, by basename: arming keeps an existing one in place (the first audio tool
+ * call may have inserted it), but it is ours all the same. `null` means the
  * variable held only our own entries and should be unset outright rather than
  * left as an empty string, which dyld treats as a malformed list.
  */
@@ -248,7 +253,9 @@ export function withdrawDyldInsertLibraries(
   currentValue: string,
   bootstrapPath: string
 ): string | null {
-  const preserved = preservedDyldInsertLibraries(currentValue, bootstrapPath);
+  const preserved = preservedDyldInsertLibraries(currentValue, bootstrapPath).filter(
+    (entry) => path.basename(entry) !== AUDIO_DYLIB_BASENAME
+  );
   return preserved.length === 0 ? null : preserved.join(":");
 }
 
@@ -393,9 +400,10 @@ async function bootstrapPathFor(udid: string, endpoint: IosEndpoint): Promise<st
 }
 
 /**
- * Undo {@linkcode setupNativeDevtoolsEnvLocal}: take our bootstrap back out of
- * `DYLD_INSERT_LIBRARIES` and drop the endpoint variable, leaving anything a
- * third party put there untouched.
+ * Undo {@linkcode setupNativeDevtoolsEnvLocal}: take our bootstrap and the
+ * audio hook back out of `DYLD_INSERT_LIBRARIES` and drop the endpoint variable
+ * and the audio control directory, leaving anything a third party put there
+ * untouched.
  *
  * Only ever removes what still names us. A provider that armed its own
  * injection over ours already owns both variables and clearing its endpoint
@@ -443,6 +451,10 @@ async function withdrawNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoin
 
   if (ours && (await getenv(name)) === ours) {
     await setenv(["unsetenv", name]);
+  }
+
+  if ((await getenv("ARGENT_AUDIO_DIR")) === audioDir(nativeId)) {
+    await setenv(["unsetenv", "ARGENT_AUDIO_DIR"]);
   }
 }
 

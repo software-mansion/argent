@@ -27,6 +27,8 @@ An app that started before Argent connected to the simulator does not have the h
 
 To load the hook only into simulators where the agent used an audio tool, run `argent disable ios-audio-always-inserted`. Then the first audio request loads the hook, and only apps that start after that request have it. See [feature flags](/docs/reference/configuration).
 
+A simulator that already has the hook keeps it until the simulator shuts down. After you disable the flag, shut down the simulator and boot it again.
+
 ## Example instructions
 
 - "Play `hello.mp3` as the microphone and check that the app shows the transcript."
@@ -38,7 +40,7 @@ To load the hook only into simulators where the agent used an audio tool, run `a
 - Argent does not cover web content in `WKWebView` such as `getUserMedia`, and does not cover `AVCaptureSession` audio.
 - The tool server feeds the microphone input. When the tool server stops, or when `stop-all-simulator-servers` releases the simulator, Argent gives the real microphone back. Argent keeps an input that a different tool server set after this one. If the tool server stops without a clean exit, the app hears silence until a new tool server connects to the simulator. The new tool server then gives the microphone back. It does not change the input of a different tool server that runs.
 - An app that a tool starts with its own injected libraries does not get the hook. Xcode runs with the Main Thread Checker, Detox, and XCUITest do this. Start the app with Argent instead.
-- The audio hook uses private parts of the simulator audio stack that Apple can change. Argent tests it on iOS 26.5, 27.0, and 27.1.
+- The audio hook uses private parts of the simulator audio stack that Apple can change. Argent tests it on iOS 17.4, 18.5, 26.5, and 27.2.
 - Your Mac keeps the real microphone open during a test, so the microphone indicator can show.
 
 Argent does this with the `audio-input` tool. The [tools reference](/docs/reference/tools) contains all tools.

@@ -6,7 +6,9 @@ import * as path from "node:path";
 // Arming (native-devtools' env setup) inserts the audio hook next to the bootstrap only while the
 // `ios-audio-always-inserted` flag is on; off, the first audio tool call inserts it instead.
 const setenvCalls: string[][] = [];
+const unsetenvCalls: string[] = [];
 let currentInserted = "";
+let currentAudioDir = "";
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -21,11 +23,20 @@ vi.mock("node:child_process", async () => {
       const callback = typeof opts === "function" ? opts : cb!;
       const i = args.indexOf("launchctl");
       if (i >= 0 && args[i + 1] === "setenv") setenvCalls.push(args.slice(i + 2));
+      if (i >= 0 && args[i + 1] === "unsetenv") unsetenvCalls.push(args[i + 2]);
       const isGetenv =
         i >= 0 && args[i + 1] === "getenv" && args[i + 2] === "DYLD_INSERT_LIBRARIES";
+      const isGetAudioDir =
+        i >= 0 && args[i + 1] === "getenv" && args[i + 2] === "ARGENT_AUDIO_DIR";
       const isListJson = args.includes("list") && args.includes("--json");
       callback(null, {
-        stdout: isGetenv ? currentInserted : isListJson ? '{"devices":{}}' : "",
+        stdout: isGetenv
+          ? currentInserted
+          : isGetAudioDir
+            ? currentAudioDir
+            : isListJson
+              ? '{"devices":{}}'
+              : "",
         stderr: "",
       });
     },
@@ -73,7 +84,9 @@ function inserted(): string | undefined {
 describe("arming inserts the audio hook per the ios-audio-always-inserted flag", () => {
   beforeEach(() => {
     setenvCalls.length = 0;
+    unsetenvCalls.length = 0;
     currentInserted = "";
+    currentAudioDir = "";
     fs.rmSync(audioDir(UDID), { recursive: true, force: true });
   });
 
@@ -141,5 +154,33 @@ describe("arming inserts the audio hook per the ios-audio-always-inserted flag",
       expect(fs.readdirSync(dir)).toEqual([`clip-${process.pid}-1.wav`]);
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  describe("handing the simulator back", () => {
+    const endpoint = { transport: "unix", socketPath: "/tmp/x.sock" } as const;
+
+    it("removes the audio hook and its control directory variable with the bootstrap", async () => {
+      currentInserted = "/fake/libArgentInjectionBootstrap.dylib:/fake/libArgentAudio.dylib";
+      currentAudioDir = audioDir(UDID);
+      await localIosHost.withdrawNativeDevtoolsEnv(UDID, endpoint);
+      expect(unsetenvCalls).toEqual(["DYLD_INSERT_LIBRARIES", "ARGENT_AUDIO_DIR"]);
+      expect(setenvCalls).toEqual([]);
+    });
+
+    it("keeps a foreign entry and a control directory variable that is not ours", async () => {
+      // On disk, so it counts as a third party's live dylib rather than a stale path.
+      const foreign = fs.realpathSync(process.execPath);
+      currentInserted = `${foreign}:/fake/libArgentInjectionBootstrap.dylib:/fake/libArgentAudio.dylib`;
+      currentAudioDir = "/tmp/someone-elses-audio";
+      await localIosHost.withdrawNativeDevtoolsEnv(UDID, endpoint);
+      expect(inserted()).toBe(foreign);
+      expect(unsetenvCalls).toEqual([]);
+    });
+
+    it("leaves a simulator that never had the audio hook as before", async () => {
+      currentInserted = "/fake/libArgentInjectionBootstrap.dylib";
+      await localIosHost.withdrawNativeDevtoolsEnv(UDID, endpoint);
+      expect(unsetenvCalls).toEqual(["DYLD_INSERT_LIBRARIES"]);
+    });
   });
 });
