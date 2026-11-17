@@ -47,10 +47,10 @@ export async function runIosProfilerPipeline(
   ]);
   for (const sample of cpuSamples) sample.stack = withAppCallsThroughArgent(sample.stack);
 
-  const correlated = correlateHangsWithCpu(rawHangs, cpuSamples);
-  const { hangSampleTimestamps } = correlated;
   const suspensions =
     options.appSuspensions != null ? suspendedTimeInHangs(rawHangs, options.appSuspensions) : null;
+  const correlated = correlateHangsWithCpu(rawHangs, cpuSamples, suspensions?.suspendedNs);
+  const { hangSampleTimestamps } = correlated;
   const uiHangs = suspensions
     ? correlated.uiHangs.map((hang, i) => withSuspendedTime(hang, suspensions.suspendedNs[i]!))
     : correlated.uiHangs;

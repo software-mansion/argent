@@ -108,7 +108,9 @@ describe("the native profiler tools' Mac app text", () => {
 
   it("native-profiler-start says what app_process, malloc_stack_logging and its warning do on a Mac app", () => {
     const on = advertised("native-profiler-start", true);
-    expect(on.properties.app_process!.description).toMatch(/Not used for a Mac app/);
+    expect(on.properties.app_process!.description).toMatch(
+      /Do not set it for a Mac app: the tool refuses it/
+    );
     expect(on.properties.malloc_stack_logging!.description).toMatch(
       /On a Mac app, argent restarts the app with MallocStackLogging=1 and then attaches/
     );

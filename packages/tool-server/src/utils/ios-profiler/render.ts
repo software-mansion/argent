@@ -25,6 +25,19 @@ function hangFunctionName(hang: UiHang, fn: string): string {
 }
 
 /**
+ * Said of a hang whose main thread ran for less than 10% of it (`hangThreadRanMs`) when
+ * a function of argent's or Instruments' library ran in it: the tool's work ran while
+ * the main thread waited, so the report must not name it as the cause. Empty otherwise.
+ */
+function waitedToolHangNote(hang: UiHang): string {
+  if (hang.hangThreadRanMs === undefined || !hang.toolingLabels) return "";
+  return (
+    `The main thread ran for only ${hang.hangThreadRanMs} ms of this hang, so it very ` +
+    `possibly waited, for example in a sleep, for a lock, for I/O or for another thread.`
+  );
+}
+
+/**
  * Follows a hang's recorded duration when macOS held the app suspended during the
  * hang: the suspended part, and the range of the app's own hang (app-suspensions.ts).
  * Empty otherwise.
@@ -431,6 +444,7 @@ function renderFullReport(
 
     const hangDetailSlice = isFinite(cap.hangLimit) ? uiHangs.slice(0, cap.hangLimit) : uiHangs;
     for (const hang of hangDetailSlice) {
+      const waitedNote = waitedToolHangNote(hang);
       const header =
         `**${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms${hangSuspendedNote(hang)})**` +
         (hang.jankReason ? ` — reason: \`${hang.jankReason}\`` : "") +
@@ -464,12 +478,14 @@ function renderFullReport(
             `${i + 1}. \`${entry.chain.map((fn) => hangFunctionName(hang, fn)).join(" > ")}\` (${entry.sampleCount} samples)`
           );
         });
+        if (waitedNote) lines.push(``, waitedNote);
       } else if (hang.suspectedFunctions.length > 0) {
         lines.push(``);
         lines.push(`${header} — during this hang, the most active functions were:`);
         for (const fn of hang.suspectedFunctions) {
           lines.push(`- \`${hangFunctionName(hang, fn)}\``);
         }
+        if (waitedNote) lines.push(``, waitedNote);
       } else {
         lines.push(``);
         lines.push(header);
@@ -555,8 +571,10 @@ function renderFullReport(
   if (uiHangs.length > 0) {
     lines.push(`### UI Hangs`, ``);
     for (const b of uiHangs) {
-      const funcNote =
-        b.suspectedFunctions.length > 0
+      const waitedNote = waitedToolHangNote(b);
+      const funcNote = waitedNote
+        ? ` ${waitedNote}`
+        : b.suspectedFunctions.length > 0
           ? ` Likely caused by: \`${hangFunctionName(b, b.suspectedFunctions[0]!)}\`.`
           : "";
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";

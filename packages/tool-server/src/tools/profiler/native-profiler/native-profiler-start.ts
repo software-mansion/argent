@@ -33,7 +33,7 @@ const zodSchema = z.object({
     .describe(
       "iOS: the CFBundleExecutable or display name of the app to profile. Android: the app's package name. " +
         "If omitted, auto-detects the foreground app; set it only if auto-detection picks the wrong app." +
-        "<flag:macos-apps> Not used for a Mac app: its device id names the app.</flag:macos-apps>"
+        "<flag:macos-apps> Do not set it for a Mac app: the tool refuses it, because the device id names the app.</flag:macos-apps>"
     ),
   template_path: z
     .string()

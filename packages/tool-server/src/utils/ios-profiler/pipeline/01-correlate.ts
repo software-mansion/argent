@@ -1,23 +1,29 @@
 import type { CpuSample, RawHang, RawLeak, UiHang, MemoryLeak } from "../types";
 import { TOOLING_LABEL, findDominantFunction, extractAppCallChain } from "./02-aggregate";
+import { normalizeThreadName } from "../../profiler-shared/thread";
 
 const TOP_N_FUNCTIONS = 5;
 const TOP_N_CHAINS = 3;
+/** A hang's thread that ran for less than this share of the hang mostly waited during it. */
+const MIN_HANG_THREAD_RUN_SHARE = 0.1;
 
 interface CorrelationResult {
   uiHangs: UiHang[];
   hangSampleTimestamps: Set<number>;
 }
 
+/** `suspendedNs`: of each hang, the time when the app was suspended, which is not the hang's run. */
 export function correlateHangsWithCpu(
   hangs: RawHang[],
-  cpuSamples: CpuSample[]
+  cpuSamples: CpuSample[],
+  suspendedNs: readonly number[] = []
 ): CorrelationResult {
   const sortedSamples = [...cpuSamples].sort((a, b) => a.timestampNs - b.timestampNs);
+  const sampleThreads = new Set(sortedSamples.map((s) => normalizeThreadName(s.threadFmt)));
 
   const hangSampleTimestamps = new Set<number>();
 
-  const uiHangs = hangs.map((hang) => {
+  const uiHangs = hangs.map((hang, hangIndex) => {
     const windowStart = hang.startNs;
     const windowEnd = hang.startNs + hang.durationNs;
 
@@ -55,6 +61,18 @@ export function correlateHangsWithCpu(
       }
     }
 
+    // A hang is a stall of one thread, the main thread in Instruments' hangs. When that
+    // thread ran for less than 10% of the hang, it mostly waited: in a sleep, for a lock,
+    // for I/O or for another thread. A thread with no sample in the whole trace can have
+    // another name in the samples, so how long it ran is not known.
+    const hangThread = normalizeThreadName(hang.threadFmt);
+    const ranNs = windowSamples.reduce(
+      (sum, s) => (normalizeThreadName(s.threadFmt) === hangThread ? sum + s.weightNs : sum),
+      0
+    );
+    const ownLengthNs = hang.durationNs - (suspendedNs[hangIndex] ?? 0);
+    const waited = sampleThreads.has(hangThread) && ranNs < ownLengthNs * MIN_HANG_THREAD_RUN_SHARE;
+
     const suspectedFunctions = [...funcCounts.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, TOP_N_FUNCTIONS)
@@ -85,6 +103,7 @@ export function correlateHangsWithCpu(
       suspectedFunctions,
       appCallChains,
       ...(Object.keys(toolingLabels).length > 0 ? { toolingLabels } : {}),
+      ...(waited ? { hangThreadRanMs: Math.round(ranNs / 1_000_000) } : {}),
       severity,
     };
   });

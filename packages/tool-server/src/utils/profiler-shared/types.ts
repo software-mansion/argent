@@ -64,6 +64,11 @@ export interface UiHang {
    * loads into the app, with the label the report adds to their names.
    */
   toolingLabels?: Record<string, string>;
+  /**
+   * xctrace only: set when the hang's thread ran for less than 10% of the hang (its
+   * suspended part left out), so it mostly waited. How long it ran during the hang, in ms.
+   */
+  hangThreadRanMs?: number;
   severity: "RED" | "YELLOW";
   /**
    * Mac apps only: ms of the hang's span during which macOS held the app
