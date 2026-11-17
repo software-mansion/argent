@@ -1,6 +1,6 @@
 ---
 name: argent-macos-app-interact
-description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) through argent. Use when a list-devices entry has platform "macos", or the user names a Mac app, a macOS app or a native desktop app. Never for an iOS simulator, an iPhone, or an Electron or Chromium app (platform "chromium").
+description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Mac Catalyst) through argent. Use when a list-devices entry has platform "macos", or the user names a Mac app, a macOS app or a native desktop app. Never for an iOS simulator, an iPhone, or an Electron or Chromium app (platform "chromium").
 ---
 
 `argent-device-interact` still applies for everything not listed here (`run-sequence`, `await-ui-element`, secrets).
@@ -31,14 +31,22 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) throug
 
 ## Tree
 
-- Identifiers: AppKit accessibility identifier, SwiftUI `.accessibilityIdentifier()`, web `data-testid` (else `id`), React Native `testID` (also on a plain `View` or `Text`).
+- Identifiers: AppKit accessibility identifier, UIKit `accessibilityIdentifier` (Mac Catalyst), SwiftUI `.accessibilityIdentifier()`, web `data-testid` (else `id`), React Native `testID` (also on a plain `View` or `Text` in react-native-macos).
 - Hint `The Mac is locked` or `fallback walk`: clicks and typing still work, elements can be missing (an open context menu among them), and a `hidden` check cannot pass. Ask the user to unlock when a target is missing.
 - An action that fails or has no effect: a minimized window takes no input. Restore it by choosing it in the Window menu with `menu-bar`; without such an item, ask the user.
+
+## Mac Catalyst (kind `catalyst`)
+
+- `native-find-views`, `native-full-hierarchy` and `native-view-at-point` fail: use `describe`, which lists the UIKit views with their identifiers and frames.
+- More than one window: tap the target text field before `keyboard`, or the text goes to the focused field of another window. `describe` and `screenshot` show the front window; switch windows with `menu-bar` (Window menu).
+- Alerts: tap the button. `enter` does nothing when no button is the default; `escape` does nothing on a UIKit alert with a text field.
+- SwiftUI: tap each field instead of moving with `tab`; the Tab order can differ from the order a user sees.
+- `boot-device` refuses a "Designed for iPad" app (an unchanged iOS app): report it to the user, do not retry.
 
 ## E2E tests
 
 Read `references/e2e.md` before recording or writing a test for a Mac app.
 
-## react-native-macos
+## React Native
 
-A Debug build loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). `debugger-*` and the React profiler do not take a Mac app id: read the screen with `describe`.
+A Debug build (react-native-macos, or React Native built for Mac Catalyst) loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). `debugger-*` and the React profiler do not take a Mac app id: read the screen with `describe`.

@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: monitor
 ---
 
-Argent lets your agent test native Mac apps built with AppKit, SwiftUI, or react-native-macos. The agent reads the interface, clicks, types, and takes screenshots while you continue to use your Mac.
+Argent lets your agent test native Mac apps built with AppKit, SwiftUI, react-native-macos, or Mac Catalyst. The agent reads the interface, clicks, types, and takes screenshots while you continue to use your Mac.
 
 **The app runs in the background, and your pointer stays under your control.** Argent requires no Accessibility or Screen Recording permission.
 
@@ -22,7 +22,7 @@ You need macOS 14.4 or later and a built `.app` bundle. Use a Debug build of you
 
 Argent must launch the app itself. It cannot control a copy started with Xcode Run or `react-native run-macos`. Save your work and quit that copy first.
 
-For react-native-macos Debug builds, start Metro before the agent launches the app. After code changes, rebuild the app and ask the agent to restart it.
+For React Native Debug builds, start Metro before the agent launches the app. This applies to react-native-macos and to React Native apps built for Mac Catalyst. After code changes, rebuild the app and ask the agent to restart it.
 
 Mac app support is on by default. If you previously disabled it, enable it in the [feature flag settings](/docs/reference/configuration#feature-flags).
 
@@ -69,6 +69,25 @@ Start your intended build through Argent before the first test. Tests restart th
 
 Stable identifiers help tests find controls after layout changes. See the [identifier examples](/docs/reference/tools#describe-on-a-mac-app) and [macOS test reference](/docs/reference/e2e-yaml#launch-a-mac-app).
 
+## Test Mac Catalyst apps
+
+The agent also tests iPad apps that you build for the Mac with Mac Catalyst:
+
+- UIKit and SwiftUI apps, with the Scale Interface to Match iPad or the Optimize Interface for Mac setting.
+- React Native apps for iOS that you build for Mac Catalyst.
+
+Build the Mac Catalyst target of your app, then give the agent the path to the `.app` bundle. The agent does the same tasks as in other Mac apps. The agent also works with alerts, sheets, multiple windows, file dialogs, the URL scheme of the app, and the content of web views.
+
+A Mac Catalyst app differs from other Mac apps in these ways:
+
+- The agent reads the UIKit views from the accessibility tree only. The tools that read the AppKit view tree do not show these views.
+- The agent reads the interface of the front window. The agent switches windows with the Window menu.
+- When the app has more than one window, the agent clicks a text field before it types.
+
+Give controls a stable accessibility identifier, or a `testID` in React Native, so that the agent and your tests find them.
+
+An iPad or iPhone app that runs on the Mac without changes ("Designed for iPad") is not a Mac Catalyst app. macOS does not let Argent load its library into such an app. Build the Mac Catalyst target of the app, or test the app on an iOS simulator.
+
 <a id="several-builds-at-the-same-time" />
 
 ## Test several builds at once
@@ -82,6 +101,8 @@ To test separate git worktrees in parallel, give each build a unique bundle iden
 ## Resolve signing restrictions
 
 Some builds use the hardened runtime, which can prevent Argent from loading its library. If launch fails, follow the [Debug build signing instructions](/docs/reference/tools#configure-code-signing).
+
+A Mac Catalyst Debug build that you sign to run locally has no hardened runtime. Argent controls it without changes. A Mac Catalyst Debug build that you sign with your development team uses the hardened runtime by default. The first launch then fails with a `codesign` command for the Argent library. Run that command with your team's identity, then ask the agent to start the app again.
 
 Most distributed or notarized apps do not allow Argent to control them. Use your development build. Keep signing changes limited to builds used for testing.
 
@@ -99,10 +120,11 @@ Most distributed or notarized apps do not allow Argent to control them. Use your
 
 ## Limits
 
-- **App types:** Apple apps and Mac Catalyst apps are unsupported. Test Catalyst apps on an iOS simulator. Use [Chromium support](/docs/fundamentals/supported-platforms#desktop-and-web-targets) for Electron apps and browsers.
+- **App types:** Apple apps and iPad or iPhone apps that run unchanged on the Mac ("Designed for iPad") are unsupported. Build the Mac Catalyst target of such an app. Use [Chromium support](/docs/fundamentals/supported-platforms#desktop-and-web-targets) for Electron apps and browsers.
 - **Windows:** the app needs a standard window. Apps with only a menu bar icon, panels, or borderless windows are unsupported.
 - **System dialogs:** the agent cannot control macOS permission prompts or content shown by another process, such as share sheets.
-- **Input:** hover, pinch, and rotate gestures are unavailable. Drag and drop works only within the app.
-- **Developer tools:** screen recording, profiling, and JavaScript debugger tools are unavailable for native Mac apps.
+- **Input:** hover, pinch, and rotate gestures are unavailable. Drag and drop works only within the app. In a Mac Catalyst app, UIKit drag and drop from one view to another fails. Pan and drag gestures in the app work.
+- **Mac Catalyst keyboard behavior:** some UIKit alerts ignore Return and Escape, and typed text can replace an input method composition. See the [Mac Catalyst details](/docs/reference/tools#mac-catalyst-apps).
+- **Developer tools:** screen recording, profiling, and JavaScript debugger tools are unavailable for native Mac apps. This includes React Native apps built for Mac Catalyst.
 
 See the [Mac app tools reference](/docs/reference/tools#mac-apps) for tool parameters and additional limitations.
