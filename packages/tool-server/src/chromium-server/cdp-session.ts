@@ -122,7 +122,7 @@ function isUndiciBadPort(err: unknown): boolean {
  * the same signal as an AbortError whose cause is that TimeoutError. A plain
  * AbortError is the caller cancelling and must keep propagating.
  */
-function isCallerAbort(err: unknown): boolean {
+function isCallerAbort(err: unknown): err is Error {
   return err instanceof Error && err.name === "AbortError" && !isReachabilityTimeout(err);
 }
 
