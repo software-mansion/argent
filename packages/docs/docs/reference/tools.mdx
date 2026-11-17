@@ -539,7 +539,7 @@ xcodebuild -scheme Notes -configuration Debug \
 
 The app has the same `macos-app-<bundle id>` ID and `platform: "macos"` as other Mac apps, with `kind: "catalyst"`. AppKit apps, SwiftUI apps for macOS, and react-native-macos apps have `kind: "app"`. The kind comes from the build that Argent last started for the bundle identifier. The kind stays the same after a tool-server restart.
 
-`native-full-hierarchy`, `native-find-views` and `native-view-at-point` fail on a Mac Catalyst app with `error_kind: "unsupported"`. The error gives this reason: `a Mac Catalyst app's UIKit views are not in its AppKit view tree: use describe, which lists them with their identifiers and frames`. `native-describe-screen` works.
+`native-full-hierarchy`, `native-find-views` and `native-view-at-point` fail on a Mac Catalyst app. The agent gets an error that names the tool. For `native-find-views`, the error is `Tool 'native-find-views' is not supported on macos catalyst (a Mac Catalyst app's UIKit views are not in its AppKit view tree: use describe, which lists them with their identifiers and frames).` The tool-server sends this error with HTTP status `400` and only an `error` field. `native-describe-screen` works.
 
 Most other tools work as in other Mac apps. These tools work differently:
 
