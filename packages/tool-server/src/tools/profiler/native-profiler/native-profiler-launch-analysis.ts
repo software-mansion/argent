@@ -79,10 +79,13 @@ export function createNativeProfilerLaunchAnalysisTool(
       failedMsg: ({ params, failureSignal }) =>
         `${launchAnalysisMode[params.mode].failed}: ${failureSignal.error_code}`,
     },
-    description: `Profile or measure iOS app startup. Use measure for launch timings and profile to investigate slow launches.
-Build and install a Release build before calling; this tool does not build or install the app. Rebuild and reinstall after code changes. Pass the installed app's bundle_id and the USB-connected iPhone's device_id. Use allow_simulator only when timings from the host machine are acceptable. Both modes open the app before collecting data, then measure subsequent process launches.
-- measure: collect five XCTest launch measurements to establish a baseline or verify a fix. The metric includes the first frame and any extended launch tasks. Returns average, median and individual times in milliseconds, sample counts, result paths and warnings.
-- profile: record one Instruments App Launch trace to investigate phases and CPU work before the first frame. Returns launch timing, phases, trace paths and a CPU session. On a simulator, phases are unavailable and launch timing is a rough estimate. Follow profilerSession.next to load the session with profiler-load and inspect it with profiler-stack-query.`,
+    description: `Profile or measure iOS app startup. Both modes open the app once, then time the launches that follow.
+- measure: time five XCTest launches to set a baseline or verify a fix. The metric includes the first frame and any extended launch tasks.
+- profile: record one Instruments App Launch trace to find the CPU work before the first frame. On a simulator there are no lifecycle phases and the launch time is a rough estimate.
+Install a Release build of bundle_id before calling; the tool does not build or install the app.
+Use when you need the iOS launch time or want to find what slows the app's startup.
+Returns samplesCollected in measure mode. In profile mode, follow profilerSession.next to load the CPU samples with profiler-load and query them with profiler-stack-query.
+Fails if the app is not installed or no iPhone or allowed simulator is available.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, ctx) {
