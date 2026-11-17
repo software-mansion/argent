@@ -94,7 +94,7 @@ describe("createTreeMemory", () => {
 describe("unchangedTreeNote", () => {
   it("says which tree it stands for and how to get it again", () => {
     expect(unchangedTreeNote("gesture-tap")).toBe(
-      "Same as the last full element tree returned for this device (in a `gesture-tap` result): no element or frame changed, so it is not repeated here. Call describe if you no longer have that tree."
+      "Same as the last full element tree returned for this device (in a `gesture-tap` result): no element or frame changed, so it is not repeated here. Call `describe` if you no longer have that tree."
     );
   });
 });

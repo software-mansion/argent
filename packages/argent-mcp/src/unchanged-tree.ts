@@ -40,7 +40,7 @@ export interface TreeMemory {
 
 /** The note sent in place of a tree identical to the one `tool` returned. */
 export function unchangedTreeNote(tool: string): string {
-  return `Same as the last full element tree returned for this device (in a \`${tool}\` result): no element or frame changed, so it is not repeated here. Call describe if you no longer have that tree.`;
+  return `Same as the last full element tree returned for this device (in a \`${tool}\` result): no element or frame changed, so it is not repeated here. Call \`describe\` if you no longer have that tree.`;
 }
 
 /**
