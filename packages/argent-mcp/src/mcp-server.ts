@@ -40,6 +40,7 @@ import {
   CAPTURE_TIMEOUT_MS,
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
+import { createTreeMemory, describedTree, treeIdLine } from "./unchanged-tree.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { listDevicesText } from "./list-devices-text.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
@@ -102,6 +103,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   const autoScreenshotOn = autoScreenshotEnabled();
   const autoDescribeOn = autoDescribeEnabled();
   const captureTimeoutMs = options.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS;
+  const trees = createTreeMemory();
 
   let TOOLS_URL: string;
   let AUTH_TOKEN: string;
@@ -240,7 +242,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
    * The element tree the agent would otherwise have to fetch with a `describe`
    * round-trip before its next tap. Measured on Sonnet over 70 runs: −21%
    * turns, −23% wall time, −17% cost at equal task success (see PR #958). The
-   * tree is a few hundred tokens per action.
+   * tree is a few hundred tokens per action. A tree identical to the last one
+   * sent for the device is replaced by a note (unchanged-tree.ts).
    */
   async function captureTreeBlocks(
     udid: string,
@@ -250,21 +253,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const t1 = Date.now();
     try {
       const d = await callTool("describe", { udid }, { signal });
-      const { description: desc, hint } =
-        (d.result as { description?: unknown; hint?: unknown } | null) ?? {};
+      const tree = describedTree(d.result);
+      const shown = tree === undefined ? undefined : trees.afterAction(udid, tree, toolName);
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_describe",
         name: toolName,
         durationMs: Date.now() - t1,
-        chars: typeof desc === "string" ? desc.length : 0,
+        chars: tree?.length ?? 0,
+        // `identical` is the repeat rate; `note` is what the agent was spared.
+        identical: shown?.identical ?? false,
+        note: shown?.note ?? false,
       });
-      if (typeof desc !== "string" || desc.length === 0) return [];
-      // The agent reads this tree in place of describe, so it needs describe's warnings too
-      // (the TV description already carries its hint).
-      const hintLine =
-        typeof hint === "string" && hint && !desc.includes(hint) ? `Hint: ${hint}\n` : "";
-      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${hintLine}${desc}` }];
+      if (shown === undefined) return [];
+      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${shown.text}` }];
     } catch (e) {
       await spyLog({
         ts: new Date().toISOString(),
@@ -310,6 +312,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const callSignal = SAVES_FILES_AFTER_CANCEL.has(canonicalToolId(params.name))
       ? undefined
       : signal;
+    // The device whose tree memory this call wrote to, if any.
+    let treeUdid: string | undefined;
     await spyLog({
       ts: new Date().toISOString(),
       event: "tool_called",
@@ -359,6 +363,16 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
+      if (udid && autoDescribeOn && canonicalToolId(params.name) === "describe") {
+        // The agent now has this tree, so the next action's tree is compared
+        // with it. The id lets a later note name it.
+        const tree = describedTree(result);
+        if (tree !== undefined) {
+          treeUdid = udid;
+          const id = trees.sent(udid, tree, "describe");
+          content = [...content, { type: "text" as const, text: treeIdLine(id) }];
+        }
+      }
       const wantScreenshot =
         autoScreenshotOn && shouldAutoScreenshot(params.name, params.arguments);
       const wantTree = autoDescribeOn && shouldAutoDescribe(params.name, params.arguments);
@@ -390,6 +404,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         }
       } else if (udid && (wantScreenshot || wantTree)) {
         const screenSettled = await awaitScreenSettled(udid, params.name, signal);
+        if (wantTree) treeUdid = udid;
         const captured = await withDeadline(signal, captureTimeoutMs, async (captureSignal) => {
           const screenshot = wantScreenshot
             ? captureScreenshotBlocks(udid, captureSignal)
@@ -409,8 +424,14 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         content = [{ type: "text" as const, text: note }, ...content];
       }
 
+      // The client gave up on this call (an interrupt, its tool timeout), and
+      // the SDK drops the response. The agent never gets the tree recorded
+      // above, so a later note must not name it.
+      if (treeUdid !== undefined && signal.aborted) trees.forget(treeUdid);
+
       return { content };
     } catch (err) {
+      if (treeUdid !== undefined) trees.forget(treeUdid);
       await spyLog({
         ts: new Date().toISOString(),
         event: "tool_result",

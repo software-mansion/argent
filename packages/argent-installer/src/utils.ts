@@ -330,6 +330,21 @@ function isEmptyPlainObject(value: unknown): boolean {
   );
 }
 
+// Removes whatever `targetPath` names and returns whether anything was there. A
+// link goes without what it leads to; a directory goes with its contents.
+//
+// A link is unlinked rather than handed to fs.rmSync: on Node 23.0 to 24.13.0
+// and 25.0 to 25.3, rmSync looks through the link, so it throws ERR_FS_EISDIR
+// for a link to a directory unless `recursive` is set, and returns without
+// removing a dangling link (nodejs/node#61020).
+export function removePath(targetPath: string): boolean {
+  const entry = fs.lstatSync(targetPath, { throwIfNoEntry: false });
+  if (!entry) return false;
+  if (entry.isSymbolicLink()) fs.unlinkSync(targetPath);
+  else fs.rmSync(targetPath, { recursive: entry.isDirectory(), force: true });
+  return true;
+}
+
 function rmEmptyDir(dirPath: string): boolean {
   try {
     if (!fs.existsSync(dirPath)) return false;
@@ -553,7 +568,7 @@ export function removeRetiredFiles(
     try {
       fs.rmSync(file);
       // A link to the removed copy would now dangle.
-      if (file !== entryPath) fs.rmSync(entryPath, { force: true });
+      if (file !== entryPath) removePath(entryPath);
       removedPaths.push(relativePath);
     } catch {
       continue;
