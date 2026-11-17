@@ -150,9 +150,11 @@ export interface ActionEnv {
    * — and one holder per run, shared with nested `run:` flows like
    * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
    * `ActionEnv` by hand, which leaves every direction, and reading order, in
-   * the frame space.
+   * the frame space. `tree` is that read's tree, cleared by a read that
+   * fails or was cut short: a miss reason reads it instead of reading the
+   * device again.
    */
-  lastRead?: { uiOrientation?: UiOrientation };
+  lastRead?: { uiOrientation?: UiOrientation; tree?: DescribeNode };
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -427,25 +429,31 @@ function selectorAlternatives(sel: FlowSelector): Selector[] {
 function flowFindAll(
   tree: DescribeNode,
   sel: FlowSelector,
-  orientation: UiOrientation | undefined
+  orientation: UiOrientation | undefined,
+  matchFieldValues = false
 ): DescribeNode[] {
   let fallback: DescribeNode[] = [];
   for (const s of selectorAlternatives(sel)) {
-    const matches = findAll(tree, s, orientation);
+    const matches = findAll(tree, s, orientation, matchFieldValues);
     if (matches.some(isVisible)) return matches;
     if (fallback.length === 0) fallback = matches;
   }
   return fallback;
 }
 
-/** Identifier-first-then-text frame resolution for a (possibly loose) selector. */
+/**
+ * Identifier-first-then-text frame resolution for a (possibly loose) selector.
+ * `matchFieldValues`: a `type` step's `into`, which may name a text field by
+ * the text it holds (see `findAll`).
+ */
 function flowSelectorToFrame(
   tree: DescribeNode,
   sel: FlowSelector,
-  orientation: UiOrientation | undefined
+  orientation: UiOrientation | undefined,
+  matchFieldValues = false
 ): DescribeFrame | undefined {
   for (const s of selectorAlternatives(sel)) {
-    const frame = selectorToFrame(tree, s, orientation);
+    const frame = selectorToFrame(tree, s, orientation, matchFieldValues);
     if (frame) return frame;
   }
   return undefined;
@@ -484,11 +492,21 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * frame, and the settle that took already cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.treeTarget).then((data) => {
-    if (env.treeOutage) env.treeOutage.proven = undefined;
-    if (env.lastRead) env.lastRead.uiOrientation = data.uiOrientation;
-    return data;
-  });
+  return fetchFlowTree(env.registry, env.device, env.treeTarget).then(
+    (data) => {
+      if (env.treeOutage) env.treeOutage.proven = undefined;
+      if (env.lastRead) {
+        env.lastRead.uiOrientation = data.uiOrientation;
+        // A cut-short read cannot show that only a field holds a text.
+        env.lastRead.tree = data.truncated ? undefined : data.tree;
+      }
+      return data;
+    },
+    (err: unknown) => {
+      if (env.lastRead) env.lastRead.tree = undefined;
+      throw err;
+    }
+  );
 }
 
 /**
@@ -585,7 +603,8 @@ export async function settleTree(
  */
 async function waitForFrames(
   env: ActionEnv,
-  selectors: readonly (FlowSelector | undefined)[]
+  selectors: readonly (FlowSelector | undefined)[],
+  matchFieldValues = false
 ): Promise<(DescribeFrame | undefined)[] | "aborted" | { unresolved: FlowSelector }> {
   const pending = selectors.flatMap((selector, i) => (selector ? [{ i, selector }] : []));
   if (pending.length === 0) return selectors.map(() => undefined);
@@ -597,7 +616,7 @@ async function waitForFrames(
     if (tree) {
       const orientation = readingOrientation(env);
       const frames = selectors.map((s) =>
-        s ? flowSelectorToFrame(tree, s, orientation) : undefined
+        s ? flowSelectorToFrame(tree, s, orientation, matchFieldValues) : undefined
       );
       const missing = pending.find(({ i }) => frames[i] === undefined);
       if (!missing) return frames;
@@ -623,9 +642,10 @@ async function waitForFrames(
  */
 export async function waitForFrame(
   env: ActionEnv,
-  selector: FlowSelector
+  selector: FlowSelector,
+  matchFieldValues = false
 ): Promise<DescribeFrame | "aborted" | undefined> {
-  const frames = await waitForFrames(env, [selector]);
+  const frames = await waitForFrames(env, [selector], matchFieldValues);
   if (frames === "aborted") return "aborted";
   return Array.isArray(frames) ? frames[0] : undefined;
 }
@@ -701,7 +721,7 @@ async function waitForFocus(
     try {
       const { tree, source, uiOrientation } = await readFlowTree(env);
       if (!FOCUS_REPORTING_SOURCES.has(source)) return;
-      const target = flowSelectorToFrame(tree, into, uiOrientation) ?? tappedFrame;
+      const target = flowSelectorToFrame(tree, into, uiOrientation, true) ?? tappedFrame;
       if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
     } catch {
       // transient describe failure — retry until the deadline
@@ -974,6 +994,8 @@ async function staleSelectorReason(
   if (!isIosSimulatorEnv(env)) return undefined;
   const role = unknownRoleReason(env, sel, missed);
   if (role !== undefined) return role;
+  const field = fieldTextReason(env, sel, missed);
+  if (field !== undefined) return field;
   // Every alternative must be an id: a bare string also tries its text, which
   // this check does not look for.
   const ids = selectorAlternatives(sel).map((alt) => alt.identifier);
@@ -1021,6 +1043,25 @@ async function staleSelectorReason(
     return `${missed}: the element with this id has the role ${roles}, not "${sel.role}"; ${OLDER_FLOW}; ${RE_RECORD}`;
   }
   return switchRoleReason(sel, missed);
+}
+
+/**
+ * Why a selector misses when only a text field holds its text, which
+ * `describe` prints as the field's value (see `resolveSelector`). Judged on the
+ * tree of the run's last read, with no new read; undefined when there is none
+ * or the selector misses for another reason.
+ */
+function fieldTextReason(env: ActionEnv, sel: FlowSelector, missed: string): string | undefined {
+  const tree = env.lastRead?.tree;
+  if (!tree) return undefined;
+  const orientation = readingOrientation(env);
+  if (flowFindAll(tree, sel, orientation).some(isVisible)) return undefined;
+  if (!flowFindAll(tree, sel, orientation, true).some(isVisible)) return undefined;
+  return (
+    `${missed}: only a text field holds this text, and a selector does not match a text field ` +
+    `by the text in it. To check the text in the field, use a \`text\` condition on the field. ` +
+    `To act on the field, select it by its id, label or role`
+  );
 }
 
 /** Why a selector step found no element: the stale reason when one shows, else the scroll-to hint. */
@@ -1808,7 +1849,7 @@ async function runType(
   env: ActionEnv,
   step: { into: FlowSelector; text: string; submit?: boolean }
 ): Promise<DirectiveOutcome> {
-  const frame = await waitForFrame(env, step.into);
+  const frame = await waitForFrame(env, step.into, true);
   if (frame === "aborted") return ABORTED_OUTCOME;
   if (!frame) {
     return await selectorMissReason(env, step.into);

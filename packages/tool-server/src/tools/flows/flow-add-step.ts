@@ -273,7 +273,8 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
     return (
       "Both read the accessibility tree. The runner drops what is scrolled or clipped out of " +
       "view and what a system alert covers, and keeps unlabelled scrolling containers " +
-      "`describe` does not print." +
+      "`describe` does not print. On an iOS simulator, a runner selector does not match a text " +
+      "field by the text in the field: check that text with a `text` condition on the field." +
       SCREEN_MAY_HAVE_MOVED
     );
   }
