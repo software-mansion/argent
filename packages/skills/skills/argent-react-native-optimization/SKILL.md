@@ -48,9 +48,9 @@ Navigate every screen and UI flow within scope (the entire app if no scope was g
 
 ## Startup time (TTI)
 
-TTI is made of two parts. Measure both and report them separately; neither alone is TTI.
+Argent measures only the native part of startup. Tell the user that the rest is not measured.
 
-1. **Native launch (iOS)**: process start to the first native frame. Runtime creation and early JS work can fall inside this window and show up in the launch profile. Measure and profile it on a Release build as §4 of `argent-native-profiler` describes.
-2. **React Native startup**: bundle load and evaluation, then the render of the first usable screen. The React profiler cannot record it: `react-profiler-start` attaches to the running JS runtime, and a reload or app restart discards that runtime. Work that runs before the first frame shows up in the launch profile. To profile the render cost of the first usable screen, start `argent-react-native-profiler` and open that screen again.
+1. **Native launch (iOS)**: process start to the first native frame. Measure and profile it on a Release build as §4 of `argent-native-profiler` describes. Runtime creation and JS that runs before the first frame show up in this profile.
+2. **React Native startup after the first frame**: bundle evaluation and the render of the first usable screen. No Argent tool times it: `react-profiler-start` attaches to a running JS runtime, and an app restart discards that runtime. To find slow renders on the first usable screen, start `argent-react-native-profiler` and open that screen again. This profiles a re-render on a Debug build, not startup.
 
-Do not add the two parts into one TTI number. They can overlap (runtime creation can run before the first frame), and they come from different builds and hardware: the launch tool measures the Release build you installed on an iPhone, the React profiler a debug Metro build on a simulator. Re-measure the part you changed and confirm the other did not regress.
+State exactly what was measured.

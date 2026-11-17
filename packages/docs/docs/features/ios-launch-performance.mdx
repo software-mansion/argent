@@ -20,7 +20,7 @@ For profiling, Xcode Instruments records launch phases and CPU samples with the 
 
 - **Debug builds:** Measure a Release build. Debug build timings do not represent production performance, and Argent cannot detect the build configuration of an installed app.
 - **Outdated builds:** After a native code or JavaScript change, the agent must build and install the app again before the next measurement.
-- **Time to interactive:** The launch profile covers work up to the first frame. React Native startup or content loading can continue after this point, so launch time does not represent the full time to interactive (TTI). It is for the developer to define. 
+- **Time to interactive:** The launch profile covers work up to the first frame. React Native startup or content loading can continue after this point, so launch time does not represent the full time to interactive (TTI). The developer defines when the app is fully interactive.
 - **Simulator results:** A simulator uses Mac hardware, so its timings do not represent iPhone performance. Argent uses a simulator only with your permission. Simulator launch profiles have no lifecycle phases.
 - **Xcode 26.4.x:** Simulator launch recording stalls with this Xcode version. Argent stops before it launches the app. Use Xcode 27 or a physical iPhone.
 - **Xcode 26.4.1 export crashes:** Exporting a recorded trace can crash, causing profiling to fail or return incomplete data. Open the saved trace in Instruments, or use Xcode 27 and run the profile again.

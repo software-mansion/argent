@@ -43,8 +43,8 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues, and iOS
 
 For any iOS app (Swift, Objective-C, React Native, Flutter) when the user asks about launch or startup time.
 
-1. Build a Release build and install it yourself with the project's own scripts or build setup (for React Native, find them as `argent-react-native-app-workflow` describes); the tool only measures an installed build. Debug-build timings are not meaningful, and the tool cannot detect them.
-2. Target a physical iPhone on USB. Ask the user before you use a booted simulator: its timings reflect the Mac.
+1. Build a Release build and install it yourself with the project's own scripts or build setup (for React Native, find them as `argent-react-native-app-workflow` describes); the tool only measures an installed build. Debug-build timings are not meaningful.
+2. Target a physical iPhone on USB. Ask the user before you use a booted simulator: its timings reflect the Mac hardware.
 3. Run `native-profiler-launch-analysis`: `mode: "measure"` for the baseline and to verify fixes, `mode: "profile"` to find the cause of a slow launch.
 4. For a profile, run `profiler-stack-query` `thread_breakdown` on the main thread, then `function_callers` for the dominant function. Typical causes: static initializers, dylib loading, heavy `didFinishLaunching` work.
 5. Rebuild and reinstall the Release build after each native or JS change, before you measure again.
