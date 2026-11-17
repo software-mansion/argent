@@ -157,7 +157,10 @@ export async function armAudio(
   if (failure) {
     throw new FailureError(
       `Could not set up the simulator's injection environment for ${session.udid}: ${failure.lastError}. ` +
-        `Try shutting down and re-booting the simulator.`,
+        (failure.givenUp
+          ? `Argent stopped retrying after ${failure.attempts} attempts: call stop-all-simulator-servers ` +
+            `with devices: ["${session.udid}"], then retry.`
+          : `Retry; if it keeps failing, shut the simulator down and boot it again with boot-device.`),
       {
         error_code: FAILURE_CODES.AUDIO_ENV_SETUP_FAILED,
         failure_stage: "audio_env_setup",

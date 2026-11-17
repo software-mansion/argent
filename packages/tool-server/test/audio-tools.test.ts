@@ -3,10 +3,23 @@ import { FAILURE_CODES, Registry, getFailureSignal } from "@argent/registry";
 import { createAudioInputTool } from "../src/tools/audio/audio-input";
 
 const TVOS = "0000AAAA-0000-0000-0000-00000000A77E";
+const BOOTED = "0000CCCC-0000-0000-0000-000000000000";
+const SHUTDOWN = "0000DDDD-0000-0000-0000-000000000000";
+const BOOTING = "0000EEEE-0000-0000-0000-000000000000";
+const UNKNOWN = "0000FFFF-0000-0000-0000-000000000000";
+
+// The simctl listing: a shut-down tvOS simulator, and iOS simulators in each state. UNKNOWN is in none.
+const SIMULATORS: Record<string, { state: string; runtimeKind: "mobile" | "tv" }> = {
+  [TVOS]: { state: "Shutdown", runtimeKind: "tv" },
+  [BOOTED]: { state: "Booted", runtimeKind: "mobile" },
+  [SHUTDOWN]: { state: "Shutdown", runtimeKind: "mobile" },
+  [BOOTING]: { state: "Booting", runtimeKind: "mobile" },
+};
 
 vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
-  isTvOsSimulator: async (udid: string) => udid === TVOS,
+  findIosSimulator: async (udid: string) =>
+    SIMULATORS[udid] && { udid, name: "Test Phone", runtime: "test", ...SIMULATORS[udid] },
 }));
 
 function registryRig() {
@@ -35,6 +48,9 @@ const targets = [
     "remote:0000BBBB-0000-0000-0000-000000000000",
     FAILURE_CODES.AUDIO_WRONG_PLATFORM,
   ],
+  ["a shut-down simulator", SHUTDOWN, FAILURE_CODES.AUDIO_SIMULATOR_NOT_BOOTED],
+  ["a simulator that is still booting", BOOTING, FAILURE_CODES.AUDIO_SIMULATOR_NOT_BOOTED],
+  ["an unknown UDID", UNKNOWN, FAILURE_CODES.AUDIO_SIMULATOR_NOT_BOOTED],
 ] as const;
 
 describe("audio tools refuse targets without the hook before resolving any service", () => {
@@ -57,6 +73,34 @@ describe("audio tools refuse targets without the hook before resolving any servi
       .catch((e: unknown) => e);
     expect((err as Error).message).toContain("same Mac as the tool-server");
   });
+
+  it("tells a shut-down simulator to be booted first", async () => {
+    const { registry } = registryRig();
+    const err = await registry
+      .invokeTool("audio-input", { udid: SHUTDOWN, source: "tone" })
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/is not booted \(state: Shutdown\).*boot-device/);
+    expect(getFailureSignal(err)?.error_kind).toBe("validation");
+  });
+
+  it("says an unknown UDID was not found, without telling to boot it", async () => {
+    const { registry } = registryRig();
+    const err = await registry
+      .invokeTool("audio-input", { udid: UNKNOWN, source: "tone" })
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/No iOS simulator with UDID .* was found.*list-devices/);
+    expect((err as Error).message).not.toContain("boot-device");
+    expect(getFailureSignal(err)?.error_kind).toBe("not_found");
+  });
+
+  it("lets a booted simulator through to the native-devtools service", async () => {
+    const { registry, resolveService } = registryRig();
+    const err = await registry
+      .invokeTool("audio-input", { udid: BOOTED, source: "tone" })
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toContain("Unexpected service resolution");
+    expect(resolveService).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("audio-input params", () => {
@@ -64,7 +108,7 @@ describe("audio-input params", () => {
     const { registry, resolveService } = registryRig();
     await expect(
       registry.invokeTool("audio-input", {
-        udid: "0000CCCC-0000-0000-0000-000000000000",
+        udid: BOOTED,
         source: "file",
       })
     ).rejects.toThrow(/source=file requires `path`/);
@@ -75,7 +119,7 @@ describe("audio-input params", () => {
     const { registry, resolveService } = registryRig();
     await expect(
       registry.invokeTool("audio-input", {
-        udid: "0000CCCC-0000-0000-0000-000000000000",
+        udid: BOOTED,
         source: "file",
         path: "/tmp/clip.wav",
         plays,

@@ -2,7 +2,7 @@ import { FAILURE_CODES, FailureError, type DeviceInfo, type Registry } from "@ar
 import { iosAudioSessionBlueprint } from "../../blueprints/ios-audio-session";
 import { assertSupported } from "../../utils/capability";
 import { resolveDevice } from "../../utils/device-info";
-import { isTvOsSimulator } from "../../utils/ios-devices";
+import { findIosSimulator } from "../../utils/ios-devices";
 import type { AudioSession } from "../../utils/ios-audio";
 
 /**
@@ -23,10 +23,21 @@ function wrongPlatform(message: string): FailureError {
   });
 }
 
+function notBooted(message: string, kind: "not_found" | "validation"): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.AUDIO_SIMULATOR_NOT_BOOTED,
+    failure_stage: "audio_boot_check",
+    failure_area: "tool_server",
+    error_kind: kind,
+  });
+}
+
 /**
  * The device an audio tool may drive, checked before any service resolves: the hook and its control
  * directory live on this Mac, so a hosted simulator or a platform without the hook fails here instead of
- * starting services for a device the tool cannot use.
+ * starting services for a device the tool cannot use. So does a simulator that is not booted: the
+ * native-devtools service counts each failed env setup and stops retrying after a few, which would outlast
+ * the boot.
  */
 export async function resolveAudioDevice(toolId: string, udid: string): Promise<DeviceInfo> {
   const device = resolveDevice(udid);
@@ -36,8 +47,22 @@ export async function resolveAudioDevice(toolId: string, udid: string): Promise<
     );
   }
   assertSupported(toolId, audioCapability, device);
-  if (await isTvOsSimulator(udid)) {
+  const simulator = await findIosSimulator(udid);
+  if (!simulator) {
+    throw notBooted(
+      `No iOS simulator with UDID ${udid} was found. Call list-devices for the available simulators.`,
+      "not_found"
+    );
+  }
+  if (simulator.runtimeKind === "tv") {
     throw wrongPlatform(`Audio mocking does not support tvOS simulators (${udid}).`);
+  }
+  if (simulator.state !== "Booted") {
+    throw notBooted(
+      `Simulator '${simulator.name}' (${udid}) is not booted (state: ${simulator.state}). ` +
+        `Boot it first with boot-device, then call ${toolId} again.`,
+      "validation"
+    );
   }
   return device;
 }
