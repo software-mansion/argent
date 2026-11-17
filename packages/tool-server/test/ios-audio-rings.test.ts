@@ -45,6 +45,35 @@ function clipFile(samples: number[]): string {
   return file;
 }
 
+/** The same clip under the WAVE_FORMAT_EXTENSIBLE header afconvert writes for a source with a channel layout. */
+function extensibleClipFile(samples: number[], subformat = 3): string {
+  const pad = 4020;
+  const h = Buffer.alloc(60 + 8 + pad + 8);
+  h.write("RIFF", 0, "ascii");
+  h.write("WAVEfmt ", 8, "ascii");
+  h.writeUInt32LE(40, 16);
+  h.writeUInt16LE(0xfffe, 20);
+  h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(STREAM_RATE, 24);
+  h.writeUInt32LE(STREAM_RATE * 4, 28);
+  h.writeUInt16LE(4, 32);
+  h.writeUInt16LE(32, 34);
+  h.writeUInt16LE(22, 36);
+  h.writeUInt16LE(32, 38);
+  h.writeUInt32LE(4, 40); // channel mask: front center
+  h.writeUInt16LE(subformat, 44);
+  Buffer.from("000000001000800000aa00389b71", "hex").copy(h, 46);
+  h.write("FLLR", 60, "ascii");
+  h.writeUInt32LE(pad, 64);
+  h.write("data", 60 + 8 + pad, "ascii");
+  h.writeUInt32LE(samples.length * 4, 60 + 8 + pad + 4);
+  const body = Buffer.alloc(samples.length * 4);
+  samples.forEach((v, i) => body.writeFloatLE(v, i * 4));
+  const file = path.join(dir, `clip-${Math.random()}.wav`);
+  fs.writeFileSync(file, Buffer.concat([h, body]));
+  return file;
+}
+
 function clipSource(samples: number[], plays = 1): FeederSource {
   const fd = fs.openSync(clipFile(samples), "r");
   return { kind: "clip", fd, info: readClipInfo(fd), plays };
@@ -87,6 +116,18 @@ describe("readClipInfo", () => {
   it("finds the samples past a padding chunk", () => {
     const fd = fs.openSync(clipFile([0.1, 0.2, 0.3]), "r");
     expect(readClipInfo(fd)).toEqual({ dataOffset: 4096, frames: 3 });
+    fs.closeSync(fd);
+  });
+
+  it("accepts the extensible header with the float subformat", () => {
+    const fd = fs.openSync(extensibleClipFile([0.1, 0.2, 0.3]), "r");
+    expect(readClipInfo(fd)).toEqual({ dataOffset: 4096, frames: 3 });
+    fs.closeSync(fd);
+  });
+
+  it("rejects the extensible header with a subformat that is not float", () => {
+    const fd = fs.openSync(extensibleClipFile([0.1, 0.2, 0.3], 1), "r"); // PCM
+    expect(() => readClipInfo(fd)).toThrow("unexpected format");
     fs.closeSync(fd);
   });
 
