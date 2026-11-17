@@ -3905,10 +3905,8 @@ describe("the tools on the Android native layer", () => {
     const codings: Array<[string, Buffer]> = [
       ["gzip", zlib.gzipSync(json)],
       ["br", zlib.brotliCompressSync(json)],
+      ["zstd", zlib.zstdCompressSync(json)],
     ];
-    if (typeof zlib.zstdCompressSync === "function") {
-      codings.push(["zstd", zlib.zstdCompressSync(json)]);
-    }
     for (const coding of codings.map(([name]) => name)) codings.push([coding, Buffer.from(json)]);
     for (const [i, [coding, bytes]] of codings.entries()) {
       const requestId = agent.rid(i + 1);

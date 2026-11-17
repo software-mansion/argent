@@ -7,20 +7,16 @@ import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry
 import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
 import { flowStartRecordingTool } from "../../../src/tools/flows/flow-start-recording";
 import { flowAddScriptTool } from "../../../src/tools/flows/flow-add-script";
-import {
-  nodeStripsTypes,
-  typeScriptGap,
-  typeScriptRefusalReason,
-} from "../../../src/tools/flows/flow-script-step";
+import { typeScriptRefusalReason } from "../../../src/tools/flows/flow-script-step";
 import { __resetRecordingsForTesting, parseFlow } from "../../../src/tools/flows/flow-utils";
 import type { FlowScriptResult } from "../../../src/tools/flows/script/flow-script-executor";
 
 /**
  * Whether a host runs a TypeScript script, and what a run does on each side of
  * that line. The host's answer is put in by hand, so both sides are covered on
- * every Node the suite runs on — the one CI pins runs no TypeScript at all, and
- * left to the real answer it would only ever see the refusal. The scripts that
- * really execute are in flow-script-step-run.test.ts.
+ * every Node the suite runs on — the one CI pins runs TypeScript, and left to
+ * the real answer it would never see the refusal. The scripts that really
+ * execute are in flow-script-step-run.test.ts.
  */
 
 const { executeMock, stripsTypesMock } = vi.hoisted(() => ({
@@ -54,6 +50,29 @@ function outcome(over: Partial<FlowScriptResult>): FlowScriptResult {
 }
 
 const PASSED = outcome({ ok: true, output: {} });
+
+/**
+ * What a CommonJS script's `require("./helpers.ts")` fails with where Node
+ * compiles the file as JavaScript: a Node with no TypeScript support writes
+ * this stack.
+ */
+function requiredTypeScriptFailure(projectRoot: string): FlowScriptResult["failure"] {
+  const helper = path.join(projectRoot, "scripts", "helpers.ts");
+  const entry = path.join(projectRoot, "scripts", "entry.js");
+  return {
+    kind: "runtime",
+    message: "Missing initializer in const declaration",
+    stack: [
+      `${helper}:1`,
+      "const orderId: number = 4711;",
+      "      ^",
+      "",
+      "SyntaxError: Missing initializer in const declaration",
+      "    at TracingChannel.traceSync (node:diagnostics_channel:322:14)",
+      `    at Object.<anonymous> (${entry}:1:11)`,
+    ].join("\n"),
+  };
+}
 
 function mockRegistry(): Registry {
   return {
@@ -98,7 +117,9 @@ function executed(): string[] {
 beforeEach(async () => {
   __resetRecordingsForTesting();
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-typescript-")));
-  for (const file of ["before.mjs", "seed.mts", "entry.mjs"]) await write(`scripts/${file}`, "");
+  for (const file of ["before.mjs", "seed.mts", "seed.ts", "entry.mjs", "entry.js"]) {
+    await write(`scripts/${file}`, "");
+  }
   executeMock.mockReset();
   executeMock.mockResolvedValue(PASSED);
   stripsTypesMock.mockReset();
@@ -109,81 +130,43 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-describe("whether a host runs TypeScript", () => {
-  it("runs it when the script process says it strips types, whatever the release", () => {
-    for (const version of ["20.19.5", "22.17.1", "23.5.0", "24.9.0"]) {
-      expect(typeScriptGap(true, version), version).toBeUndefined();
-    }
-  });
-
-  it("blames the release when the release cannot", () => {
-    for (const version of ["20.19.5", "22.6.0", "22.17.1", "23.0.0", "23.5.0"]) {
-      expect(typeScriptGap(false, version), version).toBe("release");
-      // A host that could not be asked is still one the release rules out.
-      expect(typeScriptGap(undefined, version), version).toBe("release");
-    }
-  });
-
-  it("blames the build when the release can and the binary cannot", () => {
-    // The `nodejs` package of Debian and Ubuntu: configured --without-amaro.
-    for (const version of ["22.18.0", "22.22.1", "23.6.0", "24.0.0", "24.22.2", "26.13.0"]) {
-      expect(typeScriptGap(false, version), version).toBe("build");
-    }
-  });
-
-  it("goes by the release when the binary could not be asked", () => {
-    for (const version of ["22.18.0", "23.6.0", "24.9.0"]) {
-      expect(typeScriptGap(undefined, version), version).toBeUndefined();
-    }
-  });
-
-  it("reads this process's release in the form the table is written in", () => {
-    // `process.version` carries a leading "v", which parses to no release at
-    // all: every host would then be one whose release cannot.
-    for (const strips of [true, false, undefined]) {
-      expect(typeScriptGap(strips)).toBe(typeScriptGap(strips, process.versions.node));
-    }
-    expect(nodeStripsTypes()).toBe(nodeStripsTypes(process.versions.node));
-    expect(typeScriptRefusalReason("Script", "release")).toContain(
-      `Node.js ${process.versions.node}, which`
-    );
-  });
-});
-
 describe("the refusal a host that cannot run TypeScript gives", () => {
   const subject = 'Script "scripts/seed.mts" is TypeScript';
 
-  it("names the release, the releases that can, and the tool-server to stop", () => {
-    const reason = typeScriptRefusalReason(subject, "release", "20.19.5");
+  it("names the Node, the hosts with no support, and the tool-server to stop", () => {
+    const reason = typeScriptRefusalReason(subject, "22.22.1");
 
     expect(reason).toContain(
-      'Script "scripts/seed.mts" is TypeScript, and the tool-server runs on Node.js 20.19.5, which cannot run it.'
+      'Script "scripts/seed.mts" is TypeScript, and the tool-server runs on Node.js 22.22.1, which cannot run it'
     );
-    expect(reason).toContain("Node.js runs TypeScript from 22.18, except on 23.0 to 23.5.");
+    // The two hosts that answer no: a Node below `engines`, which npm installs
+    // past, and a build compiled without the stripper.
+    expect(reason).toContain("A release older than Argent supports has none");
+    expect(reason).toContain("the nodejs package of Debian and Ubuntu");
     // A tool-server that is already up is reused whatever Node the next command
     // runs on, so switching Node alone brings the same refusal back.
     expect(reason).toContain("Stop the tool-server with `argent server stop`");
+    expect(reason).toContain("a current Node.js from nodejs.org");
     expect(reason).toContain(
       "or use JavaScript (.mjs) for the script and for the files it imports"
     );
   });
 
-  it("does not send a 23.5 host to a minimum it already meets", () => {
-    const reason = typeScriptRefusalReason(subject, "release", "23.5.0");
-
-    expect(reason).toContain("runs on Node.js 23.5.0, which cannot run it");
-    expect(reason).toContain("except on 23.0 to 23.5");
-    expect(reason).not.toMatch(/22\.18 or later/);
+  it("reads this process's release in the form a user knows it", () => {
+    // `process.version` carries a leading "v".
+    expect(typeScriptRefusalReason("Script")).toContain(`Node.js ${process.versions.node}, which`);
   });
+});
 
-  it("sends a build without the support to another build, not to another release", () => {
-    const reason = typeScriptRefusalReason(subject, "build", "22.22.1");
+describe("a run with a TypeScript script on a host that could not be asked", () => {
+  it("hands the script to Node: a refusal has to rest on an answer", async () => {
+    stripsTypesMock.mockResolvedValue(undefined);
+    await flow("unasked", "steps:\n  - script: { path: ../../scripts/seed.mts }\n");
 
-    expect(reason).toContain("runs on a build of Node.js 22.22.1 that cannot run it");
-    expect(reason).toContain("the build has no TypeScript support");
-    expect(reason).toContain("Stop the tool-server with `argent server stop`");
-    expect(reason).toContain("a Node.js from nodejs.org");
-    expect(reason).not.toContain("22.18");
+    const result = await runFlow("unasked");
+
+    expect(result.ok).toBe(true);
+    expect(executed()).toEqual(["seed.mts"]);
   });
 });
 
@@ -219,6 +202,52 @@ describe("a run with a TypeScript script on a host that cannot run it", () => {
       error_code: FAILURE_CODES.FLOW_SCRIPT_TYPESCRIPT_UNSUPPORTED,
       error_kind: "validation",
     });
+    expect(executed()).toEqual([]);
+  });
+
+  it.each([
+    ["mts", "or use JavaScript (.mjs) for the script and for the files it imports."],
+    // `.mjs` would break a `.ts` script that is CommonJS, so its twin is `.js`.
+    [
+      "ts",
+      "or use JavaScript (.js, or .mjs for an ES module) for the script and for the files it imports.",
+    ],
+  ])("refuses a .%s script, and names the JavaScript extension to use", async (ext, advice) => {
+    await flow(
+      "spelled",
+      [
+        "steps:",
+        "  - script: { path: ../../scripts/before.mjs }",
+        `  - script: { path: ../../scripts/seed.${ext} }`,
+        "",
+      ].join("\n")
+    );
+
+    const err = await runFlow("spelled").then(
+      () => undefined,
+      (thrown: Error) => thrown
+    );
+
+    expect(err?.message).toContain(`Script "../../scripts/seed.${ext}" is TypeScript`);
+    expect(err?.message).toContain(advice);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.FLOW_SCRIPT_TYPESCRIPT_UNSUPPORTED,
+    });
+    expect(executed()).toEqual([]);
+  });
+
+  it("does not record a .ts script either", async () => {
+    await flowStartRecordingTool.execute({}, { name: "recordedts", project_root: root });
+
+    const recorded = await flowAddScriptTool.execute({}, {
+      name: "recordedts",
+      project_root: root,
+      path: "../../scripts/seed.ts",
+    } as never);
+
+    expect(recorded.status).toBe("error");
+    expect(recorded.reason).toContain('Script "../../scripts/seed.ts" is TypeScript');
+    expect(recorded.reason).toContain("or use JavaScript (.js, or .mjs for an ES module)");
     expect(executed()).toEqual([]);
   });
 
@@ -303,6 +332,46 @@ describe("a run with a TypeScript script on a host that cannot run it", () => {
     expect(executed()).toEqual(["entry.mjs"]);
   });
 
+  it("reads a TypeScript file a CommonJS script could not require as the same host limit", async () => {
+    // The CommonJS loader refuses no extension: it compiles the file as
+    // JavaScript, so the failure is a SyntaxError at the first type, and only
+    // the place the stack opens with names the file.
+    executeMock.mockResolvedValue(outcome({ failure: requiredTypeScriptFailure(root) }));
+    await flow("requires", "steps:\n  - script: { path: ../../scripts/entry.js }\n");
+
+    const result = await runFlow("requires");
+
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "error" });
+    expect(result.steps[0]!.reason).toContain(
+      'Script "../../scripts/entry.js" loads the TypeScript file "scripts/helpers.ts", and the tool-server runs on'
+    );
+    expect(result.steps[0]!.reason).toMatch(
+      /or use JavaScript \(\.js, or \.mjs for an ES module\) for the script and for the files it imports\.$/
+    );
+  });
+
+  it("leaves a syntax error in a JavaScript file a script requires as the script's own", async () => {
+    const helper = path.join(root, "scripts", "helpers.js");
+    executeMock.mockResolvedValue(
+      outcome({
+        failure: {
+          kind: "runtime",
+          message: "Unexpected token ')'",
+          stack: `${helper}:1\nfoo();)\n      ^\n\nSyntaxError: Unexpected token ')'`,
+        },
+      })
+    );
+    await flow("requires", "steps:\n  - script: { path: ../../scripts/entry.js }\n");
+
+    const result = await runFlow("requires");
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "script",
+      status: "fail",
+      reason: "Unexpected token ')'\\n    at scripts/helpers.js:1",
+    });
+  });
+
   it.each([
     ["an extension no Node reads", "load", 'Unknown file extension ".tsx" for /p/view.tsx'],
     ["a script that threw the same words", "runtime", 'Unknown file extension ".mts" for /p/a.mts'],
@@ -346,6 +415,23 @@ describe("a run with a TypeScript script on a host that runs it", () => {
     expect(result.ok).toBe(true);
     expect(result.steps.map((step) => step.status)).toEqual(["pass", "pass"]);
     expect(executed()).toEqual(["before.mjs", "seed.mts"]);
+  });
+
+  it("leaves a syntax error in a TypeScript file a script requires as the script's own", async () => {
+    // The same stack as on a host that cannot: here Node did strip the types,
+    // so what is left is the file's fault, and its place still leads the frames.
+    executeMock.mockResolvedValue(outcome({ failure: requiredTypeScriptFailure(root) }));
+    await flow("requires", "steps:\n  - script: { path: ../../scripts/entry.js }\n");
+
+    const result = await runFlow("requires");
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "script",
+      status: "fail",
+      reason:
+        "Missing initializer in const declaration\\n    at scripts/helpers.ts:1\\n" +
+        "    at Object.<anonymous> (scripts/entry.js:1:11)",
+    });
   });
 
   it("leaves a TypeScript file Node could not load as the script's own failure", async () => {
@@ -396,6 +482,37 @@ describe("the place of syntax Node cannot strip", () => {
       status: "fail",
       reason:
         "TypeScript parameter property is not supported in strip-only mode\\n    at scripts/svc.mts:2",
+    });
+  });
+
+  it("leads the frames when Node names it as a bare path, as its CommonJS loader does", async () => {
+    // A `.ts` script under a package.json with no `type`, and every file a
+    // script `require`s: no `file:` URL, the same place.
+    const seed = path.join(root, "scripts", "seed.ts");
+    executeMock.mockResolvedValue(
+      outcome({
+        failure: {
+          kind: "load",
+          message: "TypeScript enum is not supported in strip-only mode",
+          stack: [
+            `${seed}:2`,
+            "enum Color { Red }",
+            "^^^^^^^^^^^^^^^^^^",
+            "",
+            "SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode",
+            "    at parseTypeScript (node:internal/modules/typescript:68:40)",
+          ].join("\n"),
+        },
+      })
+    );
+    await flow("stripcjs", "steps:\n  - script: { path: ../../scripts/seed.ts }\n");
+
+    const result = await runFlow("stripcjs");
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "script",
+      status: "fail",
+      reason: "TypeScript enum is not supported in strip-only mode\\n    at scripts/seed.ts:2",
     });
   });
 
