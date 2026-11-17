@@ -78,6 +78,20 @@ const zodSchema = z.object({
     ),
 });
 
+/**
+ * The message of the error that started a failure. The registry wraps a
+ * service's failure and prefixes the service id, which tells the agent nothing.
+ */
+function innermostMessage(err: unknown): string {
+  let current = err;
+  // Bounded against a cyclic `cause` chain.
+  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
+    if (!(current.cause instanceof Error)) return current.message;
+    current = current.cause;
+  }
+  return current instanceof Error ? current.message : String(current);
+}
+
 export function createReactProfilerStatusTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
@@ -130,9 +144,12 @@ export function createReactProfilerStatusTool(
       let api: ReactProfilerSessionApi;
       try {
         api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
-      } catch {
+      } catch (err) {
+        // The reason says what to do, for example to start the app or to pass
+        // another port. A fixed "reconnect the debugger" is wrong for a Mac
+        // app, which debugger-connect refuses.
         return noRuntime(
-          "Unable to resolve a React profiler session — the Hermes runtime may not be reachable. Reconnect the debugger and retry."
+          `Unable to resolve a React profiler session: the Hermes runtime may not be reachable. ${innermostMessage(err)}`
         );
       }
 
