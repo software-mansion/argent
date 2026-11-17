@@ -25,6 +25,7 @@ import {
   macosAppIdFromBundleId,
   parseMacosAppBundleId,
 } from "./device-info";
+import { trackedMacosAppsFile, type MacosAppKind } from "./macos-app-kind";
 import { PS_BIN } from "./vega-process";
 
 const execFileAsync = promisify(execFile);
@@ -386,10 +387,16 @@ interface TrackedMacosApp {
   args: string[];
   /** Epoch ms. */
   startedAt: number;
+  /**
+   * A Mac Catalyst app; `resolveDevice` reads it as the device kind. Absent in
+   * a record of an argent that refused Catalyst apps: an AppKit app.
+   */
+  catalyst?: boolean;
 }
 
-function trackedAppsFile(): string {
-  return path.join(os.homedir(), ".argent", "macos-apps.json");
+/** The kind of a tracked app, as `resolveDevice` reports it. */
+export function trackedAppKind(app: TrackedMacosApp): MacosAppKind {
+  return app.catalyst === true ? "catalyst" : "app";
 }
 
 function isTrackedMacosApp(value: unknown): value is TrackedMacosApp {
@@ -410,7 +417,8 @@ function isTrackedMacosApp(value: unknown): value is TrackedMacosApp {
     typeof v.logPath === "string" &&
     Array.isArray(v.args) &&
     v.args.every((a) => typeof a === "string") &&
-    typeof v.startedAt === "number"
+    typeof v.startedAt === "number" &&
+    (v.catalyst === undefined || typeof v.catalyst === "boolean")
   );
 }
 
@@ -418,7 +426,7 @@ function isTrackedMacosApp(value: unknown): value is TrackedMacosApp {
 function readTrackedApps(): TrackedMacosApp[] {
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(trackedAppsFile(), "utf8"));
+    raw = JSON.parse(fs.readFileSync(trackedMacosAppsFile(), "utf8"));
   } catch {
     return [];
   }
@@ -427,7 +435,7 @@ function readTrackedApps(): TrackedMacosApp[] {
 
 /** Adds or replaces the record for `app.bundleId`. */
 export function recordTrackedMacosApp(app: TrackedMacosApp): void {
-  const file = trackedAppsFile();
+  const file = trackedMacosAppsFile();
   const others = readTrackedApps().filter((a) => a.bundleId !== app.bundleId);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   // tmp+rename so a reader never sees a torn file, also after a crash mid-write.

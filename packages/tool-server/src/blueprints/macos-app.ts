@@ -35,7 +35,9 @@ import {
   recordTrackedMacosApp,
   runningTrackedApp,
   stageLibraryFor,
+  trackedAppKind,
 } from "../utils/macos-apps";
+import type { MacosAppKind } from "../utils/macos-app-kind";
 import {
   isInjectableBundleId,
   NATIVE_NETWORK_LOG_LIMIT,
@@ -112,6 +114,8 @@ interface MacosLaunchOptions {
 }
 
 export interface MacosLaunchResult extends MacosLibraryHandshake {
+  /** The device kind of the running build: an AppKit app or a Mac Catalyst app. */
+  kind: MacosAppKind;
   /** The arguments the running app was started with. */
   args: string[];
   appPath: string;
@@ -920,6 +924,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           .join(" ");
         return {
           ...ch.handshake!,
+          kind: trackedAppKind(own),
           args,
           appPath,
           sandboxed,
@@ -964,10 +969,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     const unsupported = !isInjectableBundleId(bundleId)
       ? `${bundleId} is an Apple app. argent drives only apps it can load its library into, ` +
         `such as your own builds.`
-      : info.catalyst
-        ? `${bundleId} is a Mac Catalyst (UIKit) app, which argent does not drive: typing, ` +
-          `paste and scrolling do not reach its views. Test its UI on an iOS simulator instead.`
-        : chromiumRefusal(info);
+      : chromiumRefusal(info);
     if (unsupported) {
       throw macosFailure(
         unsupported,
@@ -1111,6 +1113,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         logPath,
         args,
         startedAt: Date.now(),
+        catalyst: info.catalyst,
       });
     } catch (err) {
       // A copy that no record names is one that argent never lists or stops.
@@ -1156,6 +1159,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     }
     const result: MacosLaunchResult = {
       ...hello,
+      kind: info.catalyst ? "catalyst" : "app",
       args,
       appPath: info.appPath,
       sandboxed: info.sandboxed,
