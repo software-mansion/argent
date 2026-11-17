@@ -107,6 +107,7 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    - `<base>_raw_cpu.xml` — `time-profile` table
    - `<base>_raw_hangs.xml` — `potential-hangs` table
    - `<base>_raw_leaks.xml` — `Leaks` track detail
+   - On a Mac app, `<base>.trace.metadata.json` — the recording length, whether the app ended, and when the app was suspended (`recordedMs`, `appEndedDuringCapture`, `appSuspensions`). The XMLs hold none of these, and analyze needs them for its notes.
 4. Returns `{ traceFile, exportedFiles, exportDiagnostics }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data.
 
 ### `native-profiler-analyze`
@@ -201,7 +202,7 @@ Top-N is configurable (default 15).
 Lists prior `.trace` directories under the debug dir (`<os.tmpdir()>/argent-profiler-cwd/`, e.g. `/var/folders/.../T/argent-profiler-cwd/` on macOS) and re-parses them on demand:
 
 - `mode=list` — enumerate sessions on disk.
-- `mode=load_instruments session_id=<ts> device_id=<UDID>` — re-runs the parsing pipeline on the stored XMLs and re-hydrates the session so query tools work again.
+- `mode=load_instruments session_id=<ts> device_id=<UDID>` — re-runs the parsing pipeline on the stored XMLs and re-hydrates the session so query tools work again. For a Mac app it also restores the fields of `<base>.trace.metadata.json`, so the report keeps the short-recording note, the app-ended note and the suspended part of each hang. A session saved before this file existed loads without them.
 - (Also supports `mode=load_react` for Hermes profiler sessions; same idea, different files.)
 
 This is what makes before/after comparisons possible without keeping the original capture session alive.

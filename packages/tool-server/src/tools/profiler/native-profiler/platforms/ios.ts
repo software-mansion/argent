@@ -9,6 +9,7 @@ import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
 import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
 import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData, skippedTraceExport } from "../../../../utils/ios-profiler/export";
+import { writeXctraceSessionMetadata } from "../../../../utils/ios-profiler/session-metadata";
 import {
   suspensionSpansInTrace,
   type AppSuspensionSpan,
@@ -677,6 +678,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     api.exportSkipReason = diagnostics.skipped ?? null;
     api.recordedMs = null;
     api.appSuspensions = suspensionSpans(suspensions, diagnostics);
+    await saveSessionMetadata(api, traceFile);
 
     let warning = wasTimeout
       ? "Recording timed out at 10 min cap; exported the partial trace. " +
@@ -790,6 +792,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   api.exportSkipReason = diagnostics.skipped ?? null;
   api.recordedMs = api.platform === "macos" && api.wallClockStartMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
+  await saveSessionMetadata(api, api.traceFile);
   if (ended) {
     // xctrace keeps recording when the app crashes, and the trace then lacks
     // most of what came before.
@@ -803,6 +806,27 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   };
   if (warning) stopResult.warning = warning;
   return stopResult;
+}
+
+/**
+ * Saves the Mac app fields that analyze reads besides the exports, for profiler-load.
+ * A failed write costs only the notes of a later reload, so the stop goes on.
+ */
+async function saveSessionMetadata(
+  api: NativeProfilerSessionApi,
+  traceFile: string
+): Promise<void> {
+  if (api.platform !== "macos") return;
+  try {
+    await writeXctraceSessionMetadata(traceFile, {
+      appSuspensions: api.appSuspensions,
+      recordedMs: api.recordedMs,
+      appEndedDuringCapture: api.appEndedDuringCapture,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[native-profiler] could not save the session metadata: ${msg}\n`);
+  }
 }
 
 /** Ends the Mac app's suspension watch: what it saw, or null when nothing watched. */

@@ -22,6 +22,7 @@ import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
+import { readXctraceSessionMetadata } from "../../../utils/ios-profiler/session-metadata";
 import {
   isCaptureInFlight,
   inFlightGuardMessage,
@@ -402,7 +403,15 @@ async function loadNativeSession(
     );
   }
 
-  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
+  // A Mac app session's own fields, saved by native-profiler-stop: without them a
+  // reloaded short recording reads "All clear" and its hangs lose the suspended part.
+  const metadata = await readXctraceSessionMetadata(
+    path.join(debugDir, `native-profiler-${sessionId}.trace`)
+  );
+  const appSuspensions = metadata?.appSuspensions ?? null;
+  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files, {
+    appSuspensions,
+  });
 
   // raw_*.xml carry no start time, so the frozen anchor is null and the combined
   // report reports a missing native anchor rather than mis-anchoring to residue.
@@ -420,13 +429,13 @@ async function loadNativeSession(
   // Clear every per-capture field an earlier live capture left behind, or analyze
   // attributes them to the loaded trace: mislabeled capture mode, samples dropped
   // by a stale CPU filter PID, a stale-trace note, and the report .md written over
-  // the old trace's.
+  // the old trace's. A Mac app session's own fields come from its metadata file.
   api.mallocStackLogging = null;
   api.cpuFilterPid = null;
-  api.appEndedDuringCapture = false;
+  api.appEndedDuringCapture = metadata?.appEndedDuringCapture ?? false;
   api.exportSkipReason = null;
-  api.recordedMs = null;
-  api.appSuspensions = null;
+  api.recordedMs = metadata?.recordedMs ?? null;
+  api.appSuspensions = appSuspensions;
   api.wallClockStartMs = null;
   api.traceFile = null;
 
