@@ -523,12 +523,14 @@ export async function materializeArtifacts(
         });
         if (!res.ok) return null;
         // Bound the read before it is buffered, as the durable branch does: a
-        // compromised tool-server can answer with a body of any size. Cap at the
-        // declared size when it is usable; directory bundles announce `size: 0`
-        // and get the hard ceiling. The length check below still enforces
-        // integrity for every handle with a known size.
+        // compromised tool-server can answer with a body of any size. A
+        // directory bundle's `size` is the folder's stat entry, not the tar
+        // body's, so archives always get the hard ceiling — capping them at
+        // `size` cut real traces off mid-stream. Single files cap at the
+        // declared size. The length check below still enforces integrity for
+        // every non-archive handle with a known size.
         const cap =
-          Number.isInteger(value.size) && value.size > 0
+          !value.archive && Number.isInteger(value.size) && value.size > 0
             ? Math.min(value.size, MAX_ARTIFACT_BYTES)
             : MAX_ARTIFACT_BYTES;
         const data = await readCapped(res, cap);
