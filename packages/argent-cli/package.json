@@ -14,6 +14,7 @@
   "dependencies": {
     "@argent/configuration-core": "file:../configuration-core",
     "@argent/device-providers": "file:../device-providers",
+    "@argent/installer": "file:../argent-installer",
     "@argent/registry": "file:../registry",
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
