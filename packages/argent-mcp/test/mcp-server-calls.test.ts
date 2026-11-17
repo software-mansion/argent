@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -9,6 +9,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
+import { unchangedTreeNote } from "../src/unchanged-tree.js";
+import { setFlag } from "@argent/configuration-core";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -553,13 +555,35 @@ describe("startMcpServer screen capture after an interaction", () => {
     await stub.close();
   });
 
-  const tap = () =>
-    client.callTool({ name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } });
-  const wait = () =>
+  type Result = Awaited<ReturnType<Client["callTool"]>>;
+  const tap = (udid = "u") =>
+    client.callTool({ name: "gesture-tap", arguments: { udid, x: 0.5, y: 0.5 } });
+  const wait = (udid = "u") =>
     client.callTool({
       name: "await-ui-element",
-      arguments: { udid: "u", condition: "visible", selector: { text: "Settings" } },
+      arguments: { udid, condition: "visible", selector: { text: "Settings" } },
     });
+  const describeScreen = (udid = "u") => client.callTool({ name: "describe", arguments: { udid } });
+  /** The last text block: the element tree after an action, or the note. */
+  const lastText = (result: Result) =>
+    (result.content as Array<{ type: string; text?: string }>).at(-1)!.text!;
+  /** The id the result gives its full tree, as the agent reads it. */
+  const treeId = (result: Result) => {
+    const id = /^Tree id: (\S+)$/m.exec(textOf(result))?.[1];
+    expect(id).toMatch(/^[0-9a-z]{3}-\d+$/);
+    return id!;
+  };
+  const fullTree = (result: Result, tree: string) =>
+    `${AUTO_DESCRIBE_HEADER}\nTree id: ${treeId(result)}\n${tree}`;
+  const note = (id: string, tool: string) =>
+    `${AUTO_DESCRIBE_HEADER}\n${unchangedTreeNote(id, tool)}`;
+  /** What the adapter logged for each tree it read after an action, oldest first. */
+  const loggedTrees = () =>
+    readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.event === "auto_describe");
   const toolCalls = () =>
     stub.requests.filter((r) => r.url.startsWith("/tools/")).map((r) => r.url);
 
@@ -599,9 +623,9 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     const result = await tap();
 
-    const content = result.content as Array<{ type: string; text?: string }>;
-    expect(content.at(-1)!.text).toBe(
+    expect(lastText(result)).toBe(
       "--- Elements after action (describe) ---\n" +
+        `Tree id: ${treeId(result)}\n` +
         "Hint: 1 element(s) lie outside the app window and were omitted.\n" +
         "button Done (0.1,0.2,0.3,0.1)"
     );
@@ -613,8 +637,139 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     const result = await tap();
 
-    const content = result.content as Array<{ type: string; text?: string }>;
-    expect(content.at(-1)!.text).toBe(`--- Elements after action (describe) ---\n${describeText}`);
+    expect(lastText(result)).toBe(fullTree(result, describeText));
+  });
+
+  it("sends a note in place of a tree identical to the last one, and the screenshot still", async () => {
+    const first = await tap();
+
+    const second = await wait();
+
+    expect(lastText(second)).toBe(note(treeId(first), "gesture-tap"));
+    expect(textOf(second)).not.toContain("button Done");
+    const content = second.content as Array<{ type: string; text?: string }>;
+    expect(content.some((c) => c.type === "image")).toBe(true);
+  });
+
+  it("sends a changed tree in full, under a new id", async () => {
+    const first = await tap();
+    describeText = "button Save (0.1,0.2,0.3,0.1)";
+
+    const second = await tap();
+
+    expect(lastText(second)).toBe(fullTree(second, describeText));
+    expect(treeId(second)).not.toBe(treeId(first));
+  });
+
+  it("gives the tree of the agent's describe call an id, and names it in the next note", async () => {
+    // The memory already holds the same tree from the tap: the describe call
+    // replaces that record, so the note names the tree the agent read last.
+    const tapped = await tap();
+
+    const described = await describeScreen();
+
+    // Right after the tree, before the screenshot of the describe call.
+    const blocks = (described.content as Array<{ type: string; text?: string }>).map((c) =>
+      c.type === "image" ? "image" : c.text!.split("\n")[0]
+    );
+    expect(blocks.slice(0, 3)).toEqual([
+      "{",
+      `Tree id: ${treeId(described)}`,
+      "--- Screen after action ---",
+    ]);
+    expect(textOf(described)).toContain("button Done");
+    expect(treeId(described)).not.toBe(treeId(tapped));
+    expect(lastText(await wait())).toBe(note(treeId(described), "describe"));
+  });
+
+  it("sends the tree in full when it lacks the hint of the agent's describe call", async () => {
+    describeHint = "The display is suspended.";
+    await describeScreen();
+    describeHint = undefined;
+
+    const result = await tap();
+
+    expect(lastText(result)).toBe(fullTree(result, describeText));
+  });
+
+  it("sends the tree in full when only describe's hint is new", async () => {
+    await tap();
+    describeHint = "The display is suspended.";
+
+    const result = await tap();
+
+    expect(lastText(result)).toBe(
+      fullTree(result, `Hint: The display is suspended.\n${describeText}`)
+    );
+  });
+
+  it("keeps the trees of two devices apart", async () => {
+    const first = await tap("u");
+
+    const other = await tap("v");
+
+    expect(lastText(other)).toBe(fullTree(other, describeText));
+    expect(lastText(await wait("u"))).toBe(note(treeId(first), "gesture-tap"));
+    expect(lastText(await wait("v"))).toBe(note(treeId(other), "gesture-tap"));
+  });
+
+  // The SDK drops the response of a call the client cancelled, while the
+  // handler runs to its end.
+  it.each([
+    ["an action", () => ({ name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } })],
+    ["a describe call", () => ({ name: "describe", arguments: { udid: "u" } })],
+  ])("sends the tree in full after %s the client gave up on", async (_label, call) => {
+    // The stub answers describe after 100 ms.
+    await expect(client.callTool(call(), undefined, { timeout: 30 })).rejects.toThrow(/timed out/i);
+    await vi.waitFor(() => expect(events).toContain("describe end"));
+    await new Promise((r) => setTimeout(r, 50));
+
+    const result = await wait();
+
+    expect(lastText(result)).toBe(fullTree(result, describeText));
+  });
+
+  it("logs whether each tree repeated the last full one, and whether a note replaced it", async () => {
+    const before = loggedTrees().length;
+    await tap();
+    for (let i = 0; i < 4; i++) await wait();
+    describeText = "button Save (0.1,0.2,0.3,0.1)";
+    await wait();
+
+    expect(
+      loggedTrees()
+        .slice(before)
+        .map(({ name, identical, note: noted }) => ({ name, identical, noted }))
+    ).toEqual([
+      { name: "gesture-tap", identical: false, noted: false },
+      { name: "await-ui-element", identical: true, noted: true },
+      { name: "await-ui-element", identical: true, noted: true },
+      { name: "await-ui-element", identical: true, noted: true },
+      // Sent in full again after three notes: still a repeat.
+      { name: "await-ui-element", identical: true, noted: false },
+      { name: "await-ui-element", identical: false, noted: false },
+    ]);
+  });
+
+  it("gives describe no tree id when the element tree after an action is turned off", async () => {
+    setFlag("disable-auto-describe", true, "global", { homeDir: TEST_HOME });
+    try {
+      const other = await connect(
+        {
+          bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+          simulatorServerDir: "",
+          nativeDevtoolsDir: "",
+        },
+        { captureTimeoutMs: CAPTURE_MS }
+      );
+      const described = await other.callTool({ name: "describe", arguments: { udid: "u" } });
+      await other.close();
+
+      expect(textOf(described)).toContain("button Done");
+      expect(textOf(described)).not.toContain("Tree id");
+    } finally {
+      setFlag("disable-auto-describe", false, "global", { homeDir: TEST_HOME });
+    }
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {
