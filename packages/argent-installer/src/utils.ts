@@ -323,6 +323,21 @@ function isEmptyPlainObject(value: unknown): boolean {
   );
 }
 
+// Removes whatever `targetPath` names and returns whether anything was there. A
+// link goes without what it leads to; a directory goes with its contents.
+//
+// A link is unlinked rather than handed to fs.rmSync: on Node 23.0 to 24.13.0
+// and 25.0 to 25.3, rmSync looks through the link, so it throws ERR_FS_EISDIR
+// for a link to a directory unless `recursive` is set, and returns without
+// removing a dangling link (nodejs/node#61020).
+export function removePath(targetPath: string): boolean {
+  const entry = fs.lstatSync(targetPath, { throwIfNoEntry: false });
+  if (!entry) return false;
+  if (entry.isSymbolicLink()) fs.unlinkSync(targetPath);
+  else fs.rmSync(targetPath, { recursive: entry.isDirectory(), force: true });
+  return true;
+}
+
 function rmEmptyDir(dirPath: string): boolean {
   try {
     if (!fs.existsSync(dirPath)) return false;
@@ -450,13 +465,11 @@ export function resolveLinkedDestination(dest: string): string {
 // (`.claude/agents -> ../.agents/agents`) or a single file inside it (issue
 // #701).
 //
-// `fs.cp` cannot do this: its handling of a symlinked destination depends on
-// the runtime. Node 20 refuses one at any level (ERR_FS_CP_DIR_TO_NON_DIR) and
-// quietly replaces a symlinked file, leaving the canonical copy stale; Node 22
-// writes through both, but aborts the process — an uncatchable C++
-// std::filesystem exception — whenever it has to create a directory and cannot.
-// Argent supports both, and `fs.copyFileSync` reports each failure as a plain,
-// catchable errno.
+// `fs.cp` cannot: depending on the Node version it refuses a symlinked
+// destination (ERR_FS_CP_DIR_TO_NON_DIR), replaces a symlinked file (leaving the
+// canonical copy stale), or aborts the process with an uncatchable C++
+// exception when it cannot create a directory. `fs.copyFileSync` reports each
+// failure as a catchable errno.
 export function copyDir(src: string, dest: string): string | null {
   // A source with no files is nothing to copy either: a bundle that stopped
   // shipping a kind of content must not leave an empty dir at every target.
@@ -548,7 +561,7 @@ export function removeRetiredFiles(
     try {
       fs.rmSync(file);
       // A link to the removed copy would now dangle.
-      if (file !== entryPath) fs.rmSync(entryPath, { force: true });
+      if (file !== entryPath) removePath(entryPath);
       removedPaths.push(relativePath);
     } catch {
       continue;

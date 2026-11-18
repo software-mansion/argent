@@ -15,9 +15,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Node 22 is the oldest line Argent supports, and Node 24 is what most users
+  # run, so both run every test. The two differ where the tests can see it, for
+  # example in how Node loads the script of a `script:` step and how
+  # TextDecoder reads windows-1252.
   unit-tests:
-    name: Unit tests
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: "22"
+            name: Unit tests
+          - node: "24"
+            name: Unit tests (Node 24)
 
     steps:
       - name: Checkout
@@ -26,7 +38,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: ${{ matrix.node }}
           cache: npm
 
       - name: Install dependencies
@@ -43,39 +55,6 @@ jobs:
       - name: Test root scripts
         run: npm run test:scripts
 
-  # A `script:` step runs TypeScript only from Node 22.18, so the job above, on
-  # Node 20, skips every test that executes an `.mts` file. This job runs them,
-  # on a Node that runs TypeScript.
-  script-steps-typescript:
-    name: TypeScript script steps (Node 24)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-      - name: Fix rollup native bindings
-        run: npm install @rollup/rollup-linux-x64-gnu --no-save
-
-      - name: Build workspace dependencies
-        run: npm run build
-
-      - name: Run the script step tests
-        working-directory: packages/tool-server
-        run: >-
-          npx vitest run
-          test/flows/script/flow-script-step-run.test.ts
-          test/flows/script/flow-script-typescript.test.ts
-          test/flows/script/flow-script-run.test.ts
-
   # Typechecking needs the same install and build as the tests but none of their
   # output, so running it alongside them takes its ~60s off the critical path
   # rather than adding to it.
@@ -90,7 +69,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
 
       - name: Install dependencies
