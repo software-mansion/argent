@@ -80,7 +80,7 @@ Build the Mac Catalyst target of your app, then give the agent the path to the `
 
 A Mac Catalyst app differs from other Mac apps in these ways:
 
-- The agent reads the UIKit views from the accessibility tree only. The tools that read the AppKit view tree do not show these views.
+- The agent reads the UIKit views from the accessibility tree only. The tools that read the AppKit view tree fail in a Mac Catalyst app.
 - The agent reads the interface of the front window. The agent switches windows with the Window menu.
 - When the app has more than one window, the agent clicks a text field before it types.
 
