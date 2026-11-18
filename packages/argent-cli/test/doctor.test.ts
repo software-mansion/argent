@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import {
   classifyMcpEntry,
   renderDoctorReport,
   stripPackageBinDirs,
   toolchainChecks,
+  type DoctorCheck,
   type EntryContext,
 } from "../src/doctor.js";
 
@@ -118,23 +120,55 @@ describe("stripPackageBinDirs", () => {
 });
 
 describe("renderDoctorReport", () => {
-  it("prints the fix under a failing check and counts errors and warnings", () => {
-    const output = renderDoctorReport({
-      version: "1.0.0",
-      projectRoot,
-      sections: [
-        {
-          title: "Editors (MCP config)",
-          checks: [
-            { status: "error", label: "Cursor: argent mcp", fix: "npm install -g x" },
-            { status: "warn", label: "Rules missing", fix: "argent init" },
-            { status: "ok", label: "Claude Code: argent mcp", fix: "never shown" },
-          ],
-        },
-      ],
-    });
-    expect(output).toContain("npm install -g x");
-    expect(output).not.toContain("never shown");
-    expect(output).toContain("1 error, 1 warning");
+  const passed = { status: "ok", label: "Cursor: argent mcp" } as const;
+  const info = { status: "info", label: "Running v1.0.0" } as const;
+  const warning = {
+    status: "warn",
+    label: "Rules missing in ~/.cursor/rules",
+    detail: "argent.md",
+    fix: "argent init",
+  } as const;
+  const failure = {
+    status: "error",
+    label: "`argent` is not on PATH",
+    fix: "npm install -g @swmansion/argent",
+  } as const;
+
+  function report(...checks: DoctorCheck[]) {
+    return { version: "1.0.0", projectRoot, sections: [{ title: "Install", checks }] };
+  }
+
+  it("prints only the header and one summary line when every check passes", () => {
+    const lines = stripVTControlCharacters(renderDoctorReport(report(passed, info, passed))).split(
+      "\n"
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("argent doctor v1.0.0");
+    expect(lines[1]).toBe("✔ All 2 checks passed. Argent looks good.");
+  });
+
+  it("puts the summary first and lists errors before warnings with their advice", () => {
+    const output = stripVTControlCharacters(renderDoctorReport(report(passed, warning, failure)));
+    expect(output).toContain("1/3 checks passed. 2 checks failed.");
+    expect(output).toContain("Use --verbose to see the passed checks.");
+    expect(output).not.toContain(passed.label);
+    expect(output.indexOf("✖ `argent` is not on PATH")).toBeLessThan(
+      output.indexOf("⚠ Rules missing")
+    );
+    expect(output).toContain(
+      "⚠ Rules missing in ~/.cursor/rules\n  argent.md\nAdvice:\nargent init"
+    );
+    expect(
+      output.trimEnd().endsWith("2 checks failed, indicating possible issues with your setup.")
+    ).toBe(true);
+  });
+
+  it("lists the passed checks with --verbose", () => {
+    const output = stripVTControlCharacters(
+      renderDoctorReport(report(passed, info, failure), true)
+    );
+    expect(output).toContain("✔ Cursor: argent mcp");
+    expect(output).toContain("· Running v1.0.0");
+    expect(output).not.toContain("--verbose");
   });
 });

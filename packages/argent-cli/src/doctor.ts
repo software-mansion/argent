@@ -38,7 +38,7 @@ const PACKAGE_RUNNERS = new Set(["npx", "yarn", "pnpm", "bunx"]);
 
 type CheckStatus = "ok" | "warn" | "error" | "info";
 
-interface DoctorCheck {
+export interface DoctorCheck {
   status: CheckStatus;
   label: string;
   detail?: string;
@@ -386,63 +386,108 @@ async function collectDoctorReport(paths: ToolsServerPaths, cwd: string): Promis
 }
 
 const MARKS: Record<CheckStatus, string> = {
-  ok: pc.green("✓"),
-  warn: pc.yellow("!"),
-  error: pc.red("✗"),
+  ok: pc.green("✔"),
+  warn: pc.yellow("⚠"),
+  error: pc.red("✖"),
   info: pc.dim("·"),
 };
 
+function allChecks(report: DoctorReport): DoctorCheck[] {
+  return report.sections.flatMap((s) => s.checks);
+}
+
 function countStatus(report: DoctorReport, status: CheckStatus): number {
-  return report.sections.flatMap((s) => s.checks).filter((c) => c.status === status).length;
+  return allChecks(report).filter((c) => c.status === status).length;
 }
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-export function renderDoctorReport(report: DoctorReport): string {
-  const lines = [
-    `${pc.bold("argent doctor")}  v${report.version} · node v${process.versions.node} · ${process.platform} ${process.arch}`,
-    pc.dim(`project: ${home(report.projectRoot)}`),
-  ];
+function isFailed(c: DoctorCheck): boolean {
+  return c.status === "error" || c.status === "warn";
+}
+
+function header(report: DoctorReport): string {
+  const runtime = `node v${process.versions.node}, ${process.platform} ${process.arch}`;
+  return `${pc.bold("argent doctor")} v${report.version} (${runtime}) in ${home(report.projectRoot)}`;
+}
+
+function failedBlock(c: DoctorCheck): string[] {
+  const lines = [`${MARKS[c.status]} ${pc.bold(c.label)}`];
+  if (c.detail) lines.push(`  ${c.detail}`);
+  if (c.fix) lines.push("Advice:", c.fix);
+  return lines;
+}
+
+function passedList(report: DoctorReport): string[] {
+  const lines: string[] = [];
   for (const section of report.sections) {
-    if (section.checks.length === 0) continue;
+    const passed = section.checks.filter((c) => !isFailed(c));
+    if (passed.length === 0) continue;
     lines.push("", pc.bold(section.title));
-    for (const c of section.checks) {
-      lines.push(`  ${MARKS[c.status]} ${c.label}`);
-      if (c.detail) lines.push(`      ${pc.dim(c.detail)}`);
-      if (c.fix && c.status !== "ok") lines.push(`      ${pc.cyan("→")} ${c.fix}`);
+    for (const c of passed) {
+      lines.push(`${MARKS[c.status]} ${c.label}`);
+      if (c.detail) lines.push(pc.dim(`  ${c.detail}`));
     }
   }
-  const errors = countStatus(report, "error");
-  const warnings = countStatus(report, "warn");
-  const summary = `${plural(errors, "error")}, ${plural(warnings, "warning")}`;
-  const color = errors > 0 ? pc.red : warnings > 0 ? pc.yellow : pc.green;
-  lines.push("", color(summary));
+  return lines;
+}
+
+export function renderDoctorReport(report: DoctorReport, verbose = false): string {
+  const scored = allChecks(report).filter((c) => c.status !== "info");
+  const failed = [
+    ...scored.filter((c) => c.status === "error"),
+    ...scored.filter((c) => c.status === "warn"),
+  ];
+  const passedCount = scored.length - failed.length;
+  const passedDetails = verbose ? passedList(report) : [];
+
+  if (failed.length === 0) {
+    const summary = pc.green(`✔ All ${plural(passedCount, "check")} passed. Argent looks good.`);
+    return [header(report), summary, ...passedDetails].join("\n");
+  }
+
+  const lines = [
+    header(report),
+    `${passedCount}/${scored.length} checks passed. ${plural(failed.length, "check")} failed. Possible issues detected:`,
+  ];
+  if (!verbose && passedCount > 0) lines.push(pc.dim("Use --verbose to see the passed checks."));
+  lines.push(...passedDetails);
+  for (const c of failed) lines.push("", ...failedBlock(c));
+  lines.push(
+    "",
+    `${plural(failed.length, "check")} failed, indicating possible issues with your setup.`
+  );
   return lines.join("\n");
 }
 
-const HELP = `Usage: argent doctor
+const HELP = `Usage: argent doctor [--verbose]
 
 Check why argent might not work in this project: the install, the editor MCP
 entries, the skills and rules, and the Xcode and Android toolchains. The command
-changes nothing. It prints a fix for each problem.
+changes nothing. It prints advice for each failed check.
 
-Exits 1 when a check fails (✗). Warnings (!) do not change the exit code.`;
+Options:
+  --verbose    Also list the checks that passed
+  -h, --help   Show this help
+
+Exits 1 when a check fails (✖). Warnings (⚠) do not change the exit code.`;
 
 export async function doctor(argv: string[], options: { paths: ToolsServerPaths }): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(HELP);
     return;
   }
-  if (argv.length > 0) {
-    console.error(`Unknown option: ${argv[0]}\n\n${HELP}`);
+  const unknown = argv.find((arg) => arg !== "--verbose");
+  if (unknown) {
+    console.error(`Unknown option: ${unknown}\n\n${HELP}`);
     process.exitCode = 2;
     return;
   }
 
   if (process.env.PATH) process.env.PATH = stripPackageBinDirs(process.env.PATH);
   const report = await collectDoctorReport(options.paths, process.cwd());
-  console.log(renderDoctorReport(report));
+  console.log(renderDoctorReport(report, argv.includes("--verbose")));
   if (countStatus(report, "error") > 0) process.exitCode = 1;
 }

@@ -66,7 +66,9 @@ The command checks these items:
 - the skills and rules,
 - Xcode and the Android SDK Platform Tools (`adb`).
 
-The command changes nothing. It prints a fix for each problem. If `argent` is not on `PATH` (for example, with a local install), run `npx argent doctor`.
+The command changes nothing. When all checks pass, it prints only the version line and one summary line. When a check fails, it prints a summary, then the failed checks with advice for each. Add `--verbose` to also list the passed checks.
+
+If `argent` is not on `PATH` (for example, with a local install), run `npx argent doctor`.
 
 ## Manual install
 
