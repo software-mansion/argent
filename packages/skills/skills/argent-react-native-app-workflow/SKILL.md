@@ -15,7 +15,7 @@ react-native-macos app: start Metro (§1.2), then follow `argent-macos-app-inter
 
 **If the project structure is convoluted, ask the user before proceeding.**
 
-Once you know how the project starts Metro, builds and runs the app, and what environment setup it needs, **save that to project memory** so you don't need to rediscover it each time.
+Once you know how the project starts Metro, builds and runs the app, and what environment setup it needs, reuse that for the rest of the session instead of rediscovering it.
 
 ### 1.2 Start Metro
 

@@ -338,6 +338,32 @@ describe("view-network-request-details: request bodies and charsets", () => {
     }
   );
 
+  it("decodes windows-1252 on a Node whose TextDecoder reads it as ISO-8859-1", async () => {
+    // 24.9.0 is one such Node; CI's is not, so stand one in.
+    class Iso88591Decoder extends TextDecoder {
+      override decode(...args: Parameters<TextDecoder["decode"]>): string {
+        if (this.encoding !== "windows-1252") return super.decode(...args);
+        return Buffer.from(args[0] as Uint8Array).toString("latin1");
+      }
+    }
+    vi.stubGlobal("TextDecoder", Iso88591Decoder);
+    try {
+      responseBody.mockResolvedValue(heldBody(Buffer.from([0x93, 0x68, 0x69, 0x94, 0x80])));
+      serve(
+        record({
+          response: {
+            headers: { "Content-Type": "text/plain; charset=windows-1252" },
+            mimeType: "text/plain",
+          },
+        })
+      );
+
+      expect((await details()).response.body).toBe("“hi”€");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("drops only the incomplete Shift_JIS character a cut leaves", async () => {
     const sjis = Buffer.from([0x93, 0x8c, 0x8b, 0x9e]); // 東京
     responseBody.mockResolvedValue(heldBody(sjis.subarray(0, 3), true));

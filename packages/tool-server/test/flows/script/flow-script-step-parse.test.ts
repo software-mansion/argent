@@ -162,13 +162,56 @@ describe("script path rules, shared with a run: target", () => {
     expect(() => step("{ path: 'C:/seed.mjs' }")).toThrow(/must be relative to the e2e test file/);
   });
 
+  it("takes a plain JavaScript or TypeScript file", () => {
+    expect(step("{ path: scripts/seed.js }")).toEqual([
+      { kind: "script", path: "scripts/seed.js" },
+    ]);
+    expect(step("{ path: scripts/seed.ts, timeout: 5000 }")).toEqual([
+      { kind: "script", path: "scripts/seed.ts", timeout: 5000 },
+    ]);
+  });
+
+  it("takes a TypeScript ES module", () => {
+    expect(step("{ path: scripts/seed.mts }")).toEqual([
+      { kind: "script", path: "scripts/seed.mts" },
+    ]);
+    expect(step("{ path: scripts/seed.mts, timeout: 5000 }")).toEqual([
+      { kind: "script", path: "scripts/seed.mts", timeout: 5000 },
+    ]);
+  });
+
   it("refuses an uppercase extension, saying which spelling it wants", () => {
-    expect(() => step("{ path: scripts/SEED.MJS }")).toThrow(/lowercase .mjs extension/);
+    expect(() => step("{ path: scripts/SEED.MJS }")).toThrow(/lowercase \.mjs extension/);
+    expect(() => step("{ path: scripts/seed.Mts }")).toThrow(/lowercase \.mts extension/);
+    expect(() => step("{ path: scripts/seed.JS }")).toThrow(/lowercase \.js extension/);
+    expect(() => step("{ path: scripts/seed.TS }")).toThrow(/lowercase \.ts extension/);
+  });
+
+  it("refuses the CommonJS-only extensions, and says what to write instead", () => {
+    // Node's error for `require` in an ES module `.js` file advises `.cjs`, so
+    // this is where a script following that advice arrives.
+    for (const [body, extension] of [
+      ["{ path: seed.cjs }", ".cjs"],
+      ["{ path: scripts/seed.cts }", ".cts"],
+      ["{ path: seed.CJS }", ".cjs"],
+    ] as const) {
+      expect(() => step(body), body).toThrow(
+        `must end in .mjs, .mts, .js or .ts, and ${extension} is not accepted — where the project's package.json sets "type": "module", use \`import\` in the script in place of \`require\``
+      );
+    }
   });
 
   it("refuses any other extension, and never completes a bare name", () => {
-    for (const body of ["{ path: seed }", "{ path: seed.js }", "{ path: seed.cjs }"]) {
-      expect(() => step(body), body).toThrow(/must end in .mjs/);
+    for (const body of [
+      "{ path: seed }",
+      "{ path: seed.cjs }",
+      "{ path: seed.cts }",
+      "{ path: seed.jsx }",
+      "{ path: seed.tsx }",
+      "{ path: seed.json }",
+      "{ path: seedjs }",
+    ]) {
+      expect(() => step(body), body).toThrow(/must end in \.mjs, \.mts, \.js or \.ts/);
     }
   });
 
@@ -177,6 +220,11 @@ describe("script path rules, shared with a run: target", () => {
       "{ path: 'my seed.mjs' }",
       "{ path: seed.step.mjs }",
       "{ path: 'sc/.mjs' }",
+      // A declaration file holds no code to run.
+      "{ path: seed.d.ts }",
+      "{ path: seed.d.mts }",
+      "{ path: seed.config.js }",
+      "{ path: 'sc/.ts' }",
     ]) {
       expect(() => step(body), body).toThrow(/filename must match/);
     }

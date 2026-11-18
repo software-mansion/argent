@@ -135,7 +135,7 @@ describe("native-profiler-stop recovery branch", () => {
       STOP_CTX
     )) as IosStopArtifacts;
 
-    expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
+    expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE, false);
     // exportedFiles are now artifact handles (materialized client-side), not raw paths.
     expect(result.exportedFiles.cpu).toMatchObject({
       __argentArtifact: true,
@@ -147,8 +147,8 @@ describe("native-profiler-stop recovery branch", () => {
       kind: "native-profile-hangs",
       filename: "hangs.xml",
     });
-    // The .trace bundle is now a downloadable artifact (delivered as tar.gz
-    // on demand), not a "stays on the host" note.
+    // The .trace bundle is a downloadable artifact (a compressed tar on
+    // demand), not a "stays on the host" note.
     expect(result.traceFile).toMatchObject({
       __argentArtifact: true,
       kind: "native-profile-trace",
