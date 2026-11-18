@@ -1,6 +1,6 @@
 import type { ChildProcess } from "child_process";
 import * as path from "path";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import type { MacosAppApi } from "../../../../blueprints/macos-app";
 import { InvalidToolInputError } from "../../../../utils/capability";
@@ -8,6 +8,7 @@ import { waitForChildExit } from "../../../../utils/profiler-shared/lifecycle";
 import {
   getTrackedMacosApp,
   inBackgroundSession,
+  processHasWebKitMallocZone,
   processStartedWithEnv,
   readCodeSignature,
   runningTrackedApp,
@@ -85,6 +86,60 @@ async function assertDebuggable(
   );
 }
 
+/**
+ * The Allocations instrument can deadlock on JavaScriptCore's malloc zone
+ * when stack logging is off. It suspends individual threads, so the app stays
+ * frozen after recording and the task suspension watch cannot detect it.
+ * Check only the bundled template and refuse to attach if the heap check fails.
+ */
+async function assertAllocationsCanAttach(bundleId: string, pid: number): Promise<void> {
+  const waysForward =
+    `Pass malloc_stack_logging: true to record leaks with their allocation backtraces: argent ` +
+    `restarts the app with MallocStackLogging=1 (Instruments does not freeze an app that runs ` +
+    `with it), and the app loses its state. Or pass template_path: "Time Profiler" to record ` +
+    `CPU samples and hangs without leaks, and keep the app's state.`;
+  let hasWebKitHeap: boolean;
+  try {
+    hasWebKitHeap = await processHasWebKitMallocZone(pid);
+  } catch (err) {
+    const timedOut = (err as { killed?: boolean }).killed === true;
+    // Untrimmed, so the agent's error text does not repeat it as the cause.
+    const said = timedOut
+      ? "vmmap did not finish in time."
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    throw new FailureError(
+      `argent could not read the malloc zones of ${bundleId} (pid ${pid}) with vmmap, so it ` +
+        `cannot tell whether the app runs the JavaScriptCore heap of WebKit. The Allocations ` +
+        `instrument of the default template freezes an app with that heap for good, so argent ` +
+        `does not start the recording. ${waysForward} Underlying error: ${said}`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_HEAP_CHECK_FAILED,
+        failure_stage: "native_profiler_check_heap",
+        failure_area: "tool_server",
+        error_kind: timedOut ? "timeout" : "subprocess",
+        ...subprocessFailureMetadata(err, "unknown"),
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
+  }
+  if (!hasWebKitHeap) return;
+  throw new FailureError(
+    `${bundleId} runs the JavaScriptCore heap of WebKit, as an app that shows web content ` +
+      `does. The Allocations instrument of the default template freezes such an app when it ` +
+      `attaches: every thread of the app stops for good, also after the recording, until the ` +
+      `app is force-quit. So argent does not start the recording. ${waysForward} Apple's Leaks ` +
+      `and Allocations templates freeze such an app too.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_APP_HAS_WEBKIT_HEAP,
+      failure_stage: "native_profiler_check_heap",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    }
+  );
+}
+
 export async function startNativeProfilerMacos(
   api: NativeProfilerSessionApi,
   macosApp: MacosAppApi,
@@ -150,6 +205,9 @@ export async function startNativeProfilerMacos(
         `${bundleId} still runs with MallocStackLogging=1 from an earlier malloc_stack_logging ` +
           `capture, which slows it down and shows in the timings. restart-app starts it without.`
       );
+    }
+    if (params.template_path === undefined && !stillLogs) {
+      await assertAllocationsCanAttach(bundleId, pid);
     }
   }
 

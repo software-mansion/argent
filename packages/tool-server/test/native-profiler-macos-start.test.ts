@@ -58,6 +58,7 @@ vi.mock("../src/utils/macos-apps", async (importOriginal) => ({
   readCodeSignature: vi.fn(async () => null),
   inBackgroundSession: vi.fn(async () => false),
   processStartedWithEnv: vi.fn(async () => false),
+  processHasWebKitMallocZone: vi.fn(async () => false),
 }));
 vi.mock("../src/utils/ios-profiler/export", () => ({
   exportIosTraceData: vi.fn(async () => {
@@ -80,12 +81,15 @@ import { startNativeProfilerMacos } from "../src/tools/profiler/native-profiler/
 import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
+import { formatErrorForAgent } from "../src/utils/format-error";
 import { getDebugDir } from "../src/utils/react-profiler/debug/dump";
 import { listenForDarwinNotification, type NotifyHandle } from "../src/utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../src/utils/ios-profiler/startup";
 import {
   getTrackedMacosApp,
   inBackgroundSession,
+  listsWebKitMallocZone,
+  processHasWebKitMallocZone,
   processStartedWithEnv,
   readCodeSignature,
   runningTrackedApp,
@@ -109,6 +113,7 @@ const trackedMock = vi.mocked(getTrackedMacosApp);
 const signatureMock = vi.mocked(readCodeSignature);
 const readyMock = vi.mocked(waitForXctraceReady);
 const envMock = vi.mocked(processStartedWithEnv);
+const webKitHeapMock = vi.mocked(processHasWebKitMallocZone);
 
 const TEMPLATE = "/tmp/Custom.tracetemplate";
 
@@ -231,6 +236,8 @@ beforeEach(() => {
   signatureMock.mockResolvedValue(signature(true));
   envMock.mockReset();
   envMock.mockResolvedValue(false);
+  webKitHeapMock.mockReset();
+  webKitHeapMock.mockResolvedValue(false);
 });
 
 afterEach(() => {
@@ -992,6 +999,163 @@ describe("startNativeProfilerMacos and the app's code signature", () => {
     expect(launch).toHaveBeenCalledTimes(1);
     expect(spawnMock).not.toHaveBeenCalled();
     expect((err as Error).message).toContain(`argent restarted ${bundleId} (pid 7777)`);
+  });
+});
+
+// Instruments' Allocations recorder, in the bundled template, freezes for good an
+// app that has JavaScriptCore's heap and runs without MallocStackLogging.
+describe("startNativeProfilerMacos and JavaScriptCore's heap", () => {
+  const HAS_WEBKIT_HEAP = "NATIVE_PROFILER_APP_HAS_WEBKIT_HEAP";
+
+  // The malloc zones that `vmmap -summary` lists for a Mac app with a WKWebView.
+  const ZONE_TABLE = `\
+MALLOC ZONE                                  SIZE       SIZE       SIZE       SIZE      COUNT  ALLOCATED  FRAG SIZE  % FRAG   COUNT
+===========                               =======  =========  =========  =========  =========  =========  =========  ======  ======
+WebKit Malloc_0x108f065f8                  192.0M      3040K      2000K         0K       2002       208K      1792K     90%       4
+DefaultMallocZone_0x1006d4000               55.8M      19.6M      19.6M         0K      89053      13.1M      6716K     34%      73
+QuartzCore_0x107060000                       784K       672K       672K         0K       2413       184K       488K     73%      26
+WebKit Using System Malloc_0x108ed0000         0K         0K         0K         0K          0         0K         0K      0%       0
+===========                               =======  =========  =========  =========  =========  =========  =========  ======  ======
+`;
+
+  it("reads JavaScriptCore's zone from vmmap, and not WebKit's system malloc zone", () => {
+    expect(listsWebKitMallocZone(ZONE_TABLE)).toBe(true);
+    const withoutLibpas = ZONE_TABLE.split("\n")
+      .filter((line) => !line.startsWith("WebKit Malloc_0x"))
+      .join("\n");
+    expect(listsWebKitMallocZone(withoutLibpas)).toBe(false);
+  });
+
+  it("refuses the bundled template on such an app, before it spawns xctrace", async () => {
+    const api = await session();
+    const { app, launch } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+    webKitHeapMock.mockResolvedValue(true);
+
+    const err = await start(api, app, { device_id: deviceId }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(HAS_WEBKIT_HEAP);
+    expect((err as Error).message).toContain("malloc_stack_logging: true");
+    expect((err as Error).message).toContain('template_path: "Time Profiler"');
+    expect(webKitHeapMock).toHaveBeenCalledWith(4321);
+    expect(launch).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(api.profilingActive).toBe(false);
+  });
+
+  it("rejects from the zone check when vmmap cannot read the process", async () => {
+    const actual =
+      await vi.importActual<typeof import("../src/utils/macos-apps")>("../src/utils/macos-apps");
+    // No process has this pid: macOS hands out pids below 100000. Where vmmap
+    // is missing, as on Linux, the spawn fails instead.
+    await expect(actual.processHasWebKitMallocZone(999_999)).rejects.toThrow(/vmmap/);
+  });
+
+  // Not knowing is not "no heap": a wrong attach costs the app.
+  it("refuses the bundled template when vmmap cannot read the app, with vmmap's error", async () => {
+    const api = await session();
+    const { app, launch } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+    webKitHeapMock.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "Command failed: vmmap -summary 4321\nvmmap[812]: [fatal] unable to read process 4321\n"
+        ),
+        { code: 1, killed: false, signal: null }
+      )
+    );
+
+    const err = await start(api, app, { device_id: deviceId }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "NATIVE_PROFILER_APP_HEAP_CHECK_FAILED",
+      error_kind: "subprocess",
+      failure_exit_code: 1,
+    });
+    expect((err as Error).message).toContain("unable to read process 4321");
+    // The agent reads vmmap's error once, not again as the cause.
+    expect(formatErrorForAgent(err)).toBe((err as Error).message);
+    expect((err as Error).message).toContain("malloc_stack_logging: true");
+    expect((err as Error).message).toContain('template_path: "Time Profiler"');
+    expect(launch).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(api.profilingActive).toBe(false);
+  });
+
+  it("refuses the bundled template when vmmap did not finish in time", async () => {
+    const api = await session();
+    const { app } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+    // What execFile rejects with when its timeout stopped the child.
+    webKitHeapMock.mockRejectedValue(
+      Object.assign(new Error("Command failed: vmmap -summary 4321\n"), {
+        code: null,
+        killed: true,
+        signal: "SIGTERM",
+      })
+    );
+
+    const err = await start(api, app, { device_id: deviceId }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "NATIVE_PROFILER_APP_HEAP_CHECK_FAILED",
+      error_kind: "timeout",
+      failure_signal: "SIGTERM",
+    });
+    expect((err as Error).message).toContain("vmmap did not finish in time");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("records an app without that heap with the bundled template", async () => {
+    const api = await session();
+    const { app } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+
+    const result = await start(api, app, { device_id: deviceId });
+
+    expect(result.status).toBe("recording");
+    expect(webKitHeapMock).toHaveBeenCalledWith(4321);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("records such an app with the template the caller chose, unchecked", async () => {
+    const api = await session();
+    const { app } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+    webKitHeapMock.mockResolvedValue(true);
+
+    const result = await start(api, app, { device_id: deviceId, template_path: "Time Profiler" });
+
+    expect(result.status).toBe("recording");
+    expect(webKitHeapMock).not.toHaveBeenCalled();
+  });
+
+  it("records such an app with the bundled template while it runs with MallocStackLogging=1", async () => {
+    const api = await session();
+    const { app } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+    envMock.mockResolvedValue(true);
+    webKitHeapMock.mockResolvedValue(true);
+
+    const result = await start(api, app, { device_id: deviceId });
+
+    expect(result.status).toBe("recording");
+    expect(webKitHeapMock).not.toHaveBeenCalled();
+  });
+
+  it("with malloc_stack_logging, restarts such an app and records it with the bundled template", async () => {
+    const api = await session();
+    const { app, launch } = fakeMacosApp(7777);
+    runningMock.mockResolvedValue(trackedApp(4321));
+    webKitHeapMock.mockResolvedValue(true);
+
+    const result = await start(api, app, { device_id: deviceId, malloc_stack_logging: true });
+
+    expect(result.status).toBe("recording");
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(webKitHeapMock).not.toHaveBeenCalled();
+    const args = xctraceArgs();
+    expect(args[args.indexOf("--attach") + 1]).toBe("7777");
   });
 });
 

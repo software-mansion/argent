@@ -57,6 +57,8 @@ vi.mock("../src/utils/macos-apps", async (importOriginal) => ({
   getTrackedMacosApp: vi.fn(() => undefined),
   // Unread, as when codesign is missing: the start records.
   readCodeSignature: vi.fn(async () => null),
+  // No JavaScriptCore heap: the start records with the bundled template.
+  processHasWebKitMallocZone: vi.fn(async () => false),
 }));
 // The helper that watches the app's suspensions: a stand-in, as spawn is the fake xctrace.
 vi.mock("@argent/native-devtools-ios", async (importOriginal) => ({

@@ -15,6 +15,13 @@ description: Diagnose native CPU hotspots, UI hangs, and memory issues. Use Inst
 
 For **Mac apps** (`platform: "macos"`), use Instruments with full Xcode. If start returns `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`, use a development-signed build. In a background session such as SSH, `template_path: "Time Profiler"` also works for CPU and hangs on a signed build without the debugging entitlement. Do not sign files or add entitlements.
 
+If `native-profiler-start` returns `NATIVE_PROFILER_APP_HAS_WEBKIT_HEAP` or `NATIVE_PROFILER_APP_HEAP_CHECK_FAILED` on a Mac app, choose the retry based on what you need to measure.
+
+- For CPU and hangs, use `template_path: "Time Profiler"` to keep the app running in its current state.
+- For leaks, use the bundled template with `malloc_stack_logging: true`, even for allocations made during the recording. Save any state you need before retrying because this restarts the app.
+
+While logging is off, avoid `Leaks`, `Allocations`, and other templates that use the Allocations instrument on these apps. They can freeze the app.
+
 `argent-react-native-profiler` starts native profiling alongside React profiling by default; this skill's workflow and investigation patterns apply in both cases.
 
 ## 2. Workflow

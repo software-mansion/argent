@@ -120,8 +120,10 @@ describe("the native profiler tools' Mac app text", () => {
       /or the name of a built-in template such as "Time Profiler"/
     );
     expect(on.description).toMatch(/On a Mac app, a warning says when the app runs with malloc/);
+    expect(on.description).toContain("WebKit heap");
 
     const off = advertised("native-profiler-start", false);
+    expect(off.description).not.toContain("WebKit heap");
     expect(off.properties.app_process!.description).toMatch(/picks the wrong app\.$/);
     expect(off.properties.malloc_stack_logging!.description).toMatch(/^iOS only\..*no leaks\.$/s);
     expect(off.properties.template_path!.description).toMatch(/^iOS only\./);
