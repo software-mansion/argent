@@ -200,21 +200,10 @@ export interface ScreenIdleWait {
   pollIntervalMs: number;
   minStableMs: number;
   signal?: AbortSignal;
-  stopOnReadError?: boolean;
-  /** Two equal empty trees count as still, instead of a screen yet to render. */
-  emptyTreeIsStable?: boolean;
   /** Read through the Android helper (installing and starting it if needed), never `uiautomator dump`. */
   androidHelperOnly?: boolean;
   /** Resolved here for a Chromium target when absent. */
   chromium?: ChromiumCdpApi;
-}
-
-export interface ScreenIdleOutcome extends IdleResult {
-  aborted: boolean;
-  /** Some read returned a different tree from the read before it. */
-  changed: boolean;
-  /** Set when the last read failed, or no read ever returned a tree. */
-  readError?: string;
 }
 
 /**
@@ -225,7 +214,7 @@ export async function waitForScreenIdle(
   registry: Registry,
   device: DeviceInfo,
   wait: ScreenIdleWait
-): Promise<ScreenIdleOutcome> {
+): Promise<IdleResult> {
   if (device.platform === "ios") await ensureDeps(iosRequires);
   else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
   else if (device.platform === "android") await ensureDeps(androidRequires);
@@ -246,7 +235,6 @@ export async function waitForScreenIdle(
   let stableSignature: string | undefined;
   let stableSince = 0;
   let lastReadAt = 0;
-  let changed = false;
 
   const poll = await pollDescribeTree<true>({
     fetchTree: (budgetMs) =>
@@ -262,12 +250,10 @@ export async function waitForScreenIdle(
     timeoutMs: wait.timeoutMs,
     pollIntervalMs,
     signal: wait.signal,
-    stopOnError: wait.stopOnReadError,
-    skipFetchAtDeadline: true,
     onSample: (data, nowMs) => {
       lastReadAt = nowMs;
       // An empty tree (blank/loading, or a degraded AX read) is not settled.
-      if (data.tree.children.length === 0 && !wait.emptyTreeIsStable) {
+      if (data.tree.children.length === 0) {
         stableSignature = undefined;
         stableSince = 0;
         return { done: false };
@@ -280,7 +266,6 @@ export async function waitForScreenIdle(
             : minStableMs;
         if (nowMs - stableSince >= requiredMs) return { done: true, result: true };
       } else {
-        if (stableSignature !== undefined) changed = true;
         stableSignature = signature;
         stableSince = nowMs;
         if (minStableMs === 0) return { done: true, result: true };
@@ -312,9 +297,6 @@ export async function waitForScreenIdle(
     waitedMs: poll.elapsedMs,
     polls: poll.polls,
     ...(note || cursorNote ? { note: note ?? cursorNote } : {}),
-    aborted: poll.aborted,
-    changed,
-    ...(poll.lastError !== undefined ? { readError: poll.lastError } : {}),
   };
 }
 
@@ -349,14 +331,13 @@ Returns { settled, waitedMs, polls, note? }. If the screen never goes still befo
     async execute(services, params, ctx?: ToolContext) {
       const device = resolveDevice(params.udid);
       assertSupported(AWAIT_SCREEN_IDLE_TOOL_ID, capability, device);
-      const { settled, waitedMs, polls, note } = await waitForScreenIdle(registry, device, {
+      return waitForScreenIdle(registry, device, {
         timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         pollIntervalMs: params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
         minStableMs: params.minStableMs ?? DEFAULT_MIN_STABLE_MS,
         signal: ctx?.signal,
         chromium: services.chromium as ChromiumCdpApi | undefined,
       });
-      return { settled, waitedMs, polls, ...(note ? { note } : {}) };
     },
   };
 }

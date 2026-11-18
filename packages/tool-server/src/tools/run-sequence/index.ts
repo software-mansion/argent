@@ -43,37 +43,11 @@ export const ALLOWED_TOOLS = new Set([
   AWAIT_UI_ELEMENT_TOOL_ID,
 ]);
 
-const SETTLE_AFTER = new Set([
-  "gesture-tap",
-  "gesture-swipe",
-  "gesture-scroll",
-  "gesture-drag",
-  "gesture-custom",
-  "gesture-pinch",
-  "gesture-rotate",
-  "button",
-  "keyboard",
-  "paste",
-  "rotate",
-  "fold",
-  // `visible` holds as soon as an element has a frame, which can be mid slide-in.
-  AWAIT_UI_ELEMENT_TOOL_ID,
-]);
-// Momentum can outlast the cap, so a wait after these says little about the screen.
-const SCROLL_TOOLS = new Set(["gesture-swipe", "gesture-scroll", "gesture-drag"]);
+const SETTLE_AFTER = new Set(["gesture-tap", "button", AWAIT_UI_ELEMENT_TOOL_ID]);
 const SETTLE_KEYS = new Set(["enter", "return", "escape", "esc"]);
 const SETTLE_IDLE_TOOL_ID = "await-screen-idle";
-const SETTLE_TIMEOUT_MS = 1000;
-const MAX_FAILED_SETTLES = 2;
 
 type Step = Params["steps"][number];
-
-function keyMayMoveUi(args: Record<string, unknown> | undefined): boolean {
-  const key = args?.key;
-  if (typeof key === "string" && SETTLE_KEYS.has(key.toLowerCase())) return true;
-  const text = args?.text;
-  return typeof text === "string" && /[\r\n]/.test(text);
-}
 
 function canSettle(registry: Registry, device: DeviceInfo): boolean {
   if (device.platform === "harmony" || device.platform === "macos" || isIosPhysicalDevice(device)) {
@@ -87,64 +61,35 @@ function canSettle(registry: Registry, device: DeviceInfo): boolean {
   }
 }
 
+function isSettleKey(step: Step): boolean {
+  const key = step.args.key;
+  return typeof key === "string" && SETTLE_KEYS.has(key.toLowerCase());
+}
+
 function settlesBetween(step: Step, next: Step | undefined): boolean {
-  return (
-    next !== undefined &&
-    next.tool !== AWAIT_UI_ELEMENT_TOOL_ID &&
-    next.tool !== "shake" &&
-    !(SCROLL_TOOLS.has(step.tool) && SCROLL_TOOLS.has(next.tool)) &&
-    step.settle !== false &&
-    SETTLE_AFTER.has(step.tool) &&
-    (step.tool !== "keyboard" || keyMayMoveUi(step.args))
-  );
+  if (next === undefined || next.tool === AWAIT_UI_ELEMENT_TOOL_ID || next.tool === "shake") {
+    return false;
+  }
+  return step.tool === "keyboard" ? isSettleKey(step) : SETTLE_AFTER.has(step.tool);
 }
 
-type SettleVerdict =
-  { kind: "settled" | "aborted" | "capped" } | { kind: "unreadable"; error?: string };
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-async function settleScreen(
+async function screenSettled(
   registry: Registry,
   device: DeviceInfo,
   signal: AbortSignal | undefined
-): Promise<SettleVerdict> {
+): Promise<boolean> {
   try {
     const idle = await waitForScreenIdle(registry, device, {
-      timeoutMs: SETTLE_TIMEOUT_MS,
+      timeoutMs: 1000,
       pollIntervalMs: 50,
       minStableMs: 100,
       signal,
-      stopOnReadError: true,
-      emptyTreeIsStable: true,
       androidHelperOnly: true,
     });
-    if (idle.settled) return { kind: "settled" };
-    if (idle.aborted) return { kind: "aborted" };
-    if (idle.readError !== undefined) return { kind: "unreadable", error: idle.readError };
-    return idle.changed ? { kind: "capped" } : { kind: "unreadable" };
-  } catch (err) {
-    return { kind: "unreadable", error: errorMessage(err) };
+    return idle.settled;
+  } catch {
+    return false;
   }
-}
-
-function countsAsFailedSettle(step: Step, verdict: SettleVerdict): boolean {
-  return verdict.kind !== "settled" && verdict.kind !== "aborted" && !SCROLL_TOOLS.has(step.tool);
-}
-
-function settleStoppedReason(verdict: SettleVerdict): string {
-  if (verdict.kind === "unreadable") {
-    return verdict.error === undefined
-      ? `the element tree could not be read fast enough to confirm it was still within ${SETTLE_TIMEOUT_MS}ms`
-      : `the element tree could not be read (${verdict.error})`;
-  }
-  return `the screen was still changing at the ${SETTLE_TIMEOUT_MS}ms cap`;
-}
-
-function settleStoppedNote(afterStep: number, verdict: SettleVerdict): string {
-  return `Stopped waiting for the screen to settle after step ${afterStep}: ${MAX_FAILED_SETTLES} waits did not settle, the last because ${settleStoppedReason(verdict)}. Later steps ran without the wait.`;
 }
 
 type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
@@ -153,7 +98,6 @@ type RunSequenceResult = {
   completed: number;
   total: number;
   steps: StepResult[];
-  note?: string;
 };
 
 // Gates only the *outer* invocation: every step resolves its own platform from
@@ -191,13 +135,7 @@ const zodSchema = z.object({
           .number()
           .optional()
           .describe(
-            `Wait time in ms after this step before the next (default ${DEFAULT_INTER_STEP_DELAY_MS}). Added after the settle wait, so 0 means no extra wait, not back-to-back dispatch; for that also pass settle:false on this step or at the top level.`
-          ),
-        settle: z
-          .boolean()
-          .optional()
-          .describe(
-            "false skips the settle wait after this step only. Goes next to tool and args; inside args it is passed to the tool instead."
+            `Wait time in ms after this step before the next (default ${DEFAULT_INTER_STEP_DELAY_MS})`
           ),
       })
     )
@@ -207,7 +145,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Applies to the whole sequence; a step's own settle:false skips it after that step only. Default true: after a step that can start a transition (tap, swipe, button, rotate, enter/escape, a met await-ui-element) wait until two reads of the element tree match (max 1s) before the next step. This catches sheets and screens whose elements are already moving, but not motion that starts more than ~100ms after the step (a sheet opened after a fetch) or animations that leave the tree unchanged (a native iOS push or modal sheet), so keep await-ui-element gates for those. A native iOS push reports the new screen's final frames at once, so gate it with condition hidden on an element of the old screen; visible on the new one is met before the push ends. There is no wait between two consecutive swipe, scroll or drag steps. A wait can hit the 1s cap after a push or on a spinner, or when the tree cannot be read within it (a slow page, an alert, the first reads after the tool server starts). A read that outlasts the cap keeps running and can delay the next step, including the reads of a following await-ui-element, so give that step a timeout well above one tree read. The rest of the sequence skips the wait once two waits end that way (two navigations in a row on Android often do), and the result's note says so; a wait after a swipe, scroll or drag is not counted, since momentum often outlasts the cap. No wait on a physical iPhone, where a read would hold up the next step's command.<flag:harmonyos> No wait on HarmonyOS, where one tree read takes longer than the cap.</flag:harmonyos><flag:macos-apps> No wait on a Mac app.</flag:macos-apps> Set false for timing-critical input (games, double-taps split across steps)."
+      "Default true: after a tap, button, enter/escape key or met await-ui-element step, wait until two element-tree reads match (max 1s) before the next step, and skip that wait for the rest of the sequence once one hits the cap. Set false for back-to-back timing, such as a game or a double-tap split across steps."
     ),
 });
 
@@ -262,11 +200,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
       const { udid, steps } = params;
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
-      const settle = params.settle !== false;
-      let failedSettles = 0;
-      let stoppedNote: string | undefined;
-      let waitSkipped = false;
-      let note: string | undefined;
+      let settle = params.settle !== false && canSettle(registry, device);
       // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
       // drops the MCP adapter's own fetch timeout — so honour the signal between
       // steps and on the inter-step delay instead of running the rest of the
@@ -302,7 +236,6 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
         }
 
         const toolArgs = { ...step.args, udid };
-        if (waitSkipped) note = stoppedNote;
 
         try {
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
@@ -326,16 +259,8 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
           break;
         }
 
-        if (settle && settlesBetween(step, steps[results.length]) && canSettle(registry, device)) {
-          if (stoppedNote !== undefined) {
-            waitSkipped = true;
-          } else {
-            const verdict = await settleScreen(registry, device, signal);
-            if (countsAsFailedSettle(step, verdict)) failedSettles += 1;
-            if (failedSettles >= MAX_FAILED_SETTLES) {
-              stoppedNote = settleStoppedNote(results.length, verdict);
-            }
-          }
+        if (settle && settlesBetween(step, steps[results.length])) {
+          settle = await screenSettled(registry, device, signal);
         }
 
         const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;
@@ -346,7 +271,6 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
         completed: results.filter((r) => "result" in r).length,
         total: steps.length,
         steps: results,
-        ...(note ? { note } : {}),
       };
     },
   };

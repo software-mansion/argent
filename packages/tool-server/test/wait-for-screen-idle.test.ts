@@ -36,7 +36,6 @@ function treeOf(root: DescribeNode): DescribeTreeData {
 }
 
 const content = treeOf(node([node()]));
-const empty = treeOf(node());
 
 function registry(): Registry {
   return { resolveService: vi.fn(async () => cdp) } as unknown as Registry;
@@ -61,26 +60,6 @@ describe("waitForScreenIdle", () => {
     expect(chromiumRead).toHaveBeenCalledWith(cdp);
   });
 
-  it("ends on the first failed read with stopOnReadError and reports the error", async () => {
-    chromiumRead.mockRejectedValue(new Error("Target closed"));
-
-    const outcome = await waitForScreenIdle(registry(), CHROMIUM, {
-      ...WAIT,
-      stopOnReadError: true,
-    });
-
-    expect(outcome).toMatchObject({ settled: false, polls: 1, readError: "Target closed" });
-  });
-
-  it("keeps reading after a failed read without stopOnReadError", async () => {
-    chromiumRead.mockRejectedValueOnce(new Error("Target closed"));
-
-    const outcome = await waitForScreenIdle(registry(), CHROMIUM, WAIT);
-
-    expect(outcome.settled).toBe(true);
-    expect(outcome.readError).toBeUndefined();
-  });
-
   it("honours the abort signal", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -90,34 +69,8 @@ describe("waitForScreenIdle", () => {
       signal: controller.signal,
     });
 
-    expect(outcome).toMatchObject({ settled: false, aborted: true });
-  });
-
-  it("settles on an unchanging empty tree only with emptyTreeIsStable", async () => {
-    chromiumRead.mockResolvedValue(empty);
-
-    const strict = await waitForScreenIdle(registry(), CHROMIUM, { ...WAIT, timeoutMs: 100 });
-    const lenient = await waitForScreenIdle(registry(), CHROMIUM, {
-      ...WAIT,
-      emptyTreeIsStable: true,
-    });
-
-    expect(strict.settled).toBe(false);
-    expect(lenient.settled).toBe(true);
-  });
-
-  it("reports a change only when a read differs from the one before it", async () => {
-    const short = { ...WAIT, timeoutMs: 100, minStableMs: 1000 };
-
-    const still = await waitForScreenIdle(registry(), CHROMIUM, short);
-    let reads = 0;
-    chromiumRead.mockImplementation(async () =>
-      ++reads % 2 ? content : treeOf(node([node(), node()]))
-    );
-    const moving = await waitForScreenIdle(registry(), CHROMIUM, short);
-
-    expect(still).toMatchObject({ settled: false, changed: false });
-    expect(moving).toMatchObject({ settled: false, changed: true });
+    expect(outcome.settled).toBe(false);
+    expect(chromiumRead).not.toHaveBeenCalled();
   });
 
   it("reads Android through the helper alone with androidHelperOnly", async () => {
