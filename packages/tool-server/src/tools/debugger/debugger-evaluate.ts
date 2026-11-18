@@ -25,7 +25,7 @@ export const debuggerEvaluateTool: ToolDefinition<
 > = {
   id: "debugger-evaluate",
   description: `Execute arbitrary JavaScript in the app's JS runtime via CDP: Hermes on iOS / Android / Vega, V8 on Chromium.
-Returns the result serialized by value as JSON, with deviceName, appName, and logicalDeviceId. Use when you need to read app state, including localStorage and sessionStorage on Chromium, call app functions, or test logic at runtime. Cyclic objects, which many RN runtime values are (fiber nodes, navigation refs, global), fail with a serialization error. Fails if the expression throws or the runtime is not connected.`,
+Returns the result serialized by value as JSON, with deviceName, appName, and logicalDeviceId. A returned Promise is awaited for up to 10 s on Chromium and on Hermes with RN 0.76 or later: the call returns the value it resolves to, and fails with the reason if it rejects. A Promise still pending after 10 s fails with DEBUGGER_CDP_REQUEST_TIMEOUT after the expression ran. On Vega and older RN, a Promise comes back as its internal fields. Use when you need to read app state, including localStorage and sessionStorage on Chromium, call app functions, or test logic at runtime. Cyclic objects, which many RN runtime values are (fiber nodes, navigation refs, global), fail with a serialization error. Fails if the expression throws or the runtime is not connected.`,
   zodSchema,
   searchHint:
     "javascript js eval expression runtime app state localstorage sessionstorage web storage",
@@ -43,7 +43,7 @@ Returns the result serialized by value as JSON, with deviceName, appName, and lo
     const api = services.debugger as JsRuntimeDebuggerApi;
     let result: unknown;
     try {
-      result = await api.cdp.evaluate(params.expression);
+      result = await api.cdp.evaluateAwaited(params.expression);
     } catch (err) {
       // The agent's expression throwing is not a tool malfunction, so re-code it
       // to keep it separable from genuine CDP faults in telemetry. getFailureSignal

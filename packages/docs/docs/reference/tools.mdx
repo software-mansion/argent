@@ -163,6 +163,14 @@ Call `screenshot` or `describe` to read the screen again.
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
 
+When the expression of `debugger-evaluate` returns a Promise, Argent waits up to 10 seconds for the Promise to settle. Argent waits on Chromium and on Hermes with React Native 0.76 or later. On Vega and on React Native 0.75 and older with the legacy inspector, the result is the internal fields of the Promise.
+
+These are the results when Argent waits:
+
+- When the Promise resolves, the result is the value of the Promise.
+- When the Promise rejects, the call fails with the reason, as for an expression that throws.
+- When the Promise does not settle in 10 seconds, the call fails with `DEBUGGER_CDP_REQUEST_TIMEOUT`. The expression ran.
+
 ## Native devtools
 
 On a Mac app, these tools read the app through the Argent library:
