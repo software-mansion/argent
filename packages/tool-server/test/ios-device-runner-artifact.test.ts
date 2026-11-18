@@ -9,6 +9,7 @@ import {
   isProfileExpiredFailure,
   isProfileMissingDeviceFailure,
   resolveRunnerProjectPath,
+  runnerBuildLocationArgs,
   runnerBuildStaticArgs,
   xcodebuildFailureSummary,
   type RunnerArtifact,
@@ -73,6 +74,35 @@ describe("computeRunnerCacheKey", () => {
     const args = runnerBuildStaticArgs(PROJECT, CONFIG);
     expect(args).not.toContain("-destination");
     expect(args).not.toContain("-derivedDataPath");
+    // The build location follows from the derived-data dir. In the static args
+    // it would change the key and cost every user a rebuild.
+    expect(args.filter((a) => /^(SYMROOT|OBJROOT|SHARED_PRECOMPS_DIR)=/.test(a))).toEqual([]);
+  });
+});
+
+describe("runnerBuildLocationArgs", () => {
+  it("pins products and intermediates to the default layout under the derived-data dir", () => {
+    // A space in the path: each setting is one argv entry, never shell-split.
+    const derived = path.join(tmpRoot, "derived dir", "ABCDE12345");
+
+    expect(runnerBuildLocationArgs(derived)).toEqual([
+      "-derivedDataPath",
+      derived,
+      `SYMROOT=${path.join(derived, "Build", "Products")}`,
+      `OBJROOT=${path.join(derived, "Build", "Intermediates.noindex")}`,
+      `SHARED_PRECOMPS_DIR=${path.join(derived, "Build", "Intermediates.noindex", "PrecompiledHeaders")}`,
+    ]);
+  });
+
+  it("makes the build settings absolute, which xcodebuild would resolve against the project", () => {
+    const relative = path.join("relative home", "derived", "ABCDE12345");
+    const absolute = path.resolve(relative);
+
+    expect(runnerBuildLocationArgs(relative)).toEqual([
+      "-derivedDataPath",
+      relative,
+      ...runnerBuildLocationArgs(absolute).slice(2),
+    ]);
   });
 });
 
@@ -376,7 +406,17 @@ describe("ensureRunnerArtifact", () => {
 
         // Per-user Xcode state, build output and Finder metadata never enter
         // the key, whether they sit at the root or deeper in the tree.
-        for (const dir of ["xcuserdata", "DerivedData", ".build", "ArgentRunner/.swiftpm"]) {
+        // `build` and `Build` hold a build an earlier version made next to the
+        // project under a Legacy or a Custom, relative to workspace Xcode build
+        // location.
+        for (const dir of [
+          "xcuserdata",
+          "DerivedData",
+          ".build",
+          "ArgentRunner/.swiftpm",
+          "Build",
+          "ArgentRunner/build",
+        ]) {
           await fsp.mkdir(path.join(root, dir), { recursive: true });
           await fsp.writeFile(path.join(root, dir, "state"), dir);
         }
@@ -409,32 +449,58 @@ describe("ensureRunnerArtifact", () => {
     });
   });
 
-  it("stamps the build dir with the cache key after a real-arm build", async () => {
-    const stubBin = path.join(tmpRoot, "ensure-stub-bin");
-    await fsp.mkdir(stubBin, { recursive: true });
-    await fsp.writeFile(
-      path.join(stubBin, "xcodebuild"),
-      [
-        "#!/bin/sh",
-        // The toolchain fingerprint calls this first; it takes no derived dir.
-        'if [ "$1" = "-version" ]; then echo "Xcode 99.0"; exit 0; fi',
-        'for arg in "$@"; do derived="$arg"; done', // -derivedDataPath's value is last
-        '/bin/mkdir -p "$derived/Build/Products"', // PATH holds only this stub
-        ': > "$derived/Build/Products/ArgentRunner_iphoneos18.0-arm64.xctestrun"',
-        "",
-      ].join("\n"),
-      { mode: 0o755 }
-    );
+  /**
+   * Stub lines that write the products where the SYMROOT argument says, as
+   * xcodebuild does: with no SYMROOT nothing lands where the build is looked
+   * for, the way a custom Xcode build location leaves it. The argv is kept,
+   * one argument per line, in `argv` under the derived-data dir.
+   */
+  const BUILD_INTO_SYMROOT = [
+    'for arg in "$@"; do',
+    '  if [ "$previous" = "-derivedDataPath" ]; then derived="$arg"; fi',
+    '  case "$arg" in SYMROOT=*) products="${arg#SYMROOT=}" ;; esac',
+    '  previous="$arg"',
+    "done",
+    'if [ -z "$products" ]; then exit 0; fi',
+    '/bin/mkdir -p "$products"', // PATH holds only the stub
+    ': > "$products/ArgentRunner_iphoneos18.0-arm64.xctestrun"',
+    'printf "%s\\n" "$@" > "$derived/argv"',
+  ];
 
-    const artifact = await withEnsureEnv("stamp", () => ensureRunnerArtifact(CONFIG), {
-      binDir: stubBin,
-    });
+  it("stamps the build dir with the cache key after a real-arm build", async () => {
+    const binDir = await stubXcodebuild("stamp", BUILD_INTO_SYMROOT);
+
+    const artifact = await withEnsureEnv("stamp", () => ensureRunnerArtifact(CONFIG), { binDir });
 
     const stamp = await fsp.readFile(
       path.join(artifact.derivedDataPath, ".argent-cache-key"),
       "utf8"
     );
     expect(stamp).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("tells xcodebuild to build under the derived-data dir, where the artifact is read from", async () => {
+    const binDir = await stubXcodebuild("build-location", BUILD_INTO_SYMROOT);
+
+    const artifact = await withEnsureEnv(
+      "build location", // a space in the path
+      () => ensureRunnerArtifact(CONFIG, { destinationUdid: "00008030-001C2D3E4F50802E" }),
+      { binDir }
+    );
+
+    const argv = (await fsp.readFile(path.join(artifact.derivedDataPath, "argv"), "utf8"))
+      .trimEnd()
+      .split("\n");
+    const staticArgs = runnerBuildStaticArgs(fakeProject, CONFIG);
+    expect(argv).toEqual([
+      ...staticArgs,
+      "-destination",
+      "platform=iOS,id=00008030-001C2D3E4F50802E",
+      ...runnerBuildLocationArgs(artifact.derivedDataPath),
+    ]);
+    expect(path.dirname(artifact.xctestrunPath)).toBe(
+      path.join(artifact.derivedDataPath, "Build", "Products")
+    );
   });
 
   /** A PATH dir holding one xcodebuild stub; `-version` always answers so the fingerprint stays deterministic. */
