@@ -182,6 +182,7 @@ When status is not_attachable, use view-network-logs and do not retry.`,
       const api = services.nativeDevtools as NativeDevtoolsApi;
 
       const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
+      api.activateNetworkInspection(params.bundleId);
       if (blocked) return blocked;
 
       /**
@@ -200,8 +201,6 @@ When status is not_attachable, use view-network-logs and do not retry.`,
           }
         );
       }
-
-      api.activateNetworkInspection(params.bundleId);
 
       const events = api.getNetworkLog(params.bundleId).slice(-params.limit);
       if (params.clear) api.clearNetworkLog(params.bundleId);

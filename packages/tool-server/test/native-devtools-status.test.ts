@@ -630,6 +630,37 @@ describe("native-devtools tools — init_failed precheck", () => {
   });
 });
 
+describe("native-network-logs before the app is instrumented", () => {
+  const UDID = "55555555-5555-5555-5555-555555555555";
+  const params = { limit: 50, clear: false };
+
+  it("arms capture before answering restart_required, so the relaunch is captured", async () => {
+    const { api } = makeNativeApi({ envSetup: true, appRunning: true, state: "stale_process" });
+    const activate = vi.spyOn(api, "activateNetworkInspection");
+
+    const result = await nativeNetworkLogsTool.execute(
+      { nativeDevtools: api },
+      { udid: UDID, bundleId: "com.example.app", ...params }
+    );
+
+    expect(result).toMatchObject({ status: "restart_required" });
+    expect(activate).toHaveBeenCalledWith("com.example.app");
+  });
+
+  it("never arms a refused Apple system app", async () => {
+    const { api } = makeNativeApi({});
+    const activate = vi.spyOn(api, "activateNetworkInspection");
+
+    await expect(
+      nativeNetworkLogsTool.execute(
+        { nativeDevtools: api },
+        { udid: UDID, bundleId: "com.apple.Preferences", ...params }
+      )
+    ).rejects.toBeInstanceOf(FailureError);
+    expect(activate).not.toHaveBeenCalled();
+  });
+});
+
 // A status asserted for every unconnected app would keep "call restart-app"
 // literally true forever, and an agent obeying it restarts indefinitely. Each
 // measured state has to reach the agent as the action that actually applies.
