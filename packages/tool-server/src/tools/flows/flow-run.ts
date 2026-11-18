@@ -125,11 +125,9 @@ import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
 import { getTrackedMacosApp, otherWorktreeOfBuild } from "../../utils/macos-apps";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import type { ArtifactHandle } from "../../artifacts";
-import {
-  resolvableSecrets,
-  scrubSecretValues,
-  SECRET_PLACEHOLDER_MARKER,
-} from "../../utils/secrets";
+import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
+import { forgetSecretFields } from "../../utils/typed-secrets";
+import { noteSecretShown, secretFieldsBefore, SECRET_TYPING_TOOLS } from "./flow-secret-fields";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -727,6 +725,8 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // A FRESH object every time, never a mutation of the previous target: the
   // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
   state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
+  // Its fields started again too, without the secrets typed into them.
+  forgetSecretFields(device.id);
   // A Mac app's note: argent force-quit its own copy, or the new process
   // showed no window in time. The launch worked either way.
   const warnings = [
@@ -1100,13 +1100,6 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * still be on screen, so a later failure takes no screenshot.
    */
   secretTyped?: boolean;
-  /**
-   * The value of each `{{secret:…}}` placeholder the steps run so far carry.
-   * A field that is not secure shows what was typed into it, so the tree a
-   * later `text` check reads holds the value, and the reason of a failed check
-   * quotes that text: {@link pushReport} puts the placeholder back.
-   */
-  typedSecrets: Array<{ name: string; value: string }>;
   /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as a single-instance lock
@@ -1851,7 +1844,6 @@ Without a link, every step kind runs.`,
         ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
-        typedSecrets: [],
         projectRoot: params.project_root,
         scriptLogBudget: createScriptLogBudget(),
         networkCaptureNoted: new Map(),
@@ -2367,15 +2359,6 @@ function summarize(
  */
 function pushReport(state: ExecState, report: StepReport): void {
   if (report.e2eTest !== undefined) report.flow = report.e2eTest;
-  // Before the report leaves the run, as a step of the result or as progress.
-  if (state.typedSecrets.length > 0) {
-    if (report.reason !== undefined) {
-      report.reason = scrubSecretValues(report.reason, state.typedSecrets);
-    }
-    if (report.warning !== undefined) {
-      report.warning = scrubSecretValues(report.warning, state.typedSecrets);
-    }
-  }
   state.reports.push(report);
   state.onStepReport?.(report);
 }
@@ -2563,11 +2546,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       startedAt -= state.hoistedBootMs;
       state.hoistedBootMs = undefined;
     }
-    const stepText = JSON.stringify(step);
-    if (stepText.includes(SECRET_PLACEHOLDER_MARKER)) {
-      state.secretTyped = true;
-      noteTypedSecrets(state, stepText);
-    }
+    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
     const report = await execLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
@@ -2579,20 +2558,39 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
   }
 }
 
+/** The tools that terminate the app before they start it. `launch-app` only brings a running one forward. */
+const RESTARTING_TOOLS: ReadonlySet<string> = new Set(["restart-app", "reinstall-app"]);
+
 /**
- * Remember the secrets a step's placeholders name, as the text-entry tool that
- * runs for the step resolves them: with the secrets the client sent first. The
- * runner never types the values. It needs them to keep them out of the reasons
- * it writes (see {@link ExecState.typedSecrets}).
+ * The text a `tool:` step asks a text-entry tool to type, as its author wrote
+ * it, when it names a secret: every string argument that holds a placeholder,
+ * the steps of a `run-sequence` included.
  */
-function noteTypedSecrets(state: ExecState, stepText: string): void {
-  const secrets = resolvableSecrets(stepText, { clientSecrets: state.ctx?.clientSecrets });
-  for (const secret of secrets) {
-    // By value too: a secrets file can change between two steps, and the
-    // earlier value of a name can still be in a field.
-    if (!state.typedSecrets.some((s) => s.name === secret.name && s.value === secret.value)) {
-      state.typedSecrets.push(secret);
+function typedSecretText(step: Extract<FlowStep, { kind: "tool" }>): string | undefined {
+  if (!SECRET_TYPING_TOOLS.has(canonicalToolId(step.name))) return undefined;
+  const texts: string[] = [];
+  const collect = (value: unknown): void => {
+    if (typeof value === "string") {
+      if (value.includes(SECRET_PLACEHOLDER_MARKER)) texts.push(value);
+    } else if (typeof value === "object" && value !== null) {
+      for (const inner of Object.values(value)) collect(inner);
     }
+  };
+  collect(step.args);
+  return texts.length > 0 ? texts.join(" ") : undefined;
+}
+
+/**
+ * Run a step that types a secret into whatever has focus, and read what the
+ * field shows for it (see `flow-secret-fields`). Also after a failure: a tool
+ * that stops partway leaves part of the text typed.
+ */
+async function typingSecret<T>(env: ActionEnv, typed: string, run: () => Promise<T>): Promise<T> {
+  const fields = await secretFieldsBefore(env, typed);
+  try {
+    return await run();
+  } finally {
+    await noteSecretShown(env, fields, typed);
   }
 }
 
@@ -3204,14 +3202,25 @@ async function execLeafStep(
           step.name,
           nestedRunArgs(state, step.name, args)
         );
-        const result = await invokeSubTool(registry, ctx, step.name, prepared.args, {
-          ...(prepared.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
-          // The two tools that can start a nested run continue this run's
-          // stack, so a flow that runs itself stops at the cycle guard.
-          ...(FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))
-            ? { flowStack: scope.runStack }
-            : {}),
-        });
+        const toolArgs = prepared.args;
+        const invoke = (): Promise<unknown> =>
+          invokeSubTool(registry, ctx, step.name, toolArgs, {
+            ...(prepared?.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
+            // The two tools that can start a nested run continue this run's
+            // stack, so a flow that runs itself stops at the cycle guard.
+            ...(FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))
+              ? { flowStack: scope.runStack }
+              : {}),
+          });
+        const typed = state.device ? typedSecretText(step) : undefined;
+        const result =
+          typed === undefined
+            ? await invoke()
+            : await typingSecret(deviceEnv(state), typed, invoke);
+        // The app these two start again has its fields as it first shows them.
+        if (device && RESTARTING_TOOLS.has(canonicalToolId(step.name))) {
+          forgetSecretFields(device.id);
+        }
         // A tool that reports its failure in a result it returns instead of
         // throwing would otherwise count as a passing step (#606).
         const verdict = toolResultVerdict(step.name, result);

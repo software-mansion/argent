@@ -7,10 +7,10 @@ import { createPasteTool } from "../src/tools/paste";
 import {
   availableSecretNames,
   redactSecretsFromError,
-  resolvableSecrets,
   resolveSecretPlaceholders,
   type SecretSourceOptions,
 } from "../src/utils/secrets";
+import { __resetTypedSecretsForTesting, redactTypedSecrets } from "../src/utils/typed-secrets";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { shellQuote as adbShellQuote } from "../src/utils/adb";
 import { shellQuote as hdcShellQuote } from "../src/utils/harmony-hdc";
@@ -91,6 +91,7 @@ beforeEach(() => {
   vi.stubEnv("HOME", home);
   vi.stubEnv("USERPROFILE", home);
   vi.spyOn(process, "cwd").mockReturnValue(project);
+  __resetTypedSecretsForTesting();
 });
 
 afterEach(() => {
@@ -185,29 +186,6 @@ describe("resolveSecretPlaceholders", () => {
     expect(caught!.message).toContain('Unknown secret "ARGENT_SECRET_NOPE"');
     expect(caught!.message).toContain("export ARGENT_SECRET_NOPE");
     expect(caught!.message).not.toContain("ARGENT_SECRET_ARGENT_SECRET_NOPE");
-  });
-});
-
-describe("resolvableSecrets", () => {
-  it("returns each defined secret once and leaves out a name no source defines", () => {
-    // An unknown name between two known ones: it must not hide the one after.
-    const step = JSON.stringify({
-      text: "{{secret:APP_PASSWORD}}{{secret:NOPE}}{{secret:TOTP_SEED}}{{secret:APP_PASSWORD}}",
-    });
-
-    expect(resolvableSecrets(step, opts())).toEqual([
-      { name: "APP_PASSWORD", value: "hunter2" },
-      { name: "TOTP_SEED", value: "JBSWY3DP" },
-    ]);
-    expect(resolvableSecrets("plain text", opts())).toEqual([]);
-  });
-
-  it("resolves a name with the secrets the client sent first", () => {
-    const clientSecrets = new Map([["APP_PASSWORD", "from-client"]]);
-
-    expect(resolvableSecrets("{{secret:APP_PASSWORD}}", { ...opts(), clientSecrets })).toEqual([
-      { name: "APP_PASSWORD", value: "from-client" },
-    ]);
   });
 });
 
@@ -490,5 +468,54 @@ describe("paste tool with secret placeholders", () => {
     await expect(
       tool.execute({}, { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" })
     ).rejects.toThrow(/paste failed for: \{\{secret:APP_PASSWORD\}\}/);
+  });
+});
+
+// The value a tool types is on the device's screen from then on, so the tool
+// notes it for the device: what quotes that screen later names the placeholder.
+describe("the secrets a text-entry tool types", () => {
+  it("are noted by keyboard for the device it typed on, and for no other", async () => {
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    const tool = createKeyboardTool(registryWith(recordingCdpApi().api));
+
+    await tool.execute({}, { udid: CHROMIUM_UDID, text: "{{secret:APP_PASSWORD}}", delayMs: 0 });
+
+    expect(redactTypedSecrets(CHROMIUM_UDID, "field shows hunter2")).toBe(
+      "field shows {{secret:APP_PASSWORD}}"
+    );
+    expect(redactTypedSecrets(IOS_UDID, "field shows hunter2")).toBe("field shows hunter2");
+  });
+
+  it("are noted by keyboard when the backend fails partway through the value", async () => {
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    const tool = createKeyboardTool(
+      registryWith({
+        dispatchKeyEvent: async () => {
+          throw new Error("CDP went away");
+        },
+      })
+    );
+
+    await expect(
+      tool.execute({}, { udid: CHROMIUM_UDID, text: "{{secret:APP_PASSWORD}}", delayMs: 0 })
+    ).rejects.toThrow(/CDP went away/);
+    expect(redactTypedSecrets(CHROMIUM_UDID, "hunter2")).toBe("{{secret:APP_PASSWORD}}");
+  });
+
+  it("are not noted for text without a placeholder", async () => {
+    const tool = createKeyboardTool(registryWith(recordingCdpApi().api));
+
+    await tool.execute({}, { udid: CHROMIUM_UDID, text: "hello", delayMs: 0 });
+
+    expect(redactTypedSecrets(CHROMIUM_UDID, "hello")).toBe("hello");
+  });
+
+  it("are noted by paste", async () => {
+    vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    const tool = createPasteTool(registryWith({ apiUrl: "http://127.0.0.1:1", pressKey: vi.fn() }));
+
+    await tool.execute({}, { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" });
+
+    expect(redactTypedSecrets(IOS_UDID, "hunter2")).toBe("{{secret:APP_PASSWORD}}");
   });
 });
