@@ -135,27 +135,59 @@ const stepSpec: FileInputSpec = {
   collect: "step",
 };
 
+/** The input schema of e2e-execute that names the test file params `pathParam` and `fileParam`. */
+function testSourceSchema(pathParam: string, fileParam: string): Record<string, unknown> {
+  const string = { type: "string" };
+  return {
+    type: "object",
+    properties: { name: string, project_root: string, [fileParam]: string, [pathParam]: string },
+    required: ["project_root"],
+  };
+}
+const formerSchema = testSourceSchema("flow_path", "flow_file");
+
 /** The flow-* tools as a 0.29.0 tool-server lists them: no e2e-* ids, no `paths`. */
 const olderTools: ToolMeta[] = [
   ...["flow-execute", "flow-read-prerequisite"].map((name) => ({
     name,
     description: "",
-    inputSchema: {},
+    inputSchema: formerSchema,
     fileInputs: [flowPathSpec, olderFlowFileSpec],
   })),
   { name: "flow-add-step", description: "", inputSchema: {}, fileInputs: [stepSpec] },
 ];
 
-/** The same tools as this tool-server lists them: e2e-* ids with `paths`, flow-* as aliases. */
-const newerTools: ToolMeta[] = ["execute", "read-prerequisite", "add-step"].flatMap((tool) => {
-  const entry = {
-    name: `e2e-${tool}`,
-    description: "",
-    inputSchema: {},
-    fileInputs: tool === "add-step" ? [stepSpec] : [flowPathSpec, flowFileSpec],
-  };
-  return [entry, { ...entry, name: `flow-${tool}`, hideFromMcp: true, aliasOf: entry.name }];
-});
+/** e2e-* ids with flow-* aliases, as a tool-server lists them with these test source specs. */
+function listedTools(
+  inputSchema: Record<string, unknown>,
+  sourceSpecs: FileInputSpec[]
+): ToolMeta[] {
+  return ["execute", "read-prerequisite", "add-step"].flatMap((tool) => {
+    const entry = {
+      name: `e2e-${tool}`,
+      description: "",
+      inputSchema: tool === "add-step" ? {} : inputSchema,
+      fileInputs: tool === "add-step" ? [stepSpec] : sourceSpecs,
+    };
+    return [entry, { ...entry, name: `flow-${tool}`, hideFromMcp: true, aliasOf: entry.name }];
+  });
+}
+
+/** The tools as a tool-server with `.argent/e2e` and the former param names lists them. */
+const formerParamTools = listedTools(formerSchema, [
+  { ...flowPathSpec, collect: "flow" },
+  { ...flowFileSpec, collect: "flow" },
+]);
+
+/**
+ * The tools as this tool-server lists them: `e2e_test_path` and `e2e_test_file`,
+ * and the `flow_path` spec for a client older than the rename.
+ */
+const newerTools = listedTools(testSourceSchema("e2e_test_path", "e2e_test_file"), [
+  { ...flowPathSpec, target: "e2e_test_path", path: "${e2e_test_path}" },
+  { ...flowFileSpec, target: "e2e_test_file", skipWhenSet: "e2e_test_path" },
+  flowPathSpec,
+]);
 
 /** The path a wire value names: a wrapped file input, or the plain string. */
 function named(value: unknown): unknown {
@@ -229,8 +261,66 @@ describe("a call by name to a tool-server that lists both ids", () => {
     await client.callTool("flow-execute", { name: "new", project_root: root });
     expect(posts[0]!.url).toBe("http://stub/tools/flow-execute");
     expect(posts[0]!.body.name).toBe("new");
-    expect(named(posts[0]!.body.flow_file)).toBe(e2e("new.yaml"));
+    expect(named(posts[0]!.body.e2e_test_file)).toBe(e2e("new.yaml"));
     expect((await client.fetchTool("e2e-execute"))?.name).toBe("e2e-execute");
+  });
+});
+
+describe("a test named by its path", () => {
+  it.each(["flow_path", "e2e_test_path"])(
+    "reaches this tool-server as e2e_test_path when the caller writes %s",
+    async (param) => {
+      await write(e2e("run.yaml"));
+      const { client, posts } = stubServer(newerTools, true);
+
+      await client.callTool("e2e-execute", { [param]: e2e("run.yaml"), project_root: root });
+      expect(Object.keys(posts[0]!.body).sort()).toEqual(["e2e_test_path", "project_root"]);
+      expect(named(posts[0]!.body.e2e_test_path)).toBe(e2e("run.yaml"));
+    }
+  );
+
+  it.each([
+    ["the former param names", formerParamTools],
+    ["no e2e-* ids", olderTools],
+  ])(
+    "reaches a tool-server with %s as flow_path when the caller writes e2e_test_path",
+    async (_kind, tools) => {
+      await write(e2e("run.yaml"));
+      const { client, posts } = stubServer(tools, true);
+
+      await client.callTool("e2e-read-prerequisite", {
+        e2e_test_path: e2e("run.yaml"),
+        project_root: root,
+      });
+      expect(Object.keys(posts[0]!.body).sort()).toEqual(["flow_path", "project_root"]);
+      expect(named(posts[0]!.body.flow_path)).toBe(e2e("run.yaml"));
+    }
+  );
+
+  it("sends its run: fragments with a call to a tool-server with the former param names", async () => {
+    await fs.mkdir(e2e(""), { recursive: true });
+    await fs.writeFile(e2e("run.yaml"), "steps:\n  - run: frag.yaml\n");
+    await write(e2e("frag.yaml"));
+    const { client, posts } = stubServer(formerParamTools, true);
+
+    await client.callTool("e2e-execute", { e2e_test_path: e2e("run.yaml"), project_root: root });
+    const members = (posts[0]!.body.flow_path as FileInputWire).members ?? [];
+    expect(members.map((m) => m.key)).toEqual([
+      flowMemberKey(await fs.realpath(e2e("")), "frag.yaml"),
+    ]);
+  });
+
+  it("is refused before anything is sent when the call sets both names", async () => {
+    const { client, posts } = stubServer(newerTools);
+
+    await expect(
+      client.callTool("e2e-execute", {
+        flow_path: e2e("a.yaml"),
+        e2e_test_path: e2e("b.yaml"),
+        project_root: root,
+      })
+    ).rejects.toThrow("Pass e2e_test_path or its former name flow_path, not both.");
+    expect(posts).toEqual([]);
   });
 });
 

@@ -17,7 +17,7 @@ beforeAll(async () => {
   const out = await esbuild.transform(fs.readFileSync(srcPath, "utf8"), {
     loader: "ts",
     format: "esm",
-    target: "node20",
+    target: "node22",
   });
   const handlerPath = path.join(tmpDir, "fatal-handlers.mjs");
   fs.writeFileSync(handlerPath, out.code);

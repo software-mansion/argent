@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 
 // Records every child_process invocation the profiler makes so the test can
 // assert how the (attacker-influenced) udid is passed and how stdout is buffered.
@@ -9,6 +10,8 @@ const rec = vi.hoisted(() => ({
     args: string[];
     options?: { maxBuffer?: number; input?: string };
   }[],
+  /** An argv element that makes the call fail, as a broken simulator would. */
+  failOn: undefined as string | undefined,
 }));
 
 vi.mock("child_process", () => ({
@@ -18,6 +21,9 @@ vi.mock("child_process", () => ({
     options?: { maxBuffer?: number; input?: string }
   ) => {
     rec.calls.push({ fn: "execFileSync", file, args, options });
+    if (rec.failOn !== undefined && args.includes(rec.failOn)) {
+      throw new Error(`${rec.failOn} failed`);
+    }
     if (args.includes("launchctl")) {
       // `launchctl list` output: PID, status, label.
       return "123\t0\tUIKitApplication:com.example.app[abc]\n";
@@ -148,5 +154,26 @@ describe("native iOS profiler: record-args device_id argv safety", () => {
     // i.e. it was never fused with its flag or a neighbouring token.
     expect(args.filter((a) => a === hostileDeviceId)).toHaveLength(1);
     expect(args.some((a) => a !== hostileDeviceId && a.includes(hostileDeviceId))).toBe(false);
+  });
+});
+
+describe("native iOS profiler: a failed simctl call", () => {
+  it.each([
+    ["launchctl", FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_LIST_FAILED],
+    ["listapps", FAILURE_CODES.NATIVE_PROFILER_APP_LIST_FAILED],
+  ])("in %s keeps the profiler's own error", (failOn, code) => {
+    rec.failOn = failOn;
+    try {
+      let err: unknown;
+      try {
+        enumerateRunningUserApps(VALID_UDID);
+      } catch (e) {
+        err = e;
+      }
+      expect(getFailureSignal(err)?.error_code).toBe(code);
+      expect((err as Error).message).toMatch(/^Failed to .*Underlying error: \w+ failed/);
+    } finally {
+      rec.failOn = undefined;
+    }
   });
 });

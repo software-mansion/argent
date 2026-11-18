@@ -222,7 +222,9 @@ type FlowStepResult = {
 };
 
 export type FlowExecuteResult = {
-  flow: string;
+  e2eTest?: string;
+  /** The `e2eTest` of a tool-server that predates that field. */
+  flow?: string;
   device?: string;
   executionPrerequisite?: string;
   ok?: boolean;
@@ -293,6 +295,7 @@ export async function flowRunToMcpContent(
   ctx?: ContentContext
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
+  const name = result.e2eTest ?? result.flow;
 
   if (result.executionPrerequisite) {
     blocks.push({ type: "text", text: `Prerequisite: ${result.executionPrerequisite}` });
@@ -300,7 +303,7 @@ export async function flowRunToMcpContent(
 
   blocks.push({
     type: "text",
-    text: `Running e2e test "${result.flow}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
+    text: `Running e2e test "${name}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
   });
   if (typeof result.warning === "string")
     blocks.push({ type: "text", text: `⚠ ${result.warning}` });
@@ -359,7 +362,7 @@ export async function flowRunToMcpContent(
       text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}${durationSuffix(result.durationMs)}`,
     });
   } else {
-    blocks.push({ type: "text", text: `E2E test "${result.flow}" complete.` });
+    blocks.push({ type: "text", text: `E2E test "${name}" complete.` });
   }
   return blocks;
 }

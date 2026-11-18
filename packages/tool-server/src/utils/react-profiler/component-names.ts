@@ -151,7 +151,7 @@ export function describeResolution(
 /** Shared markdown for the two non-resolving outcomes, so the tools cannot drift. */
 export function renderComponentNameMiss(
   resolution: Extract<ComponentNameResolution, { kind: "ambiguous" | "missing" }>,
-  context: { fiberRenders?: number; commits?: number } = {}
+  context: { fiberRenders?: number; commits?: number; nextStep?: string } = {}
 ): string {
   if (resolution.kind === "ambiguous") {
     const list = resolution.candidates.map((c) => `- \`${c}\``).join("\n");
@@ -177,7 +177,8 @@ export function renderComponentNameMiss(
     `_Component \`${resolution.query}\` not found in this profiling session — no exact match, and no ` +
     `component whose displayed name is \`${resolution.query}\` once \`Memo(...)\` / \`ForwardRef(...)\` / ` +
     `\`Forget(...)\` wrappers are stripped.${recorded}_${suggestions}\n\n` +
-    `To list every component in a commit instead, run \`profiler-commit-query mode=by_index commit_index=<n>\`.`
+    (context.nextStep ??
+      `To list every component in a commit instead, run \`profiler-commit-query mode=by_index commit_index=<n>\`.`)
   );
 }
 

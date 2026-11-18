@@ -55,9 +55,12 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   "keyboard",
   "gesture-tap",
   "gesture-swipe",
-  // Press-hold / straight drags via the runner's longPress + drag; two-finger
-  // trains and Move waypoints are rejected with authoring guidance.
+  // Press-hold / straight drags via the runner's longPress + drag; every other
+  // Down/Move/Up train, a second finger included, plays through touchPaths.
   "gesture-custom",
+  // Two fingers as timed paths through the runner's touch synthesizer.
+  "gesture-pinch",
+  "gesture-rotate",
   // home / volumeUp / volumeDown / actionButton via XCUIDevice.press; power
   // and appSwitch have no public XCUIDevice API and stay rejected.
   "button",

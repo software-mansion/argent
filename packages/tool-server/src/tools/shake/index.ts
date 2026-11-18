@@ -26,6 +26,13 @@ const capability: ToolCapability = {
 
 export const shakeTool: ToolDefinition<ShakeParams, ShakeResult> = {
   id: "shake",
+  description: `Send a shake gesture to the device (iOS simulator or Android emulator).
+Use when you need to trigger anything bound to the shake gesture: iOS's "Undo Typing" / "Redo Typing" prompt in a text field, React Native's developer menu in a debug build, or an app's own shake-to-report handler.
+iOS delivers one discrete shake per gesture (the same motion event a physical device raises). Android has no OS-level shake event: the accelerometer is driven through a burst of hard direction changes so app-side detectors fire, and the resting orientation is restored afterwards.
+Returns { shaken: true, count }.
+Works on local and remote (sim-remote) iOS simulators. Fails on a physical device or a TV: only phone/tablet simulators and emulators are supported.`,
+  zodSchema: shakeZodSchema,
+  searchHint: "shake motion accelerometer undo typing dev menu gesture",
   interaction: {
     startedMsg: ({ params }) =>
       params.count && params.count > 1 ? `Shaking device ${params.count}x` : "Shaking device",
@@ -33,15 +40,6 @@ export const shakeTool: ToolDefinition<ShakeParams, ShakeResult> = {
       params.count && params.count > 1 ? `Shook device ${params.count}x` : "Shook device",
     failedMsg: ({ failureSignal }) => `Failed to shake device: ${failureSignal.error_code}`,
   },
-  description: `Shake the device (iOS simulator or Android emulator).
-Use to trigger anything bound to the shake gesture: iOS's "Undo Typing" / "Redo Typing" prompt in a text field, React Native's developer menu in a debug build, or an app's own shake-to-report handler.
-iOS delivers one discrete shake per gesture (the same motion event a physical device raises). Android has no OS-level shake event: the accelerometer is driven through a burst of hard direction changes so app-side detectors fire, and the resting orientation is restored afterwards.
-Set \`count\` above 1 when a detector needs sustained motion before it triggers.
-Returns { shaken: true, count }.
-Works on local and remote (sim-remote) iOS simulators.
-Only phone/tablet simulators and emulators are supported.`,
-  searchHint: "shake motion accelerometer undo typing dev menu gesture",
-  zodSchema: shakeZodSchema,
   capability,
   // No simulator-server is resolved: `simctl`/`adb` are called directly, so a
   // tool that never uses one doesn't spawn it or wait for it to be ready.

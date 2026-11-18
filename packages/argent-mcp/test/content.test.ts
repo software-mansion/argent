@@ -38,6 +38,19 @@ describe("toMcpContent", () => {
     expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }, null, 2) }]);
   });
 
+  it("keeps a warning that sits beside a long report in the text an agent reads", async () => {
+    const warning = "No source files found under project_root";
+    const result = await toMcpContent({ report: "x".repeat(50_000), warning });
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ type: "text" });
+    expect((result[0] as { text: string }).text).toContain(warning);
+  });
+
+  it("keeps the order of the result's keys, so a warning placed first is read first", async () => {
+    const result = await toMcpContent({ warning: "first", report: "x".repeat(50_000) });
+    expect((result[0] as { text: string }).text.indexOf('"warning"')).toBeLessThan(10);
+  });
+
   it("returns JSON text block when outputHint is not image", async () => {
     const result = await toMcpContent({ url: "http://x" }, "other");
     expect(result).toEqual([
@@ -371,6 +384,23 @@ describe("flowRunToMcpContent", () => {
       type: "text",
       text: "✗ baseline not written: /p/b.png: EACCES: permission denied",
     });
+  });
+
+  it("names the e2e test from e2eTest, falling back to the flow an older tool-server sends", async () => {
+    const texts = async (input: FlowExecuteResult) =>
+      (await flowRunToMcpContent(input)).map((b) => (b.type === "text" ? b.text : ""));
+    expect(await texts({ e2eTest: "new", flow: "old", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ e2eTest: "new", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ flow: "old", steps: [] })).toEqual([
+      'Running e2e test "old" (0 steps)',
+      'E2E test "old" complete.',
+    ]);
   });
 
   it("produces header and footer text blocks", async () => {

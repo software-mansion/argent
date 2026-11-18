@@ -6,6 +6,7 @@ import pc from "picocolors";
 import { track } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
+  ARGENT_SKILL_PREFIX,
   buildArgentSkillsSource,
   getGlobalSkillLockPath,
   getInstalledVersion,
@@ -14,6 +15,7 @@ import {
   listArgentSkillsInLock,
   listBundledSkills,
   npxChildEnv,
+  removePath,
   withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
@@ -142,6 +144,40 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   return results;
 }
 
+// The skills in `names` found on disk in a scope, each with a stamp of its
+// SKILL.md in every skill dir (inode and mtime). The skills CLI rewrites a skill
+// it installs, so two snapshots tell whether a run installed anything. stat
+// follows links, so an editor's link to the shared copy counts like the copy.
+// With no names (an unreadable bundled set), any argent-prefixed skill counts.
+export function snapshotArgentSkills(
+  projectRoot: string,
+  scope: SkillScope,
+  names: readonly string[]
+): Map<string, string> {
+  const { skillTargets } = getManagedContentTargets(
+    ALL_ADAPTERS,
+    projectRoot,
+    scope === "global" ? "global" : "local"
+  );
+  const found = new Map<string, string>();
+  for (const { targetPath } of skillTargets) {
+    let candidates: readonly string[] = names;
+    if (names.length === 0) {
+      try {
+        candidates = fs.readdirSync(targetPath).filter((n) => n.startsWith(ARGENT_SKILL_PREFIX));
+      } catch {
+        continue;
+      }
+    }
+    for (const name of candidates) {
+      const stat = fs.statSync(path.join(targetPath, name, "SKILL.md"), { throwIfNoEntry: false });
+      if (!stat?.isFile()) continue;
+      found.set(name, `${found.get(name) ?? ""}${stat.ino}:${stat.mtimeMs};`);
+    }
+  }
+  return found;
+}
+
 // A renamed skill's old dir can outlive its lock entry (or never have had one),
 // so `skills remove` never sees it. Removes it, editor links to it, and its
 // lock entry from the scope. Returns the names removed.
@@ -164,10 +200,8 @@ export function pruneLegacySkillDirs(
     for (const name of legacy) {
       const dir = path.join(targetPath, name);
       try {
-        // lstat: an editor link into an emptied .agents/skills dangles.
-        if (!fs.lstatSync(dir, { throwIfNoEntry: false })) continue;
-        fs.rmSync(dir, { recursive: true, force: true });
-        removed.add(name);
+        // An editor link into an emptied .agents/skills dangles, and goes too.
+        if (removePath(dir)) removed.add(name);
       } catch {
         // non-fatal
       }

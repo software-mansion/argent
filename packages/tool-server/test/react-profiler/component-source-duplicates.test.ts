@@ -24,6 +24,12 @@ function makeTempDir(prefix: string): string {
  * happened to reach first, which may be the wrong platform variant.
  */
 describe("react-profiler-component-source: duplicate component names", () => {
+  // react-profiler-analyze attaches the same lookup to every component in its
+  // report; the SDK still calls this tool.
+  it("is hidden from MCP", () => {
+    expect(reactProfilerComponentSourceTool.hideFromMcp).toBe(true);
+  });
+
   it("returns the base-file primary source and surfaces variants under otherMatches", async () => {
     const dir = makeTempDir("component-source-dup-");
     mkdirSync(join(dir, "components"), { recursive: true });

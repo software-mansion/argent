@@ -26,6 +26,8 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "run-sequence",
   // A wait is almost always followed by a look at the screen it waited for.
   "await-ui-element",
+  "file-panel",
+  "menu-bar",
 ]);
 
 /**
@@ -60,6 +62,18 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
 
 const DEFAULT_DELAY_MS = 1400;
 
+/**
+ * The most the screenshot and the element tree may take together once the
+ * settle wait is over; the settle call gets this on top of its own cap. A
+ * capture call that times out is not sent again: the tool-server keeps reading
+ * after the adapter gives up, so a retry queues behind the read it abandoned.
+ * A frozen helper on a Huawei phone made the four retries of `describe` take
+ * two minutes.
+ * In the telemetry of the 14 days to 2026-10-28, 15 s cuts off 0.05-0.35% of
+ * `describe` calls on iOS and Android, and 2.3% on Android TV emulators.
+ */
+export const CAPTURE_TIMEOUT_MS = 15_000;
+
 // Opt-out only: the `disable-auto-screenshot` flag is off by default.
 // `options` lets tests point flag storage at a temp dir.
 export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
@@ -90,6 +104,8 @@ export const AUTO_DESCRIBE_TOOLS = new Set([
   "open-url",
   "run-sequence",
   "await-ui-element",
+  "file-panel",
+  "menu-bar",
 ]);
 
 // Opt-out only: the `disable-auto-describe` flag is off by default.
@@ -97,11 +113,19 @@ export function autoDescribeEnabled(options?: FlagsPathOptions): boolean {
   return !isFlagEnabled("disable-auto-describe", options);
 }
 
+/**
+ * Appended instead of the screenshot and element tree while a profiler records
+ * on the call's device (the tool-server flags the call's envelope).
+ */
+export const PROFILING_CAPTURE_SKIPPED_NOTE =
+  "Auto-screenshot and element tree skipped while a profiler is recording on this device. Call screenshot or describe if you need to see the screen.";
+
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
 
-export function shouldAutoDescribe(toolName: string): boolean {
-  return AUTO_DESCRIBE_TOOLS.has(normalizeToolName(toolName));
+export function shouldAutoDescribe(toolName: string, args?: unknown): boolean {
+  const canonical = normalizeToolName(toolName);
+  return AUTO_DESCRIBE_TOOLS.has(canonical) && !isListCall(canonical, args);
 }
 
 /**
@@ -145,9 +169,21 @@ export function normalizeToolName(name: string): string {
   return idx === -1 ? name : name.slice(idx + 2);
 }
 
-export function shouldAutoScreenshot(toolName: string): boolean {
+export function shouldAutoScreenshot(toolName: string, args?: unknown): boolean {
   const canonical = normalizeToolName(toolName);
-  return canonical !== "screenshot" && AUTO_SCREENSHOT_TOOLS.has(canonical);
+  return (
+    canonical !== "screenshot" &&
+    AUTO_SCREENSHOT_TOOLS.has(canonical) &&
+    !isListCall(canonical, args)
+  );
+}
+
+/** `menu-bar` and `file-panel` only read with `action: "list"`. */
+function isListCall(canonical: string, args: unknown): boolean {
+  return (
+    (canonical === "menu-bar" || canonical === "file-panel") &&
+    (args as { action?: unknown } | null | undefined)?.action === "list"
+  );
 }
 
 export function getAutoScreenshotDelayMs(toolName: string): number {

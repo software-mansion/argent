@@ -208,9 +208,88 @@ describe("buildSigningDetectionNote", () => {
         "argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach"
     );
   });
+
+  describe("with a phone", () => {
+    const UDID = "00008120-001668913A05A01E";
+    const [NEWEST, MIDDLE] = THREE_TEAMS;
+
+    it("calls the winner the only team that lists the phone, and lists the newest as found", () => {
+      const note = buildSigningDetectionNote(THREE_TEAMS, MIDDLE, { udid: UDID, coveringTeams: 1 });
+
+      expect(note).toContain(
+        "team ABCDE12345 (Apple Development (ALICEKEY01)), the only one of 3 signing identities " +
+          `in this Mac's keychain with a provisioning profile that lists phone ${UDID}. `
+      );
+      expect(note).toContain(
+        "Also found: FGHIJ67890 (Apple Development (BOBKEY0002)), KLMNO13579 " +
+          "(Apple Development (CAROLKEY01)). "
+      );
+    });
+
+    it("counts only the teams that list the phone", () => {
+      expect(
+        buildSigningDetectionNote(THREE_TEAMS, NEWEST, { udid: UDID, coveringTeams: 2 })
+      ).toContain(
+        "the newest of the 2 signing identities in this Mac's keychain with a " +
+          `provisioning profile that lists phone ${UDID}. `
+      );
+    });
+
+    it("names the phone when no team lists it", () => {
+      expect(
+        buildSigningDetectionNote(THREE_TEAMS, NEWEST, { udid: UDID, coveringTeams: 0 })
+      ).toContain(
+        "the newest of 3 signing identities in this Mac's keychain; none has a " +
+          `provisioning profile that lists phone ${UDID}. `
+      );
+    });
+  });
 });
 
 describe("announceDetectedSigningTeam", () => {
+  const PHONE_A = "00008120-00000000000A001E";
+  const PHONE_B = "00008120-00000000000B001E";
+  const [TEAM_ONE, TEAM_TWO] = THREE_TEAMS;
+
+  it("hands each phone only its own note", () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      announceDetectedSigningTeam(THREE_TEAMS, TEAM_ONE, { udid: PHONE_A, coveringTeams: 1 });
+      announceDetectedSigningTeam(THREE_TEAMS, TEAM_TWO, { udid: PHONE_B, coveringTeams: 1 });
+
+      const forB = consumePendingSigningDetectionNote(PHONE_B);
+      expect(forB).toContain(`team ${TEAM_TWO!.teamId}`);
+      expect(forB).not.toContain(`phone ${PHONE_A}`);
+
+      const forA = consumePendingSigningDetectionNote(PHONE_A);
+      expect(forA).toContain(`team ${TEAM_ONE!.teamId}`);
+      expect(forA).not.toContain(`phone ${PHONE_B}`);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("announces once per phone and team, and joins a phone's notes into one drain", () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const phoneA = { udid: PHONE_A, coveringTeams: 0 };
+      announceDetectedSigningTeam(THREE_TEAMS, TEAM_ONE, phoneA);
+      announceDetectedSigningTeam(THREE_TEAMS, TEAM_ONE, phoneA);
+      announceDetectedSigningTeam(THREE_TEAMS, TEAM_TWO, phoneA);
+      announceDetectedSigningTeam(THREE_TEAMS, TEAM_ONE, { udid: PHONE_B, coveringTeams: 0 });
+
+      expect(write).toHaveBeenCalledTimes(3);
+      expect(consumePendingSigningDetectionNote(PHONE_A)).toBe(
+        `${buildSigningDetectionNote(THREE_TEAMS, TEAM_ONE, phoneA)}\n` +
+          buildSigningDetectionNote(THREE_TEAMS, TEAM_TWO, phoneA)
+      );
+      expect(consumePendingSigningDetectionNote(PHONE_A)).toBeNull();
+      expect(consumePendingSigningDetectionNote(PHONE_B)).toContain(`team ${TEAM_ONE!.teamId}`);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it("logs once to stderr and stages the note for exactly one drain", () => {
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
@@ -221,8 +300,8 @@ describe("announceDetectedSigningTeam", () => {
       expect(write.mock.calls[0]?.[0]).toBe(
         `[ios-device-signing] ${buildSigningDetectionNote(ONE_TEAM)}\n`
       );
-      expect(consumePendingSigningDetectionNote()).toBe(buildSigningDetectionNote(ONE_TEAM));
-      expect(consumePendingSigningDetectionNote()).toBeNull();
+      expect(consumePendingSigningDetectionNote(PHONE_A)).toBe(buildSigningDetectionNote(ONE_TEAM));
+      expect(consumePendingSigningDetectionNote(PHONE_A)).toBeNull();
     } finally {
       write.mockRestore();
     }
@@ -234,7 +313,7 @@ describe("announceDetectedSigningTeam", () => {
       announceDetectedSigningTeam([]);
 
       expect(write).not.toHaveBeenCalled();
-      expect(consumePendingSigningDetectionNote()).toBeNull();
+      expect(consumePendingSigningDetectionNote(PHONE_A)).toBeNull();
     } finally {
       write.mockRestore();
     }

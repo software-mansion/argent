@@ -13,7 +13,10 @@ import request from "supertest";
 import { Registry } from "@argent/registry";
 import { z } from "zod";
 
-vi.mock("@argent/configuration-core", () => ({ isFlagEnabled: vi.fn() }));
+vi.mock("@argent/configuration-core", () => {
+  const isFlagEnabled = vi.fn();
+  return { isFlagEnabled, isFeatureEnabled: (name: string) => isFlagEnabled(name) };
+});
 import { isFlagEnabled } from "@argent/configuration-core";
 import { createHttpApp } from "../src/http";
 import { createProposeVariantTool } from "../src/tools/variants/propose-variant";
