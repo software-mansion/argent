@@ -3242,6 +3242,9 @@ async function execLeafStep(
           }
           warning = networkCaptureWarning(state, launched, result);
           refreshMacosDeviceKind(state);
+        } else if (FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))) {
+          // A launch in the nested run updates the record, not this run's device.
+          refreshMacosDeviceKind(state);
         }
         return {
           ...base,

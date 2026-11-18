@@ -47,7 +47,10 @@ function makeRegistry(
     devices?: unknown[];
     /** restart-app's answer: its note, or the error it fails with. */
     restart?: { note?: string } | Error;
-    /** Runs before launch-app or restart-app answers, as the real ones write their record. */
+    /**
+     * Runs before launch-app, restart-app or a nested e2e-execute answers, as the
+     * real ones (the nested run through its launch) write their record.
+     */
     onStart?: () => Promise<void>;
     capabilityOf?: (tool: string) => unknown;
   } = {}
@@ -67,6 +70,18 @@ function makeRegistry(
         if (opts.restart instanceof Error) throw opts.restart;
         await opts.onStart?.();
         return { restarted: true, bundleId: args.bundleId, ...opts.restart };
+      }
+      if (tool === "e2e-execute") {
+        await opts.onStart?.();
+        return {
+          e2eTest: "inner",
+          ok: true,
+          passed: 1,
+          failed: 0,
+          skipped: 0,
+          errored: 0,
+          steps: [{ index: 0, kind: "launch", status: "pass" }],
+        };
       }
       return { ok: true };
     }),
@@ -551,6 +566,37 @@ describe("raw tool steps on a Mac app", () => {
       ]);
       expect(result.steps[1]?.reason).toContain("not supported on macos catalyst");
       expect(calls.map((c) => c.tool)).not.toContain("native-find-views");
+    }
+  );
+
+  it.each([
+    { start: "a Mac Catalyst app's first start", before: undefined, after: true },
+    { start: "a Mac Catalyst app rebuilt as an AppKit app", before: true, after: false },
+  ])(
+    "gates the steps after a nested e2e-execute by the kind its launch recorded: $start",
+    async ({ before, after }) => {
+      if (before !== undefined) await recordKind(before);
+      const { registry, calls } = makeRegistry({
+        capabilityOf: catalystCapabilityOf,
+        onStart: () => recordKind(after),
+      });
+      await writeFlow("inner", {
+        executionPrerequisite: "",
+        steps: [{ kind: "launch", app: { macos: APP } }],
+      });
+      await writeFlow("nested-start", {
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tool", name: "e2e-execute", args: { name: "inner", project_root: tmpDir } },
+          { kind: "tool", name: "native-find-views", args: { bundleId: APP, identifier: "x" } },
+        ],
+      });
+      const result = await run(registry, "nested-start", { device: MAC_DEVICE });
+      expect(result.steps.map((s) => `${s.tool}:${s.status}`)).toEqual([
+        "e2e-execute:pass",
+        `native-find-views:${after ? "error" : "pass"}`,
+      ]);
+      expect(calls.some((c) => c.tool === "native-find-views")).toBe(!after);
     }
   );
 });
