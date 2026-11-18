@@ -88,7 +88,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)<flag:macos-apps>, or a Mac app id, which needs no debugger-connect</flag:macos-apps>."
+      "Device ID used to record or load the React profile<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>."
     ),
   project_root: z
     .string()
@@ -96,7 +96,7 @@ const zodSchema = z.object({
   platform: z
     .enum(["ios", "android", "macos"])
     .optional()
-    .describe("Target platform")
+    .describe("Platform for source lookup when the recording does not identify one.")
     .meta({ [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } }),
   rn_version: z.coerce.string().default("unknown").describe('React Native version (e.g. "0.73.4")'),
   annotations: z

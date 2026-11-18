@@ -147,21 +147,9 @@ describe("the native profiler tools' Mac app text", () => {
 });
 
 describe("the React profiler tools' Mac app text", () => {
-  it.each(["react-profiler-start", "react-profiler-stop"])(
-    "%s takes a Mac app id, which needs no debugger-connect, only with the flag on",
-    (id) => {
-      expect(advertised(id, true).properties.device_id!.description).toMatch(
-        /\(iOS simulator UDID, Mac app id or Android serial\)\. A Mac app needs no debugger-connect\.$/
-      );
-      const off = advertised(id, false);
-      expect(off.properties.device_id!.description).toMatch(
-        /\(iOS simulator UDID or Android serial\)\.$/
-      );
-      expect(JSON.stringify(off)).not.toMatch(MAC_TEXT);
-    }
-  );
-
   it.each([
+    "react-profiler-start",
+    "react-profiler-stop",
     "react-profiler-status",
     "react-profiler-analyze",
     "react-profiler-fiber-tree",
@@ -169,49 +157,33 @@ describe("the React profiler tools' Mac app text", () => {
     "react-profiler-cpu-summary",
     "profiler-cpu-query",
     "profiler-commit-query",
-  ])("%s takes a Mac app id, not from debugger-connect, only with the flag on", (id) => {
-    // debugger-connect refuses a Mac app id, so the id must not read as its result.
-    expect(advertised(id, true).properties.device_id!.description).toBe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android " +
-        "logicalDeviceId), or a Mac app id, which needs no debugger-connect."
-    );
-    const off = advertised(id, false);
-    expect(off.properties.device_id!.description).toMatch(
-      /\(iOS simulator UDID or Android logicalDeviceId\)\.$/
-    );
-    expect(JSON.stringify(off)).not.toMatch(MAC_TEXT);
+    "profiler-combined-report",
+  ])("%s documents the Mac app ID only with the flag on", (id) => {
+    const on = advertised(id, true).properties.device_id!.description;
+    expect(on).toMatch(/Mac app/);
+    expect(on).toContain("list-devices");
+    expect(on).not.toContain("debugger-connect");
+    expect(JSON.stringify(advertised(id, false))).not.toMatch(MAC_TEXT);
   });
 
-  it("profiler-combined-report takes a Mac app id only with the flag on", () => {
-    expect(advertised("profiler-combined-report", true).properties.device_id!.description).toBe(
-      "iOS Simulator/device UDID, Mac app id or Android serial"
-    );
-    const off = advertised("profiler-combined-report", false);
-    expect(off.properties.device_id!.description).toBe(
-      "iOS Simulator/device UDID or Android serial"
-    );
-    expect(JSON.stringify(off)).not.toMatch(MAC_TEXT);
-  });
-
-  it("react-profiler-start asks for native-profiler-start on a Mac app only with the flag on", () => {
-    expect(advertised("react-profiler-start", true).description).toContain(
-      "On an iOS simulator, a Mac app or Android device, also call native-profiler-start"
-    );
-    expect(advertised("react-profiler-start", false).description).toContain(
-      "On an iOS simulator or Android device, also call native-profiler-start"
-    );
+  it("react-profiler-start documents Mac setup and native capture only with the flag on", () => {
+    const on = advertised("react-profiler-start", true).description;
+    expect(on).toMatch(/react-native-macos.*Debug build.*Metro/);
+    expect(on).toContain("without debugger-connect");
+    expect(on).toMatch(/Mac app[^.\n]*native-profiler-start/);
+    const off = advertised("react-profiler-start", false).description;
+    expect(off).toContain("native-profiler-start");
+    expect(off).not.toMatch(MAC_TEXT);
   });
 
   it("react-profiler-analyze offers the macos platform only with the flag on", () => {
-    expect(advertised("react-profiler-analyze", true).properties.platform).toEqual({
+    expect(advertised("react-profiler-analyze", true).properties.platform).toMatchObject({
       type: "string",
       enum: ["ios", "android", "macos"],
-      description: "Target platform",
     });
-    expect(advertised("react-profiler-analyze", false).properties.platform).toEqual({
+    expect(advertised("react-profiler-analyze", false).properties.platform).toMatchObject({
       type: "string",
       enum: ["ios", "android"],
-      description: "Target platform",
     });
   });
 });

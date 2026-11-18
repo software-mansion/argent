@@ -37,7 +37,7 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) throug
 
 ## Profiling
 
-Use `argent-native-profiler`. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect. For a react-native-macos app, follow `argent-react-native-profiler`, which also starts the native profiler.
+Use `argent-native-profiler` for native profiling or `argent-react-native-profiler` to capture React performance on a react-native-macos app. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
 
 ## E2E tests
 
@@ -45,4 +45,4 @@ Read `references/e2e.md` before recording or writing a test for a Mac app.
 
 ## react-native-macos
 
-A Debug build loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). Use `describe` to inspect the screen; the JavaScript debugger is unavailable for Mac apps. To measure performance, follow `argent-react-native-profiler` with the Mac app id as `device_id`, without `debugger-connect`.
+Start Metro before launching a react-native-macos Debug build with `boot-device`. See `argent-react-native-app-workflow` for Metro setup. Use `describe` to inspect the screen. The JavaScript debugger tools are unavailable for Mac apps.

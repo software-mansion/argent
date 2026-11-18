@@ -44,7 +44,7 @@ interface HangCommitCorrelation {
 const zodSchema = z.object({
   port: metroPortField,
   device_id: metroDeviceIdParam(
-    "iOS Simulator/device UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial"
+    "Device ID from list-devices used for the native profile (iOS simulator UDID, Android serial<flag:macos-apps>, or Mac app ID</flag:macos-apps>)."
   ),
 });
 

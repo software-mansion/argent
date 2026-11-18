@@ -102,7 +102,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)<flag:macos-apps>, or a Mac app id, which needs no debugger-connect</flag:macos-apps>."
+      "Device ID of the app to inspect<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>. During a recording, use the ID passed to react-profiler-start."
     ),
   max_depth: z.coerce
     .number()

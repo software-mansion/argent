@@ -517,7 +517,7 @@ The menu list stops at 2000 items or eight submenu levels. Check `truncated` and
 
 ### Profiling a Mac app
 
-Pass the Mac app's `device_id` to `native-profiler-start`, `native-profiler-stop`, `native-profiler-analyze`, and `profiler-stack-query`. In a react-native-macos app, also pass it to the React profiler tools. See [React profiler on react-native-macos](#react-profiler-on-react-native-macos). Use `profiler-load` to reopen a saved session. See [Profiling](#profiling) for shared behavior.
+Pass the Mac app's `device_id` to `native-profiler-start`, `native-profiler-stop`, `native-profiler-analyze`, and `profiler-stack-query`. Use `profiler-load` with `mode: "load_native"` to reopen a saved native session. See [Profiling](#profiling) for shared behavior.
 
 - **Start.** Launch the app through Argent first and omit `app_process`. The bundled Instruments template captures CPU samples, UI hangs, and memory leaks. In a desktop session, Argent requires `com.apple.security.get-task-allow` on signed builds to avoid an administrator prompt that blocks recording. If you get `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`, use a development-signed build. In a background session such as SSH, pass `template_path: "Time Profiler"` to profile CPU and hangs on a signed build without that entitlement.
 - **Trace older allocations.** The bundled template can capture allocation stacks for objects allocated during recording. To trace allocations from launch, set `malloc_stack_logging: true`. This restarts the app and clears its current state. If start reports that it restarted the app, malloc stack logging stays active even if Instruments fails to attach. Use `restart-app` to remove the overhead before measuring CPU or hangs.
@@ -533,21 +533,24 @@ A short recording may end before a leak check finishes. Follow the report's warn
 
 #### React profiler on react-native-macos
 
-The React profiler tools, `profiler-cpu-query`, `profiler-commit-query`, `profiler-combined-report`, and `profiler-load` with `mode: "load_react"` work on a react-native-macos app:
+Start a [supported Debug build](/docs/features/mac-apps#profile-a-react-native-macos-app) through Argent.
+Pass the Mac app's ID from `list-devices` as `device_id`, even on a shared Metro. The profiler
+connects directly to Metro. The `debugger-*` tools are unavailable for Mac apps.
 
-- The app must be a Debug build of react-native-macos 0.76 or later that loads its JavaScript bundle from Metro. A Release build has no JavaScript debugger. Older versions of react-native-macos are not supported. Argent is tested with react-native-macos 0.83 with Hermes in bridgeless mode.
-- `react-profiler-start` does not need `debugger-connect` first. The `debugger-*` tools reject a Mac app ID.
-- Argent finds the JavaScript runtime of the app on Metro from the bundle identifier in the Mac app ID. This also works when other devices use the same Metro, for example an iOS simulator that runs the same app with the same bundle identifier. Pass the Mac app ID, not a `logicalDeviceId` of Metro.
-- When Metro lists other devices but no runtime of the app, the tools fail with `DEBUGGER_TARGET_DEVICE_MISMATCH`, and the error lists the devices that Metro has. When Metro lists no runtime, the tools fail with `DEBUGGER_METRO_NO_TARGETS`. In both cases, `react-profiler-status` does not fail: it returns `session_status: "no_react_runtime"`, and its `note` gives the reason of the error. Argent does not connect to the runtime of another app.
-- When Metro does not use port 8081, pass its port in `port`.
-- Call `native-profiler-start` with the same Mac app ID at the same time, as on iOS. `profiler-combined-report` then correlates the hangs of the Instruments trace with the React commits.
-- While the React profiler records, interaction tools on the app return no automatic screenshot or element tree, as on the other devices.
+Use the same `device_id` and Metro `port` for the React profiler and query tools. The default port
+is 8081. To reopen a saved React profile, use `profiler-load` with `mode: "load_react"`. To compare
+React commits with native hangs, record both profiles during the same interaction. Analyze both
+profiles before calling `profiler-combined-report`.
 
-`react-profiler-analyze` on a Mac app:
+If Metro lists other runtimes but cannot find the Mac app, tools that need the runtime return
+`DEBUGGER_TARGET_DEVICE_MISMATCH` and list the available targets. If Metro lists no runtimes, they
+return `DEBUGGER_METRO_NO_TARGETS`. In either case, `react-profiler-status` returns
+`session_status: "no_react_runtime"` with the reason in `note`. Check that the app is running,
+wait for it to load its JavaScript, and verify the Metro port before retrying.
 
-- The tool reads the platform from the recording: the bundle URL of a Mac app has `platform=macos`. The `platform` parameter also accepts `"macos"`. It applies only when the recording names no platform.
-- When several files define a component name, the report selects the file in the order of Metro for macOS: a `.macos.*` file, then a `.native.*` file, then the base file. A `.ios.*` file and a `.android.*` file are not in a macOS bundle, so the report does not give them. On iOS and Android, the report does not give a `.macos.*` file.
-- When the recording does not give the React Native architecture, the tool reads `macos/Podfile` in place of `ios/Podfile`.
+For `react-profiler-analyze`, pass `platform: "macos"` if the recording lacks platform information.
+The report prefers `.macos.*` source files, then `.native.*` files, then files without a platform suffix.
+If the recording lacks architecture information, the tool checks `macos/Podfile`.
 
 ### Additional limitations
 
@@ -607,7 +610,7 @@ When a session has no hot commits, the other modes of `profiler-commit-query` re
 
 While a profiler that `react-profiler-start` or `native-profiler-start` started records on a device, interaction tools on that device return no automatic screenshot or element tree. The tool-server sets `profiling: true` on the tool-call response, and the MCP server returns a note in place of the capture. An explicit `describe` call returns its tree and no note. Call `screenshot` or `describe` to see the screen. Through the MCP server, an interaction tool still waits until the screen stops changing before it returns, so a `screenshot` or `describe` called next shows the screen after the interaction. The skip ends when the profiler stops, when the 10-minute recording cap ends the capture, when the app reloads its JavaScript during a React profile, or when the profiler session ends. On an Android emulator or device, Argent also sets the simulator-server of the device to on-demand screenshots while a profiler records. On an emulator, a `screenshot` then takes one frame in about 100 ms. On a physical device, a `screenshot` takes about 150 ms to 200 ms. It starts the screen capture for a short time. Interaction tools do not start the screen capture. When the last profiler on the device stops, Argent sets the simulator-server back to the default mode. An older simulator-server ignores the setting and keeps the default mode.
 
-When two or more devices use one Metro, `react-profiler-start` takes the `logicalDeviceId` of Metro, not the device id. Interaction tools take the device id. Thus Argent finds the device of the React profile:
+On a shared Metro, `react-profiler-start` may ask for Metro's `logicalDeviceId` to select an iOS or Android target. Interaction tools still take the device ID. Argent matches a recording that uses a `logicalDeviceId` to a device in three steps.
 
 1. The app writes a marker line to the device log.
 2. Argent reads the logs of the connected Android devices and the booted iOS simulators.
@@ -615,7 +618,7 @@ When two or more devices use one Metro, `react-profiler-start` takes the `logica
 
 When Argent finds no device, interaction tools on the device keep the automatic screenshot and element tree. `react-profiler-start` then returns a note. Argent cannot read the log of a physical iPhone or of a device from a provider.
 
-A Mac app does not need a `logicalDeviceId`. `react-profiler-start` accepts the Mac app ID also when two or more devices use one Metro, because Argent finds the app from its bundle id. Thus Argent does not read a log for a Mac app, and interaction tools on the app return no automatic screenshot or element tree. See [Profiling a Mac app](#profiling-a-mac-app).
+For a Mac app, use the [Mac app ID](#react-profiler-on-react-native-macos) even when several devices share Metro.
 
 One React profiler run at a time can record in an app. `react-profiler-status` returns one of these `session_status` values:
 

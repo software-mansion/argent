@@ -449,7 +449,7 @@ const timeWindowSchema = z.object({
 const zodSchema = z.object({
   port: metroPortField,
   device_id: metroDeviceIdParam(
-    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)<flag:macos-apps>, or a Mac app id, which needs no debugger-connect</flag:macos-apps>."
+    "Device ID used to record or load the React profile<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>."
   ),
   mode: z
     .enum(["top_functions", "time_window", "call_tree", "component_cpu"])

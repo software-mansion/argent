@@ -7,7 +7,12 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Profile on a simulator.
 
-react-native-macos app (`platform: "macos"`): `device_id` is the Mac app id; no `debugger-connect`. Needs a Debug build of react-native-macos 0.76 or later that loads its bundle from Metro (a Release build has no JS debugger). Pass `port` when Metro is not on 8081. If the error says Metro has no runtime of the app, start the app when it does not run, else report the error; do not switch to another device it lists.
+For react-native-macos, start Metro and use `argent-macos-app-interact` to launch a Debug build of
+version 0.76 or later with Hermes. Pass the Mac app's `device_id` from `list-devices` and call
+`react-profiler-start` directly. Use the same ID and Metro port for the rest of the session.
+If Metro cannot find the runtime, make sure the app is running, wait for its bundle to load, and
+check the port (8081 by default). Retry with the same app ID, even if Metro lists other devices.
+If the retry fails, report the error.
 
 ## 1. Tools
 

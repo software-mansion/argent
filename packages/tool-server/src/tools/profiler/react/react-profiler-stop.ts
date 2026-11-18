@@ -186,7 +186,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial).<flag:macos-apps> A Mac app needs no debugger-connect.</flag:macos-apps>"
+      "Device ID passed to react-profiler-start<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>."
     ),
 });
 
