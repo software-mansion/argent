@@ -592,12 +592,15 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 
 `argent e2e run` replays an e2e test without an agent and exits non-zero on failure. The command sends the e2e test to the tool-server that the CLI uses. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-| Command                      | Description                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist |
-| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                            |
-| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                         |
-| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                     |
+| Command                      | Description                                                                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist                      |
+| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                                                 |
+| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                                              |
+| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                                          |
+| `argent e2e list --json`     | Print the same list as a JSON document. See [The `argent e2e list` JSON document](#the-argent-e2e-list-json-document) |
+
+When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes `warning: no .argent/e2e or .argent/flows directory in the current working directory` on stderr. When the directories hold no e2e test, `argent e2e list` writes `No e2e tests found in .argent/e2e or .argent/flows` on stderr. In both cases, stdout is empty and the exit code is 0. When one of the directories exists but Argent cannot read it, `argent e2e list` writes `Could not read e2e test directory: <dir>` on stderr and gives exit code 2.
 
 | Option               | Description                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -686,6 +689,34 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
+
+### The `argent e2e list` JSON document
+
+`argent e2e list --json` writes one document on stdout. The document holds an `e2eTests` array. The array has the same order as the plain output. Each entry holds these fields:
+
+| Field        | Description                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `path`       | The path that the plain output prints, relative to the current directory                                                         |
+| `name`       | The name that `argent e2e run <name>` accepts. Only for a file directly in `.argent/e2e` or `.argent/flows`                      |
+| `legacy`     | `true` for an e2e test in `.argent/flows`                                                                                        |
+| `shadowedBy` | The path of an earlier entry with the same name. `argent e2e run <name>` runs that entry instead. Only when such an entry exists |
+
+```json
+{
+  "e2eTests": [
+    { "path": ".argent/e2e/login.yaml", "name": "login", "legacy": false },
+    { "path": ".argent/e2e/suite/pay.yaml", "legacy": false },
+    {
+      "path": ".argent/flows/login.yaml",
+      "name": "login",
+      "legacy": true,
+      "shadowedBy": ".argent/e2e/login.yaml"
+    }
+  ]
+}
+```
+
+When Argent finds no e2e test, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
 
 <a id="flows-over-a-link" />
 
