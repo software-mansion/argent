@@ -789,21 +789,17 @@ export async function inBackgroundSession(): Promise<boolean> {
 }
 
 /**
- * Whether `vmmap` output lists the malloc zone of JavaScriptCore's heap
- * (libpas), which WebKit registers as "WebKit Malloc" in an app that shows web
- * content or runs JavaScriptCore. vmmap names each zone with its address, as
- * `WebKit Malloc_0x10aeee5f8`. "WebKit Using System Malloc" is another zone.
+ * Match JavaScriptCore's `WebKit Malloc` zone and its address suffix in `vmmap`
+ * output. `WebKit Using System Malloc` is a separate zone.
  */
 export function listsWebKitMallocZone(vmmapOutput: string): boolean {
   return /^WebKit Malloc_0x[0-9a-f]+\s/m.test(vmmapOutput);
 }
 
 /**
- * Whether the process `pid` has the malloc zone of JavaScriptCore's heap, from
- * `vmmap -summary`, which takes 1 to 2 s on an app and suspends it while it
- * reads. Rejects with vmmap's error when it cannot tell: vmmap failed, or did
- * not finish in 10 s. The timeout stops vmmap with SIGTERM, and vmmap resumes
- * the process before it exits.
+ * Check for JavaScriptCore's malloc zone. `vmmap` briefly suspends the app
+ * during the check and resumes it on exit, including after a timeout.
+ * Reject if `vmmap` fails or times out so the caller can handle an unknown heap.
  */
 export async function processHasWebKitMallocZone(pid: number): Promise<boolean> {
   const { stdout } = await execFileAsync("vmmap", ["-summary", String(pid)], {

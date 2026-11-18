@@ -87,20 +87,10 @@ async function assertDebuggable(
 }
 
 /**
- * Refuses the bundled template for an app that has JavaScriptCore's heap
- * (libpas, which WebKit runs in an app that shows web content) and was not
- * started with MallocStackLogging. When the template's Allocations instrument
- * attaches, its recorder (liboainject) suspends every other thread of the app
- * to walk the malloc zones, and libpas's zone then waits for a condition that
- * one of those threads would signal. The recorder never ends and never resumes
- * them: the app, argent's library in it included, stays frozen after the
- * recording until it is killed. Apple's Leaks template does the same, also to
- * an app with no argent library. The app's task is never suspended, so the
- * suspension watch does not see it. An app started with MallocStackLogging=1
- * was not stopped, with the same zone. A template that the caller chose is not
- * checked: the attach decides, as in assertDebuggable. When vmmap cannot read
- * the zones, the start is refused too: a wrong refusal costs the caller one more
- * call, a wrong attach costs the app.
+ * The Allocations instrument can deadlock on JavaScriptCore's malloc zone
+ * when stack logging is off. It suspends individual threads, so the app stays
+ * frozen after recording and the task suspension watch cannot detect it.
+ * Check only the bundled template and refuse to attach if the heap check fails.
  */
 async function assertAllocationsCanAttach(bundleId: string, pid: number): Promise<void> {
   const waysForward =
