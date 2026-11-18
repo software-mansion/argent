@@ -149,7 +149,11 @@ import {
   readAxDaemonExit,
   type AXServiceApi,
 } from "../../src/blueprints/ax-service";
-import { describeIos } from "../../src/tools/describe/platforms/ios";
+import {
+  __resetBootCaveatStateForTests,
+  describeIos,
+  withBootCaveatOncePerDevice,
+} from "../../src/tools/describe/platforms/ios";
 
 // Its own udid prefix: the socket path is /tmp/ax-<first 8 chars>.sock, and
 // other suites run beside this one.
@@ -351,6 +355,26 @@ describe("ax-service blueprint: a daemon that dies before it connects", () => {
     simctlReportsSignal(proc, 6, "Abort trap", "exit-first");
 
     await expect(pending).rejects.toThrow("ax-service crashed with SIGABRT before connecting");
+  });
+
+  it("does not wait for a stderr that had already ended when the exit arrived", async () => {
+    // `end` fires once. With the stream already at its end there is nothing
+    // left to wait for, and waiting anyway would hold every verdict back for
+    // the whole drain window. The stand-in above calls `end()` in the same
+    // tick as the exit, when the stream has not ended yet; this one lets it.
+    const pending = axServiceBlueprint.factory({}, device, { device });
+    pending.catch(() => {});
+    const proc = await spawned();
+    proc.stderr.write(SEGFAULT_STDERR);
+    proc.stderr.end();
+    await new Promise((resolve) => proc.stderr.once("end", resolve));
+    expect(proc.stderr.readableEnded).toBe(true);
+    fakeBlueprintTimers();
+
+    proc.emit("exit", 139, null);
+
+    // No timer has been advanced.
+    expect(await settledNow(pending)).toBe("ax-service crashed with SIGSEGV before connecting");
   });
 
   it("waits for a line that arrives well after the exit", async () => {
@@ -893,6 +917,88 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
           "view-hierarchy fallback is unavailable on it. Take a screenshot to see the screen."
       );
     });
+  });
+
+  describe("the standing boot caveat around a start that fails", () => {
+    // A failed start has a hint that is neither caveat, like a crash. What
+    // keeps it from clearing the once-per-device state is that the read is
+    // recorded as one whose daemon was gone, with the boot state it measured.
+    beforeEach(() => {
+      __resetBootCaveatStateForTests();
+    });
+
+    // A sim not booted through argent whose read works: the standing caveat.
+    const degradedAx = {
+      degraded: true,
+      describe: async () => ({
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          { label: "General", frame: { x: 0.05, y: 0.3, width: 0.9, height: 0.05 }, traits: [] },
+        ],
+      }),
+    } as unknown as AXServiceApi;
+
+    /** One read as the `describe` tool makes it, over a service or its failure to start. */
+    async function toolRead(ax: AXServiceApi | Error) {
+      const registry = {
+        resolveService: async (urn: string) => {
+          if (!urn.startsWith("AXService:")) throw new Error("no native devtools here");
+          if (ax instanceof Error) throw ax;
+          return ax;
+        },
+      } as unknown as Registry;
+      return withBootCaveatOncePerDevice(
+        device.id,
+        await describeIos(registry, device, {}, { isTvOs: false })
+      );
+    }
+
+    /** What the registry rejects with when a real start exits 1 before connecting. */
+    async function failedStart(throughArgent: boolean): Promise<Error> {
+      bootedThroughArgent = throughArgent;
+      behavior = "idle";
+      const pending = failure(axServiceBlueprint.factory({}, device, { device }));
+      const proc = await spawned(procs.length);
+      proc.stderr.end();
+      proc.emit("exit", 1, null);
+      const cause = (await pending) as Error;
+      return new ServiceInitializationError(`AXService:${UDID}`, cause.message, { cause });
+    }
+
+    it("is not re-armed by a failed start on a sim measured as not booted through argent", async () => {
+      expect((await toolRead(degradedAx)).hint).toMatch(/^This simulator was not booted through/);
+
+      const failed = await toolRead(await failedStart(false));
+      expect(failed.hint).toContain("ax-service exited with code 1 before connecting");
+      expect(failed.hint).toContain("Call boot-device with force=true");
+
+      // Same sim, same state: the caveat already told stays told.
+      expect((await toolRead(degradedAx)).hint).toBeUndefined();
+    });
+
+    it("is re-armed by a failed start on a sim measured as booted through argent", async () => {
+      // That read found the sim off the state the caveat describes, so a later
+      // external boot of the same udid has not been told.
+      expect((await toolRead(degradedAx)).hint).toMatch(/^This simulator was not booted through/);
+
+      const failed = await toolRead(await failedStart(true));
+      expect(failed.hint).toContain("ax-service exited with code 1 before connecting).");
+      expect(failed.hint).not.toMatch(/boot-device/);
+
+      expect((await toolRead(degradedAx)).hint).toMatch(/^This simulator was not booted through/);
+    });
+
+    it.each([true, false])(
+      "is not consumed by a failed start that comes first (through argent: %s)",
+      async (throughArgent) => {
+        expect((await toolRead(await failedStart(throughArgent))).hint).toContain(
+          "The accessibility service failed to start"
+        );
+        expect((await toolRead(degradedAx)).hint).toMatch(/^This simulator was not booted through/);
+        expect((await toolRead(degradedAx)).hint).toBeUndefined();
+      }
+    );
   });
 
   it("leaves the service resolvable again after a crash during a read", async () => {

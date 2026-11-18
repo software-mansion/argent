@@ -1359,6 +1359,18 @@ describe("describe tool — ax-service daemon crash", () => {
       expect((await unmeasured.execute({}, { udid: UDID })).hint).toContain("crashed with SIGSEGV");
       expect((await degradedRead()).hint).toBeUndefined();
     });
+
+    it("is not re-armed by a start that failed without a crash, its boot state unmeasured", async () => {
+      // The crash's twin: the daemon was just as gone, and its hint is no more
+      // a caveat than the crash hint is. The measured cases, over a real start,
+      // are in ax-service-daemon-exit.test.ts.
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      const failed = createDescribeTool(registryWhereAxFailsToStart(startFailure({ code: 1 })));
+      expect((await failed.execute({}, { udid: UDID })).hint).toContain(
+        "ax-service exited with code 1 before connecting"
+      );
+      expect((await degradedRead()).hint).toBeUndefined();
+    });
   });
 
   it("sets the native fallback's own diagnosis apart from the crash", async () => {
