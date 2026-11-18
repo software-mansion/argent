@@ -112,7 +112,7 @@ describe("react-profiler-start registers the run where the device's calls look",
       found: ["emulator-5554", "127.0.0.1:5555"],
       unresolved: [],
     });
-    const { registry } = fakeSession(LOGICAL_ID);
+    const { api, registry } = fakeSession(LOGICAL_ID);
     const tool = createReactProfilerStartTool(registry);
 
     const result = await tool.execute(
@@ -124,6 +124,12 @@ describe("react-profiler-start registers the run where the device's calls look",
     expect(isProfiling("127.0.0.1:5555")).toBe(true);
     expect(isProfiling(LOGICAL_ID)).toBe(true);
     expect(result).not.toHaveProperty("__argentNote");
+
+    // Every way a run ends clears the session's flag, which releases them all.
+    api.profilingActive = false;
+    for (const id of ["emulator-5554", "127.0.0.1:5555", LOGICAL_ID]) {
+      expect(isProfiling(id)).toBe(false);
+    }
   });
 
   // Only an awaited serial is kept when it answers after the grace window, so
@@ -177,7 +183,7 @@ describe("react-profiler-start registers the run where the device's calls look",
     );
     registerCaptureOnDemandSender("ext:acme-3f2a9c:emulator-5558", "ws://127.0.0.1:9001", () => {});
     findRuntimeDevicesMock.mockResolvedValue({ found: ["emulator-5556"], unresolved: [] });
-    const { registry } = fakeSession(LOGICAL_ID);
+    const { api, registry } = fakeSession(LOGICAL_ID);
     const tool = createReactProfilerStartTool(registry);
 
     await tool.execute(
@@ -188,6 +194,11 @@ describe("react-profiler-start registers the run where the device's calls look",
     expect(isProfiling(PROVIDER_ID)).toBe(true);
     expect(sends).toEqual([true]);
     expect(isProfiling("ext:acme-3f2a9c:emulator-5558")).toBe(false);
+
+    api.profilingActive = false;
+    expect(isProfiling(PROVIDER_ID)).toBe(false);
+    expect(isProfiling("emulator-5556")).toBe(false);
+    expect(sends).toEqual([true, false]);
   });
 
   it("notes that captures go on when the device cannot be found", async () => {

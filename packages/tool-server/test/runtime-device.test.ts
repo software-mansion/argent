@@ -227,15 +227,22 @@ describe("findRuntimeDevices", () => {
       });
     });
 
-    it("does not wait out its hung read once the device is found", async () => {
-      adb.readDelayMs.set("emulator-5556", Infinity);
-      const startedAt = Date.now();
+    // The issue's own setup: two emulators on one Metro, the other one slow.
+    it.each([
+      ["not awaited", {}],
+      ["awaited", { awaitSerials: ["emulator-5556"] }],
+    ])(
+      "does not wait for its hung read once the device is found, %s",
+      async (_label, options: { awaitSerials?: string[] }) => {
+        adb.readDelayMs.set("emulator-5556", Infinity);
+        const startedAt = Date.now();
 
-      await expect(
-        findRuntimeDevices(runtimeOn("emulator-5554"), { awaitSerials: ["emulator-5556"] })
-      ).resolves.toEqual(foundOn("emulator-5554"));
-      expect(Date.now() - startedAt).toBeLessThan(OTHER_TRANSPORTS_GRACE_MS + 1_000);
-    });
+        await expect(findRuntimeDevices(runtimeOn("emulator-5554"), options)).resolves.toEqual(
+          foundOn("emulator-5554")
+        );
+        expect(Date.now() - startedAt).toBeLessThan(OTHER_TRANSPORTS_GRACE_MS / 2);
+      }
+    );
   });
 
   describe("for a device reachable over two adb transports", () => {

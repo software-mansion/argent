@@ -16,8 +16,8 @@ const RETRY_DELAY_MS = 300;
  * How long the other adb serials get to answer once one holds the marker. A
  * device reachable over two transports answers on both, and a slow or hung one
  * must not hold up every start for the full read timeout. Serials the caller
- * names in `awaitSerials` or `waitSerials` are not cut off, unless their serial
- * shows they are another device (see {@link anotherDevice}).
+ * names in `awaitSerials` or `waitSerials` are not cut off. A serial that shows
+ * it is another device (see {@link anotherDevice}) is not waited for at all.
  */
 export const OTHER_TRANSPORTS_GRACE_MS = 500;
 
@@ -123,11 +123,11 @@ function firstFound<T>(checks: Array<() => Promise<T | undefined>>): Promise<T |
 
 /**
  * The serials whose logcat holds the marker. It reads every listed serial at
- * once and stops once all have answered, or once
- * {@link OTHER_TRANSPORTS_GRACE_MS} has passed since the first hit and every
- * listed serial in `awaitSerials` or `waitSerials` has answered or is
- * {@link anotherDevice} than a serial that holds the marker. Undefined when
- * none holds it.
+ * once and stops once each has answered or is {@link anotherDevice} than a
+ * serial that holds the marker, except that once
+ * {@link OTHER_TRANSPORTS_GRACE_MS} has passed since the first hit it waits
+ * only for serials in `awaitSerials` or `waitSerials`. Undefined when none
+ * holds it.
  */
 async function androidDevices(
   serials: readonly string[],
@@ -146,13 +146,19 @@ async function androidDevices(
   await new Promise<void>((resolve) => {
     let graceOver = false;
     let grace: ReturnType<typeof setTimeout> | undefined;
+    // Waits on each unanswered serial that could still be this device: before
+    // the grace window ends every one, then only the awaited ones. A serial
+    // that names another device than one that holds the marker cannot hold it,
+    // so it is not waited on at all.
     const settle = () => {
-      const allAnswered = answers.size === listed.length;
       const held = heldSerials(answers);
-      const awaitedAnswered = awaited.every(
-        (serial) => answers.has(serial) || held.some((found) => anotherDevice(serial, found))
+      const waitingOn = listed.filter(
+        (serial) =>
+          !answers.has(serial) &&
+          (!graceOver || awaited.includes(serial)) &&
+          !held.some((found) => anotherDevice(serial, found))
       );
-      if (allAnswered || (graceOver && awaitedAnswered)) {
+      if (waitingOn.length === 0) {
         clearTimeout(grace);
         resolve();
       }
