@@ -9,7 +9,7 @@ Argent - general rules:
 - use the platform the user named; otherwise prefer a device `list-devices` shows already running, and don't default to iOS; in a single-platform project boot that platform.
 - if tap fails twice, stop retrying and re-run a discovery tool
 - Prefer mcp-tool calls over raw commands like `xcrun` or `adb`; use them as fallback.
-- Interaction tools return screenshot and element tree automatically.
+- Interaction tools return screenshot and element tree automatically; once you have a tree of the device, only the lines that changed since it.
 - prefer `launch-app` or `open-url` than tapping icons on home screen.
 - If a task can require a saved e2e test, load `argent-create-e2e` (`argent-qa-e2e` for acceptance tests) before the first launch or in-app action; recording is not retroactive.
 - Load the matching `argent-*` skill before React Native build/debug, profiling, a physical phone, a Mac app or a TV.

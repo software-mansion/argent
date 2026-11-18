@@ -40,7 +40,7 @@ Each tool's own description carries its parameters, defaults, return shape and e
 
 ## 3. Finding Tap Targets
 
-After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`): use it, and call a discovery tool only when no fresh tree covers the current screen.
+After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`), or only its lines that changed since the last tree you got (`--- Elements changed since the last tree ...`, `-` gone, `+` new; `same as the last tree` when nothing changed): use it, and call a discovery tool only when no fresh tree covers the current screen.
 
 | Need                                           | Tool                                                                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |

@@ -26,7 +26,7 @@ The agent does not read coordinates from a screenshot. Before a tap, the agent h
 - the accessibility tree on iOS, Android, TV and Mac apps,
 - the DOM in Chromium and Electron apps.
 
-After a screen change, the action returns the new screen: a screenshot and the element tree. The element tree also contains the hint of `describe`, for example when the tree is not complete. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.
+After a screen change, the action returns the new screen: a screenshot and the element tree. The element tree also contains the hint of `describe`, for example when the tree is not complete. When the agent already has a tree of the device, the action returns only the elements that changed. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.
 
 ## Launching apps
 

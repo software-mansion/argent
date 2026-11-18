@@ -35,7 +35,6 @@ import {
   getAutoScreenshotDelayMs,
   autoDescribeEnabled,
   shouldAutoDescribe,
-  AUTO_DESCRIBE_HEADER,
   CAPTURE_TIMEOUT_MS,
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
@@ -45,6 +44,7 @@ import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
+import { renderTreeChange } from "./tree-diff.js";
 
 export { fetchWithReconnect } from "./tool-caller.js";
 
@@ -203,35 +203,35 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   }
 
+  /** The last element tree returned to the agent per device, as `treeText` renders it. */
+  const lastTreeByUdid = new Map<string, string>();
+
   /**
    * The element tree the agent would otherwise have to fetch with a `describe`
    * round-trip before its next tap. Measured on Sonnet over 70 runs: −21%
-   * turns, −23% wall time, −17% cost at equal task success (see PR #958). The
-   * tree is a few hundred tokens per action.
+   * turns, −23% wall time, −17% cost at equal task success (see PR #958).
+   * Once the agent holds a tree of the device, only the changed lines are sent.
    */
   async function captureTreeBlocks(
     udid: string,
     toolName: string,
     signal: AbortSignal
-  ): Promise<ContentBlock[]> {
+  ): Promise<CapturedTree> {
     const t1 = Date.now();
     try {
       const d = await callTool("describe", { udid }, { signal });
-      const { description: desc, hint } =
-        (d.result as { description?: unknown; hint?: unknown } | null) ?? {};
+      const tree = treeText(d.result);
+      const change =
+        tree === undefined ? undefined : renderTreeChange(lastTreeByUdid.get(udid), tree);
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_describe",
         name: toolName,
         durationMs: Date.now() - t1,
-        chars: typeof desc === "string" ? desc.length : 0,
+        chars: tree?.length ?? 0,
+        mode: change?.mode,
       });
-      if (typeof desc !== "string" || desc.length === 0) return [];
-      // The agent reads this tree in place of describe, so it needs describe's warnings too
-      // (the TV description already carries its hint).
-      const hintLine =
-        typeof hint === "string" && hint && !desc.includes(hint) ? `Hint: ${hint}\n` : "";
-      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${hintLine}${desc}` }];
+      return { blocks: change ? [{ type: "text" as const, text: change.text }] : [], tree };
     } catch (e) {
       await spyLog({
         ts: new Date().toISOString(),
@@ -240,7 +240,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         durationMs: Date.now() - t1,
         error: String(e instanceof Error ? e.message : e),
       });
-      return [];
+      return { blocks: [] };
     }
   }
 
@@ -272,7 +272,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
     const t0 = Date.now();
     await spyLog({
       ts: new Date().toISOString(),
@@ -318,6 +318,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
+      let shownTree = canonicalToolId(params.name) === "describe" ? treeText(result) : undefined;
       const wantScreenshot =
         autoScreenshotOn && shouldAutoScreenshot(params.name, params.arguments);
       const wantTree = autoDescribeOn && shouldAutoDescribe(params.name, params.arguments);
@@ -356,14 +357,21 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         // An unsettled screen can leave a tree read in flight, which a
         // concurrent describe would reuse (physical iPhone).
         if (!screenSettled) await screenshot;
-        const tree = wantTree ? captureTreeBlocks(udid, params.name, signal) : Promise.resolve([]);
-        content = [...content, ...(await screenshot), ...(await tree)];
+        const captured: CapturedTree = wantTree
+          ? await captureTreeBlocks(udid, params.name, signal)
+          : { blocks: [] };
+        shownTree = captured.tree ?? shownTree;
+        content = [...content, ...(await screenshot), ...captured.blocks];
       }
 
       if (note) {
         content = [{ type: "text" as const, text: note }, ...content];
       }
 
+      // A cancelled call never reaches the agent, so its tree cannot be the next baseline.
+      if (udid && shownTree !== undefined && !extra.signal.aborted) {
+        lastTreeByUdid.set(udid, shownTree);
+      }
       return { content };
     } catch (err) {
       await spyLog({
@@ -420,4 +428,22 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       setTimeout(() => process.exit(0), 5_000);
     });
   }
+}
+
+interface CapturedTree {
+  blocks: ContentBlock[];
+  /** The full tree the blocks stand for, undefined when none was read. */
+  tree?: string;
+}
+
+/**
+ * The tree text of a `describe` result, with its hint, which the agent needs as
+ * well (the TV description already carries it). Undefined for an empty tree.
+ */
+function treeText(result: unknown): string | undefined {
+  const { description, hint } = (result as { description?: unknown; hint?: unknown } | null) ?? {};
+  if (typeof description !== "string" || description.length === 0) return undefined;
+  const hintLine =
+    typeof hint === "string" && hint && !description.includes(hint) ? `Hint: ${hint}\n` : "";
+  return `${hintLine}${description}`;
 }

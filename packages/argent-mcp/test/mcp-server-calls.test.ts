@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
+import { TREE_DIFF_HEADER, TREE_UNCHANGED_TEXT } from "../src/tree-diff.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -594,6 +595,64 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content.at(-1)!.text).toBe(`--- Elements after action (describe) ---\n${describeText}`);
+  });
+
+  describe("after the agent holds a tree of the device", () => {
+    const LIST = ["Wi-Fi", "Bluetooth", "Cellular", "Battery", "General", "Privacy"]
+      .map((label, i) => `AXButton "${label}" (0.000,0.${i}00,1.000,0.100)`)
+      .join("\n");
+    const treeOf = (result: Awaited<ReturnType<typeof tap>>) =>
+      (result.content as Array<{ type: string; text?: string }>).at(-1)!.text;
+    const tapOn = (udid: string) =>
+      client.callTool({ name: "gesture-tap", arguments: { udid, x: 0.5, y: 0.5 } });
+
+    beforeEach(() => {
+      describeText = LIST;
+    });
+
+    it("sends only the changed lines", async () => {
+      await tap();
+      describeText = `${LIST}\nAXStaticText "Saved"`;
+
+      expect(treeOf(await tap())).toBe(`${TREE_DIFF_HEADER}\n+ AXStaticText "Saved"`);
+    });
+
+    it("sends one line when nothing changed", async () => {
+      await tap();
+
+      expect(treeOf(await tap())).toBe(TREE_UNCHANGED_TEXT);
+    });
+
+    it("sends the full tree to a device it has not sent a tree for", async () => {
+      await tapOn("u");
+
+      expect(treeOf(await tapOn("v"))).toBe(`${AUTO_DESCRIBE_HEADER}\n${LIST}`);
+    });
+
+    it("keeps no tree from a call that the client cancelled", async () => {
+      const controller = new AbortController();
+      const cancelled = client.callTool(
+        { name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } },
+        undefined,
+        { signal: controller.signal }
+      );
+      await vi.waitFor(() => expect(events).toContain("describe start"));
+      controller.abort();
+      await expect(cancelled).rejects.toThrow();
+      await vi.waitFor(() => expect(events).toContain("describe end"));
+
+      expect(treeOf(await tap())).toBe(`${AUTO_DESCRIBE_HEADER}\n${LIST}`);
+    });
+
+    it("compares with the tree of the last describe, which returns the full tree", async () => {
+      await tap();
+      describeText = `${LIST}\nAXStaticText "Saved"`;
+
+      const described = await client.callTool({ name: "describe", arguments: { udid: "u" } });
+      expect(textOf(described)).toContain("Saved");
+
+      expect(treeOf(await tap())).toBe(TREE_UNCHANGED_TEXT);
+    });
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {
