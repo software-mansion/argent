@@ -1,5 +1,4 @@
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
-import { isFlagEnabled } from "@argent/configuration-core";
 import {
   getDescribeTapPoint,
   type DescribeFrame,
@@ -29,6 +28,7 @@ import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosSimulator } from "../../utils/device-info";
 import { renderFlagGated } from "../../utils/flag-gated-text";
+import { isFlagOffered } from "../../utils/capability";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
@@ -971,7 +971,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
               (platform === "harmony"
                 ? ""
                 : ". On a touch screen, open a context menu with long-press"),
-        isFlagEnabled
+        isFlagOffered
       ),
     };
   }

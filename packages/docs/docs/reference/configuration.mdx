@@ -92,6 +92,8 @@ A feature flag is a boolean switch. Each flag turns one behavior of Argent on or
 
 Add `--scope project` to `enable` or `disable` to change the flag for the current project only. The default scope is global.
 
+A project value overrides the global value. If the project value contradicts a global `enable` or `disable`, the command shows a note with the command that changes the project value.
+
 ```bash
 argent enable argent-lens                    # global
 argent enable argent-lens --scope project    # this project only
@@ -111,7 +113,7 @@ argent enable argent-lens --scope project    # this project only
 | `harmonyos`               | Off     | Enable HarmonyOS support: list, boot and drive HarmonyOS phones and DevEco Studio emulators over `hdc`                                                                                                                      |
 | `forward-secrets`         | Off     | Send the secrets of the client to a linked tool-server. See [Secrets over a link](#secrets-over-a-link)                                                                                                                     |
 | `video-watermark`         | On      | Put the Argent watermark in the corner of a recorded screen video                                                                                                                                                           |
-| `macos-apps`              | Off     | Drive native Mac apps (AppKit, SwiftUI, react-native-macos) from inside the app. Adds Mac apps to `list-devices` and `boot-device`, and adds the `file-panel` and `menu-bar` tools. See [Mac apps](/docs/features/mac-apps) |
+| `macos-apps`              | On      | Drive native Mac apps (AppKit, SwiftUI, react-native-macos) from inside the app. Adds Mac apps to `list-devices` and `boot-device`, and adds the `file-panel` and `menu-bar` tools. See [Mac apps](/docs/features/mac-apps) |
 
 The tool-server writes the event log to `~/.argent/tool-server-events.jsonl`. Set the `ARGENT_EVENT_LOG` environment variable to select a different path.
 

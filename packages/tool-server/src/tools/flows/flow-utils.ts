@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
-import { MIN_SCRIPT_TIMEOUT_MS, isFlagEnabled } from "@argent/configuration-core";
+import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import {
   canonicalToolArgs,
   E2E_DIRS,
@@ -15,6 +15,7 @@ import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_EXTENSIONS,
   SCRIPT_FILE_NAME_PATTERN,
   completeRunExtension,
   type ClientFileDirective,
@@ -36,7 +37,7 @@ import {
 // match engine defines it.
 export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
-import { MACOS_APPS_FLAG } from "../../utils/capability";
+import { MACOS_APPS_FLAG, isFlagOffered } from "../../utils/capability";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
@@ -2353,9 +2354,14 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
  */
 export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega", "macos"] as const;
 
-/** {@link LAUNCH_PLATFORMS} as an error names them: `macos` only with its flag on. */
+/**
+ * {@link LAUNCH_PLATFORMS} as an error names them: `macos` only where this
+ * host can drive a Mac app (the flag is on and the host is macOS). This is
+ * text only. The parser accepts `macos` on every host, checked against
+ * {@link LAUNCH_PLATFORMS}, because e2e files are shared between hosts.
+ */
 function namedLaunchPlatforms(): string[] {
-  return LAUNCH_PLATFORMS.filter((p) => p !== "macos" || isFlagEnabled(MACOS_APPS_FLAG));
+  return LAUNCH_PLATFORMS.filter((p) => p !== "macos" || isFlagOffered(MACOS_APPS_FLAG));
 }
 
 /**
@@ -2532,7 +2538,7 @@ function parseLaunch(raw: unknown): Launch {
       `({ native | ${namedLaunchPlatforms()
         .filter((p) => p !== "chromium")
         .join(" | ")}: <app id>, ` +
-      `ios${isFlagEnabled(MACOS_APPS_FLAG) ? " | macos" : ""}: { app, args }, ` +
+      `ios${isFlagOffered(MACOS_APPS_FLAG) ? " | macos" : ""}: { app, args }, ` +
       `chromium: <app path> | { path, args } })`
   );
 }
@@ -3168,7 +3174,7 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (typeof value !== "string" || value.length === 0) {
     badEntry(
       raw,
-      "a `script` step needs a `path` — a .mjs file path relative to this e2e test's file, e.g. `script: { path: scripts/seed.mjs }`"
+      `a \`script\` step needs a \`path\` — a ${SCRIPT_EXTENSIONS_FOR_MESSAGE} file path relative to this e2e test's file, e.g. \`script: { path: scripts/seed.mjs }\``
     );
   }
   if (value.includes("\\")) {
@@ -3180,23 +3186,41 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
     badEntry(raw, "a `script` path must be relative to the e2e test file that references it");
   }
-  if (!value.endsWith(".mjs")) {
-    if (value.toLowerCase().endsWith(".mjs")) {
-      badEntry(raw, "a `script` path must use the lowercase .mjs extension");
+  if (!SCRIPT_FILE_EXTENSIONS.some((extension) => value.endsWith(extension))) {
+    const lower = value.toLowerCase();
+    const miscased = SCRIPT_FILE_EXTENSIONS.find((extension) => lower.endsWith(extension));
+    if (miscased) {
+      badEntry(raw, `a \`script\` path must use the lowercase ${miscased} extension`);
+    }
+    // Node's own error for `require` in a `.js` file it read as an ES module
+    // ends by advising this rename, so a path that arrives here with it is
+    // usually following that advice and needs the way out, not the list again.
+    const commonJsOnly = COMMONJS_ONLY_EXTENSIONS.find((extension) => lower.endsWith(extension));
+    if (commonJsOnly) {
+      badEntry(
+        raw,
+        `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE}, and ${commonJsOnly} is not accepted — where the project's package.json sets "type": "module", use \`import\` in the script in place of \`require\``
+      );
     }
     badEntry(
       raw,
-      "a `script` path must end in .mjs — the extension pins the module type whatever the project's package.json says"
+      `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE} — a JavaScript or TypeScript file`
     );
   }
   if (!SCRIPT_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
     badEntry(
       raw,
-      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the .mjs`
+      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the extension`
     );
   }
   return value;
 }
+
+/** The spellings that pin a file to CommonJS, which {@link SCRIPT_FILE_EXTENSIONS} leaves out. */
+const COMMONJS_ONLY_EXTENSIONS = [".cjs", ".cts"] as const;
+
+/** ".mjs, .mts, .js or .ts", for the messages that name every spelling a script may take. */
+const SCRIPT_EXTENSIONS_FOR_MESSAGE = `${SCRIPT_FILE_EXTENSIONS.slice(0, -1).join(", ")} or ${SCRIPT_FILE_EXTENSIONS.slice(-1)[0]}`;
 
 /**
  * The `timeout` a `script` step may carry, in milliseconds. The finiteness

@@ -7,7 +7,7 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) throug
 
 ## Contract
 
-- Needs the `macos-apps` flag. When a tool says it is off, tell the user to run the command it names. Do not change the flag yourself.
+- Needs the `macos-apps` flag, which is on by default. When a tool says it is off, tell the user to run the command it names. Do not change the flag yourself.
 - One app is one device. `list-devices` shows only apps argent started that still run, also those of other sessions: never pick one unless the user named that app or this session started it.
 - Start an app with `boot-device {macosAppPath: "<abs path>.app"}`, never with `open` or Xcode. Use `launch-app` only for an app argent already started: with no recorded path it takes whichever copy Spotlight finds.
 - Build the `.app` without starting it: `xcodebuild ... build`, then take the bundle from `BUILT_PRODUCTS_DIR` (`xcodebuild -showBuildSettings`). Xcode Run and `react-native run-macos` start a copy without the argent library: `boot-device` then fails with `already running ... without the argent library`. Retry with `force: true`, but ask the user first when they may have work open in that copy.
@@ -35,10 +35,14 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) throug
 - Hint `The Mac is locked` or `fallback walk`: clicks and typing still work, elements can be missing (an open context menu among them), and a `hidden` check cannot pass. Ask the user to unlock when a target is missing.
 - An action that fails or has no effect: a minimized window takes no input. Restore it by choosing it in the Window menu with `menu-bar`; without such an item, ask the user.
 
+## Profiling
+
+Use `argent-native-profiler` for native profiling or `argent-react-native-profiler` to capture React performance on a react-native-macos app. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
+
 ## E2E tests
 
 Read `references/e2e.md` before recording or writing a test for a Mac app.
 
 ## react-native-macos
 
-A Debug build loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). `debugger-*` and the React profiler do not take a Mac app id: read the screen with `describe`.
+Start Metro before launching a react-native-macos Debug build with `boot-device`. See `argent-react-native-app-workflow` for Metro setup. Use `describe` to inspect the screen. The JavaScript debugger tools are unavailable for Mac apps.

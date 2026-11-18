@@ -20,7 +20,7 @@ import {
   type ToolsClient,
   type ToolsServerPaths,
 } from "@argent/tools-client";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import { FlagParseException } from "./flag-parser.js";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 
@@ -116,8 +116,26 @@ function durationSuffix(ms: unknown): string {
   return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
-function printHelp(toStderr = false): void {
+/**
+ * Whether the help lists `macos` under --platform: the flag is on, and a Mac
+ * can run the test. That is this host, or the tool-server that `argent link`
+ * or ARGENT_TOOLS_URL names, which can be a Mac when this host is not. Help
+ * reads the link (one local file, no network) and does not contact that
+ * tool-server, so a linked CLI lists `macos` whatever the remote host is.
+ */
+async function offersMacosPlatform(): Promise<boolean> {
+  if (!isFeatureEnabled("macos-apps")) return false;
+  if (process.platform === "darwin") return true;
+  try {
+    return (await getResolvedToolsUrl()).url !== null;
+  } catch {
+    return false;
+  }
+}
+
+async function printHelp(toStderr = false): Promise<void> {
   const print = toStderr ? console.error : console.log;
+  const macos = (await offersMacosPlatform()) ? " macos |" : "";
   print(`Usage: argent e2e <subcommand> [options]
 
 Run a YAML e2e test without an LLM in the loop. \`run\` takes any of these forms:
@@ -183,12 +201,14 @@ Subcommands:
   run <test|test.yaml|dir>   Run a saved e2e test by name, a YAML file by path,
                              or every test in a directory, and report pass/fail
                              (exit reflects result)
-  list                       List runnable YAML paths in .argent/e2e and
-                             .argent/flows (legacy); notes go to stderr
+  list [--json]              List runnable YAML paths in .argent/e2e and
+                             .argent/flows (legacy); notes go to stderr.
+                             --json prints { "e2eTests": [...] } instead, with
+                             path, name, legacy and shadowedBy per entry
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega |${isFlagEnabled("macos-apps") ? " macos |" : ""} ios-remote — narrow
+  --platform <p>         ios | android | chromium | vega |${macos} ios-remote — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,
@@ -228,6 +248,8 @@ const RUN_OPTIONS = {
   "platform": { kind: "value" },
   "output": { kind: "value" },
 } as const satisfies OptionSpecs;
+
+const LIST_OPTIONS = { json: { kind: "boolean" } } as const satisfies OptionSpecs;
 
 export function parseRunArgs(argv: string[]): {
   /**
@@ -1554,17 +1576,44 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   const [sub, ...rest] = argv;
 
   if (!sub || sub === "--help" || sub === "-h") {
-    printHelp();
+    await printHelp();
     return;
   }
 
+  const flagGiven = (flag: string): boolean =>
+    rest.some((tok) => tok === flag || tok.startsWith(`${flag}=`));
+
   if (sub === "list") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      await printHelp();
+      return;
+    }
+    let json: boolean;
+    try {
+      const parsed = parseCommandArgs(rest, LIST_OPTIONS);
+      if (parsed.positionals.length > 0) {
+        throw new UsageError(
+          `unexpected argument ${JSON.stringify(parsed.positionals[0])}; e2e list takes no arguments`
+        );
+      }
+      json = parsed.options.json === true;
+    } catch (err) {
+      if (!(err instanceof UsageError)) throw err;
+      console.error(
+        flagGiven("--json")
+          ? JSON.stringify(errorRecord(err.message))
+          : `Error: ${err.message}\nRun \`argent e2e --help\`.`
+      );
+      return exitAfterFlush(2);
+    }
+    const listFail = (message: string): Promise<never> => {
+      console.error(json ? JSON.stringify(errorRecord(message)) : message);
+      return exitAfterFlush(2);
+    };
     // Every e2e test directory in lookup order. Stdout stays bare paths, one
     // per line, so `list | xargs -n1 run` keeps working; notes on legacy and
     // shadowed entries go to stderr.
-    const lines: string[] = [];
-    const notes: string[] = [];
-    let legacyCount = 0;
+    const entries: { path: string; name?: string; legacy: boolean; shadowedBy?: string }[] = [];
     const byName = new Map<string, string>();
     let anyDir = false;
     for (const dir of E2E_DIRS) {
@@ -1574,34 +1623,51 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
         // ordering must be a pure function of the set of paths, never of the
         // walk order.
         rels = (await collectRunnableFlowPaths(path.join(process.cwd(), dir))).sort();
-      } catch {
-        continue;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") continue;
+        return listFail(`Could not read e2e test directory: ${dir}`);
       }
       anyDir = true;
       for (const rel of rels) {
         const shown = path.join(dir, rel);
         // Only a file directly in the directory is reachable by name.
         const name = path.dirname(rel) === "." ? path.basename(rel, ".yaml") : undefined;
-        const usedByName = name === undefined ? undefined : byName.get(name);
-        if (name !== undefined && usedByName === undefined) byName.set(name, shown);
-        lines.push(shown);
-        if (dir === E2E_DIR) continue;
-        legacyCount++;
-        if (usedByName)
-          notes.push(`warning: ${shown} is shadowed by ${usedByName} when run by name`);
+        const shadowedBy = name === undefined ? undefined : byName.get(name);
+        if (name !== undefined && shadowedBy === undefined) byName.set(name, shown);
+        entries.push({
+          path: shown,
+          ...(name !== undefined && { name }),
+          legacy: dir !== E2E_DIR,
+          ...(shadowedBy !== undefined && { shadowedBy }),
+        });
       }
     }
-    if (legacyCount > 0) {
-      notes.push(
-        `note: ${legacyCount} test${legacyCount === 1 ? "" : "s"} listed from .argent/flows (legacy); move ${legacyCount === 1 ? "it" : "them"} to .argent/e2e`
-      );
+    if (json) {
+      const doc = { e2eTests: entries, ...(!anyDir && { warning: "no-e2e-directory" }) };
+      console.log(JSON.stringify(doc, null, 2));
+      return;
     }
     if (!anyDir) {
-      console.log(`No ${E2E_DIRS.join(" or ")} directory in the current working directory.`);
-    } else if (lines.length === 0) console.log(`No e2e tests found in ${E2E_DIRS.join(" or ")}`);
+      console.error(
+        `warning: no ${E2E_DIRS.join(" or ")} directory in the current working directory`
+      );
+    } else if (entries.length === 0)
+      console.error(`No e2e tests found in ${E2E_DIRS.join(" or ")}`);
     else {
-      console.log(lines.join("\n"));
-      for (const note of notes) console.error(note);
+      console.log(entries.map((entry) => entry.path).join("\n"));
+      for (const entry of entries) {
+        if (entry.shadowedBy !== undefined)
+          console.error(
+            `warning: ${entry.path} is shadowed by ${entry.shadowedBy} when run by name`
+          );
+      }
+      const legacyCount = entries.filter((entry) => entry.legacy).length;
+      if (legacyCount > 0) {
+        console.error(
+          `note: ${legacyCount} test${legacyCount === 1 ? "" : "s"} listed from .argent/flows (legacy); move ${legacyCount === 1 ? "it" : "them"} to .argent/e2e`
+        );
+      }
     }
     return;
   }
@@ -1615,25 +1681,23 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   // token. Once streaming is requested stdout belongs exclusively to NDJSON,
   // so help goes to stderr as the diagnostic it is. --json reads stderr as
   // records, so a usage error there is the record alone, with no help.
-  const flagGiven = (flag: string): boolean =>
-    rest.some((tok) => tok === flag || tok.startsWith(`${flag}=`));
   const jsonStream = flagGiven("--json-stream");
   const json = !jsonStream && flagGiven("--json");
   // Checked before parseRunArgs so --help wins even when it trails a
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
   if (rest.includes("--help") || rest.includes("-h")) {
-    printHelp(jsonStream);
+    await printHelp(jsonStream);
     return;
   }
-  const usageError = (message: string, prose: string): Promise<never> => {
+  const usageError = async (message: string, prose: string): Promise<never> => {
     if (json) {
       console.error(JSON.stringify(errorRecord(message)));
       return exitAfterFlush(2);
     }
     if (jsonStream) writeJsonStreamError(message);
     console.error(prose);
-    printHelp(jsonStream);
+    await printHelp(jsonStream);
     return exitAfterFlush(2);
   };
   let args: ReturnType<typeof parseRunArgs>;
