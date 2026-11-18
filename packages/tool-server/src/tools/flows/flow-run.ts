@@ -48,8 +48,8 @@ import {
   type FlowStep,
   type Launch,
   SELECTABLE_PLATFORMS,
-  windowsPathRefusal,
   usesViewHierarchy,
+  windowsPathRefusal,
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import {
@@ -98,13 +98,10 @@ import {
   type DirectiveOutcome,
 } from "./flow-actions";
 import {
-  buildAppStateMessage,
   isInjectableBundleId,
   isNativeDevtoolsBlockResult,
   nativeDevtoolsRef,
-  NATIVE_DEVTOOLS_CONNECT_BUDGET_MS,
   type NativeDevtoolsApi,
-  type NativeDevtoolsAppState,
 } from "../../blueprints/native-devtools";
 import { readIosSimulatorUiTree } from "./flow-ios-tree";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
@@ -332,27 +329,13 @@ const POST_LAUNCH_SETTLE_MS = 1500;
 /**
  * How long a launch waits for the platform's tree source to serve the launched
  * app: on an iOS simulator, for the accessibility tree to name it as the
- * foreground app (a version 1 file: for native devtools to connect); on Vega,
- * for the automation toolkit to attach. A cold start can outlast the first
- * directive's auto-wait, so the wait lives on the launch step, which fails with
- * a reason naming the app instead of letting the first directive surface a raw
- * tree-source error.
- *
- * The same as `NATIVE_DEVTOOLS_CONNECT_BUDGET_MS`: a native devtools wait longer
- * than the dial budget would time out onto `unregistered`, whose remedy is a
- * tool-server restart.
+ * foreground app; on Vega, for the automation toolkit to attach. A cold start
+ * can outlast the first directive's auto-wait, so the wait lives on the launch
+ * step, which fails with a reason naming the app instead of letting the first
+ * directive surface a raw tree-source error.
  */
-export const NATIVE_READY_TIMEOUT_MS = NATIVE_DEVTOOLS_CONNECT_BUDGET_MS;
+export const NATIVE_READY_TIMEOUT_MS = 15_000;
 const NATIVE_READY_POLL_MS = 250;
-
-/**
- * How long the launch step has spent on the app by the time the gate takes its
- * verdict: the post-launch settle plus the whole connect wait. The gate's own
- * timeout is only the second half, so quoting it alone understates the age of a
- * process the step launched — the fact the remedies below rest on. Exported so
- * they can be pinned against it.
- */
-export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT_MS;
 
 /**
  * `tool:` steps that can change or relaunch the foreground app — running one
@@ -362,11 +345,6 @@ export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT
  * launched app, so a read after the app left the foreground fails instead of
  * reading another app's tree. Only `launch-app` and `restart-app` re-pin, to
  * the app their own `bundleId` names, once they return.
- *
- * {@link ActionEnv.viewHierarchyTarget}, which version 1 reads use, keeps the
- * rules from before version 2: one of these drops it, any other raw `tool:`
- * step demotes a pin to a hint, and `launch-app`/`restart-app` set an unpinned
- * hint to their app.
  */
 const FOREGROUND_CHANGING_TOOLS = new Set([
   "launch-app",
@@ -375,137 +353,6 @@ const FOREGROUND_CHANGING_TOOLS = new Set([
   "open-url",
   "button",
 ]);
-
-/**
- * Poll until native-devtools is connected for `bundleId`. Returns null once
- * connected, on abort (the caller reports the cancellation itself), and for an
- * app whose hierarchy this gate cannot wait for at all. Otherwise the reason the
- * connection never came up: the resolution error when the service is
- * unreachable, else the state measured off the running process, rewritten for
- * the one thing that distinguishes this caller — it has just launched the app.
- *
- * Measured rather than guessed: "re-run to relaunch" here would be the same
- * restart loop `appConnectionState` exists to break.
- */
-async function waitForNativeDevtools(
-  registry: Registry,
-  device: DeviceInfo,
-  bundleId: string,
-  signal?: AbortSignal
-): Promise<string | null> {
-  let api: NativeDevtoolsApi;
-  try {
-    const ref = nativeDevtoolsRef(device);
-    api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
-  } catch (err) {
-    // Withheld for the same reason as the timeout below: an app the native
-    // tools refuse to target was never going to be served by this service.
-    if (!isInjectableBundleId(bundleId)) return null;
-    return `the native-devtools service is unavailable for ${bundleId} (${errMsg(err)})`;
-  }
-  const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
-  for (;;) {
-    if (signal?.aborted) return null;
-    if (api.isConnected(bundleId)) return null;
-    if (Date.now() >= deadline) break;
-    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
-  }
-  // Timed out with no connection. An app the native tools refuse to target has
-  // no hierarchy to wait for, so that is its expected outcome rather than a
-  // launch failure; the refusal bites only where a selector needs the hierarchy,
-  // and `fetchFlowTree` reports it there.
-  //
-  // The wait itself still runs, deliberately: whether the dylib loads into a
-  // simulator system app is unsettled (#453 saw `connected: false` for
-  // com.apple.Preferences on iOS 26.5, an E2E run `connected: true` on 18.5).
-  // Only the VERDICT is withheld — before a measurement no arm below would
-  // consult for such an app, costing several uninterruptible simctl round-trips.
-  if (!isInjectableBundleId(bundleId)) return null;
-  // Measure why — the state may have flipped to connected since the last poll.
-  // The loop's abort check covers every exit but this one (`break` follows it
-  // synchronously); an abort during the uninterruptible measurement is caught by
-  // the caller, which drops the reason.
-  const state = await api.appConnectionState(bundleId).catch(() => "indeterminate" as const);
-  if (state === "connected") return null;
-  return flowLaunchGateReason(bundleId, state);
-}
-
-/**
- * The measured diagnosis, rewritten for the one fact that separates this caller
- * from every other consumer of {@link buildAppStateMessage}: it has just run
- * `restart-app` on this bundle id and spent {@link LAUNCH_TO_VERDICT_MS} on it.
- *
- * Those messages are written for a reader who has not launched anything, so
- * emitted verbatim they hand back the action this step just took and an author
- * who obeys re-runs the flow into the identical state. Each state gets the
- * sentence that is true *after* a launch instead; the switch is exhaustive so a
- * state added later cannot inherit a remedy written for a reader who never
- * launched.
- */
-export function flowLaunchGateReason(
-  bundleId: string,
-  state: Exclude<NativeDevtoolsAppState, "connected">
-): string {
-  const measured = buildAppStateMessage(bundleId, state);
-  switch (state) {
-    case "not_running":
-      // The step launched it and it is gone: a relaunch provably reproduces
-      // this, so the measured remedy reads as advice to change nothing.
-      return (
-        `${bundleId} was relaunched by this step and is no longer running ${LAUNCH_TO_VERDICT_MS} ms later, ` +
-        `so it exited after launch rather than failing to connect. Re-running the e2e test repeats the same launch: ` +
-        `start it by hand (launch-app, then describe or screenshot) to see the crash or early exit first.`
-      );
-    case "stale_process":
-      // The first sentence must not pick between the state's two producers: a
-      // process carrying no argent injection at all, or one carrying THIS
-      // endpoint and merely older than the listener — the measured text names
-      // both, and blaming the launchd environment would be false for the second.
-      // The environment IS right on a SECOND landing: a re-run's process is
-      // younger than any long-up listener, which rules that producer out (it
-      // needs `processAge + grace >= listenerAge`).
-      return (
-        `${measured} This step already relaunched it, so the process it measured predates whatever the ` +
-        `relaunch would have given it — re-run the e2e test to launch again. If it lands here twice, the ` +
-        `simulator's launchd environment is not holding argent's instrumentation: re-boot the device ` +
-        `(boot-device with force) before re-running.`
-      );
-    case "unregistered":
-      // Everywhere else this verdict reads the app's whole lifetime; here only
-      // this step's launch plus its wait, which a cold start can outlast — so the
-      // measured remedy would have the author restart a healthy tool-server. The
-      // figure is the whole spend: the poll checks the live map once before its
-      // first sleep, so a dial during the post-launch settle counts too.
-      return (
-        `${measured} A cold start slower than the ${LAUNCH_TO_VERDICT_MS} ms this step waited reads the ` +
-        `same way — if that is likely, re-run the e2e test to relaunch and wait again before restarting anything.`
-      );
-    case "connecting":
-      // A process seconds old, though this step launched the app
-      // LAUNCH_TO_VERDICT_MS ago — something relaunched it in between, so the
-      // handshake being waited on belongs to that later process. "Wait" is
-      // still right; crediting this step with that launch is not.
-      return (
-        `${measured} This step launched it ${LAUNCH_TO_VERDICT_MS} ms before that reading, so the process ` +
-        `being measured started after the step's own launch — something relaunched it in between. Re-run ` +
-        `the e2e test once the app is settled.`
-      );
-    case "indeterminate":
-      return (
-        `${measured} This step already performed that one restart, so re-run the e2e test at most once more ` +
-        `before restarting the tool-server rather than the app.`
-      );
-    case "provider_attached":
-      // The measured text offers a retry to a reader whose app has only just
-      // started; this step already spent that wait. What survives is the half
-      // that does not ask argent to restart a process the provider owns.
-      return (
-        `${measured} This step already waited ${LAUNCH_TO_VERDICT_MS} ms after launching it, so the ` +
-        `provider is lending a different app rather than one still connecting. Re-run the e2e test only ` +
-        `once it is lending this one; otherwise drive the app by coordinate.`
-      );
-  }
-}
 
 /**
  * Poll the simulator's accessibility tree until it names `bundleId` as the
@@ -558,6 +405,41 @@ async function waitForForegroundApp(
     `launch: ${last}. Launch it by hand (launch-app, then screenshot) to see whether it crashes ` +
     `or shows another app first.`
   );
+}
+
+/**
+ * Poll until our library in `bundleId` has connected: a version 1 file reads
+ * the view hierarchy from it, and it connects a moment after the app starts.
+ * Returns null once it has and on abort; otherwise the reason. An Apple system
+ * app is not waited for: the first tree read refuses it with its own reason.
+ */
+async function waitForNativeDevtools(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string,
+  signal?: AbortSignal
+): Promise<string | null> {
+  if (!isInjectableBundleId(bundleId)) return null;
+  let api: NativeDevtoolsApi;
+  try {
+    const ref = nativeDevtoolsRef(device);
+    api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+  } catch (err) {
+    return `could not connect to native devtools for ${bundleId}: ${errMsg(err)}`;
+  }
+  const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
+  while (!api.isConnected(bundleId)) {
+    if (Date.now() >= deadline) {
+      return (
+        `could not connect to native devtools: ${bundleId} did not connect within ` +
+        `${NATIVE_READY_TIMEOUT_MS} ms of its launch, so its view hierarchy cannot be read. ` +
+        `Launch it by hand (launch-app, then screenshot) to see whether it crashes; if it runs, ` +
+        `re-boot the simulator (boot-device with force) and re-run the e2e test.`
+      );
+    }
+    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
+  }
+  return null;
 }
 
 /**
@@ -616,8 +498,8 @@ async function androidDevtoolsReady(
  * raw tree-source error.
  *
  * Returns null when ready, when the platform needs no gate, when the run was
- * aborted, and in a version 1 file for an iOS app the native tools refuse to
- * target (see {@link waitForNativeDevtools}). Otherwise the reason to report.
+ * aborted, and in a version 1 file for an Apple system app. Otherwise the
+ * reason to report.
  *
  * A successful iOS simulator launch pins later tree reads to this bundle
  * ({@link FlowTreeTarget}): a read that finds another app in the foreground
@@ -645,20 +527,13 @@ async function treeSourceGate(
     }
   }
   // Both iOS simulator platforms gate the same way: the ax-service and
-  // native-devtools blueprints serve a remote sim over TCP. A version 1 file
-  // waits for the source it reads, the native-devtools connection.
+  // native-devtools blueprints serve a remote sim over TCP. Each version waits
+  // for the tree it reads.
   if ((device.platform === "ios" || device.platform === "ios-remote") && !signal?.aborted) {
-    if (viewHierarchy) {
-      const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
-      if (reason !== null && !signal?.aborted) {
-        // Every reason names the bundle id, so the prefix must not: doubled, it
-        // reads as two failures reported back to back.
-        return `could not connect to native devtools. ${reason}`;
-      }
-    } else {
-      const reason = await waitForForegroundApp(registry, device, bundleId, signal);
-      if (reason !== null && !signal?.aborted) return reason;
-    }
+    const reason = viewHierarchy
+      ? await waitForNativeDevtools(registry, device, bundleId, signal)
+      : await waitForForegroundApp(registry, device, bundleId, signal);
+    if (reason !== null && !signal?.aborted) return reason;
   }
   if (device.platform === "android" && !signal?.aborted) {
     const { ready, reason } = await androidDevtoolsReady(registry, device);
@@ -708,14 +583,6 @@ function networkCaptureWarning(
 }
 
 /**
- * Whether `flow`'s steps run under the version 1 rules: a file without
- * `version: 2` on an iOS simulator. Other devices run every version the same.
- */
-function readsViewHierarchy(flow: FlowFile, device: DeviceInfo | null): boolean {
-  return device !== null && isIosSimulatorDevice(device) && usesViewHierarchy(flow);
-}
-
-/**
  * Execute a `launch` step: start the app from a clean state — terminate and
  * relaunch via `restart-app`, so a copy left running by a prior run can't leak
  * state in — then settle and wait for the platform's flow tree source to serve
@@ -749,8 +616,6 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // The previous app is terminating and the new one has not started, so a
   // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
-  state.viewHierarchyTarget = undefined;
-  state.owedLaunchGate = undefined;
   // An `{ app, args }` entry's args reach only its own platform. A Mac app
   // declared without args gets none, not the arguments of its last start.
   const key = authoringPlatform(device.platform);
@@ -785,13 +650,6 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (gate) return { ok: false, reason: gate };
   state.treeTarget = { bundleId, pinned: true };
-  // A fresh object: the app just cold-started, so a version 1 read must
-  // re-arm `probeAnswered`.
-  state.viewHierarchyTarget = { bundleId, pinned: true, probeAnswered: false };
-  // The gate waited only for the tree this file reads.
-  if (isIosSimulatorDevice(device)) {
-    state.owedLaunchGate = { bundleId, viewHierarchy: !state.viewHierarchy };
-  }
   // A Mac app's note: argent force-quit its own copy, or the new process
   // showed no window in time. The launch worked either way.
   const warnings = [
@@ -1180,14 +1038,6 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * `attached:` identity, having never been told what the instance runs.
    */
   attachedAppPath?: string;
-  /**
-   * The launch gate the last `launch:` step on an iOS simulator did not run: it
-   * waited only for the tree its own file's version reads. The first step of
-   * the other version that reads the tree runs it ({@link runOwedLaunchGate}),
-   * as a run of that version alone would have at the launch. A
-   * foreground-changing `tool:` step drops it.
-   */
-  owedLaunchGate?: { bundleId: string; viewHierarchy: boolean };
   projectRoot: string;
   scriptLogBudget: FlowScriptLogBudget;
   /**
@@ -1916,7 +1766,8 @@ Without a link, every step kind runs.`,
       }
 
       const state: ExecState = {
-        viewHierarchy: readsViewHierarchy(flow, device),
+        // The file's version holds for the whole run, `run:` fragments too.
+        viewHierarchy: device !== null && isIosSimulatorDevice(device) && usesViewHierarchy(flow),
         registry,
         ctx,
         device,
@@ -2638,24 +2489,6 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       if (inner) reportBlockSkipped(state, inner, childScope(scope), "run aborted");
       continue;
     }
-    // Lazily, so a version switch with no read after it, or a step that moves
-    // the app first, waits for nothing.
-    const owedGate = readsFlowTree(step) ? await runOwedLaunchGate(state) : null;
-    if (owedGate !== null) {
-      state.stopped = true;
-      pushReport(state, {
-        index,
-        kind: step.kind,
-        status: "error",
-        e2eTest: stepFlow(step, scope),
-        target: stepTarget(step),
-        ...depthOf(scope),
-        reason: owedGate,
-      });
-      const inner = blockSteps(step);
-      if (inner) reportBlockSkipped(state, inner, childScope(scope));
-      continue;
-    }
 
     if (step.kind === "run") {
       await execRunStep(state, step, scope);
@@ -2977,72 +2810,11 @@ async function execRunStep(
     ...depthOf(scope),
     durationMs: Date.now() - startedAt,
   });
-  // Each file runs on the tree it was written against, so a new test can `run:`
-  // an old fragment and the other way round.
-  const outerViewHierarchy = state.viewHierarchy === true;
-  setFlowVersion(state, readsViewHierarchy(fragment, state.device));
-  try {
-    await execSteps(
-      state,
-      fragment.steps,
-      childScope(scope, { runStack: [...scope.runStack, { canonical, display }] })
-    );
-  } finally {
-    setFlowVersion(state, outerViewHierarchy);
-  }
-}
-
-/**
- * Switch the run to a file's version at a `run:` step's entry or return. A
- * change spends a proven tree outage: it was proven on the other tree.
- */
-function setFlowVersion(state: ExecState, viewHierarchy: boolean): void {
-  if ((state.viewHierarchy === true) === viewHierarchy) return;
-  state.viewHierarchy = viewHierarchy;
-  if (state.treeOutage) state.treeOutage.proven = undefined;
-}
-
-/** Steps that read the flow tree, before which an owed launch gate runs. */
-function readsFlowTree(step: FlowStep): boolean {
-  switch (step.kind) {
-    case "when":
-      return step.condition.kind === "ui";
-    case "tool":
-    case "echo":
-    case "launch":
-    case "run":
-    case "wait":
-    case "fold":
-    case "script":
-      return false;
-    default:
-      return true;
-  }
-}
-
-/**
- * Run {@link ExecState.owedLaunchGate} when the steps now running are of the
- * version it is owed to, and return why the step cannot run, or null. Only a
- * `run:` step changes the version, so with nothing owed this costs nothing, and
- * a ready tree costs one poll.
- */
-async function runOwedLaunchGate(state: ExecState): Promise<string | null> {
-  const owed = state.owedLaunchGate;
-  const viewHierarchy = state.viewHierarchy === true;
-  if (!owed || owed.viewHierarchy !== viewHierarchy || !state.device) return null;
-  state.owedLaunchGate = undefined;
-  const { signal } = state;
-  const gate = await treeSourceGate(
-    state.registry,
-    state.device,
-    owed.bundleId,
-    signal,
-    viewHierarchy
+  await execSteps(
+    state,
+    fragment.steps,
+    childScope(scope, { runStack: [...scope.runStack, { canonical, display }] })
   );
-  // The gate returns null on abort, and the steps after this report the abort.
-  if (gate === null || signal?.aborted) return null;
-  const tree = viewHierarchy ? "the view hierarchy" : "the accessibility tree";
-  return `this e2e test file reads ${tree}, which the launch of ${owed.bundleId} in a file of the other version did not wait for: ${gate}`;
 }
 
 type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "scriptLogTruncated">;
@@ -3311,19 +3083,6 @@ async function execLeafStep(
       if (FOREGROUND_CHANGING_TOOLS.has(step.name) && state.treeOutage) {
         state.treeOutage.proven = undefined;
       }
-      // The version 1 target, in a file of either version: the runner stops
-      // vouching for the foreground app after a raw tool step, and version 1
-      // reads go back to auto-targeting.
-      if (FOREGROUND_CHANGING_TOOLS.has(step.name)) {
-        state.viewHierarchyTarget = undefined;
-        // The app may have left the foreground on purpose, or now runs without
-        // the instrumentation: a run of either version alone would not wait.
-        state.owedLaunchGate = undefined;
-      } else if (state.viewHierarchyTarget?.pinned) {
-        state.viewHierarchyTarget = { ...state.viewHierarchyTarget, pinned: false };
-        // A verdict proven on the pinned read says nothing about auto-targeting.
-        if (state.viewHierarchy && state.treeOutage) state.treeOutage.proven = undefined;
-      }
       // A nested orchestrator runs its tools outside this run's holder -
       // `flow-execute` on an ExecState of its own, `run-sequence` on none - so
       // a tree read or relaunch inside it retires nothing here. Cleared before
@@ -3379,15 +3138,14 @@ async function execLeafStep(
           };
         }
         // The two tools whose args name the app they just started re-pin to
-        // it (the version 1 target: as an unpinned hint): they change WHICH app
-        // is in front, which is how a flow switches apps on purpose. After the
-        // invoke, like `runLaunch`: a tool that threw started nothing.
+        // it: they change WHICH app is in front, which is how a flow switches
+        // apps on purpose. After the invoke, like `runLaunch`: a tool that
+        // threw started nothing.
         let warning: string | undefined;
         if (step.name === "launch-app" || step.name === "restart-app") {
           const launched = (args as { bundleId?: unknown }).bundleId;
           if (typeof launched === "string") {
             state.treeTarget = { bundleId: launched, pinned: true };
-            state.viewHierarchyTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
           warning = networkCaptureWarning(state, launched, result);
         }

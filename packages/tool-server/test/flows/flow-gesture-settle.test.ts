@@ -731,8 +731,6 @@ describe("a launch clears a proven outage", () => {
   it("makes the gesture after it pay for a settle of its own", async () => {
     currentTree = outage;
     await writeFlow("tap-launch-tap", {
-      // Version 2 gates the launch on the accessibility tree the registry mock serves.
-      version: 2,
       executionPrerequisite: "",
       steps: [
         { kind: "tap", x: 0.1, y: 0.1 },
@@ -765,41 +763,18 @@ describe("a launch clears a proven outage", () => {
 // skipped, while missing a repair leaves it dispatching blind.
 describe("a raw `tool:` relaunch clears a proven outage", () => {
   // Every entry of `FOREGROUND_CHANGING_TOOLS`, with the args its own schema
-  // asks for: the clear is unkeyed, so each spelling has to be pinned. The
-  // clear does not depend on the file's version: one version-less case pins it.
+  // asks for: the clear is unkeyed, so each spelling has to be pinned.
   it.each([
-    {
-      tool: "launch-app",
-      args: { bundleId: "com.acme.app" },
-      file: "a version 2 file",
-      version: 2,
-    },
-    {
-      tool: "restart-app",
-      args: { bundleId: "com.acme.app" },
-      file: "a version 2 file",
-      version: 2,
-    },
-    {
-      tool: "reinstall-app",
-      args: { bundleId: "com.acme.app", appPath: "./build/Acme.app" },
-      file: "a version 2 file",
-      version: 2,
-    },
-    {
-      tool: "open-url",
-      args: { url: "https://example.com" },
-      file: "a version 2 file",
-      version: 2,
-    },
-    { tool: "button", args: { button: "home" }, file: "a version 2 file", version: 2 },
-    { tool: "button", args: { button: "home" }, file: "a version-less file", version: undefined },
+    { tool: "launch-app", args: { bundleId: "com.acme.app" } },
+    { tool: "restart-app", args: { bundleId: "com.acme.app" } },
+    { tool: "reinstall-app", args: { bundleId: "com.acme.app", appPath: "./build/Acme.app" } },
+    { tool: "open-url", args: { url: "https://example.com" } },
+    { tool: "button", args: { button: "home" } },
   ])(
-    "makes the gesture after `tool: $tool` in $file pay for a settle of its own",
-    async ({ tool, args, version }) => {
+    "makes the gesture after `tool: $tool` pay for a settle of its own",
+    async ({ tool, args }) => {
       currentTree = deadUntilTool(tool);
       await writeFlow(`tap-${tool}-tap`, {
-        ...(version ? { version } : {}),
         executionPrerequisite: "",
         steps: [
           { kind: "tap", x: 0.1, y: 0.1 },

@@ -76,8 +76,6 @@ describe("fetchFlowTree without its tree source", () => {
     await fs.writeFile(
       path.join(dir, "check.yaml"),
       serializeFlow({
-        // Version 2 reads the accessibility tree; version 1 reads the view hierarchy.
-        version: 2,
         executionPrerequisite: "",
         steps: [{ kind: "assert", condition: "visible", selector: { text: "Continue" } }],
       }),

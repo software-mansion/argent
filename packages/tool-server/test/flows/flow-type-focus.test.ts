@@ -145,7 +145,6 @@ describe("type directive focus wait", () => {
   async function typeIntoEmail(): Promise<Call[]> {
     const calls: Call[] = [];
     await writeFlow("ax-login", {
-      version: 2,
       executionPrerequisite: "",
       steps: [{ kind: "type", into: { text: "Email" }, text: "a@b.com", submit: false }],
     });

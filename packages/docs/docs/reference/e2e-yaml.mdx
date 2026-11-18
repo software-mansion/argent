@@ -73,7 +73,7 @@ On an iOS simulator, local or remote, the version sets the tree that Argent reso
 | `1`, or no `version` key | The native view hierarchy of the app, as in Argent releases from before version 2                           |
 
 - On other platforms and on a physical iPhone, the version has no effect.
-- Each file runs at its own version. This is also true for a `run:` fragment and for an e2e test that a `tool: e2e-execute` step runs.
+- A `run:` fragment runs at the version of the e2e test that runs it. An e2e test that a `tool: e2e-execute` step runs uses its own version.
 - A selector from `describe` can miss in a version 1 e2e test. To change a version 1 e2e test, set `version: 2`, replay the e2e test and replace each selector that fails.
 
 An e2e test has one of two shapes:

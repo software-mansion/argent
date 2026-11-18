@@ -46,8 +46,6 @@ async function runHiddenAssert(
   await fs.writeFile(
     path.join(dir, "hidden.yaml"),
     serializeFlow({
-      // Version 2 reads the ax-service tree; version 1 reads the view hierarchy.
-      version: 2,
       executionPrerequisite: "",
       steps: [{ kind: "assert", condition, selector: { identifier: "General" } }],
     }),

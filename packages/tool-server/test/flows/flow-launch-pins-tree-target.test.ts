@@ -118,13 +118,7 @@ function mockRegistry(failLaunchOf?: string): Registry {
 async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]): Promise<void> {
   const dir = path.join(tmpDir, ".argent", "flows");
   await fs.mkdir(dir, { recursive: true });
-  // Version 2, fragments too: a fragment runs at its own version, and version 1
-  // reads the view hierarchy, not the source mocked here.
-  await fs.writeFile(
-    path.join(dir, `${name}.yaml`),
-    serializeFlow({ ...yaml, version: 2 }),
-    "utf8"
-  );
+  await fs.writeFile(path.join(dir, `${name}.yaml`), serializeFlow(yaml), "utf8");
 }
 
 function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
