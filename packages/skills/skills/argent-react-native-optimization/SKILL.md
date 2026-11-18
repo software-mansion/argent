@@ -48,9 +48,9 @@ Navigate every screen and UI flow within scope (the entire app if no scope was g
 
 ## Startup time (TTI)
 
-Argent measures only the native part of startup. Tell the user that the rest is not measured.
+TTI lasts until the first usable screen shows real content. The first native frame is often only the splash screen: bundle evaluation, startup data loading and the first screen's render usually come after it.
 
-1. **Native launch (iOS)**: process start to the first native frame. Measure and profile it on a Release build as §4 of `argent-native-profiler` describes. Runtime creation and JS that runs before the first frame show up in this profile.
-2. **React Native startup after the first frame**: bundle evaluation and the render of the first usable screen. No Argent tool times it: `react-profiler-start` attaches to a running JS runtime, and an app restart discards that runtime. To find slow renders on the first usable screen, start `argent-react-native-profiler` and open that screen again. This profiles a re-render on a Debug build, not startup.
+1. **Up to the first frame (iOS)**: measure and profile it on a Release build as §4 of `argent-native-profiler` describes. Runtime creation and JS that runs before the first frame show up in this profile.
+2. **After the first frame**: `native-profiler-launch-analysis` does not cover it, so do not stop at the first frame. Find what the app waits for and renders before the first usable screen (what hides the splash, the startup data loading, the first screen) and measure it with the tools that fit. `react-profiler-*` cannot record startup: an app restart discards the JS runtime it attaches to.
 
-State exactly what was measured.
+State exactly what was measured, and what comes only from reading the code.

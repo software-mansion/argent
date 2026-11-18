@@ -80,11 +80,11 @@ export function createNativeProfilerLaunchAnalysisTool(
         `${launchAnalysisMode[params.mode].failed}: ${failureSignal.error_code}`,
     },
     description: `Profile or measure iOS app startup. Both modes open the app once, then time the launches that follow.
-- measure: time five XCTest launches to set a baseline or verify a fix. The metric includes the first frame and any extended launch tasks.
-- profile: record one Instruments App Launch trace to find the CPU work before the first frame. On a simulator there are no lifecycle phases and the launch time is a rough estimate.
+- measure: time five launches with Argent's XCTest runner to set a baseline or verify a fix. On an iPhone the runner must be signed. The metric includes the first frame and any extended launch tasks.
+- profile: record one Instruments App Launch trace to find the CPU work before the first frame. Work after the first frame is not included. On a simulator there are no lifecycle phases and the launch time is a rough estimate.
 Install a Release build of bundle_id before calling; the tool does not build or install the app.
 Use when you need the iOS launch time or want to find what slows the app's startup.
-Returns samplesCollected in measure mode. In profile mode, follow profilerSession.next to load the CPU samples with profiler-load and query them with profiler-stack-query.
+Returns samplesCollected in measure mode. In profile mode, launchMs runs from the first lifecycle phase after Process Creation to the first frame (null on a simulator); follow profilerSession.next to load the CPU samples with profiler-load and query them with profiler-stack-query.
 Fails if the app is not installed or no iPhone or allowed simulator is available.`,
     zodSchema,
     services: () => ({}),
