@@ -54,7 +54,7 @@ The agent reproduces a failed state. The agent restarts the app, reloads the Met
 ## Limits
 
 - Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
-- The native view tree is available on iOS and in Mac apps only.
+- The native view tree is available on iOS and in Mac apps only. A Mac Catalyst app does not give the native view tree.
 - The agent connects to one app at a time.
 
 Argent does this with the `debugger-*`, `native-*` and `chromium-*` tools. The [tools reference](/docs/reference/tools) contains all tools.
