@@ -2137,6 +2137,353 @@ describe("argent e2e run", () => {
     });
   });
 
+  describe("list with suite.config.yaml", () => {
+    let root: string;
+    let previousCwd: string;
+    beforeEach(async () => {
+      root = await fsp.mkdtemp(path.join(tempRoot, "list-suite-"));
+      previousCwd = process.cwd();
+      process.chdir(root);
+    });
+    afterEach(() => {
+      process.chdir(previousCwd);
+    });
+
+    async function writeTree(files: Record<string, string>): Promise<void> {
+      for (const [rel, text] of Object.entries(files)) {
+        await fsp.mkdir(path.dirname(path.join(root, rel)), { recursive: true });
+        await fsp.writeFile(path.join(root, rel), text);
+      }
+    }
+
+    async function listBoth(args: string[]): Promise<{
+      stdout: string[];
+      stderr: string[];
+      json: string[];
+      jsonStderr: string[];
+    }> {
+      await expect(flow(["list", ...args], opts)).resolves.toBeUndefined();
+      const plain = { stdout: [...logs], stderr: [...errs] };
+      logs.length = 0;
+      errs.length = 0;
+      await expect(flow(["list", ...args, "--json"], opts)).resolves.toBeUndefined();
+      const out = { ...plain, json: [...logs], jsonStderr: [...errs] };
+      logs.length = 0;
+      errs.length = 0;
+      return out;
+    }
+
+    const e2eTestsOf = (json: string[]): unknown => JSON.parse(json.join("\n")).e2eTests;
+
+    it("lists a suite in the run order of a directory run, with its directory as suite", async () => {
+      await writeTree({
+        ".argent/e2e/a.yaml": "steps: []\n",
+        ".argent/e2e/posts/suite.config.yaml": "tests:\n  - delete\n  - add\n",
+        ".argent/e2e/posts/add.yaml": "steps: []\n",
+        ".argent/e2e/posts/b/x.yaml": "steps: []\n",
+        ".argent/e2e/posts/delete.yaml": "steps: []\n",
+        ".argent/e2e/z.yaml": "steps: []\n",
+      });
+
+      const out = await listBoth([]);
+
+      const order = [
+        ".argent/e2e/a.yaml",
+        ".argent/e2e/posts/delete.yaml",
+        ".argent/e2e/posts/add.yaml",
+        ".argent/e2e/posts/b/x.yaml",
+        ".argent/e2e/z.yaml",
+      ];
+      expect(out.stdout).toEqual([order.join("\n")]);
+      expect(out.stderr).toEqual([]);
+      expect(out.jsonStderr).toEqual([]);
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: ".argent/e2e/a.yaml", name: "a", legacy: false },
+        { path: ".argent/e2e/posts/delete.yaml", legacy: false, suite: ".argent/e2e/posts" },
+        { path: ".argent/e2e/posts/add.yaml", legacy: false, suite: ".argent/e2e/posts" },
+        { path: ".argent/e2e/posts/b/x.yaml", legacy: false },
+        { path: ".argent/e2e/z.yaml", name: "z", legacy: false },
+      ]);
+
+      await expect(flow(["run", ".argent/e2e", "--recursive"], opts)).rejects.toThrow(
+        "process.exit:0"
+      );
+      const ran = toolsClientMock.callTool.mock.calls.map(
+        (c) => (c[1] as { e2e_test_path: string }).e2e_test_path
+      );
+      expect(ran.map((p) => path.relative(process.cwd(), p))).toEqual(order);
+    });
+
+    it("lists a suite without tests in file name order", async () => {
+      await writeTree({
+        "tests/posts/suite.config.yaml": "continueOnFailure: true\n",
+        "tests/posts/b.yaml": "steps: []\n",
+        "tests/posts/a.yaml": "steps: []\n",
+      });
+
+      const out = await listBoth(["tests", "-r"]);
+
+      expect(out.stdout).toEqual(["tests/posts/a.yaml\ntests/posts/b.yaml"]);
+      expect(out.stderr).toEqual([]);
+      expect(out.jsonStderr).toEqual([]);
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: "tests/posts/a.yaml", suite: "tests/posts" },
+        { path: "tests/posts/b.yaml", suite: "tests/posts" },
+      ]);
+    });
+
+    it("leaves the tests of an invalid suite off stdout, warns on stderr and exits 0", async () => {
+      await writeTree({
+        "tests/a.yaml": "steps: []\n",
+        "tests/posts/suite.config.yaml": "bogus: 1\n",
+        "tests/posts/add.yaml": "steps: []\n",
+        "tests/posts/delete.yaml": "",
+        "tests/z.yaml": "steps: []\n",
+      });
+
+      const out = await listBoth(["tests", "-r"]);
+
+      expect(out.stdout).toEqual(["tests/a.yaml\ntests/z.yaml"]);
+      expect(out.stderr).toEqual([
+        'warning: tests/posts/suite.config.yaml: unknown key "bogus"; the allowed keys are tests and continueOnFailure',
+        "  not listed: tests/posts/add.yaml",
+        "  not listed: tests/posts/delete.yaml",
+      ]);
+      expect(out.jsonStderr).toEqual([]);
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: "tests/a.yaml" },
+        { path: "tests/posts/add.yaml", suite: "tests/posts", warning: "invalid-suite-config" },
+        { path: "tests/posts/delete.yaml", suite: "tests/posts", warning: "invalid-suite-config" },
+        { path: "tests/z.yaml" },
+      ]);
+    });
+
+    it("leaves a file that tests does not name off stdout and keeps it under --json after its suite", async () => {
+      await writeTree({
+        "tests/posts/suite.config.yaml": "tests:\n  - zed\n  - add\n",
+        "tests/posts/add.yaml": "steps: []\n",
+        "tests/posts/draft.yaml": "",
+        "tests/posts/zed.yaml": "steps: []\n",
+        "tests/z.yaml": "steps: []\n",
+      });
+
+      const out = await listBoth(["tests", "-r"]);
+
+      expect(out.stdout).toEqual(["tests/posts/zed.yaml\ntests/posts/add.yaml\ntests/z.yaml"]);
+      expect(out.stderr).toEqual([
+        "warning: tests/posts/draft.yaml is not listed in the tests of tests/posts/suite.config.yaml and does not run",
+      ]);
+      expect(out.jsonStderr).toEqual([]);
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: "tests/posts/zed.yaml", suite: "tests/posts" },
+        { path: "tests/posts/add.yaml", suite: "tests/posts" },
+        { path: "tests/posts/draft.yaml", suite: "tests/posts", warning: "not-in-suite" },
+        { path: "tests/z.yaml" },
+      ]);
+    });
+
+    it("prints only the warnings when every test is left out", async () => {
+      await writeTree({
+        "tests/suite.config.yaml": "tests: []\n",
+        "tests/a.yaml": "steps: []\n",
+      });
+
+      const out = await listBoth(["tests"]);
+
+      expect(out.stdout).toEqual([]);
+      expect(out.stderr).toEqual([
+        "warning: tests/suite.config.yaml: tests must be a non-empty list of test names",
+        "  not listed: tests/a.yaml",
+      ]);
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: "tests/a.yaml", suite: "tests", warning: "invalid-suite-config" },
+      ]);
+    });
+
+    it.each([
+      { label: "relative", dir: "own", shown: "own" },
+      { label: "relative with a trailing slash", dir: "own/", shown: "own" },
+      { label: "starting with a dash", dir: "./-own", shown: "./-own" },
+    ])("gives suite the form of path for a $label dir", async ({ dir, shown }) => {
+      const base = dir.replace(/^\.\//, "").replace(/\/$/, "");
+      await writeTree({
+        [`${base}/suite.config.yaml`]: "",
+        [`${base}/a.yaml`]: "steps: []\n",
+        [`${base}/sub/suite.config.yaml`]: "",
+        [`${base}/sub/b.yaml`]: "steps: []\n",
+      });
+
+      const out = await listBoth([dir, "-r"]);
+
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: `${shown}/a.yaml`, suite: shown },
+        { path: `${shown}/sub/b.yaml`, suite: `${shown}/sub` },
+      ]);
+    });
+
+    it("gives suite an absolute path for an absolute dir", async () => {
+      await writeTree({
+        "own/suite.config.yaml": "",
+        "own/sub/suite.config.yaml": "",
+        "own/a.yaml": "steps: []\n",
+        "own/sub/b.yaml": "steps: []\n",
+      });
+      const absolute = path.join(root, "own");
+
+      const out = await listBoth([absolute, "-r"]);
+
+      expect(out.stdout).toEqual([
+        [path.join(absolute, "a.yaml"), path.join(absolute, "sub", "b.yaml")].join("\n"),
+      ]);
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: path.join(absolute, "a.yaml"), suite: absolute },
+        { path: path.join(absolute, "sub", "b.yaml"), suite: path.join(absolute, "sub") },
+      ]);
+    });
+
+    it("keeps a nested suite separate from its parent suite", async () => {
+      await writeTree({
+        "tests/posts/suite.config.yaml": "",
+        "tests/posts/x.yaml": "steps: []\n",
+        "tests/posts/other/c.yaml": "steps: []\n",
+        "tests/posts/sub/suite.config.yaml": "tests:\n  - b\n  - a\n",
+        "tests/posts/sub/a.yaml": "steps: []\n",
+        "tests/posts/sub/b.yaml": "steps: []\n",
+      });
+
+      const out = await listBoth(["tests", "-r"]);
+
+      expect(out.stdout).toEqual([
+        [
+          "tests/posts/other/c.yaml",
+          "tests/posts/sub/b.yaml",
+          "tests/posts/sub/a.yaml",
+          "tests/posts/x.yaml",
+        ].join("\n"),
+      ]);
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: "tests/posts/other/c.yaml" },
+        { path: "tests/posts/sub/b.yaml", suite: "tests/posts/sub" },
+        { path: "tests/posts/sub/a.yaml", suite: "tests/posts/sub" },
+        { path: "tests/posts/x.yaml", suite: "tests/posts" },
+      ]);
+    });
+
+    it("follows a suite in .argent/flows and counts only the listed tests as legacy", async () => {
+      await writeTree({
+        ".argent/e2e/x.yaml": "steps: []\n",
+        ".argent/flows/posts/suite.config.yaml": "tests:\n  - b\n  - a\n",
+        ".argent/flows/posts/a.yaml": "steps: []\n",
+        ".argent/flows/posts/b.yaml": "steps: []\n",
+        ".argent/flows/posts/c.yaml": "steps: []\n",
+      });
+
+      const out = await listBoth([]);
+
+      expect(out.stdout).toEqual([
+        [".argent/e2e/x.yaml", ".argent/flows/posts/b.yaml", ".argent/flows/posts/a.yaml"].join(
+          "\n"
+        ),
+      ]);
+      expect(out.stderr).toEqual([
+        "warning: .argent/flows/posts/c.yaml is not listed in the tests of .argent/flows/posts/suite.config.yaml and does not run",
+        "note: 2 tests listed from .argent/flows (legacy); move them to .argent/e2e",
+      ]);
+      expect(out.jsonStderr).toEqual([]);
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: ".argent/e2e/x.yaml", name: "x", legacy: false },
+        { path: ".argent/flows/posts/b.yaml", legacy: true, suite: ".argent/flows/posts" },
+        { path: ".argent/flows/posts/a.yaml", legacy: true, suite: ".argent/flows/posts" },
+        {
+          path: ".argent/flows/posts/c.yaml",
+          legacy: true,
+          suite: ".argent/flows/posts",
+          warning: "not-in-suite",
+        },
+      ]);
+    });
+
+    it("shadows a legacy test by a test that tests does not name, since run by name ignores the suite", async () => {
+      await writeTree({
+        ".argent/e2e/suite.config.yaml": "tests:\n  - a\n",
+        ".argent/e2e/a.yaml": "steps: []\n",
+        ".argent/e2e/b.yaml": "steps: []\n",
+        ".argent/flows/b.yaml": "steps: []\n",
+      });
+
+      const out = await listBoth([]);
+
+      expect(out.stdout).toEqual([".argent/e2e/a.yaml\n.argent/flows/b.yaml"]);
+      expect(out.stderr).toEqual([
+        "warning: .argent/e2e/b.yaml is not listed in the tests of .argent/e2e/suite.config.yaml and does not run",
+        "warning: .argent/flows/b.yaml is shadowed by .argent/e2e/b.yaml when run by name",
+        "note: 1 test listed from .argent/flows (legacy); move it to .argent/e2e",
+      ]);
+      expect(out.jsonStderr).toEqual([]);
+      expect(e2eTestsOf(out.json)).toStrictEqual([
+        { path: ".argent/e2e/a.yaml", name: "a", legacy: false, suite: ".argent/e2e" },
+        {
+          path: ".argent/e2e/b.yaml",
+          name: "b",
+          legacy: false,
+          suite: ".argent/e2e",
+          warning: "not-in-suite",
+        },
+        {
+          path: ".argent/flows/b.yaml",
+          name: "b",
+          legacy: true,
+          shadowedBy: ".argent/e2e/b.yaml",
+        },
+      ]);
+    });
+
+    it("keeps the exact output for directories without a suite.config.yaml file", async () => {
+      await writeTree({
+        ".argent/e2e/b.yaml": "steps: []\n",
+        ".argent/e2e/a.yaml": "",
+        ".argent/e2e/posts/x.yaml": "steps: []\n",
+        ".argent/flows/b.yaml": "steps: []\n",
+      });
+
+      const out = await listBoth([]);
+
+      expect(out.stdout).toEqual([
+        [
+          ".argent/e2e/a.yaml",
+          ".argent/e2e/b.yaml",
+          ".argent/e2e/posts/x.yaml",
+          ".argent/flows/b.yaml",
+        ].join("\n"),
+      ]);
+      expect(out.stderr).toEqual([
+        "warning: .argent/e2e/a.yaml is empty",
+        "warning: .argent/flows/b.yaml is shadowed by .argent/e2e/b.yaml when run by name",
+        "note: 1 test listed from .argent/flows (legacy); move it to .argent/e2e",
+      ]);
+      expect(out.jsonStderr).toEqual([]);
+      expect(out.json).toEqual([
+        JSON.stringify(
+          {
+            e2eTests: [
+              { path: ".argent/e2e/a.yaml", name: "a", legacy: false, warning: "empty" },
+              { path: ".argent/e2e/b.yaml", name: "b", legacy: false },
+              { path: ".argent/e2e/posts/x.yaml", legacy: false },
+              {
+                path: ".argent/flows/b.yaml",
+                name: "b",
+                legacy: true,
+                shadowedBy: ".argent/e2e/b.yaml",
+              },
+            ],
+          },
+          null,
+          2
+        ),
+      ]);
+    });
+  });
+
   it("renders the report — echo lines unnumbered, real steps numbered, reasons and fragment tags shown — and exits 1 on failure", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({
@@ -4115,6 +4462,420 @@ describe("argent e2e run <dir>", () => {
     } finally {
       await fsp.chmod(lockedDir, 0o755);
     }
+  });
+});
+
+describe("argent e2e run <dir> with suite.config.yaml", () => {
+  let tempRoot: string;
+  let runDir: string;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let logs: string[];
+  let errs: string[];
+  let merged: ["out" | "err", string][];
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  const opts = { paths: {} as never };
+  const TEST = "steps: []\n";
+  const failedReport = report({
+    ok: false,
+    passed: 0,
+    failed: 1,
+    steps: [{ index: 0, kind: "assert", status: "fail", reason: "never visible" }],
+  });
+  const invalidFile = (): ToolInvocationError =>
+    new ToolInvocationError("flow file is not valid YAML", {
+      errorCode: "FLOW_FILE_INVALID",
+      errorKind: "validation",
+    });
+
+  beforeEach(async () => {
+    // Real path, since process.cwd() after a chdir resolves symlinks such as /var on macOS.
+    tempRoot = await fsp.realpath(await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-suite-")));
+    runDir = path.join(tempRoot, "e2e");
+    vi.clearAllMocks();
+    getResolvedToolsUrlMock.mockResolvedValue({ url: null, source: "none" });
+    toolsClientMock.callTool.mockResolvedValue({ data: report() });
+    logs = [];
+    errs = [];
+    merged = [];
+    logSpy = vi.spyOn(console, "log").mockImplementation((...a) => {
+      logs.push(a.join(" "));
+      merged.push(["out", a.join(" ")]);
+    });
+    errSpy = vi.spyOn(console, "error").mockImplementation((...a) => {
+      errs.push(a.join(" "));
+      merged.push(["err", a.join(" ")]);
+    });
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit:${code}`);
+    }) as typeof process.exit);
+  });
+
+  afterEach(async () => {
+    exitSpy.mockRestore();
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    await fsp.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  /** Writes each file, keyed by its path relative to the run directory. */
+  async function writeTree(files: Record<string, string>): Promise<void> {
+    for (const [rel, text] of Object.entries(files)) {
+      await fsp.mkdir(path.dirname(path.join(runDir, rel)), { recursive: true });
+      await fsp.writeFile(path.join(runDir, rel), text);
+    }
+  }
+
+  /** Answers each run by the test's path relative to the run directory; a pass otherwise. */
+  function answer(outcomes: Record<string, unknown>): void {
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, payload: { e2e_test_path: string }) => {
+        const outcome = outcomes[path.relative(runDir, payload.e2e_test_path)];
+        if (outcome instanceof Error) throw outcome;
+        return { data: outcome ?? report() };
+      }
+    );
+  }
+
+  const ran = (): string[] =>
+    toolsClientMock.callTool.mock.calls.map((call) =>
+      path.relative(runDir, (call[1] as { e2e_test_path: string }).e2e_test_path)
+    );
+
+  async function inDir<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
+    const previousCwd = process.cwd();
+    process.chdir(cwd);
+    try {
+      return await fn();
+    } finally {
+      process.chdir(previousCwd);
+    }
+  }
+
+  it("runs the tests of a suite in manifest order, at the position of its first file", async () => {
+    await writeTree({
+      "a.yaml": TEST,
+      "posts/suite.config.yaml": "tests:\n  - delete\n  - add\n",
+      "posts/add.yaml": TEST,
+      "posts/delete.yaml": TEST,
+      "z.yaml": TEST,
+    });
+
+    await expect(flow(["run", runDir, "-r"], opts)).rejects.toThrow("process.exit:0");
+
+    const order = ["a.yaml", "posts/delete.yaml", "posts/add.yaml", "z.yaml"].map((p) =>
+      path.join(p)
+    );
+    expect(ran()).toEqual(order);
+    const headers = logs.filter((line) => line.startsWith("["));
+    expect(headers).toEqual(order.map((p, i) => `[${i + 1}/4] ${p}`));
+  });
+
+  it.each([
+    ["fails its steps", failedReport],
+    ["is rejected by the tool-server", invalidFile()],
+    [
+      "passes with baselines not written",
+      report({ baselineWrites: [{ path: "x.png", error: "EACCES" }] }),
+    ],
+  ])("skips the later tests of a suite when a test %s", async (_case, outcome) => {
+    await writeTree({
+      "suite.config.yaml": "tests:\n  - a\n  - b\n  - c\n",
+      "a.yaml": TEST,
+      "b.yaml": TEST,
+      "c.yaml": TEST,
+    });
+    answer({ "a.yaml": outcome });
+
+    await expect(flow(["run", runDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(ran()).toEqual(["a.yaml"]);
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(lines.indexOf("[2/3] b.yaml"), lines.indexOf("[2/3] b.yaml") + 6)).toEqual([
+      "[2/3] b.yaml",
+      "  · skipped (earlier test failed)",
+      "    earlier test failed: a.yaml",
+      "[3/3] c.yaml",
+      "  · skipped (earlier test failed)",
+      "    earlier test failed: a.yaml",
+    ]);
+    // A policy skip is not a failure, so the recap names only the test that failed.
+    expect(lines).toContain("Failed e2e tests (1)");
+    expect(lines.at(-1)).toMatch(/^FAIL — 3 e2e tests: 0 passed, 1 failed, 2 skipped/);
+  });
+
+  it("carries the earlier failed test of a suite skip into the --json aggregate", async () => {
+    await writeTree({
+      "posts/suite.config.yaml": "",
+      "posts/add.yaml": TEST,
+      "posts/delete.yaml": TEST,
+    });
+    answer({ [path.join("posts", "add.yaml")]: failedReport });
+
+    await expect(flow(["run", runDir, "-r", "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toHaveLength(1);
+    const out = JSON.parse(logs[0]);
+    expect(out).toMatchObject({ ok: false, total: 2, passed: 0, failed: 1, skipped: 1 });
+    expect(out.e2eTests[1]).toEqual({
+      path: path.join("posts", "delete.yaml"),
+      status: "skip",
+      reason: `earlier test failed: ${path.join("posts", "add.yaml")}`,
+    });
+  });
+
+  it("runs every test of a suite after a failure with continueOnFailure: true", async () => {
+    await writeTree({
+      "suite.config.yaml": "continueOnFailure: true\n",
+      "a.yaml": TEST,
+      "b.yaml": TEST,
+    });
+    answer({ "a.yaml": failedReport });
+
+    await expect(flow(["run", runDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(ran()).toEqual(["a.yaml", "b.yaml"]);
+    expect(logs.at(-1)).toMatch(/^\nFAIL — 2 e2e tests: 1 passed, 1 failed, 0 skipped/);
+  });
+
+  it("keeps a suite running after a test that its requires: skips", async () => {
+    await writeTree({ "suite.config.yaml": "", "a.yaml": TEST, "b.yaml": TEST });
+    answer({
+      "a.yaml": new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+        errorCode: "FLOW_REQUIREMENTS_UNMET",
+        errorKind: "validation",
+      }),
+    });
+
+    await expect(flow(["run", runDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(ran()).toEqual(["a.yaml", "b.yaml"]);
+    expect(logs.at(-1)).toMatch(/^\nPASS — 2 e2e tests: 1 passed, 0 failed, 1 skipped/);
+  });
+
+  it("does not skip the tests of another suite or independent tests after a failure", async () => {
+    await writeTree({
+      "one/suite.config.yaml": "",
+      "one/a.yaml": TEST,
+      "one/b.yaml": TEST,
+      "two/suite.config.yaml": "",
+      "two/c.yaml": TEST,
+      "two/d.yaml": TEST,
+      "z.yaml": TEST,
+    });
+    answer({ [path.join("one", "a.yaml")]: failedReport });
+
+    await expect(flow(["run", runDir, "-r"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(ran()).toEqual(
+      ["one/a.yaml", "two/c.yaml", "two/d.yaml", "z.yaml"].map((p) => path.join(p))
+    );
+    expect(logs.at(-1)).toMatch(/^\nFAIL — 5 e2e tests: 3 passed, 1 failed, 1 skipped/);
+  });
+
+  it("lets a batch stop win over the suite skip", async () => {
+    await writeTree({ "suite.config.yaml": "", "a.yaml": TEST, "b.yaml": TEST });
+    answer({ "a.yaml": { flow: "a", notice: "prerequisite" } });
+
+    await expect(flow(["run", runDir], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[2/2] b.yaml") + 1]).toBe("  · not run (batch stopped)");
+  });
+
+  it("rejects an invalid suite config, skips its tests and runs the rest", async () => {
+    await writeTree({
+      "a.yaml": TEST,
+      "posts/suite.config.yaml": "bogus: 1\n",
+      "posts/add.yaml": TEST,
+      "posts/delete.yaml": TEST,
+      "z.yaml": TEST,
+    });
+    const manifest = path.join("posts", "suite.config.yaml");
+    const message = `${manifest}: unknown key "bogus"; the allowed keys are tests and continueOnFailure`;
+
+    await expect(
+      inDir(tempRoot, () =>
+        flow(["run", "./e2e", "-r", "--platform", "ios", "--output", "out"], opts)
+      )
+    ).rejects.toThrow("process.exit:1");
+
+    expect(ran()).toEqual(["a.yaml", "z.yaml"]);
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(lines.indexOf(`[2/5] ${manifest}`), lines.indexOf("[5/5] z.yaml"))).toEqual([
+      `[2/5] ${manifest}`,
+      "  ✗ not run (invalid suite config)",
+      `[3/5] ${path.join("posts", "add.yaml")}`,
+      "  · skipped (invalid suite config)",
+      `    invalid suite config: ${manifest}`,
+      `[4/5] ${path.join("posts", "delete.yaml")}`,
+      "  · skipped (invalid suite config)",
+      `    invalid suite config: ${manifest}`,
+    ]);
+    expect(merged[merged.findIndex(([, line]) => line === `[2/5] ${manifest}`) + 2]).toEqual([
+      "err",
+      message,
+    ]);
+    expect(errs).toEqual([message]);
+    expect(lines.slice(lines.indexOf("Failed e2e tests (1)"))).toEqual([
+      "Failed e2e tests (1)",
+      "",
+      `  ✗ ${manifest} › not run (invalid suite config)`,
+      `    ${message}`,
+      `    re-run: argent e2e run ${path.join("e2e", "posts")} --platform ios --output ${path.join("out", "posts")}`,
+      "",
+      expect.stringMatching(/^FAIL — 5 e2e tests: 2 passed, 1 failed, 2 skipped/),
+    ]);
+  });
+
+  it("reports an invalid suite config after a batch stop and does not run its tests", async () => {
+    await writeTree({
+      "a.yaml": TEST,
+      "posts/suite.config.yaml": "bogus: 1\n",
+      "posts/add.yaml": TEST,
+    });
+    answer({ "a.yaml": new Error("tool stream ended") });
+    const manifest = path.join("posts", "suite.config.yaml");
+    const add = path.join("posts", "add.yaml");
+    const message = `${manifest}: unknown key "bogus"; the allowed keys are tests and continueOnFailure`;
+    const signal = { error_code: "FLOW_FILE_INVALID", error_kind: "validation" };
+
+    await expect(flow(["run", runDir, "-r"], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(0, lines.indexOf("Failed e2e tests (2)") + 1)).toEqual([
+      "[1/3] a.yaml",
+      "  ✗ did not finish (run error)",
+      `[2/3] ${manifest}`,
+      "  ✗ not run (invalid suite config)",
+      `[3/3] ${add}`,
+      "  · not run (batch stopped)",
+      "",
+      "Failed e2e tests (2)",
+    ]);
+    expect(lines).toContain(`  ✗ ${manifest} › not run (invalid suite config)`);
+    expect(errs).toEqual(["tool stream ended", message]);
+
+    logs = [];
+    errs = [];
+    await expect(flow(["run", runDir, "-r", "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    const out = JSON.parse(logs[0]);
+    expect(out).toMatchObject({ ok: false, total: 3, passed: 0, failed: 2, skipped: 1 });
+    expect(out.e2eTests.slice(1)).toEqual([
+      { path: manifest, status: "fail", error: message, ...signal },
+      { path: add, status: "skip" },
+    ]);
+    expect(errs).toHaveLength(2);
+    expect(JSON.parse(errs[1])).toEqual({ event: "error", error: message, ...signal });
+  });
+
+  it("re-runs an invalid suite at the working directory as .", async () => {
+    await writeTree({ "suite.config.yaml": "tests: []\n", "a.yaml": TEST });
+
+    await expect(inDir(runDir, () => flow(["run", "."], opts))).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n").split("\n")).toContain("    re-run: argent e2e run .");
+  });
+
+  it("re-runs an invalid suite in a child of the working directory as a path, not a name", async () => {
+    await writeTree({ "posts/suite.config.yaml": "tests: []\n", "posts/add.yaml": TEST });
+
+    await expect(inDir(runDir, () => flow(["run", ".", "-r"], opts))).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(logs.join("\n").split("\n")).toContain(`    re-run: argent e2e run .${path.sep}posts`);
+  });
+
+  it("writes an invalid suite config as a failed entry and an error record under --json", async () => {
+    await writeTree({
+      "suite.config.yaml": "continueOnFailure: yes\n",
+      "a.yaml": TEST,
+      "b.yaml": TEST,
+    });
+    const message = "suite.config.yaml: continueOnFailure must be true or false";
+    const signal = { error_code: "FLOW_FILE_INVALID", error_kind: "validation" };
+
+    await expect(flow(["run", runDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0])).toMatchObject({
+      ok: false,
+      total: 3,
+      passed: 0,
+      failed: 1,
+      skipped: 2,
+      e2eTests: [
+        { path: "suite.config.yaml", status: "fail", error: message, ...signal },
+        { path: "a.yaml", status: "skip", reason: "invalid suite config: suite.config.yaml" },
+        { path: "b.yaml", status: "skip", reason: "invalid suite config: suite.config.yaml" },
+      ],
+    });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: message, ...signal },
+    ]);
+  });
+
+  it("warns about a test the suite does not list before the first test runs", async () => {
+    await writeTree({
+      "suite.config.yaml": "tests:\n  - a\n",
+      "a.yaml": TEST,
+      "extra.yaml": TEST,
+    });
+    const warning = "extra.yaml is not listed in the tests of suite.config.yaml and does not run";
+
+    await expect(flow(["run", runDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(ran()).toEqual(["a.yaml"]);
+    expect(merged[0]).toEqual(["err", `warning: ${warning}`]);
+    expect(errs).toEqual([`warning: ${warning}`]);
+    expect(logs.at(-1)).toMatch(/^\nPASS — 1 e2e test: 1 passed, 0 failed, 0 skipped/);
+  });
+
+  it("writes the unlisted-test warning as a record and leaves the test out under --json", async () => {
+    await writeTree({
+      "suite.config.yaml": "tests:\n  - a\n",
+      "a.yaml": TEST,
+      "extra.yaml": TEST,
+    });
+
+    await expect(flow(["run", runDir, "--json"], opts)).rejects.toThrow("process.exit:0");
+
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "warning",
+        warning: "extra.yaml is not listed in the tests of suite.config.yaml and does not run",
+      },
+    ]);
+    expect(JSON.parse(logs[0]).e2eTests.map((r: { path: string }) => r.path)).toEqual(["a.yaml"]);
+  });
+
+  it("keeps independent tests in a directory with no suite config", async () => {
+    await writeTree({ "a.yaml": TEST, "b.yaml": TEST });
+    answer({ "a.yaml": failedReport });
+
+    await expect(flow(["run", runDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(ran()).toEqual(["a.yaml", "b.yaml"]);
+    expect(errs).toEqual([]);
+    expect(logs.join("\n").split("\n")).toEqual([
+      "[1/2] a.yaml",
+      "  ✗  1 assert — never visible",
+      "  FAIL (started on SIM-1) — 0 passed, 1 failed, 0 errored, 0 skipped",
+      "[2/2] b.yaml",
+      "  PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped",
+      "",
+      "Failed e2e tests (1)",
+      "",
+      "  ✗ a.yaml › step 1 assert",
+      "    never visible",
+      `    re-run: argent e2e run ${path.join(runDir, "a.yaml")}`,
+      "",
+      expect.stringMatching(/^FAIL — 2 e2e tests: 1 passed, 1 failed, 0 skipped/),
+    ]);
   });
 });
 
