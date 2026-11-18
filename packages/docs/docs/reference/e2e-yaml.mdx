@@ -212,7 +212,35 @@ The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a
 
 A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
 
-A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. A text field that is not secure shows the value on the screen. When a later step fails and its reason quotes that text, the reason shows the placeholder in place of the value. See [Secrets](/docs/reference/configuration#secrets).
+A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time. The report of the step shows the placeholder, not the value. See [Secrets](/docs/reference/configuration#secrets) and [Typed secrets in a report](#typed-secrets-in-a-report).
+
+### Typed secrets in a report
+
+A text field that is not secure shows a typed secret on the screen. The reason of a failed `text` check quotes the text of its element. In the quoted text, Argent replaces a typed secret with its placeholder:
+
+```
+element matched id="token" but its text was "{{secret:API_TOKEN}}" (wanted to contain "Saved")
+```
+
+Argent replaces these texts:
+
+- Each value that a `type` step or the `keyboard`, `fill` or `paste` tool typed on the device. Argent ignores the case of the letters.
+- The text that the field showed after the step, when the field changed the value. For example, an iOS text field can capitalize and correct the value. The runner reads the field after a step that types a secret.
+
+Argent keeps the values and the texts in memory until the tool-server stops, for each device. Thus the replacement also applies in a later e2e test of a directory run, in a nested `e2e-execute` run and in the run around it.
+
+A field can change its text after the runner read it. When a field with an id took a secret and shows a text that Argent does not know, the quoted text contains `[withheld: a step typed {{secret:NAME}} into this field]` in place of the text of the field. This stops when a `launch` step, or a `tool:` step of `restart-app` or `reinstall-app`, starts the app again.
+
+Argent replaces a value only in the text that the reason quotes from the screen. The other words of the reason and the text that the check expects do not change. Argent replaces a short value, for example `1`, at each position in the quoted text.
+
+Argent does not replace a typed secret in these cases:
+
+- The result of a `tool:` step that reads the screen, for example `describe`.
+- A text that the app derives from the value and shows in a different element.
+- A text that changed after the runner read the field, when the field has no id or the app started again.
+- A value that a different tool-server typed, or that no Argent tool typed.
+
+The same replacement applies to the note of a failed `text` check of the `await-ui-element` tool.
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
