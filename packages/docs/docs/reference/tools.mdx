@@ -132,6 +132,21 @@ Through the MCP server, an interaction tool and `await-ui-element` return a scre
 - Argent waits at most 15 seconds for the screenshot and the element tree together. If a capture takes longer, the result does not include it.
 - Argent does not send a capture call again after a timeout.
 
+Argent does not repeat an element tree that the agent already has. Each full element tree starts with a `Tree id` line. Argent compares the element tree with the last full element tree that the MCP server returned for the same device. That element tree comes from an earlier action or from a `describe` call. When the two are identical, the result contains a note in place of the element tree. The note gives the id of the full element tree and the tool that returned it. The screenshot is not affected.
+
+The note does not show that the action had no effect. The element tree does not contain all state. For example, text that the agent types in a field can be absent from it.
+
+All agents on one MCP connection share this comparison. An agent that does not have the element tree with the id in the note calls `describe`.
+
+Argent sends the full element tree again in these cases:
+
+- The element tree or the hint of `describe` changed.
+- Argent sent the note 3 times in a row.
+- The last full element tree is more than 5 minutes old.
+- The client cancelled the call that returned the last full element tree.
+
+A `describe` call always returns the full element tree, with its `Tree id`. With the `disable-auto-describe` flag, a `describe` result has no `Tree id`.
+
 Call `screenshot` or `describe` to read the screen again.
 
 ## JavaScript runtime debugging

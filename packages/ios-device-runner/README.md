@@ -46,7 +46,9 @@ build-for-testing` (signed with the user's team; see the environment
    variables below) into `~/.argent/ios-device-runner/derived/<team>`, one
    directory per team, stamped with a fingerprint of sources + Xcode + signing;
    a stamp mismatch (an Argent or Xcode update) rebuilds in place. Switching to
-   a team reuses that team's build when it is still current.
+   a team reuses that team's build when it is still current. The build passes
+   `SYMROOT`, `OBJROOT` and `SHARED_PRECOMPS_DIR`, so the Build Location in
+   Xcode's settings cannot move the products out of that directory.
 2. Per session it launches `xcodebuild test-without-building` detached;
    testmanagerd installs and starts the runner on the device. The runner
    binds a system-assigned loopback port and logs it as
