@@ -91,7 +91,7 @@ async function readSuiteConfig(dir: string): Promise<SuiteConfig> {
   return parseSuiteConfig(text);
 }
 
-interface Suite {
+export interface Suite {
   /** Relative to the run directory; "." is the run directory itself. */
   dir: string;
   /** The manifest path relative to the run directory. */
