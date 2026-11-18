@@ -1,3 +1,4 @@
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { DescribeTreeData } from "../tools/describe/contract";
 import { settleWithin, sleepOrAbort } from "./timing";
 
@@ -87,6 +88,13 @@ export async function pollDescribeTree<R>(
       break;
     }
     if (settled.type === "error") {
+      // Waiting cannot end this one, and a timeout result would hide what to do.
+      if (
+        getFailureSignal(settled.cause)?.error_code ===
+        FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING
+      ) {
+        throw settled.cause;
+      }
       lastError = settled.error;
     } else {
       lastData = settled.value;

@@ -77,6 +77,9 @@ export interface DevToolsCommitTree {
   hookNames?: Map<number, string>;
 }
 
+/** The platform a React Native bundle was built for, as Metro's `platform` names it. */
+export type RnPlatform = "ios" | "android" | "macos";
+
 // Top-level raw input to the pipeline
 export interface RawProfilingInput {
   flamegraph?: HermesCpuProfile;
@@ -84,14 +87,14 @@ export interface RawProfilingInput {
   sessionMeta: {
     recordingDurationMs: number;
     deviceId: string;
-    platform: "ios" | "android";
+    platform: RnPlatform;
     rnVersion: string;
     projectRoot: string;
     detectedArchitecture?: "bridge" | "bridgeless";
     anyCompilerOptimized?: boolean; // pre-scanned in react-profiler-stop before hot filtering
     hotCommitIndices?: number[]; // commits whose heat reached the 16ms floor
-    allClear?: boolean; // every commit stayed under the 16ms floor
-    maxCommitMs?: number; // max commit heat when allClear=true
+    noHotCommits?: boolean; // no named commit reached the 16ms floor
+    maxCommitMs?: number; // slowest commit when noHotCommits=true
     totalReactCommits?: number; // all commit batches, including ones hot filtering dropped
     unattributedByCommit?: Array<[number, number, number]>;
   };

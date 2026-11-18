@@ -21,10 +21,10 @@ extension ArgentRunnerSession {
 
     /// Taps at the wire coordinates: one tap, the native double-tap when
     /// `numberOfTaps` is 2, or a loop of single taps above that. XCUICoordinate
-    /// has no N-tap API, and the loop is not one gesture on hardware: each tap
-    /// is its own synthesized event behind XCTest's idle wait and an XPC round
-    /// trip, hundreds of milliseconds apart, so the taps land separately and do
-    /// not trigger a multi-tap recognizer. That is documented, not refused.
+    /// has no N-tap API, and the loop is not one gesture: each tap is its own
+    /// synthesized event and XPC round trip, about 300 ms apart on a
+    /// simulator, which a double-tap recognizer can still pair. That is
+    /// documented, not refused.
     func performTap(_ request: CommandRequest, on app: XCUIApplication)
         -> Envelope
     {
@@ -39,15 +39,17 @@ extension ArgentRunnerSession {
 
         let coordinate = point(app, x, y, relativeTo: app.frame.origin)
 
-        switch taps {
-        case 1:
-            coordinate.tap()
-        case 2:
-            coordinate.doubleTap()
-        default:
-            // Separate taps, not one gesture (see the doc comment above).
-            for _ in 0..<taps {
+        skippingQuiescence(of: app) {
+            switch taps {
+            case 1:
                 coordinate.tap()
+            case 2:
+                coordinate.doubleTap()
+            default:
+                // Separate taps, not one gesture (see the doc comment above).
+                for _ in 0..<taps {
+                    coordinate.tap()
+                }
             }
         }
 
@@ -63,7 +65,11 @@ extension ArgentRunnerSession {
         }
 
         let seconds = max(0.05, (request.durationMs ?? 800) / 1000)
-        point(app, x, y, relativeTo: app.frame.origin).press(forDuration: seconds)
+        let coordinate = point(app, x, y, relativeTo: app.frame.origin)
+
+        skippingQuiescence(of: app) {
+            coordinate.press(forDuration: seconds)
+        }
 
         return .success(MessagePayload(message: "long-pressed"))
     }
@@ -112,14 +118,112 @@ extension ArgentRunnerSession {
             velocity = .default
         }
 
-        start.press(
-            forDuration: startHold,
-            thenDragTo: end,
-            withVelocity: velocity,
-            thenHoldForDuration: endHold
-        )
+        skippingQuiescence(of: app) {
+            start.press(
+                forDuration: startHold,
+                thenDragTo: end,
+                withVelocity: velocity,
+                thenHoldForDuration: endHold
+            )
+        }
 
         return .success(MessagePayload(message: "dragged"))
+    }
+
+    /// Most fingers one `touchPaths` command plays. A hand has five.
+    private static let maxTouchFingers = 5
+    /// Longest `touchPaths` gesture, comfortably inside the command budget.
+    private static let maxTouchPathsMs = 30_000.0
+
+    /// Plays one path per finger, all at once: pinches, rotations, and any
+    /// single path with waypoints. XCUICoordinate only draws one straight drag,
+    /// so this goes through XCTest's event synthesizer (ArgentTouchSynthesizer).
+    ///
+    /// Wire points are absolute screen points, the same space `tap` and `drag`
+    /// take, and times are measured from the start of the gesture. A finger
+    /// whose first waypoint is later than 0 touches down late, which is how a
+    /// second finger joins a gesture already under way.
+    func performTouchPaths(_ request: CommandRequest, on app: XCUIApplication)
+        -> Envelope
+    {
+        guard let fingers = request.fingers,
+            (1...Self.maxTouchFingers).contains(fingers.count)
+        else {
+            return .failure(
+                .invalidRequest,
+                "touchPaths requires between 1 and \(Self.maxTouchFingers) fingers"
+            )
+        }
+
+        for (index, finger) in fingers.enumerated() {
+            guard !finger.points.isEmpty else {
+                return .failure(
+                    .invalidRequest,
+                    "touchPaths finger \(index) has no waypoints"
+                )
+            }
+
+            var previousMs = 0.0
+
+            for point in finger.points {
+                guard point.x.isFinite, point.y.isFinite, point.tMs.isFinite,
+                    point.tMs >= previousMs, point.tMs <= Self.maxTouchPathsMs
+                else {
+                    return .failure(
+                        .invalidRequest,
+                        "touchPaths finger \(index) needs finite waypoints whose times do not decrease and stay within \(Int(Self.maxTouchPathsMs)) ms"
+                    )
+                }
+
+                previousMs = point.tMs
+            }
+        }
+
+        if let reason = ArgentTouchSynthesizer.unavailabilityReason() {
+            return .failure(
+                .unsupportedOperation,
+                "multi-finger touch is unavailable here: \(reason)",
+                hint:
+                    "Use tap, swipe or drag for a single finger, or drive the app's own zoom controls."
+            )
+        }
+
+        // The orientation the app draws in, not the way the phone is held: a
+        // portrait-only app on a phone turned sideways is still portrait. Wire
+        // points are in the app's space, which is the panel's own only in
+        // portrait. Other orientations have not been checked on hardware, and
+        // a touch that lands somewhere else without an error is worse than a
+        // refusal.
+        switch ArgentTouchSynthesizer.interfaceOrientation(ofApplication: app) {
+        case .portrait:
+            break
+        case .unknown:
+            return .failure(
+                .unsupportedOperation,
+                "touchPaths could not read the app's interface orientation",
+                hint:
+                    "Use tap, swipe or drag for a single finger, or drive the app's own zoom controls."
+            )
+        default:
+            return .failure(
+                .unsupportedOperation,
+                "touchPaths has only been verified with the app drawn in portrait",
+                hint: "Turn the phone upright so the app draws in portrait, then retry."
+            )
+        }
+
+        let waypoints = fingers.map { finger in
+            finger.points.map { [$0.x, $0.y, $0.tMs / 1000] as [NSNumber] }
+        }
+
+        if let failure = ArgentTouchSynthesizer.synthesizeFingers(
+            waypoints,
+            interfaceOrientation: .portrait
+        ) {
+            return .failure(.commandFailed, failure)
+        }
+
+        return .success(MessagePayload(message: "touched"))
     }
 
     /// Reports the interaction viewport, the rectangle that normalized 0-1

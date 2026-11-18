@@ -1,9 +1,13 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { harmonyConnectKey, resolveDevice } from "../../utils/device-info";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { harmonyConnectKey, isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { ensureDep } from "../../utils/check-deps";
-import { sendTouchEvent } from "../../utils/gesture-utils";
+import { pinchContacts, sendTouchEvent } from "../../utils/gesture-utils";
+import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
+import { getViewport, touchPaths } from "../../utils/ios-device/runner-commands";
+import { pinchPaths } from "../../utils/ios-device/touch-paths";
 import {
   HARMONY_INTERACTION_TIMEOUT_MS,
   assertHarmonyDisplayReady,
@@ -15,55 +19,59 @@ import {
 } from "../../utils/harmony-uitest";
 import { sleep } from "../../utils/timing";
 
+interface Result {
+  pinched: boolean;
+  timestampMs: number;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the gesture went to the cover panel. Says why and what to check.
+   */
+  warning?: string;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this gesture, so the foreground screen changed as a
+   * side effect. Set only when true.
+   */
+  reactivated?: true;
+}
+
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  harmony: { device: true },
+};
+
 const zodSchema = z.object({
   udid: z
     .string()
     .describe(
       "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
     ),
-  centerX: z
-    .number()
-    .describe(
-      "Center of pinch, horizontal: normalized 0.0–1.0 (fraction of screen width, not pixels)"
-    ),
-  centerY: z
-    .number()
-    .describe(
-      "Center of pinch, vertical: normalized 0.0–1.0 (fraction of screen height, not pixels)"
-    ),
-  startDistance: z
-    .number()
-    .describe(
-      "Initial distance between the two fingers: normalized 0.0–1.0 (fraction of screen, not pixels). " +
-        "E.g. 0.2 = fingers 20% of screen apart. " +
-        "Use a larger startDistance than endDistance to pinch in (zoom out)."
-    ),
-  endDistance: z
-    .number()
-    .describe(
-      "Final distance between the two fingers: normalized 0.0–1.0 (fraction of screen, not pixels). " +
-        "E.g. 0.6 = fingers 60% of screen apart. " +
-        "Use a larger endDistance than startDistance to pinch out (zoom in)."
-    ),
+  centerX: z.number().describe("Center of the pinch, horizontal."),
+  centerY: z.number().describe("Center of the pinch, vertical."),
+  startDistance: z.number().describe("Initial distance between the two fingers."),
+  endDistance: z.number().describe("Final distance between the two fingers."),
   endCenterX: z
     .number()
     .optional()
     .describe(
-      "Final horizontal center of the pinch: normalized 0.0–1.0. When set, the centroid drifts " +
-        "linearly from centerX to endCenterX over the gesture (e.g. to keep expanding fingers " +
-        "on-screen near an edge). Omit for a fixed center."
+      "Final horizontal center of the pinch. When set, the centroid drifts linearly from centerX to " +
+        "endCenterX over the gesture (e.g. to keep expanding fingers on-screen near an edge). Omit for a " +
+        "fixed center."
     ),
   endCenterY: z
     .number()
     .optional()
     .describe(
-      "Final vertical center of the pinch: normalized 0.0–1.0. When set, the centroid drifts " +
-        "linearly from centerY to endCenterY over the gesture. Omit for a fixed center."
+      "Final vertical center of the pinch; drifts from centerY like endCenterX. Omit for a fixed center."
     ),
   angle: z
     .number()
     .optional()
-    .describe("Axis angle in degrees along which the fingers are placed (default 0 = horizontal)."),
+    .describe(
+      "Angle in degrees of the axis the fingers lie on: 0 = horizontal (default), 90 = vertical."
+    ),
   durationMs: z
     .number()
     .optional()
@@ -74,44 +82,13 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
-  pinched: boolean;
-  timestampMs: number;
-  /**
-   * Foldable iOS simulators only: the panel the device renders to could not
-   * be resolved, so the gesture went to the cover panel. Says why and what to check.
-   */
-  warning?: string;
-}
-
-const capability: ToolCapability = {
-  apple: { simulator: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  harmony: { device: true },
-};
-
-interface Contacts {
-  first: { x: number; y: number };
-  second: { x: number; y: number };
-}
-
-/** Linear in `t`, so the endpoints alone determine the path HarmonyOS draws as two lines. */
-function contactsAt(params: Params, t: number): Contacts {
-  const angleRad = ((params.angle ?? 0) * Math.PI) / 180;
-  const cosA = Math.cos(angleRad);
-  const sinA = Math.sin(angleRad);
-  const halfDist = (params.startDistance + (params.endDistance - params.startDistance) * t) / 2;
-  const cx = params.centerX + ((params.endCenterX ?? params.centerX) - params.centerX) * t;
-  const cy = params.centerY + ((params.endCenterY ?? params.centerY) - params.centerY) * t;
-  return {
-    first: { x: cx - halfDist * cosA, y: cy - halfDist * sinA },
-    second: { x: cx + halfDist * cosA, y: cy + halfDist * sinA },
-  };
-}
-
 export const gesturePinchTool: ToolDefinition<Params, Result> = {
   id: "gesture-pinch",
+  description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. Positions and distances are fractions of the screen (0.0–1.0, not pixels), as in gesture-tap.
+startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
+Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
+Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device, or on a physical iPhone when the app is not drawn in portrait.`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) =>
       `Pinching ${params.endDistance > params.startDistance ? "out" : "in"} at (${Math.round(params.centerX * 100)}%, ${Math.round(params.centerY * 100)}%)`,
@@ -119,17 +96,15 @@ export const gesturePinchTool: ToolDefinition<Params, Result> = {
       `Pinched ${params.endDistance > params.startDistance ? "out" : "in"} at (${Math.round(params.centerX * 100)}%, ${Math.round(params.centerY * 100)}%)`,
     failedMsg: ({ failureSignal }) => `Failed to pinch: ${failureSignal.error_code}`,
   },
-  description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same coordinate space as gesture-tap and gesture-swipe.
-startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
-Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
-Auto-generates interpolated frames at ~60fps<flag:harmonyos> on iOS and Android; HarmonyOS takes both fingers' endpoints in one call and interpolates them on-device</flag:harmonyos>. The angle parameter controls the axis (0 = horizontal, 90 = vertical). Optional endCenterX/endCenterY drift the centroid linearly over the gesture (omitted = fixed center).
-Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
-  zodSchema,
   capability,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
     // No simulator-server controller exists for HarmonyOS.
     if (device.platform === "harmony") return {};
+    if (isIosPhysicalDevice(device)) return { iosDeviceRunner: iosDeviceRunnerRef(device) };
     return { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params, ctx) {
@@ -158,8 +133,8 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
             )
           );
           assertHarmonyDisplayReady(live, "pinch");
-          const start = contactsAt(params, 0);
-          const end = contactsAt(params, 1);
+          const start = pinchContacts(params, 0);
+          const end = pinchContacts(params, 1);
           timestampMs = Date.now();
           await ui.multiTouchMove(
             [
@@ -179,6 +154,20 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       );
       return { pinched: true, timestampMs };
     }
+    // Hardware fingers go through the runner as two timed paths, played at once.
+    if (isIosPhysicalDevice(device)) {
+      const runner = services.iosDeviceRunner as IosDeviceRunnerApi;
+      const bundleId = requireCurrentIosDeviceApp(device.id);
+      const viewport = await getViewport(runner, bundleId);
+      const timestampMs = Date.now();
+      const { reactivated } = await touchPaths(
+        runner,
+        bundleId,
+        pinchPaths(params, viewport, duration)
+      );
+      const fronted = viewport.reactivated === true || reactivated;
+      return { pinched: true, timestampMs, ...(fronted ? { reactivated: true as const } : {}) };
+    }
     const api = services.simulatorServer as SimulatorServerApi;
     const steps = Math.max(1, Math.round(duration / 16));
 
@@ -187,7 +176,7 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      const { first, second } = contactsAt(params, t);
+      const { first, second } = pinchContacts(params, t);
 
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();

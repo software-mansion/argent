@@ -63,6 +63,7 @@ set, so clean replies stay byte-identical on the wire.
 | `fromX/fromY/toX/toY` | `drag`              | Absolute start/end points.                                              |
 | `durationMs`          | `longPress`, `drag` | Press duration / movement duration.                                     |
 | `holdMs`              | `drag`              | Rest at the start point before moving (default 50 ms).                  |
+| `fingers`             | `touchPaths`        | 1 to 5 paths, one per finger: `{points: [{x, y, tMs}]}`.                |
 | `settle`              | `drag`              | Rest at the destination before lifting (~0 release velocity, no fling). |
 | `text`                | `type`              | Text for the focused input.                                             |
 | `button`              | `button`            | `home`, `volumeUp`, `volumeDown` or `actionButton`.                     |
@@ -85,13 +86,32 @@ launch, and launching is launch-app's job, never a command side effect):
   XCUICoordinate (public API; orientation-safe). `tap` runs `numberOfTaps`
   1 (default) as a tap and 2 as the native `doubleTap()`. Higher counts loop
   single taps on the device, and that loop is not one gesture: XCUICoordinate
-  has no N-tap API, each tap is its own synthesized event behind XCTest's
-  idle wait and an XPC round trip, hundreds of milliseconds apart, so the
-  taps land separately and do not trigger a multi-tap recognizer.
+  has no N-tap API, each tap is its own synthesized event and XPC round trip,
+  about 300 ms apart on a simulator, which a double-tap recognizer can still
+  pair.
   `drag` presses for `holdMs` at the start, moves at the velocity
   `durationMs` implies, and rests `settle`-long before lifting; a long-press
   pickup of a draggable item needs a `holdMs` of about 500 ms or more, since
   a short press never lifts it however slowly the finger then moves.
+- `touchPaths` → `{message}`: plays every finger at once, each along its own
+  timed path, as one event record through XCTest's event synthesizer
+  (`XCPointerEventPath` and `XCSynthesizedEventRecord`). This is what pinches,
+  rotations and paths with waypoints need, since XCUICoordinate draws only one
+  straight drag. `fingers` is 1 to 5 paths; a path is `points`, each `{x, y,
+tMs}`: an absolute point in the app's space and the time since the gesture
+  began. A finger touches down at its first point, moves through the rest in
+  order and lifts 10 ms after its last, so a first point later than 0 is a
+  finger joining late. Times must be finite, within 0 to 30 000 ms, and must
+  not decrease along a path, or the reply is `INVALID_REQUEST`. The synthesizer
+  classes are private and are resolved by name at runtime. The record is built
+  with `initWithName:displayID:interfaceOrientation:` when XCTest and the main
+  screen offer a display id, and with `initWithName:interfaceOrientation:`
+  otherwise. When this Xcode has neither, or a path class or selector is
+  missing, the reply is `UNSUPPORTED_OPERATION` naming why, and every other
+  command keeps working. The same code answers when the app is not drawn in
+  portrait, the only orientation checked on hardware; the check reads the
+  app's interface orientation, so a portrait-only app on a phone held sideways
+  is accepted. It has the same 75 s execution budget as the other gestures.
 - `type` → `{message}`: types into the current first responder. The runner
   probes keyboard focus first and answers `TEXT_INPUT_NOT_FOCUSED` when
   nothing has it. The probe is what makes that code real on hardware: there,
@@ -193,6 +213,18 @@ Flat list in emission order; `parentIndex` links reconstruct the tree.
   `degraded`, `reasonCode: "node_cap"`). Depth is also capped: the raw walk
   stops at depth 100 and emission at depth 60; unlike the node cap,
   depth-dropped content does not mark the snapshot `degraded`.
+- Hosted view services: when `com.apple.SafariViewService` is in the
+  foreground (an `ASWebAuthenticationSession` or `SFSafariViewController`
+  sheet is up), its tree is added under the root as an `Application` node,
+  emitted before the app's own nodes and capped at 1000 of the 1500 nodes. On
+  iOS 26 the app's own tree no longer contains the sheet. The service is read
+  without activating it, so the screen and the registered target stay as they
+  are, and its frames are in the same viewport points. It is skipped when the
+  service is suspended or in the background (a suspended service blocks the
+  capture past the watchdog), when its tree is not the app's size (a sheet
+  still animating), and when the app's tree already holds the sheet's
+  `BrowserView` (iOS 18 and earlier). A failed hosted capture never fails the
+  snapshot.
 - `quality`: `{state: healthy|degraded, backend: "xctest", reason?,
 reasonCode?}`.
 
@@ -215,12 +247,24 @@ under a larger transport window (default `RUNNER_COMMAND_TIMEOUT_MS`,
 runner-client.ts; overrides in runner-commands.ts: `GESTURE_TIMEOUT_MS` and
 the `type`/`snapshot` call sites).
 
-| Command class              | Runner budget | Client window |
-| -------------------------- | ------------- | ------------- |
-| `type`                     | 55s           | 60s           |
-| `tap`, `longPress`, `drag` | 75s           | 90s           |
-| `snapshot`                 | 30s           | 45s           |
-| everything else (default)  | 30s           | 45s           |
+XCTest waits up to 60s before and after every synthesized event for the app
+to report idle, and a screen that never does (a paused
+`UIViewPropertyAnimator`, as expo-blur keeps) would stall each gesture for two
+minutes. `tap`, `longPress`, `drag` and the three typing commands skip those
+waits and instead wait at most 2s (`preEventSettleTimeout`,
+ArgentRunnerSession+Quiescence.swift) for the app to go idle before the event,
+so a command sent right after a navigation lands on the new screen.
+`touchPaths` sends its events straight to the daemon, so it neither waits nor
+settles. The skip is XCTest SPI; where any of it is missing, XCTest's own waits
+apply, and on a screen that never goes idle they outrun the gesture budget
+below.
+
+| Command class                            | Runner budget | Client window |
+| ---------------------------------------- | ------------- | ------------- |
+| `type`                                   | 55s           | 60s           |
+| `tap`, `longPress`, `drag`, `touchPaths` | 75s           | 90s           |
+| `snapshot`                               | 30s           | 45s           |
+| everything else (default)                | 30s           | 45s           |
 
 The invariant: every client window MUST strictly exceed the matching runner
 budget, so the client outlasts the runner's verdict. A command that blows

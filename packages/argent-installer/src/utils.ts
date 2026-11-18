@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as dns from "node:dns";
+import { createHash } from "node:crypto";
 import * as os from "node:os";
 import { execFileSync, execSync } from "node:child_process";
 import semver from "semver";
@@ -121,6 +122,62 @@ export const LEGACY_ARGENT_SKILL_NAMES: readonly string[] = [
   "argent-simulator-setup",
   "argent-ios-profiler",
 ];
+
+export interface RetiredBundledPath {
+  /** Relative to the bundled agents/ or rules/ dir, "/"-separated. */
+  path: string;
+  /** sha256 of every version argent shipped, CRLF read as LF. */
+  shipped: readonly string[];
+}
+
+// Files earlier argent versions copied into agents/ and rules/ targets. When a
+// change deletes a file from packages/skills/agents or packages/skills/rules,
+// add it here in the same change, with the hash of each version in its git
+// history. Once the bundle no longer ships it, init, update and uninstall
+// offer to remove it from every target argent manages. Only a copy that
+// matches one of these hashes goes: any other file at that path may hold the
+// user's work, so it stays.
+export const RETIRED_BUNDLED_PATHS: Readonly<
+  Record<"agents" | "rules", readonly RetiredBundledPath[]>
+> = {
+  agents: [
+    {
+      // v0.3.1 and v0.3.2, when the agent and package carried their first names.
+      path: "environment-inspector.md",
+      shipped: [
+        "50f8d1442677a7def3117cc8652f26dd5c1e2271ae0c7c9814c5bb17dfdd7858",
+        "10f998fef549503cf341e1775ff6aacafbf361c1d7ec32c554a9c42343a6998a",
+      ],
+    },
+    {
+      path: "argent-environment-inspector.md",
+      shipped: [
+        "1f9b285ec30b7298b60b03cae10fb934ab07bc394104ab2d974d452a4c203178",
+        "9d417798147fa11f4351109e6331865b79862fc631d7f32b70f64981362b90eb",
+        "0f535893b239040ebe4a001ae7c3639366c4a6fe8d98e2568a59584798454644",
+        "ec5872c9bd2085d281f5d4e1d06b5eb3f32a5be29c2bf8cb5c953ca6e9d73349",
+        "96cb2e5025755448186cd9d29e85ce3db3cedb3dbfd2e6c89e734c76aa7fbdff",
+        "9eff92cf887390fb3ffb68e7de5789e703049795a24d5f268332af488d155531",
+      ],
+    },
+    {
+      path: "references/quality-control-checklist.md",
+      shipped: [
+        "40f43028524e9544e2c77d2d1ad7eaf9385efadfb079bfec2973b999817203c1",
+        "12a8deb0276a3d9fcd8b6c8fc6080b58be2e3e45fd0409dc2e7594e619e2eceb",
+        "f1c76c1d51aa5a88371061a2bd5f46264ea2082aa4e1c2bca517d901b836c753",
+        "84ecf5920fbca4460484a241a8ad1411fe8d6c3d0c9c25f80096a5a28f219f8a",
+      ],
+    },
+  ],
+  rules: [],
+};
+
+// The hash RETIRED_BUNDLED_PATHS lists: a checkout with CRLF line endings
+// still matches.
+export function hashBundledContent(content: string): string {
+  return createHash("sha256").update(content.replace(/\r\n/g, "\n")).digest("hex");
+}
 
 export function listArgentSkillsInLock(lockPath: string): string[] {
   try {
@@ -266,14 +323,31 @@ function isEmptyPlainObject(value: unknown): boolean {
   );
 }
 
-function rmEmptyDir(dirPath: string): void {
+// Removes whatever `targetPath` names and returns whether anything was there. A
+// link goes without what it leads to; a directory goes with its contents.
+//
+// A link is unlinked rather than handed to fs.rmSync: on Node 23.0 to 24.13.0
+// and 25.0 to 25.3, rmSync looks through the link, so it throws ERR_FS_EISDIR
+// for a link to a directory unless `recursive` is set, and returns without
+// removing a dangling link (nodejs/node#61020).
+export function removePath(targetPath: string): boolean {
+  const entry = fs.lstatSync(targetPath, { throwIfNoEntry: false });
+  if (!entry) return false;
+  if (entry.isSymbolicLink()) fs.unlinkSync(targetPath);
+  else fs.rmSync(targetPath, { recursive: entry.isDirectory(), force: true });
+  return true;
+}
+
+function rmEmptyDir(dirPath: string): boolean {
   try {
-    if (!fs.existsSync(dirPath)) return;
-    if (!fs.statSync(dirPath).isDirectory()) return;
-    if (fs.readdirSync(dirPath).length > 0) return;
+    if (!fs.existsSync(dirPath)) return false;
+    if (!fs.statSync(dirPath).isDirectory()) return false;
+    if (fs.readdirSync(dirPath).length > 0) return false;
     fs.rmdirSync(dirPath);
+    return true;
   } catch {
     // non-fatal
+    return false;
   }
 }
 
@@ -356,7 +430,7 @@ export function realpathOrSelf(p: string): string {
 // exists: finishing `.claude/agents -> ../.agents/agents` for someone who has
 // made `.agents` is helpful, conjuring a whole tree is not. Anything else
 // resolves back to `dest`, so the caller fails naming the link the user wrote.
-function resolveLinkedDestination(dest: string): string {
+export function resolveLinkedDestination(dest: string): string {
   let current = dest;
 
   for (let hop = 0; hop < MAX_SYMLINK_HOPS; hop++) {
@@ -391,19 +465,25 @@ function resolveLinkedDestination(dest: string): string {
 // (`.claude/agents -> ../.agents/agents`) or a single file inside it (issue
 // #701).
 //
-// `fs.cp` cannot do this: its handling of a symlinked destination depends on
-// the runtime. Node 20 refuses one at any level (ERR_FS_CP_DIR_TO_NON_DIR) and
-// quietly replaces a symlinked file, leaving the canonical copy stale; Node 22
-// writes through both, but aborts the process — an uncatchable C++
-// std::filesystem exception — whenever it has to create a directory and cannot.
-// Argent supports both, and `fs.copyFileSync` reports each failure as a plain,
-// catchable errno.
+// `fs.cp` cannot: depending on the Node version it refuses a symlinked
+// destination (ERR_FS_CP_DIR_TO_NON_DIR), replaces a symlinked file (leaving the
+// canonical copy stale), or aborts the process with an uncatchable C++
+// exception when it cannot create a directory. `fs.copyFileSync` reports each
+// failure as a catchable errno.
 export function copyDir(src: string, dest: string): string | null {
-  if (!fs.existsSync(src)) return null;
+  // A source with no files is nothing to copy either: a bundle that stopped
+  // shipping a kind of content must not leave an empty dir at every target.
+  if (!fs.existsSync(src) || !treeHasFiles(src)) return null;
 
   const target = resolveLinkedDestination(dest);
   copyTree(src, target);
   return target;
+}
+
+function treeHasFiles(dir: string): boolean {
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .some((entry) => !entry.isDirectory() || treeHasFiles(path.join(dir, entry.name)));
 }
 
 function copyTree(src: string, dest: string): void {
@@ -419,6 +499,81 @@ function copyTree(src: string, dest: string): void {
     if (entry.isDirectory()) copyTree(from, to);
     else fs.copyFileSync(from, to);
   }
+}
+
+export interface RetiredFile {
+  /** Relative to the target dir, "/"-separated. */
+  relativePath: string;
+  /** Hash when found: removal skips the file if it has changed since. */
+  sha256: string;
+}
+
+function readRetiredFile(targetDir: string, relativePath: string): string | null {
+  const entryPath = path.join(resolveLinkedDestination(targetDir), ...relativePath.split("/"));
+  const file = resolveLinkedDestination(entryPath);
+  try {
+    if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) return null;
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// The retired files in `targetDir` that the bundle in `bundleDir` no longer
+// ships, each a copy of a version argent shipped. A file at a retired path that
+// matches none is not listed: it may be an edited copy or the user's own, and
+// nothing tells the two apart. Reads through links the way copyDir writes
+// through them.
+export function findRetiredFiles(
+  retired: readonly RetiredBundledPath[],
+  bundleDir: string,
+  targetDir: string
+): RetiredFile[] {
+  const found: RetiredFile[] = [];
+  for (const { path: relativePath, shipped } of retired) {
+    if (fs.existsSync(path.join(bundleDir, ...relativePath.split("/")))) continue;
+    const content = readRetiredFile(targetDir, relativePath);
+    if (content === null) continue;
+    const sha256 = hashBundledContent(content);
+    if (shipped.includes(sha256)) found.push({ relativePath, sha256 });
+  }
+  return found;
+}
+
+// Removes `files` (from findRetiredFiles) from `targetDir`, then each directory
+// that left empty. A file whose content changed since it was found stays.
+// `targetDir` itself goes only when it is not a link: the canonical dir a link
+// leads to is the user's.
+export function removeRetiredFiles(
+  targetDir: string,
+  files: readonly RetiredFile[]
+): { removedPaths: string[]; removedRoot: boolean } {
+  const dir = resolveLinkedDestination(targetDir);
+  const removedPaths: string[] = [];
+
+  for (const { relativePath, sha256 } of files) {
+    const content = readRetiredFile(targetDir, relativePath);
+    if (content === null || hashBundledContent(content) !== sha256) continue;
+
+    const segments = relativePath.split("/");
+    const entryPath = path.join(dir, ...segments);
+    const file = resolveLinkedDestination(entryPath);
+    try {
+      fs.rmSync(file);
+      // A link to the removed copy would now dangle.
+      if (file !== entryPath) removePath(entryPath);
+      removedPaths.push(relativePath);
+    } catch {
+      continue;
+    }
+
+    for (let depth = segments.length - 1; depth > 0; depth--) {
+      if (!rmEmptyDir(path.join(dir, ...segments.slice(0, depth)))) break;
+    }
+  }
+
+  const removedRoot = removedPaths.length > 0 && dir === targetDir && rmEmptyDir(dir);
+  return { removedPaths, removedRoot };
 }
 
 export function dirExists(p: string): boolean {
@@ -476,6 +631,16 @@ export function withNpmForce(npxArgs: string[]): string[] {
 // inherits it and npm then installs <spec> in place of the requested package,
 // so `npx skills add ...` re-runs argent instead of the skills CLI (#1335).
 // The skills commands argent spawns get an environment without it.
+//
+// The pinned source is this whole repository at a release tag, and the skills CLI
+// (1.8.0+) runs `git submodule update --init --recursive` after cloning it. The
+// one submodule is private and has an SSH URL, and no skill lives in it. Without
+// github.com in known_hosts, ssh asks to trust the host on /dev/tty, behind the
+// install spinner, and the install hangs: the CLI's clone timeout signals git,
+// never ssh. Every release tag carries the submodule, so skip it through git's
+// environment config, after any entries the caller already set.
+const SKIPPED_SKILLS_SOURCE_SUBMODULES = ["packages/argent-private"] as const;
+
 export function npxChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const childEnv = { ...env };
   for (const key of Object.keys(childEnv)) {
@@ -483,15 +648,27 @@ export function npxChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
       delete childEnv[key];
     }
   }
+  // A count git would reject breaks every git command anyway, so start over.
+  const existing = Number(childEnv.GIT_CONFIG_COUNT ?? 0);
+  let count = Number.isInteger(existing) && existing >= 0 ? existing : 0;
+  for (const name of SKIPPED_SKILLS_SOURCE_SUBMODULES) {
+    childEnv[`GIT_CONFIG_KEY_${count}`] = `submodule.${name}.update`;
+    childEnv[`GIT_CONFIG_VALUE_${count}`] = "none";
+    count += 1;
+  }
+  childEnv.GIT_CONFIG_COUNT = String(count);
   return childEnv;
 }
 
-export function isSkillsCliAvailable(): boolean {
+// `cwd`: where the `skills` command will run - `npx --no-install` resolves a
+// project-local bin from it.
+export function isSkillsCliAvailable(cwd?: string): boolean {
   try {
     execSync("npx --force --no-install skills --version", {
       env: npxChildEnv(),
       stdio: ["ignore", "ignore", "ignore"],
       timeout: PROBE_TIMEOUT_MS,
+      ...(cwd ? { cwd } : {}),
     });
     return true;
   } catch {

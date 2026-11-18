@@ -170,10 +170,10 @@ describe("flow-read-prerequisite parameter handling", () => {
       };
 
       expect(Object.keys(schema.properties), tool.id).toEqual(
-        expect.arrayContaining(["name", "flow_path"])
+        expect.arrayContaining(["name", "e2e_test_path"])
       );
       expect(schema.required ?? [], tool.id).not.toContain("name");
-      expect(schema.required ?? [], tool.id).not.toContain("flow_path");
+      expect(schema.required ?? [], tool.id).not.toContain("e2e_test_path");
     }
   });
 
@@ -183,7 +183,7 @@ describe("flow-read-prerequisite parameter handling", () => {
     ).rejects.toThrow(/needs the e2e test's name in `name`.*\.argent\/flows\/<name>\.yaml/s);
   });
 
-  it("anchors the exactly-one-source rule at the ROOT, not on flow_path", async () => {
+  it("anchors the exactly-one-source rule at the ROOT, not on e2e_test_path", async () => {
     for (const tool of [createRunFlowTool(new Registry()), flowReadPrerequisiteTool]) {
       const parsed = tool.zodSchema!.safeParse({ project_root: tmpDir });
       expect(parsed.success, tool.id).toBe(false);
@@ -200,13 +200,13 @@ describe("flow-read-prerequisite parameter handling", () => {
     try {
       await prereqRegistry().invokeTool("flow-read-prerequisite", {
         name: "a",
-        flow_path: path.join(tmpDir, "b.yaml"),
+        e2e_test_path: path.join(tmpDir, "b.yaml"),
         project_root: tmpDir,
       });
     } catch (err) {
       message = (err as Error).message;
     }
-    expect(message).toContain("Pass exactly one e2e test source: name or flow_path.");
+    expect(message).toContain("Pass exactly one e2e test source: name or e2e_test_path.");
     expect(message).not.toContain("needs the e2e test's name");
   });
 });

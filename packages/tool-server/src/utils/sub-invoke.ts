@@ -18,7 +18,8 @@ import type { InvokeToolOptions, Registry, ResolvedFileInput, ToolContext } from
  * The abort `signal` is forwarded on both paths so a client disconnect cancels a
  * sub-tool that would otherwise poll on to its own timeout, and so is
  * `flowStack`, the chain of enclosing flow runs a nested `flow-execute` checks
- * itself against. `extra` is what a dispatcher decided for this one call, and
+ * itself against, and so are `clientSecrets`, which a nested `type:` step
+ * resolves against. `extra` is what a dispatcher decided for this one call, and
  * a key in it wins over the same key of `ctx`: `fileInputs`, the outcome of
  * the file boundary it applied to `args` itself (a `tool:` step whose files
  * are on the client, or a nested `flow-execute` whose flow and files the
@@ -42,6 +43,7 @@ export async function invokeSubTool<T = unknown>(
   const forwarded = {
     ...(extra?.fileInputs ? { fileInputs: extra.fileInputs } : {}),
     ...(flowStack ? { flowStack } : {}),
+    ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
   };
   if (!recordChildInvocation) {
     return signal || Object.keys(forwarded).length > 0

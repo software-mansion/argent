@@ -6,7 +6,8 @@ import { execFileSync } from "node:child_process";
 import * as p from "@clack/prompts";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
-import { isLocallyInstalled, resolveProjectRoot } from "../src/utils.js";
+import { isGloballyInstalled, isLocallyInstalled, resolveProjectRoot } from "../src/utils.js";
+import { PACKAGE_NAME } from "../src/constants.js";
 import type { InitTelemetry } from "../src/init-telemetry.js";
 
 // Exercises installLocally's failure handling: the retry-once semantics, the
@@ -32,6 +33,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     isYarnPnp: vi.fn(() => false),
     getLocallyInstalledVersion: vi.fn(() => "1.0.0"),
     detectProjectPackageManager: vi.fn(() => "pnpm" as const),
+    isGloballyInstalled: vi.fn(() => false),
   };
 });
 
@@ -46,6 +48,7 @@ vi.mock("@clack/prompts", async (importOriginal) => {
 });
 
 vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
+vi.mock("../src/skills.js", () => ({ reportSkillRefresh: vi.fn() }));
 
 class ExitCalled extends Error {
   constructor(readonly code: number | undefined) {
@@ -71,6 +74,16 @@ function localInstall(tel: InitTelemetry): Promise<string> {
     version: "0.0.0",
     tel,
   });
+}
+
+// What a mocked p.log.* printed, one entry per call, colour codes removed.
+function loggedLines(fn: (message: string) => void): string[] {
+  const esc = String.fromCharCode(27);
+  return vi.mocked(fn).mock.calls.map((c) =>
+    String(c[0])
+      .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+      .join("")
+  );
 }
 
 describe("installLocally failure handling", () => {
@@ -194,6 +207,29 @@ describe("installLocally failure handling", () => {
     }
   });
 
+  it("shows pnpm's own error and advises the command it ran, workspace-root check skipped", async () => {
+    // The advice has to be the command that ran: a bare `pnpm add -D` fails at
+    // a workspace root (ERR_PNPM_ADDING_TO_ROOT) however the reader runs it.
+    vi.mocked(p.log.info).mockClear();
+    vi.mocked(p.log.error).mockClear();
+    const pnpmError = "ERR_PNPM_META_FETCH_FAIL  GET https://registry.npmjs.org/ failed";
+    vi.mocked(runShellCommand).mockRejectedValue(new ShellCommandError(pnpmError, 1, null));
+
+    await expect(localInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+    const ran = vi.mocked(runShellCommand).mock.calls[0]!;
+    expect(ran[0]).toEqual({
+      bin: "pnpm",
+      args: ["add", "-D", "--ignore-workspace-root-check", PACKAGE_NAME],
+    });
+    expect(ran[1]).toEqual({ cwd: "/fake/project" });
+
+    expect(loggedLines(p.log.error).join("\n")).toContain(pnpmError);
+    expect(loggedLines(p.log.info).join("\n")).toContain(
+      `pnpm add -D --ignore-workspace-root-check ${PACKAGE_NAME}`
+    );
+  });
+
   it.skipIf(process.platform === "win32")(
     "quotes the project root in the manual-install advice",
     async () => {
@@ -211,15 +247,9 @@ describe("installLocally failure handling", () => {
 
         await expect(localInstall(makeTel())).rejects.toThrow(ExitCalled);
 
-        const esc = String.fromCharCode(27);
-        const advice = vi
-          .mocked(p.log.info)
-          .mock.calls.map((c) =>
-            String(c[0])
-              .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
-              .join("")
-          )
-          .find((line) => line.startsWith("Install manually with: "));
+        const advice = loggedLines(p.log.info).find((line) =>
+          line.startsWith("Install manually with: ")
+        );
         expect(advice).toBeDefined();
 
         const cd = advice!.slice(advice!.indexOf("cd ")).split(" && ")[0];
@@ -230,4 +260,54 @@ describe("installLocally failure handling", () => {
       }
     }
   );
+});
+
+describe("global install PATH check", () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.mocked(runShellCommand).mockReset();
+    vi.mocked(runShellCommand).mockResolvedValue(undefined);
+    vi.mocked(isGloballyInstalled).mockReset();
+    vi.mocked(p.log.warn).mockClear();
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new ExitCalled(code);
+    }) as never);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+  });
+
+  function globalInstall(tel: InitTelemetry): Promise<string> {
+    return runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: true,
+      version: "0.0.0",
+      tel,
+    });
+  }
+
+  it("warns and continues when the install succeeds but argent is not on PATH", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(false);
+    const tel = makeTel();
+
+    await globalInstall(tel);
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(p.log.warn).toHaveBeenCalledTimes(1);
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("is not on PATH"));
+    expect(tel.trackPackageAction).toHaveBeenCalledWith("fresh_install", expect.any(Number), true);
+  });
+
+  it("does not warn when the fresh install is on PATH", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const tel = makeTel();
+
+    await globalInstall(tel);
+
+    expect(runShellCommand).toHaveBeenCalledTimes(1);
+    expect(p.log.warn).not.toHaveBeenCalled();
+  });
 });

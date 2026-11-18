@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Cb = (err: Error | null, out: { stdout: string; stderr: string }) => void;
-let execFailure: { message: string; stderr: string } | null = null;
+let execFailure: { message: string; stderr: string; killed?: boolean } | null = null;
 const execFileMock = vi.fn((_cmd: string, _args: readonly string[], opts: unknown, cb?: Cb) => {
   const callback = (typeof opts === "function" ? opts : cb!) as Cb;
   if (!execFailure) return callback(null, { stdout: "", stderr: "" });
-  const err = Object.assign(new Error(execFailure.message), { stderr: execFailure.stderr });
+  const err = Object.assign(new Error(execFailure.message), {
+    stderr: execFailure.stderr,
+    killed: execFailure.killed ?? false,
+  });
   callback(err, { stdout: "", stderr: execFailure.stderr });
 });
 vi.mock("node:child_process", async () => {
@@ -23,16 +26,25 @@ vi.mock("../src/utils/adb", async (importActual) => ({
 }));
 
 const vegaCalls: string[][] = [];
+let vegaStderr: string | null = null;
 vi.mock("../src/utils/vega-cli", async (importActual) => ({
   ...(await importActual<typeof import("../src/utils/vega-cli")>()),
   vegaDevice: vi.fn(async (_serial: string, args: string[]) => {
     vegaCalls.push(args);
+    if (vegaStderr) {
+      // Shaped like runVega's rejection.
+      const argv = ["device", ...args, "-d", "emulator-5554"];
+      throw new Error(formatSubprocessFailure("vega", argv, { stderr: vegaStderr }));
+    }
     return { stdout: "", stderr: "" };
   }),
 }));
 
 import { terminateAppTool } from "../src/tools/terminate-app";
+import { formatSubprocessFailure } from "../src/utils/subprocess-error";
 import { UnsupportedOperationError } from "../src/utils/capability";
+import { SIMCTL_KILL_SIGNAL } from "../src/utils/simctl-config";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
 const IOS_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
@@ -44,10 +56,22 @@ const NOTHING_TO_TERMINATE =
   "found nothing to terminate\nUnderlying error (domain=NSPOSIXErrorDomain, code=3):\n" +
   '\tThe request to terminate "com.example.app" failed. found nothing to terminate';
 
+// Real vega CLI stderr for an app that is not installed.
+const VEGA_NOT_INSTALLED =
+  "Vega operation FAILED due to an irrecoverable error: Failed: App could not be determined\n" +
+  "Additional logs can be found at /home/user/vega/sdk/vega-sdk/main/0.23.8358/logs";
+// Real stderr when the device is not reachable.
+const VEGA_DEVICE_NOT_FOUND =
+  "Vega operation FAILED due to an irrecoverable error: Device not found: Cannot find an " +
+  "instance of Vega Virtual Device, launch the virtual device and try again.\n" +
+  "Additional logs can be found at /home/user/vega/sdk/vega-sdk/main/0.23.8358/logs";
+const VEGA_SERIAL = "amazon-4a27df03c9777152";
+
 const run = (udid: string) => terminateAppTool.execute!({}, { udid, bundleId: BUNDLE_ID });
 
 beforeEach(() => {
   execFailure = null;
+  vegaStderr = null;
   execFileMock.mockClear();
   shellCalls.length = 0;
   vegaCalls.length = 0;
@@ -72,6 +96,32 @@ describe("terminate-app", () => {
     ]);
   });
 
+  it("bounds the local simctl terminate like restart-app does", async () => {
+    await run(IOS_UDID);
+    expect(execFileMock.mock.calls[0]![2]).toEqual({
+      timeout: 15_000,
+      killSignal: SIMCTL_KILL_SIGNAL,
+    });
+  });
+
+  it("fails with a timeout when simctl terminate is killed, not as not running", async () => {
+    // A killed simctl may have printed the not-running text before it hung.
+    execFailure = {
+      message: "Command failed: xcrun simctl terminate",
+      stderr: NOTHING_TO_TERMINATE,
+      killed: true,
+    };
+    const err = await run(IOS_UDID).catch((e: unknown) => e);
+    expect((err as Error).message).toBe(
+      `Terminating iOS app ${BUNDLE_ID} on ${IOS_UDID} did not finish within 15s.`
+    );
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.IOS_TERMINATE_APP_FAILED,
+      failure_stage: "ios_terminate_app_simctl_terminate",
+      error_kind: "timeout",
+    });
+  });
+
   it("runs simctl terminate over sim-remote with the remote: prefix stripped", async () => {
     await expect(run(`remote:${IOS_UDID}`)).resolves.toEqual({
       terminated: true,
@@ -94,11 +144,22 @@ describe("terminate-app", () => {
   });
 
   it("runs vega terminate-app on a Vega Virtual Device", async () => {
-    await expect(run("amazon-4a27df03c9777152")).resolves.toEqual({
+    await expect(run(VEGA_SERIAL)).resolves.toEqual({
       terminated: true,
       bundleId: BUNDLE_ID,
     });
     expect(vegaCalls).toEqual([["terminate-app", "-a", BUNDLE_ID]]);
+  });
+
+  it("reports terminated: true on Vega when the app is not installed", async () => {
+    vegaStderr = VEGA_NOT_INSTALLED;
+    await expect(run(VEGA_SERIAL)).resolves.toEqual({ terminated: true, bundleId: BUNDLE_ID });
+    expect(vegaCalls).toEqual([["terminate-app", "-a", BUNDLE_ID]]);
+  });
+
+  it("propagates other vega CLI failures", async () => {
+    vegaStderr = VEGA_DEVICE_NOT_FOUND;
+    await expect(run(VEGA_SERIAL)).rejects.toThrow(/Device not found/);
   });
 
   it.each([
@@ -109,13 +170,16 @@ describe("terminate-app", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
-  it("propagates other simctl failures", async () => {
+  it.each([
+    ["iOS", IOS_UDID, /Command failed/],
+    ["ios-remote", `remote:${IOS_UDID}`, /Unable to lookup in current state: Shutdown/],
+  ])("propagates other simctl failures on %s", async (_name, udid, expected) => {
     execFailure = {
       message: "Command failed: xcrun simctl terminate",
       stderr:
         "An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=405):\n" +
         "Unable to lookup in current state: Shutdown",
     };
-    await expect(run(IOS_UDID)).rejects.toThrow(/Command failed/);
+    await expect(run(udid)).rejects.toThrow(expected);
   });
 });

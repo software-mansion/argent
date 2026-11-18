@@ -12,6 +12,8 @@ import {
 } from "./ios-device-sets";
 import { externalNativeId, isExternalId } from "./external-devices";
 import { resolveDevice } from "./device-info";
+import { XcodeFirstLaunchPendingError } from "./dependency-errors";
+import { xcodeInstallInstruction } from "./xcode-first-launch";
 
 const execFileAsync = promisify(execFile);
 
@@ -43,49 +45,82 @@ interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
 }
 
+const SIMCTL_LIST_TIMEOUT_MS = 10_000;
+
+/** What to tell an agent after a `simctl list` timeout; `retry` names the call to repeat. */
+export function simctlListTimeoutAdvice(retry: string): string {
+  return (
+    `\`xcrun simctl list\` did not answer within ${SIMCTL_LIST_TIMEOUT_MS / 1000}s. ` +
+    `CoreSimulatorService is probably still starting, which can take about a minute after a ` +
+    `reboot, so call ${retry} again shortly. If it keeps timing out and Xcode was just updated, ` +
+    `ask the user to ${xcodeInstallInstruction()}; otherwise restart CoreSimulatorService.`
+  );
+}
+
+interface IosSimulatorScan {
+  simulators: IosSimulator[];
+  /** Some set's `simctl list` timed out, so the list is incomplete. */
+  timedOut: boolean;
+}
+
+/** Undefined for a runtime that is neither iOS nor tvOS, such as watchOS or visionOS (`xrOS`). */
+export function simulatorRuntimeKind(runtimeId: string): "mobile" | "tv" | undefined {
+  if (runtimeId.includes("tvOS")) return "tv";
+  return runtimeId.includes("iOS") ? "mobile" : undefined;
+}
+
 /**
  * The listing of each device set that is still running, by set path (`""` for
  * the default set).
  */
-const inFlightSetListings = new Map<string, Promise<IosSimulator[]>>();
+const inFlightSetListings = new Map<string, Promise<IosSimulatorScan>>();
 
 /**
- * List one device set's iOS/tvOS simulators; `[]` on any failure.
+ * List one device set's iOS/tvOS simulators; none on any failure but the refusal
+ * while Xcode's component install is pending. Read as an empty set, it would
+ * make a simulator's type lookup answer "not tvOS, not foldable".
  *
  * Callers that ask for the same set while its listing is still running share
  * that one `simctl` call, such as the foldable checks of several simulators an
  * external provider lends from one set. Each caller gets its own copies.
+ *
+ * @throws XcodeFirstLaunchPendingError
  */
-async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
+async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulatorScan> {
   const key = deviceSet ?? "";
   let listing = inFlightSetListings.get(key);
 
   if (!listing) {
-    listing = readDeviceSetSimulators(deviceSet).finally(() => inFlightSetListings.delete(key));
+    const started = readDeviceSetSimulators(deviceSet).finally(() => {
+      if (inFlightSetListings.get(key) === started) inFlightSetListings.delete(key);
+    });
+    listing = started;
     inFlightSetListings.set(key, listing);
   }
 
-  return (await listing).map((simulator) => ({ ...simulator }));
+  const { simulators, timedOut } = await listing;
+  return { simulators: simulators.map((simulator) => ({ ...simulator })), timedOut };
 }
 
-async function readDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
+/** @throws XcodeFirstLaunchPendingError */
+async function readDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulatorScan> {
   // simctl materializes a missing `--set` directory as a side effect, so a
   // config typo would leave a stray directory on disk.
-  if (deviceSet && !fs.existsSync(deviceSet)) return [];
+  if (deviceSet && !fs.existsSync(deviceSet)) return { simulators: [], timedOut: false };
   try {
     const { stdout } = await execFileAsync(
       "xcrun",
       [...simctlPrefix(deviceSet), "list", "devices", "--json"],
-      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+      { timeout: SIMCTL_LIST_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];
     const deviceTypes: string[] = [];
     for (const [runtimeId, devices] of Object.entries(data.devices)) {
-      if (!runtimeId.includes("iOS") && !runtimeId.includes("tvOS")) continue;
+      const runtimeKind = simulatorRuntimeKind(runtimeId);
+      if (!runtimeKind) continue;
       for (const d of devices) {
         if (!d.isAvailable) continue;
-        const runtimeKind = runtimeId.includes("tvOS") ? "tv" : "mobile";
         out.push({
           udid: d.udid,
           name: d.name,
@@ -108,9 +143,10 @@ async function readDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
         if (foldable) sim.foldable = true;
       })
     );
-    return out;
-  } catch {
-    return [];
+    return { simulators: out, timedOut: false };
+  } catch (err) {
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
+    return { simulators: [], timedOut: (err as { killed?: boolean }).killed === true };
   }
 }
 
@@ -120,13 +156,25 @@ async function readDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
  * with its owning set and remembered in the UDID → device-set map, so later
  * per-device simctl calls target the right set. Empty when xcrun is missing or
  * every set fails, keeping the rest of the tool surface usable off macOS.
+ *
+ * @throws XcodeFirstLaunchPendingError
  */
 export async function listIosSimulators(): Promise<IosSimulator[]> {
+  return (await scanIosSimulators()).simulators;
+}
+
+/**
+ * {@link listIosSimulators}, plus whether any set's `simctl list` timed out, as it
+ * does on a cold CoreSimulatorService (up to about a minute after a reboot).
+ *
+ * @throws XcodeFirstLaunchPendingError
+ */
+export async function scanIosSimulators(): Promise<IosSimulatorScan> {
   const sets: DeviceSetPath[] = [null, ...configuredAdditionalDeviceSets()];
   const perSet = await Promise.all(sets.map(listDeviceSetSimulators));
   const out: IosSimulator[] = [];
   const seen = new Set<string>();
-  for (const simulators of perSet) {
+  for (const { simulators } of perSet) {
     for (const sim of simulators) {
       // A UDID lives in exactly one set; first sighting wins, guarding against
       // a set listed twice in the config.
@@ -136,7 +184,7 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
       out.push(sim);
     }
   }
-  return out;
+  return { simulators: out, timedOut: perSet.some((set) => set.timedOut) };
 }
 
 // A simulator's runtime kind is fixed at creation, so memoize per-UDID and keep
@@ -166,7 +214,7 @@ export async function findIosSimulator(udid: string): Promise<IosSimulator | und
    * match on the native UDID.
    */
   const listing = isExternalId(udid)
-    ? await listDeviceSetSimulators(await deviceSetForUdid(udid))
+    ? (await listDeviceSetSimulators(await deviceSetForUdid(udid))).simulators
     : await listIosSimulators();
   const native = externalNativeId(udid);
   return listing.find((s) => s.udid === native);
@@ -199,9 +247,10 @@ export function getCachedSimulatorRuntimeKind(udid: string): "mobile" | "tv" | u
   return runtimeKindCache.get(udid);
 }
 
-/** Test-only: clear the iOS runtime-kind memo so cases don't leak verdicts. */
+/** Test-only: clear the iOS memos and in-flight set listings so cases don't leak verdicts. */
 export function __resetSimulatorRuntimeKindCacheForTesting(): void {
   runtimeKindCache.clear();
+  inFlightSetListings.clear();
   foldableCache.clear();
   deviceTypeFoldableCache.clear();
   deviceTypeBundlePaths = null;
@@ -221,10 +270,11 @@ const foldableCache = new Map<string, boolean>();
 
 async function listDeviceTypeBundlePaths(): Promise<Map<string, string>> {
   try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devicetypes", "--json"], {
-      timeout: 10_000,
-      killSignal: SIMCTL_KILL_SIGNAL,
-    });
+    const { stdout } = await execFileAsync(
+      "xcrun",
+      [...simctlPrefix(null), "list", "devicetypes", "--json"],
+      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+    );
     const data = JSON.parse(stdout) as {
       devicetypes?: Array<{ identifier?: string; bundlePath?: string }>;
     };
