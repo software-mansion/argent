@@ -8,7 +8,7 @@ import {
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
-import { assertTwoFingerTouchSupported, rotateContacts, sendTouchEvent } from "../../utils/gesture-utils";
+import { rotateContacts, sendTouchEvent } from "../../utils/gesture-utils";
 import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
 import { getViewport, touchPaths } from "../../utils/ios-device/runner-commands";
 import { rotatePaths } from "../../utils/ios-device/touch-paths";
@@ -121,7 +121,6 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
     }
 
     const api = services.simulatorServer as SimulatorServerApi;
-    assertTwoFingerTouchSupported(api, "gesture-rotate", device);
 
     let timestampMs = 0;
     let warning: string | undefined;

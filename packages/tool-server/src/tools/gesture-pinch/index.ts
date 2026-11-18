@@ -4,7 +4,7 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { harmonyConnectKey, isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { ensureDep } from "../../utils/check-deps";
-import { assertTwoFingerTouchSupported, pinchContacts, sendTouchEvent } from "../../utils/gesture-utils";
+import { pinchContacts, sendTouchEvent } from "../../utils/gesture-utils";
 import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
 import { getViewport, touchPaths } from "../../utils/ios-device/runner-commands";
 import { pinchPaths } from "../../utils/ios-device/touch-paths";
@@ -169,7 +169,6 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       return { pinched: true, timestampMs, ...(fronted ? { reactivated: true as const } : {}) };
     }
     const api = services.simulatorServer as SimulatorServerApi;
-    assertTwoFingerTouchSupported(api, "gesture-pinch", device);
     const steps = Math.max(1, Math.round(duration / 16));
 
     let timestampMs = 0;

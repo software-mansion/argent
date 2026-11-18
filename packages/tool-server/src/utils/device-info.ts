@@ -156,9 +156,7 @@ export function classifyDevice(udid: string): Platform {
  *
  * The distinction picks the simulator-server controller: emulators go through
  * the emulator gRPC bridge (`android` subcommand), physical devices through the
- * screen-sharing agent over adb (`android_device`). An emulator whose gRPC
- * bridge cannot be discovered (started by another user or HOME) falls back to
- * `android_device` as well; see the simulator-server blueprint.
+ * screen-sharing agent over adb (`android_device`).
  */
 export function isAndroidEmulatorSerial(serial: string): boolean {
   return serial.startsWith("emulator-");
