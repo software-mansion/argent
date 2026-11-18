@@ -64,7 +64,7 @@ export const nativeProfilerStartTool: ToolDefinition<
   longRunning: true,
   description: `Start native profiling. Instruments records CPU, hangs, and leaks on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>. Perfetto records CPU, jank, and memory growth on Android.
 Start the target app first for an attach recording. Wait for this call to return before reproducing the scenario, then call native-profiler-stop while the app is still running.
-On Android, a warning names apps whose timings may be affected by native network capture.<flag:macos-apps> On a Mac app, a warning says when the app runs with malloc stack logging. Launch the app through Argent and use a development-signed build. If signing blocks profiling in a background session such as SSH, try the "Time Profiler" template for CPU and hangs without leak checks.</flag:macos-apps>`,
+On Android, a warning names apps whose timings may be affected by native network capture.<flag:macos-apps> On a Mac app, a warning says when the app runs with malloc stack logging. Launch the app through Argent and use a development-signed build. If signing blocks profiling in a background session such as SSH, try the "Time Profiler" template for CPU and hangs without leak checks. For an app that shows web content, the bundled template is refused unless malloc_stack_logging is on, because it would freeze the app; "Time Profiler" records such an app and keeps its state.</flag:macos-apps>`,
   zodSchema,
   interaction: {
     startedMsg: () => "Starting native profiler",
