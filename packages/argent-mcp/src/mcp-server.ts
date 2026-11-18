@@ -280,23 +280,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   async function warmDevice(udid: string): Promise<void> {
     const t1 = Date.now();
+    let error: string | undefined;
     try {
       await warmScreenReader(udid);
-      await spyLog({
-        ts: new Date().toISOString(),
-        event: "warm_screen_reader",
-        udid,
-        durationMs: Date.now() - t1,
-      });
     } catch (e) {
-      await spyLog({
-        ts: new Date().toISOString(),
-        event: "warm_screen_reader",
-        udid,
-        durationMs: Date.now() - t1,
-        error: String(e instanceof Error ? e.message : e),
-      });
+      error = e instanceof Error ? e.message : String(e);
     }
+    await spyLog({
+      ts: new Date().toISOString(),
+      event: "warm_screen_reader",
+      udid,
+      durationMs: Date.now() - t1,
+      ...(error !== undefined && { error }),
+    });
   }
 
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal: cancelled }) => {
