@@ -824,6 +824,36 @@ export function selectorToFrame(
   return best?.frame;
 }
 
+/**
+ * The distinct elements a tap on `selector` could mean, for a caller that must
+ * refuse to guess: the visible frontmost matches of the best exactness tier
+ * {@link selectorToFrame} ranks by, keeping only the innermost of nested frames
+ * (a container and the leaf inside it are one target). Smallest frame first, so
+ * a single result is the element `selectorToFrame` would pick.
+ */
+export function selectorTapTargets(
+  root: DescribeNode,
+  selector: Selector,
+  orientation?: UiOrientation
+): DescribeNode[] {
+  const visible = frontmost(findAll(root, selector, orientation).filter(isVisible));
+  const fullTextRegex = fullConsumptionRegex(selector);
+  const scored = visible.map((node) => ({
+    node,
+    exact: exactFieldCount(node, selector, fullTextRegex),
+  }));
+  const bestExact = Math.max(...scored.map((s) => s.exact));
+  const tier = scored
+    .filter((s) => s.exact === bestExact)
+    .map((s) => s.node)
+    .sort((a, b) => frameArea(a.frame) - frameArea(b.frame));
+  const targets: DescribeNode[] = [];
+  for (const node of tier) {
+    if (!targets.some((t) => frameWithin(t.frame, node.frame))) targets.push(node);
+  }
+  return targets;
+}
+
 const GENERIC_ROLES = new Set([
   "axgroup",
   "group",

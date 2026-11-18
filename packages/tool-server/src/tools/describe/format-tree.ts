@@ -128,6 +128,11 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
 
+/** One element as `describe` prints it, unindented. */
+export function formatDescribeLine(n: DescribeNode, source: DescribeSource): string {
+  return formatLine(n, 0, source);
+}
+
 function renderFlat(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
@@ -167,6 +172,8 @@ function renderNested(
 
 interface FormatDescribeOptions {
   source: DescribeSource;
+  /** The device takes a gesture-tap `selector`, so the header points at it. */
+  selectorTap?: boolean;
 }
 
 export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
@@ -212,7 +219,10 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
         : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
     header.push(
-      "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."
+      opts.selectorTap
+        ? "To tap an element, pass gesture-tap a selector (text / identifier / role) or its centre: " +
+            "tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."
+        : "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."
     );
   }
   header.push("");

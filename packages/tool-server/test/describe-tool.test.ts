@@ -137,6 +137,21 @@ describe("describe tool", () => {
     expect(result.description).toMatch(/AXButton\s+"General"/);
   });
 
+  it("points at the gesture-tap selector on a local simulator only", async () => {
+    __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [],
+    });
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+    const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+    const local = await tool.execute({}, { udid });
+    const remote = await tool.execute({}, { udid: `remote:${udid}` });
+    expect(local.description).toContain("pass gesture-tap a selector");
+    expect(remote.description).not.toContain("selector");
+  });
+
   it("returns dialog elements when alertVisible is true", async () => {
     const axApi = makeAXServiceApi({
       alertVisible: true,

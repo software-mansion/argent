@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createRegistry } from "../src/utils/setup-registry";
 import { renderFlagGated } from "../src/utils/flag-gated-text";
 import { MACOS_APPS_FLAG } from "../src/utils/capability";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { directiveCommandHint } from "../src/tools/flows/flow-add-step";
 import { advertisedSchema, definitionsById } from "./helpers/catalog";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 vi.mock("@argent/configuration-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/configuration-core")>();

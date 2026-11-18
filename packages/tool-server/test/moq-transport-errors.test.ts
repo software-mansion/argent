@@ -20,7 +20,7 @@ import {
   type SimulatorServerTransport,
 } from "../src/utils/simulator-client";
 import type { MoqClient } from "../src/utils/moq-client";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 
 vi.mock("../src/utils/moq-client", () => ({
   openMoqClient: vi.fn(() => Promise.resolve(closedMoqClient())),
@@ -37,6 +37,8 @@ import {
   simulatorServerBlueprint,
   type SimulatorServerApi,
 } from "../src/blueprints/simulator-server";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 

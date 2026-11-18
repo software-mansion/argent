@@ -42,6 +42,8 @@ Each tool's own description carries its parameters, defaults, return shape and e
 
 After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`): use it, and call a discovery tool only when no fresh tree covers the current screen. Each tree has a `Tree id`. When the tree is identical to an earlier one, the result names that id in place of the tree: use that tree, and call `describe` if it is not in your context. An identical tree does not mean the action did nothing.
 
+On an iOS simulator, Android or Chromium, tap an element the tree lists with `gesture-tap` `selector: { text }` (or `identifier` / `role`) instead of computing x/y. If it reports several matches, add `role` or `identifier`.
+
 | Need                                           | Tool                                                                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Any screen: app, system dialog, Home screen    | `describe`                                                                                                                     |

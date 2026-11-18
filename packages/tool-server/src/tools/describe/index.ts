@@ -24,9 +24,9 @@ import { formatDescribeTree } from "./format-tree";
 
 // Renders the adapter-internal `tree` to text and drops it, so the caller (LLM)
 // never pays for the JSON tree. Pruning stays in the per-platform adapters.
-function withDescription(data: DescribeTreeData): DescribeResult {
+function withDescription(data: DescribeTreeData, selectorTap = false): DescribeResult {
   const out: DescribeResult = {
-    description: formatDescribeTree(data.tree, { source: data.source }),
+    description: formatDescribeTree(data.tree, { source: data.source, selectorTap }),
     source: data.source,
   };
   if (data.should_restart) out.should_restart = data.should_restart;
@@ -85,7 +85,8 @@ function makeDescribeExecute(
               withBootCaveatOncePerDevice(
                 device.id,
                 await describeIos(registry, device, params, { isTvOs: false })
-              )
+              ),
+              true
             ),
     },
     iosDevice: {
@@ -113,10 +114,13 @@ function makeDescribeExecute(
         // through so describeAndroid doesn't re-probe.
         (await isAndroidTv(device.id))
           ? describeTv(registry, device)
-          : withDescription(await describeAndroid(registry, params.udid, params.bundleId, false)),
+          : withDescription(
+              await describeAndroid(registry, params.udid, params.bundleId, false),
+              true
+            ),
     },
     chromium: {
-      handler: async (services) => withDescription(await describeChromium(services.chromium)),
+      handler: async (services) => withDescription(await describeChromium(services.chromium), true),
     },
     vega: {
       requires: vegaRequires,

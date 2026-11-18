@@ -23,11 +23,13 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
   ensureDep: vi.fn(async () => {}),
 }));
 
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { ensureDep } from "../src/utils/check-deps";
 import { runHdcShell as realRunHdcShell } from "../src/utils/harmony-hdc";
 import { HARMONY_INTERACTION_TIMEOUT_MS } from "../src/utils/harmony-uitest";
 import { sendCommand } from "../src/utils/simulator-client";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 const runHdcShell = vi.mocked(realRunHdcShell);
 

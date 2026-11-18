@@ -103,7 +103,7 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 ### Taps
 
-`e2e-add-step` cannot receive a YAML selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and derives the selector in a fixed order (`id`, then `text`, then `role`), giving three outcomes. Read the `recorded` line after every tap. It names the derived form (a selector map, or the kept point):
+`e2e-add-step` cannot receive a YAML selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. Pass x/y here, not the `selector` argument of `gesture-tap`: only a coordinate tap becomes a `tap:` selector step. The recorder reads the pre-tap tree and derives the selector in a fixed order (`id`, then `text`, then `role`), giving three outcomes. Read the `recorded` line after every tap. It names the derived form (a selector map, or the kept point):
 
 1. **`tap: { id: ... }` or `tap: { text: ... }`**: the good case.
 2. **`tap: { role: ... }`, with a warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree) and the tap reports a pass on the wrong control.

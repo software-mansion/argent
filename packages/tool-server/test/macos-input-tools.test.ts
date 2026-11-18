@@ -16,7 +16,7 @@ import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { ensureDeps } from "../src/utils/check-deps";
 import { MACOS_CLICK_SETTLE_MS } from "../src/utils/macos-input";
 import { RESULT_NOTE_KEY } from "../src/tools/screenshot/dropped-geometry";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { gestureDragTool } from "../src/tools/gesture-drag";
 import { gestureScrollTool } from "../src/tools/gesture-scroll";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
@@ -47,6 +47,8 @@ import {
   fakeMacosApp,
   macosToolRegistry,
 } from "./helpers/macos-input-fake";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 const flag = useMacosAppsFlag();
 

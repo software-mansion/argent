@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { gestureDragTool } from "../src/tools/gesture-drag";
 import { gestureScrollTool } from "../src/tools/gesture-scroll";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 // The hidden-window guard: a minimized / fully occluded Chromium window
 // throttles compositor hit-testing, so every MOUSE dispatch stalls ~5s

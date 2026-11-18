@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { Registry } from "@argent/registry";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 import { gestureScrollTool } from "../src/tools/gesture-scroll";
 import { gestureDragTool } from "../src/tools/gesture-drag";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 const gestures = [
   {

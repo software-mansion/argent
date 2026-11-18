@@ -23,12 +23,14 @@ import { createRegistry } from "../src/utils/setup-registry";
 import { directiveCommandHint } from "../src/tools/flows/flow-add-step";
 import { runDirective } from "../src/tools/flows/flow-actions";
 import { parseFlow, parseRequires } from "../src/tools/flows/flow-utils";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { debuggerConnectTool } from "../src/tools/debugger/debugger-connect";
 import { profilerCommitQueryTool } from "../src/tools/profiler/query/profiler-commit-query";
 import { profilerCpuQueryTool } from "../src/tools/profiler/query/profiler-cpu-query";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { definitionsById } from "./helpers/catalog";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 const flag = useMacosAppsFlag();
 

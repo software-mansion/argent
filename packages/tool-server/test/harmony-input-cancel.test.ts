@@ -15,7 +15,7 @@ vi.mock("../src/utils/harmony-hdc", async (importOriginal) => ({
   hdcFileRecv: vi.fn(async () => {}),
 }));
 
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 import { gesturePinchTool } from "../src/tools/gesture-pinch";
 import { buttonTool } from "../src/tools/button";
@@ -23,6 +23,8 @@ import { createKeyboardTool } from "../src/tools/keyboard";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { runHdcShell as realRunHdcShell } from "../src/utils/harmony-hdc";
 import { harmonyScreenCap } from "../src/utils/harmony-uitest";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 const runHdcShell = vi.mocked(realRunHdcShell);
 const CONNECT_KEY = "025DEK236V035771";

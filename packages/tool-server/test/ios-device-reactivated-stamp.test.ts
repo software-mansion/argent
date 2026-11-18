@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Registry, type DeviceInfo } from "@argent/registry";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 import { gestureCustomTool } from "../src/tools/gesture-custom";
 import { makeIosDeviceImpl } from "../src/tools/keyboard/platforms/ios-device";
@@ -8,6 +8,8 @@ import {
   clearCurrentIosDeviceApp,
   setCurrentIosDeviceApp,
 } from "../src/utils/ios-device/app-session";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 // The runner stamps a reply `reactivated: true` when it had to re-front a
 // backgrounded target to run the command. These tests pin that the stamp

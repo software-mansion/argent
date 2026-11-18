@@ -3,8 +3,10 @@ import { WebSocketServer, type WebSocket as WsSocket } from "ws";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { sendCommand } from "../src/utils/simulator-client";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 type Reply = "ok" | "error" | "silent" | "withhold";
 

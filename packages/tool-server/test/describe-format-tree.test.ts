@@ -325,16 +325,31 @@ describe("formatDescribeTree", () => {
       frame: { x: 0, y: 0, width: 1, height: 1 },
       children: [],
     };
-    const out = formatDescribeTree(empty, { source: "ax-service" });
+    const out = formatDescribeTree(empty, { source: "ax-service", selectorTap: true });
     expect(out).toBe(
       "Source: ax-service\n" +
         "Mode: flat\n" +
         "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels.\n" +
         "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.\n" +
-        "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n" +
+        "To tap an element, pass gesture-tap a selector (text / identifier / role) or its centre: " +
+        "tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n" +
         "\n" +
         "ROOT  AXGroup (0.000,0.000,1.000,1.000)\n"
     );
+  });
+
+  it("points at the selector only where the device takes one", () => {
+    const empty: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [],
+    };
+    expect(formatDescribeTree(empty, { source: "cdp-dom", selectorTap: true })).toContain(
+      "pass gesture-tap a selector"
+    );
+    const out = formatDescribeTree(empty, { source: "ax-service" });
+    expect(out).not.toContain("selector");
+    expect(out).toContain("To tap an element, use its centre");
   });
 
   // Bluesky-style names mix emoji, ZWJ sequences, and bidirectional isolate

@@ -16,9 +16,21 @@ vi.mock("../../src/utils/simulator-client", () => ({
   },
 }));
 
+const { describeIos, describeAndroid, describeChromium } = vi.hoisted(() => ({
+  describeIos: vi.fn(),
+  describeAndroid: vi.fn(),
+  describeChromium: vi.fn(),
+}));
+vi.mock("../../src/tools/describe/platforms/ios", () => ({ describeIos }));
+vi.mock("../../src/tools/describe/platforms/android", () => ({ describeAndroid }));
+vi.mock("../../src/tools/describe/platforms/chromium", () => ({ describeChromium }));
+
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
-import { gestureTapTool } from "../../src/tools/gesture-tap";
+import { createGestureTapTool } from "../../src/tools/gesture-tap";
+import type { DescribeFrame, DescribeNode } from "../../src/tools/describe/contract";
 import { setCurrentIosDeviceApp } from "../../src/utils/ios-device/app-session";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 const touchServices = { simulatorServer: {} } as never;
 
@@ -38,6 +50,9 @@ function runnerRig() {
 
 beforeEach(() => {
   sent.length = 0;
+  describeIos.mockReset();
+  describeAndroid.mockReset();
+  describeChromium.mockReset();
 });
 
 describe("gesture-tap", () => {
@@ -182,5 +197,182 @@ describe("gesture-tap button", () => {
   it("sends a touch down and up on a touch device when the button is left", async () => {
     await gestureTapTool.execute(touchServices, { udid: "X", x: 0.5, y: 0.5, button: "left" });
     expect(sent.map((e) => e.type)).toEqual(["Down", "Up"]);
+  });
+});
+
+const SIM_UDID = "00000000-0000-0000-0000-0000000000AB";
+
+function node(role: string, label: string, frame: DescribeFrame): DescribeNode {
+  return { role, label, frame, children: [] };
+}
+
+function screen(...children: DescribeNode[]) {
+  return {
+    tree: { role: "root", frame: { x: 0, y: 0, width: 1, height: 1 }, children },
+    source: "ax-service",
+  };
+}
+
+const loginButton = node("AXButton", "Log in", { x: 0.25, y: 0.75, width: 0.5, height: 0.125 });
+
+async function failure(promise: Promise<unknown>): Promise<Error | undefined> {
+  return promise.then(
+    () => undefined,
+    (e: unknown) => e as Error
+  );
+}
+
+describe("gesture-tap selector", () => {
+  it("takes either a selector or both x and y", () => {
+    const schema = gestureTapTool.zodSchema!;
+    const selector = { text: "Log in" };
+    expect(schema.safeParse({ udid: "X", selector }).success).toBe(true);
+    expect(schema.safeParse({ udid: "X", x: 0.5, y: 0.5 }).success).toBe(true);
+    expect(schema.safeParse({ udid: "X", selector, x: 0.5 }).success).toBe(false);
+    expect(schema.safeParse({ udid: "X", x: 0.5 }).success).toBe(false);
+    expect(schema.safeParse({ udid: "X" }).success).toBe(false);
+    expect(schema.safeParse({ udid: "X", selector: {} }).success).toBe(false);
+  });
+
+  it("taps the centre of the one matching element on an iOS simulator", async () => {
+    describeIos.mockResolvedValue(screen(loginButton));
+    await gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "log in" } });
+    expect(sent.map((e) => [e.type, e.x, e.y])).toEqual([
+      ["Down", 0.5, 0.8125],
+      ["Up", 0.5, 0.8125],
+    ]);
+  });
+
+  it("prefers the exact match over a container whose label only contains the text", async () => {
+    const form = node("AXGroup", "Email, Log in", { x: 0, y: 0.5, width: 1, height: 0.5 });
+    const header = node("AXStaticText", "Log in to continue", {
+      x: 0.1,
+      y: 0.1,
+      width: 0.8,
+      height: 0.05,
+    });
+    describeIos.mockResolvedValue(screen(form, header, loginButton));
+    await gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "Log in" } });
+    expect(sent[0]).toMatchObject({ x: 0.5, y: 0.8125 });
+  });
+
+  it("reads a container and the leaf inside it as one target", async () => {
+    const row = node("AXButton", "Settings", { x: 0, y: 0.2, width: 1, height: 0.1 });
+    const label = node("AXStaticText", "Settings", { x: 0.1, y: 0.22, width: 0.3, height: 0.06 });
+    describeIos.mockResolvedValue(screen(row, label));
+    await gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "Settings" } });
+    expect(sent[0]).toMatchObject({ x: 0.25, y: 0.25 });
+  });
+
+  it("refuses an ambiguous selector, listing the candidates, and taps nothing", async () => {
+    const other = node("AXButton", "Log in", { x: 0.1, y: 0.1, width: 0.3, height: 0.05 });
+    describeIos.mockResolvedValue(screen(loginButton, other));
+    const err = await failure(
+      gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "Log in" } })
+    );
+    expect(err?.message).toContain("matches 2 elements");
+    expect(err?.message).toContain('AXButton "Log in"  (0.250,0.750,0.500,0.125)');
+    expect(err?.message).toContain('AXButton "Log in"  (0.100,0.100,0.300,0.050)');
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+    expect(sent).toEqual([]);
+  });
+
+  it("waits briefly for the element to appear", async () => {
+    describeIos.mockResolvedValueOnce(screen()).mockResolvedValue(screen(loginButton));
+    await gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "Log in" } });
+    expect(describeIos).toHaveBeenCalledTimes(2);
+    expect(sent[0]).toMatchObject({ x: 0.5, y: 0.8125 });
+  });
+
+  it("fails when nothing matches before the wait ends", async () => {
+    vi.useFakeTimers();
+    try {
+      describeIos.mockResolvedValue(screen(loginButton));
+      const pending = failure(
+        gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "Sign up" } })
+      );
+      await vi.advanceTimersByTimeAsync(5000);
+      expect((await pending)?.message).toContain(
+        'No visible element matches selector {"text":"Sign up"}'
+      );
+      expect(sent).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves against the Android tree on an emulator", async () => {
+    describeAndroid.mockResolvedValue({
+      ...screen({ ...loginButton, role: "android.widget.Button", identifier: "com.app:id/login" }),
+      source: "android-devtools",
+    });
+    await gestureTapTool.execute(touchServices, {
+      udid: "emulator-5554",
+      selector: { identifier: "login" },
+    });
+    expect(sent[0]).toMatchObject({ x: 0.5, y: 0.8125 });
+  });
+
+  it("clicks the element's centre in Chromium", async () => {
+    const mouse: Array<{ type: string; x: number; y: number }> = [];
+    const chromium = {
+      getViewport: () => ({ width: 1000, height: 800 }),
+      dispatchMouseEvent: vi.fn(async (e: { type: string; x: number; y: number }) => {
+        mouse.push(e);
+      }),
+    };
+    describeChromium.mockResolvedValue({ ...screen(loginButton), source: "cdp-dom" });
+    await gestureTapTool.execute({ chromium } as never, {
+      udid: "chromium-cdp-9222",
+      selector: { role: "AXButton" },
+    });
+    expect(describeChromium).toHaveBeenCalledWith(chromium);
+    expect(mouse[1]).toMatchObject({ type: "mousePressed", x: 500, y: 650 });
+  });
+
+  it.each([
+    ["a physical iPhone", DEVICE_UDID, "ios device"],
+    ["a remote iOS simulator", `remote:${SIM_UDID}`, "ios-remote simulator"],
+    ["a HarmonyOS device", "harmony-FMR0223C13000649", "harmony device"],
+    ["a Mac app", "macos-app-com.example.app", "macos app"],
+  ])("refuses a selector on %s and starts no backend", async (_name, udid, where) => {
+    expect(gestureTapTool.services!({ udid, selector: { text: "Log in" } })).toEqual({});
+    const { run, services } = runnerRig();
+    const err = await failure(
+      gestureTapTool.execute(services, { udid, selector: { text: "Log in" } })
+    );
+    expect(err?.message).toContain(`not on ${where}: pass x/y`);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+    expect(run).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+
+  it("stops waiting when the call is cancelled", async () => {
+    describeIos.mockResolvedValue(screen());
+    const controller = new AbortController();
+    const pending = failure(
+      gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "Log in" } }, {
+        signal: controller.signal,
+      } as never)
+    );
+    controller.abort();
+    expect((await pending)?.message).toContain("cancelled");
+    expect(sent).toEqual([]);
+  });
+
+  it("starts the backend for a selector where one is supported", () => {
+    expect(
+      gestureTapTool.services!({ udid: SIM_UDID, selector: { text: "Log in" } })
+    ).toHaveProperty("simulatorServer");
+  });
+
+  it("only considers matches in the frontmost layer", async () => {
+    const sheetButton = {
+      ...node("AXButton", "Log in", { x: 0.25, y: 0.25, width: 0.5, height: 0.125 }),
+      layer: 1,
+    };
+    describeIos.mockResolvedValue(screen(loginButton, sheetButton));
+    await gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "Log in" } });
+    expect(sent[0]).toMatchObject({ x: 0.5, y: 0.3125 });
   });
 });

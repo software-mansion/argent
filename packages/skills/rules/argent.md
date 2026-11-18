@@ -5,7 +5,7 @@ alwaysApply: true
 
 Argent - general rules:
 
-- do not derive tap coordinates from screenshot pixels; use inspection tools that give coordinates
+- on an iOS simulator, Android or Chromium, tap elements by `gesture-tap` `selector` (text, identifier or role) when the element tree lists them; never derive tap coordinates from screenshot pixels
 - use the platform the user named; otherwise prefer a device `list-devices` shows already running, and don't default to iOS; in a single-platform project boot that platform.
 - if tap fails twice, stop retrying and re-run a discovery tool
 - Prefer mcp-tool calls over raw commands like `xcrun` or `adb`; use them as fallback.

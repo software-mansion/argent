@@ -137,7 +137,7 @@ import {
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { createFillTool } from "../src/tools/fill";
 import { createScreenshotTool } from "../src/tools/screenshot";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { createLaunchAppTool } from "../src/tools/launch-app";
 import { openUrlTool } from "../src/tools/open-url";
@@ -147,6 +147,8 @@ import { settingsPermissionsTool } from "../src/tools/settings-permissions";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "../src/utils/ax-prefs";
 import { pinStatusBar, restoreStatusBar } from "../src/utils/status-bar";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 const realPlatform = process.platform;
 const SIMULATOR: DeviceInfo = {

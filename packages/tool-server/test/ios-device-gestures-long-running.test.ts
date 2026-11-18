@@ -9,7 +9,9 @@ import { gestureCustomTool } from "../src/tools/gesture-custom";
 import { gesturePinchTool } from "../src/tools/gesture-pinch";
 import { gestureRotateTool } from "../src/tools/gesture-rotate";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
-import { gestureTapTool } from "../src/tools/gesture-tap";
+import { createGestureTapTool } from "../src/tools/gesture-tap";
+
+const gestureTapTool = createGestureTapTool({} as never);
 
 const runnerMutatingTools: { id: string; longRunning?: boolean }[] = [
   gestureTapTool,
