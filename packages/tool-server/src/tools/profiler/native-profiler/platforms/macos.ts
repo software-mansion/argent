@@ -8,6 +8,7 @@ import { waitForChildExit } from "../../../../utils/profiler-shared/lifecycle";
 import {
   getTrackedMacosApp,
   inBackgroundSession,
+  processHasWebKitMallocZone,
   processStartedWithEnv,
   readCodeSignature,
   runningTrackedApp,
@@ -85,6 +86,40 @@ async function assertDebuggable(
   );
 }
 
+/**
+ * Refuses the bundled template for an app that has JavaScriptCore's heap
+ * (libpas, which WebKit runs in an app that shows web content) and was not
+ * started with MallocStackLogging. When the template's Allocations instrument
+ * attaches, its recorder (liboainject) suspends every other thread of the app
+ * to walk the malloc zones, and libpas's zone then waits for a condition that
+ * one of those threads would signal. The recorder never ends and never resumes
+ * them: the app, argent's library in it included, stays frozen after the
+ * recording until it is killed. Apple's Leaks template does the same, also to
+ * an app with no argent library. The app's task is never suspended, so the
+ * suspension watch does not see it. An app started with MallocStackLogging=1
+ * was not stopped, with the same zone. A template that the caller chose is not
+ * checked: the attach decides, as in assertDebuggable.
+ */
+async function assertAllocationsCanAttach(bundleId: string, pid: number): Promise<void> {
+  if (!(await processHasWebKitMallocZone(pid))) return;
+  throw new FailureError(
+    `${bundleId} runs the JavaScriptCore heap of WebKit, as an app that shows web content ` +
+      `does. The Allocations instrument of the default template freezes such an app when it ` +
+      `attaches: every thread of the app stops for good, also after the recording, until the ` +
+      `app is force-quit. So argent does not start the recording. Pass malloc_stack_logging: ` +
+      `true to record leaks with their allocation backtraces: argent restarts the app with ` +
+      `MallocStackLogging=1, which Instruments does not freeze, and the app loses its state. ` +
+      `Or pass template_path: "Time Profiler" to record CPU samples and hangs without leaks, ` +
+      `and keep the app's state. Apple's Leaks and Allocations templates freeze such an app too.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_APP_HAS_WEBKIT_HEAP,
+      failure_stage: "native_profiler_check_heap",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    }
+  );
+}
+
 export async function startNativeProfilerMacos(
   api: NativeProfilerSessionApi,
   macosApp: MacosAppApi,
@@ -150,6 +185,9 @@ export async function startNativeProfilerMacos(
         `${bundleId} still runs with MallocStackLogging=1 from an earlier malloc_stack_logging ` +
           `capture, which slows it down and shows in the timings. restart-app starts it without.`
       );
+    }
+    if (params.template_path === undefined && !stillLogs) {
+      await assertAllocationsCanAttach(bundleId, pid);
     }
   }
 

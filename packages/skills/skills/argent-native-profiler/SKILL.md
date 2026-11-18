@@ -13,7 +13,7 @@ description: Diagnose native CPU hotspots, UI hangs, and memory issues. Use Inst
 
 **Android** (Perfetto): emulator or physical device. Reports CPU hotspots and UI hangs (with jank reasons and the main thread's blocking function), plus an RSS-growth signal for memory pressure: treat it as a hint to confirm, not a confirmed leak. The app must be debuggable or declare `<profileable android:shell="true"/>` in its manifest, or no `perf_sample` callstacks are captured.
 
-For **Mac apps** (`platform: "macos"`), use Instruments with full Xcode. If start returns `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`, use a development-signed build. In a background session such as SSH, `template_path: "Time Profiler"` also works for CPU and hangs on a signed build without the debugging entitlement. Do not sign files or add entitlements.
+For **Mac apps** (`platform: "macos"`), use Instruments with full Xcode. If start returns `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`, use a development-signed build. In a background session such as SSH, `template_path: "Time Profiler"` also works for CPU and hangs on a signed build without the debugging entitlement. If start returns `NATIVE_PROFILER_APP_HAS_WEBKIT_HEAP`, the app shows web content and the default template would freeze it: pass `malloc_stack_logging: true` to record leaks (this restarts the app), or `template_path: "Time Profiler"` to keep its state. Never pass the `Leaks` or `Allocations` template to such an app. Do not sign files or add entitlements.
 
 `argent-react-native-profiler` starts native profiling alongside React profiling by default; this skill's workflow and investigation patterns apply in both cases.
 

@@ -789,6 +789,33 @@ export async function inBackgroundSession(): Promise<boolean> {
 }
 
 /**
+ * Whether `vmmap` output lists the malloc zone of JavaScriptCore's heap
+ * (libpas), which WebKit registers as "WebKit Malloc" in an app that shows web
+ * content or runs JavaScriptCore. vmmap names each zone with its address, as
+ * `WebKit Malloc_0x10aeee5f8`. "WebKit Using System Malloc" is another zone.
+ */
+export function listsWebKitMallocZone(vmmapOutput: string): boolean {
+  return /^WebKit Malloc_0x[0-9a-f]+\s/m.test(vmmapOutput);
+}
+
+/**
+ * Whether the process `pid` has the malloc zone of JavaScriptCore's heap, from
+ * `vmmap -summary`, which takes 1 to 2 s on an app and suspends it while it
+ * reads. False when it cannot tell.
+ */
+export async function processHasWebKitMallocZone(pid: number): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("vmmap", ["-summary", String(pid)], {
+      timeout: 10_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return listsWebKitMallocZone(stdout);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Reads what a launch needs from the bundle: `Info.plist` (bundle id,
  * executable, name) and the code signature. An unsigned app is neither
  * hardened nor sandboxed.

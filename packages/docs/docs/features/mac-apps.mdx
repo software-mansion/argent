@@ -78,6 +78,8 @@ Instruments attaches to the running app by default. Keep the app open until the 
 
 The default template checks for leaks about every 11 seconds. Each check can pause the app for several seconds. The report shows how much of a recorded hang overlapped a pause when that timing is available. To investigate the hang, ask the agent to repeat the recording without leak checks.
 
+The default template can stop an app that shows web content, and the app does not run again until a force quit. Argent does not start that recording. To check such an app for leaks, ask the agent to restart the app with malloc stack logging. To keep the app state, ask the agent to record without leak checks.
+
 See the [profiling guide](/docs/features/profiling#limits) for leak recording guidance and the [Mac profiling tool reference](/docs/reference/tools#profiling-a-mac-app) for signing and recording options.
 
 ### Profile a react-native-macos app
