@@ -162,7 +162,8 @@ function mockRegistry(): Registry {
 async function writeFlow(name: string, yaml: string): Promise<void> {
   const dir = path.join(tmpDir, ".argent", "flows");
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, `${name}.yaml`), yaml, "utf8");
+  // Version 2: on an iOS simulator an older file runs on the version 1 runner.
+  await fs.writeFile(path.join(dir, `${name}.yaml`), `version: 2\n${yaml}`, "utf8");
 }
 
 async function run(name: string, signal?: AbortSignal): Promise<FlowRunResult> {

@@ -40,6 +40,7 @@ import {
   E2E_FILE_TEMPLATES,
   flowNameCasingError,
   isBlockStep,
+  isVersion1,
   parseFlow,
   precedesLeadingLaunch,
   runTargetName,
@@ -48,7 +49,6 @@ import {
   type FlowStep,
   type Launch,
   SELECTABLE_PLATFORMS,
-  usesViewHierarchy,
   windowsPathRefusal,
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
@@ -83,7 +83,6 @@ import {
   bindDeviceArgs,
   flowRequiresDevice,
   flowScopesDevice,
-  isIosSimulatorDevice,
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
@@ -97,12 +96,7 @@ import {
   type ActionEnv,
   type DirectiveOutcome,
 } from "./flow-actions";
-import {
-  isInjectableBundleId,
-  isNativeDevtoolsBlockResult,
-  nativeDevtoolsRef,
-  type NativeDevtoolsApi,
-} from "../../blueprints/native-devtools";
+import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { readIosSimulatorUiTree } from "./flow-ios-tree";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
@@ -115,6 +109,7 @@ import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-elec
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import {
   isIosPhysicalDevice,
+  isIosSimulator,
   isMacosBundleId,
   macosAppIdFromBundleId,
   parseChromiumCdpPort,
@@ -123,6 +118,7 @@ import {
 import { assertSupported, MACOS_APPS_FLAG } from "../../utils/capability";
 import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
 import { getTrackedMacosApp, otherWorktreeOfBuild } from "../../utils/macos-apps";
+import { createRunFlowTool as createVersion1RunFlowTool } from "./version-1/flow-run";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import type { ArtifactHandle } from "../../artifacts";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
@@ -408,41 +404,6 @@ async function waitForForegroundApp(
 }
 
 /**
- * Poll until our library in `bundleId` has connected: a version 1 file reads
- * the view hierarchy from it, and it connects a moment after the app starts.
- * Returns null once it has and on abort; otherwise the reason. An Apple system
- * app is not waited for: the first tree read refuses it with its own reason.
- */
-async function waitForNativeDevtools(
-  registry: Registry,
-  device: DeviceInfo,
-  bundleId: string,
-  signal?: AbortSignal
-): Promise<string | null> {
-  if (!isInjectableBundleId(bundleId)) return null;
-  let api: NativeDevtoolsApi;
-  try {
-    const ref = nativeDevtoolsRef(device);
-    api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
-  } catch (err) {
-    return `could not connect to native devtools for ${bundleId}: ${errMsg(err)}`;
-  }
-  const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
-  while (!api.isConnected(bundleId)) {
-    if (Date.now() >= deadline) {
-      return (
-        `could not connect to native devtools: ${bundleId} did not connect within ` +
-        `${NATIVE_READY_TIMEOUT_MS} ms of its launch, so its view hierarchy cannot be read. ` +
-        `Launch it by hand (launch-app, then screenshot) to see whether it crashes; if it runs, ` +
-        `re-boot the simulator (boot-device with force) and re-run the e2e test.`
-      );
-    }
-    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
-  }
-  return null;
-}
-
-/**
  * Poll until the Vega automation toolkit — the only tree source on Vega —
  * serves a page source. Like iOS's injected dylib it attaches asynchronously at
  * app launch, and `describeVega` degrades to an empty tree + relaunch hint until
@@ -497,9 +458,8 @@ async function androidDevtoolsReady(
  * platform-specific reason instead of letting the first directive surface a
  * raw tree-source error.
  *
- * Returns null when ready, when the platform needs no gate, when the run was
- * aborted, and in a version 1 file for an Apple system app. Otherwise the
- * reason to report.
+ * Returns null when ready, when the platform needs no gate, and when the run
+ * was aborted. Otherwise the reason to report.
  *
  * A successful iOS simulator launch pins later tree reads to this bundle
  * ({@link FlowTreeTarget}): a read that finds another app in the foreground
@@ -509,8 +469,7 @@ async function treeSourceGate(
   registry: Registry,
   device: DeviceInfo,
   bundleId: string,
-  signal?: AbortSignal,
-  viewHierarchy = false
+  signal?: AbortSignal
 ): Promise<string | null> {
   if (isIosPhysicalDevice(device) && !signal?.aborted) {
     // Physical devices read the XCUITest runner, not native devtools.
@@ -526,13 +485,10 @@ async function treeSourceGate(
       );
     }
   }
-  // Both iOS simulator platforms gate the same way: the ax-service and
-  // native-devtools blueprints serve a remote sim over TCP. Each version waits
-  // for the tree it reads.
+  // Both iOS simulator platforms gate the same way: the ax-service blueprint
+  // serves a remote sim over TCP.
   if ((device.platform === "ios" || device.platform === "ios-remote") && !signal?.aborted) {
-    const reason = viewHierarchy
-      ? await waitForNativeDevtools(registry, device, bundleId, signal)
-      : await waitForForegroundApp(registry, device, bundleId, signal);
+    const reason = await waitForForegroundApp(registry, device, bundleId, signal);
     if (reason !== null && !signal?.aborted) return reason;
   }
   if (device.platform === "android" && !signal?.aborted) {
@@ -644,7 +600,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
     return { ok: false, reason: `restart-app did not start ${bundleId}: ${restart.message}` };
   }
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
-  const gate = await treeSourceGate(registry, device, bundleId, signal, state.viewHierarchy);
+  const gate = await treeSourceGate(registry, device, bundleId, signal);
   // The gate returns null (ready) on abort — check the signal before trusting
   // it, or a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;
@@ -1527,6 +1483,7 @@ type Params = z.infer<typeof zodSchema>;
 export function createRunFlowTool(
   registry: Registry
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
+  const version1 = createVersion1RunFlowTool(registry);
   return {
     id: "e2e-execute",
     description: `Run a saved YAML e2e test end to end. Use when
@@ -1552,7 +1509,7 @@ Without a link, every step kind runs.`,
     longRunning: true,
     fileInputs,
     services: () => ({}),
-    async execute(_services, params, ctx?: ToolContext) {
+    async execute(services, params, ctx?: ToolContext) {
       const runStartedAt = Date.now();
       const signal = ctx?.signal;
       const { filePath, flowName, viaUpload, shadowed } = await resolveFlowSource(
@@ -1742,6 +1699,13 @@ Without a link, every step kind runs.`,
       // launch boots one, so the status-bar restore below must not follow it.
       const device = resolved.device;
 
+      // An e2e test file older than version 2 on an iOS simulator runs on the
+      // runner it was written for: the whole call, kept unchanged in version-1/.
+      // Nothing has touched the device yet, and it repeats the checks above.
+      if (device !== null && isIosSimulator(device) && isVersion1(flow)) {
+        return version1.execute(services, params, ctx);
+      }
+
       // Normalize the status bar (clock/battery/signal) for the whole run so it
       // never drives a snapshot diff. Pinned before step 1 — it's a device-level
       // override independent of the app, so a standalone flow's leading launch step
@@ -1766,8 +1730,6 @@ Without a link, every step kind runs.`,
       }
 
       const state: ExecState = {
-        // The file's version holds for the whole run, `run:` fragments too.
-        viewHierarchy: device !== null && isIosSimulatorDevice(device) && usesViewHierarchy(flow),
         registry,
         ctx,
         device,

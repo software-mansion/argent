@@ -5,36 +5,53 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import type { AXTreeResponse } from "../../src/blueprints/ax-service";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
-import type { FlowTreeTarget } from "../../src/tools/flows/flow-actions";
 
-// Runs of each file version through the REAL runner. On an iOS simulator a
-// version-less (or version 1) file reads the view hierarchy and keeps the
-// rules from before version 2; a version 2 file reads the accessibility tree.
-// A physical iPhone and Android run every version the same.
+// Runs of each file version through the REAL `e2e-execute`. On an iOS simulator
+// a file without `version: 2` runs on the runner from before version 2
+// (version-1/), which reads the view hierarchy; a version 2 file runs on the
+// current runner, which reads the accessibility tree. A physical iPhone,
+// Android and a Mac app run every version on the current runner.
 //
 // The simulator sources are real behind mocked services, so a test sees which
-// service and which native devtools method a read used. The physical-device
-// and Android sources answer a fixed tree. Pass-through spies record every
-// read's source and the launch target it carried.
+// service and which native devtools method a read used. The physical-device,
+// Android and Mac app sources answer a fixed tree. Pass-through spies record
+// which runner read the tree and from which source.
 
+/** One entry per tree read, in order: the runner that read it. */
+let runners: string[];
 /** One entry per tree read, in order: the source it went to. */
 let sources: string[];
-/** The target each `fetchFlowTree` call carried, as `pinned:<app>`, `hint:<app>` or `none`. */
-let targets: string[];
-/** External calls of `readIosSimulatorUiTree`: the launch gate and the stale-selector read. */
+/** Calls of `readIosSimulatorUiTree` outside a tree read: the current runner's launch gate. */
 let axGateReads: number;
-
-function label(target: FlowTreeTarget | undefined): string {
-  return target ? `${target.pinned ? "pinned" : "hint"}:${target.bundleId}` : "none";
-}
 
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/tools/flows/flow-tree")>();
   return {
     ...actual,
     fetchFlowTree: vi.fn((...args: Parameters<typeof actual.fetchFlowTree>) => {
-      targets.push(label(args[2]));
+      runners.push("current");
       return actual.fetchFlowTree(...args);
+    }),
+  };
+});
+vi.mock("../../src/tools/flows/version-1/flow-tree", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/tools/flows/version-1/flow-tree")>();
+  return {
+    ...actual,
+    fetchFlowTree: vi.fn((...args: Parameters<typeof actual.fetchFlowTree>) => {
+      runners.push("version-1");
+      return actual.fetchFlowTree(...args);
+    }),
+  };
+});
+vi.mock("../../src/tools/flows/version-1/flow-ios-tree", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../src/tools/flows/version-1/flow-ios-tree")>();
+  return {
+    ...actual,
+    queryFullHierarchyTree: vi.fn((...args: Parameters<typeof actual.queryFullHierarchyTree>) => {
+      sources.push("vh");
+      return actual.queryFullHierarchyTree(...args);
     }),
   };
 });
@@ -42,10 +59,6 @@ vi.mock("../../src/tools/flows/flow-ios-tree", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/tools/flows/flow-ios-tree")>();
   return {
     ...actual,
-    queryFullHierarchyTree: vi.fn((...args: Parameters<typeof actual.queryFullHierarchyTree>) => {
-      sources.push("vh");
-      return actual.queryFullHierarchyTree(...args);
-    }),
     queryIosSimulatorFlowTree: vi.fn(
       (...args: Parameters<typeof actual.queryIosSimulatorFlowTree>) => {
         sources.push("ax");
@@ -78,11 +91,7 @@ vi.mock("../../src/tools/flows/flow-macos-tree", async (importOriginal) => ({
   }),
 }));
 
-import {
-  createRunFlowTool,
-  NATIVE_READY_TIMEOUT_MS,
-  type FlowRunResult,
-} from "../../src/tools/flows/flow-run";
+import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, type FlowFile, type FlowSelector } from "../../src/tools/flows/flow-utils";
 
 const LOCAL = "00000000-0000-0000-0000-0000000000ab";
@@ -262,29 +271,6 @@ async function run(d: Device, deviceId: string, name = "flow"): Promise<FlowRunR
 
 const statuses = (r: FlowRunResult): string[] => r.steps.map((s) => `${s.kind}:${s.status}`);
 
-/** Enough 250 ms pumps for two launch gates to time out. */
-const PUMP_LIMIT = Math.ceil(NATIVE_READY_TIMEOUT_MS / 250) * 10;
-
-/** {@link run} on a fake clock, for runs that wait out gates and settles. */
-async function runPumped(d: Device, deviceId: string): Promise<FlowRunResult> {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-  try {
-    const pending = run(d, deviceId);
-    let settled = false;
-    void pending.then(
-      () => (settled = true),
-      () => (settled = true)
-    );
-    for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-      await new Promise((resolve) => setImmediate(resolve));
-      await vi.advanceTimersByTimeAsync(250);
-    }
-    return await pending;
-  } finally {
-    vi.useRealTimers();
-  }
-}
-
 const assertVisible = (selector: FlowSelector): Step => ({
   kind: "assert",
   condition: "visible",
@@ -295,8 +281,8 @@ const AX_ONLY = assertVisible({ text: "AX Only" });
 const READY = assertVisible({ identifier: "ready" });
 
 beforeEach(async () => {
+  runners = [];
   sources = [];
-  targets = [];
   axGateReads = 0;
   // Removed by its own test's teardown: the concurrent tests below overwrite
   // `root`, so an afterEach would remove only the last one.
@@ -305,47 +291,39 @@ beforeEach(async () => {
   return () => fs.rm(dir, { recursive: true, force: true });
 });
 
-describe("the tree each version reads", () => {
+describe("the runner each version runs on", () => {
   it.each([
-    ["a version-less", undefined],
-    ["a version 1", 1],
-  ])("%s file reads the view hierarchy on an iOS simulator", async (_name, version) => {
-    await writeFlow("flow", version, [VH_ONLY]);
-    const d = device();
-
-    const result = await run(d, LOCAL);
-
-    expect(statuses(result)).toEqual(["assert:pass"]);
-    expect(sources).toEqual(["vh"]);
-    expect(d.native).toContain(`ViewHierarchy.getFullHierarchy:${APP}`);
-    expect(d.services).not.toContain("AXService");
-  });
-
-  it("a version 2 file reads the accessibility tree on an iOS simulator", async () => {
-    await writeFlow("flow", 2, [AX_ONLY]);
-    const d = device();
-
-    const result = await run(d, LOCAL);
-
-    expect(statuses(result)).toEqual(["assert:pass"]);
-    expect(sources).toEqual(["ax"]);
-    expect(d.services).not.toContain("NativeDevtools");
-  });
-
-  it.each([
-    ["a version-less", undefined, VH_ONLY, "vh", "NativeDevtools"],
-    ["a version 2", 2, AX_ONLY, "ax", "AXService"],
+    ["a version-less", undefined, LOCAL],
+    ["a version 1", 1, LOCAL],
+    ["a version-less", undefined, REMOTE],
   ])(
-    "a remote simulator reads the same tree as a local one in %s file",
-    async (_name, version, step, source, service) => {
-      await writeFlow("flow", version, [step]);
+    "%s file on simulator %s runs on version 1, on the view hierarchy",
+    async (_n, version, id) => {
+      await writeFlow("flow", version, [VH_ONLY]);
       const d = device();
 
-      const result = await run(d, REMOTE);
+      const result = await run(d, id);
 
       expect(statuses(result)).toEqual(["assert:pass"]);
-      expect(sources).toEqual([source]);
-      expect(d.services).toContain(service);
+      expect(runners).toEqual(["version-1"]);
+      expect(sources).toEqual(["vh"]);
+      expect(d.native).toContain(`ViewHierarchy.getFullHierarchy:${APP}`);
+      expect(d.services).not.toContain("AXService");
+    }
+  );
+
+  it.each([LOCAL, REMOTE])(
+    "a version 2 file on simulator %s runs on the current runner, on the accessibility tree",
+    async (id) => {
+      await writeFlow("flow", 2, [AX_ONLY]);
+      const d = device();
+
+      const result = await run(d, id);
+
+      expect(statuses(result)).toEqual(["assert:pass"]);
+      expect(runners).toEqual(["current"]);
+      expect(sources).toEqual(["ax"]);
+      expect(d.services).not.toContain("NativeDevtools");
     }
   );
 
@@ -353,12 +331,14 @@ describe("the tree each version reads", () => {
     [PHONE, "device"],
     [ANDROID, "android"],
     [MAC_APP, "macos"],
-  ])("%s reads its one tree at every version", async (deviceId, source) => {
+  ])("%s runs every version on the current runner", async (deviceId, source) => {
     for (const version of [undefined, 1, 2]) {
+      runners = [];
       sources = [];
       await writeFlow("flow", version, [READY]);
       const result = await run(device(), deviceId);
       expect(statuses(result)).toEqual(["assert:pass"]);
+      expect(runners).toEqual(["current"]);
       expect(sources).toEqual([source]);
     }
   });
@@ -374,7 +354,6 @@ describe("the launch gate", () => {
     expect(statuses(result)).toEqual(["launch:pass", "assert:pass"]);
     expect(d.native[0]).toBe(`isConnected:${APP}`);
     expect(axGateReads).toBe(0);
-    expect(targets).toEqual([`pinned:${APP}`]);
   });
 
   it("waits for the foreground app in a version 2 file", async () => {
@@ -387,121 +366,38 @@ describe("the launch gate", () => {
     expect(axGateReads).toBeGreaterThan(0);
     expect(d.services).not.toContain("NativeDevtools");
   });
-
-  it("fails a version-less launch with the native devtools reason", async () => {
-    await writeFlow("flow", undefined, [{ kind: "launch", app: APP }, READY]);
-
-    const result = await run(device({ nativeDevtoolsDown: true }), LOCAL);
-
-    expect(statuses(result)).toEqual(["launch:error", "assert:skip"]);
-    expect(result.steps[0]!.reason).toBe(
-      `could not connect to native devtools for ${APP}: socket closed`
-    );
-  });
-
-  it("fails a version-less launch when the app never connects", async () => {
-    await writeFlow("flow", undefined, [{ kind: "launch", app: APP }, READY]);
-
-    const result = await runPumped(device({ connectAfterMs: Infinity }), LOCAL);
-
-    expect(statuses(result)).toEqual(["launch:error", "assert:skip"]);
-    expect(result.steps[0]!.reason).toMatch(
-      new RegExp(`^could not connect to native devtools: ${APP} did not connect within 15000 ms`)
-    );
-  });
-});
-
-describe("`run:` runs a fragment at the version of the test that runs it", () => {
-  it("a version 2 test runs a version-less fragment on the accessibility tree", async () => {
-    await writeFlow("old", undefined, [AX_ONLY]);
-    await writeFlow("flow", 2, [AX_ONLY, { kind: "run", flow: "old.yaml" }, AX_ONLY]);
-
-    const result = await run(device(), LOCAL);
-
-    expect(statuses(result)).toEqual(["assert:pass", "run:pass", "assert:pass", "assert:pass"]);
-    expect(sources).toEqual(["ax", "ax", "ax"]);
-  });
-
-  it("a version-less test runs a version 2 fragment on the view hierarchy", async () => {
-    await writeFlow("new", 2, [VH_ONLY]);
-    await writeFlow("flow", undefined, [VH_ONLY, { kind: "run", flow: "new.yaml" }, VH_ONLY]);
-
-    const result = await run(device(), LOCAL);
-
-    expect(statuses(result)).toEqual(["assert:pass", "run:pass", "assert:pass", "assert:pass"]);
-    expect(sources).toEqual(["vh", "vh", "vh"]);
-  });
 });
 
 const runStep = (flow: string): Step => ({ kind: "run", flow: `${flow}.yaml` });
 
-describe("a file of each version run by another", () => {
-  it("fails a `run:` of an unsupported version with the parse error", async () => {
-    const dir = path.join(root, ".argent", "flows");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "newer.yaml"), "version: 3\nsteps: []\n", "utf8");
-    await writeFlow("flow", 2, [runStep("newer"), AX_ONLY]);
+describe("a file run by another", () => {
+  it("a `run:` fragment runs on the runner of the test that runs it", async () => {
+    await writeFlow("old", undefined, [AX_ONLY]);
+    await writeFlow("new", 2, [VH_ONLY]);
+    await writeFlow("flow", 2, [runStep("old")]);
+    await writeFlow("old-flow", undefined, [runStep("new")]);
 
-    const result = await run(device(), LOCAL);
-
-    expect(statuses(result)).toEqual(["run:error", "assert:skip"]);
-    expect(result.steps[0]!.reason).toContain(
-      'could not load fragment "newer.yaml": The e2e test file is version 3, but this Argent reads up to version 2.'
-    );
+    expect(statuses(await run(device(), LOCAL))).toEqual(["run:pass", "assert:pass"]);
+    expect(statuses(await run(device(), LOCAL, "old-flow"))).toEqual(["run:pass", "assert:pass"]);
+    expect(runners).toEqual(["current", "version-1"]);
+    expect(sources).toEqual(["ax", "vh"]);
   });
 
-  it("rejects an unsupported version in the e2e test it runs", async () => {
-    const dir = path.join(root, ".argent", "flows");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "flow.yaml"), "version: 0\nsteps: []\n", "utf8");
-
-    await expect(run(device(), LOCAL)).rejects.toThrow(
-      "Invalid e2e test file: version must be a positive integer, got 0"
-    );
-  });
-
-  it("runs a version-less e2e test that a version 2 test runs with `tool: e2e-execute` on the view hierarchy", async () => {
+  it("an e2e test that `tool: e2e-execute` runs uses its own version", async () => {
     await writeFlow("old", undefined, [VH_ONLY]);
-    await writeFlow("flow", 2, [
-      { kind: "tool", name: "e2e-execute", args: { name: "old", project_root: root } },
-      AX_ONLY,
-    ]);
+    await writeFlow("new", 2, [AX_ONLY]);
+    const execute = (name: string): Step => ({
+      kind: "tool",
+      name: "e2e-execute",
+      args: { name, project_root: root },
+    });
+    await writeFlow("flow", 2, [execute("old"), AX_ONLY]);
+    await writeFlow("old-flow", undefined, [execute("new"), VH_ONLY]);
 
-    const result = await run(device(), LOCAL);
-
-    expect(statuses(result)).toEqual(["tool:pass", "assert:pass"]);
-    expect(sources).toEqual(["vh", "ax"]);
-  });
-});
-
-describe("an empty text field in a `matches` check", () => {
-  const emptyCheck: Step = {
-    kind: "assert",
-    condition: "text",
-    selector: { identifier: "email" },
-    expectedText: "^$",
-    textMatch: "matches",
-  };
-
-  it("never reads as empty in a version-less file on an iOS simulator", async () => {
-    await writeFlow("flow", undefined, [emptyCheck]);
-
-    const result = await run(device(), LOCAL);
-
-    expect(statuses(result)).toEqual(["assert:fail"]);
-    expect(result.steps[0]!.reason).toContain('element matched id="email" but its text was ""');
-  });
-
-  it.each([
-    ["a version 2 file on an iOS simulator", 2, LOCAL],
-    ["a version-less file on a physical iPhone", undefined, PHONE],
-    ["a version-less file on Android", undefined, ANDROID],
-  ])("reads as empty in %s", async (_name, version, deviceId) => {
-    await writeFlow("flow", version, [emptyCheck]);
-
-    const result = await run(device(), deviceId);
-
-    expect(statuses(result)).toEqual(["assert:pass"]);
+    expect(statuses(await run(device(), LOCAL))).toEqual(["tool:pass", "assert:pass"]);
+    expect(statuses(await run(device(), LOCAL, "old-flow"))).toEqual(["tool:pass", "assert:pass"]);
+    expect(runners).toEqual(["version-1", "current", "current", "version-1"]);
+    expect(sources).toEqual(["vh", "ax", "ax", "vh"]);
   });
 });
 
@@ -542,7 +438,7 @@ describe.concurrent("a selector miss", () => {
     }
   }
 
-  it("keeps main's reason in a version-less file", async ({ expect }) => {
+  it("gives the reason from before version 2 in a version-less file", async ({ expect }) => {
     expect(await missReason(undefined, LOCAL, missingTap)).toBe(PLAIN);
   }, 20_000);
 

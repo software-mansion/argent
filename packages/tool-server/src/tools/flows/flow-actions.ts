@@ -30,7 +30,7 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosSimulator } from "../../utils/device-info";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import { isFlagOffered } from "../../utils/capability";
-import { bindDeviceArgs, isIosSimulatorDevice } from "./flow-device";
+import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import { readIosSimulatorUiTree } from "./flow-ios-tree";
 import { NATIVE_DESCRIBE_ROLES } from "../describe/platforms/ios/ios-native-adapter";
@@ -96,12 +96,6 @@ export interface FlowTreeTarget {
 
 /** Everything a directive needs to act on the run's device. */
 export interface ActionEnv {
-  /**
-   * An iOS simulator run of a version 1 file ({@link usesViewHierarchy}):
-   * selectors resolve on the view hierarchy, as before version 2. Never set on
-   * another device, where every version reads the same tree.
-   */
-  viewHierarchy?: boolean;
   registry: Registry;
   ctx?: ToolContext;
   device: DeviceInfo;
@@ -498,7 +492,7 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * frame, and the settle that took already cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.treeTarget, env.viewHierarchy).then(
+  return fetchFlowTree(env.registry, env.device, env.treeTarget).then(
     (data) => {
       if (env.treeOutage) env.treeOutage.proven = undefined;
       if (env.lastRead) {
@@ -934,9 +928,9 @@ const OLDER_FLOW =
 
 const RE_RECORD = "re-record the step, or target the control `describe` shows there.";
 
-/** The accessibility tree reasons below apply: a version 2 file on an iOS simulator. */
 function isIosSimulatorEnv(env: ActionEnv): boolean {
-  return !env.viewHierarchy && isIosSimulatorDevice(env.device);
+  const { platform, kind } = env.device;
+  return platform === "ios-remote" || (platform === "ios" && kind !== "device");
 }
 
 /** A role anywhere in the selector that passes `test` (given it lowercased). */
@@ -1959,11 +1953,14 @@ async function waitForCondition(
           : undefined;
       if (
         !blind &&
-        evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch, {
-          orientation: data.uiOrientation,
-          viewHierarchy: env.viewHierarchy,
-          textFieldsShowText: env.device.platform === "macos",
-        })
+        evaluateCondition(
+          step.condition,
+          step.expectedText,
+          lastMatches,
+          step.textMatch,
+          data.uiOrientation,
+          env.device.platform === "macos"
+        )
       ) {
         return { ok: true };
       }

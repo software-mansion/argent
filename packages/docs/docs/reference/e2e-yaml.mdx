@@ -65,12 +65,12 @@ Argent releases from before the `version` key refuse a file that has the key. To
 
 ### File version
 
-On an iOS simulator, local or remote, the version sets the tree that Argent resolves selectors on:
+On an iOS simulator, local or remote, the version sets how Argent runs the e2e test:
 
-| Version                  | Tree on an iOS simulator                                                                                    |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `2`                      | The accessibility tree of `describe`. See [Runner tree and discovery tree](#runner-tree-and-discovery-tree) |
-| `1`, or no `version` key | The native view hierarchy of the app, as in Argent releases from before version 2                           |
+| Version                  | Run on an iOS simulator                                                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `2`                      | Selectors resolve on the accessibility tree of `describe`. See [Runner tree and discovery tree](#runner-tree-and-discovery-tree) |
+| `1`, or no `version` key | As in Argent releases from before version 2: the same steps, checks and messages, on the native view hierarchy of the app        |
 
 - On other platforms and on a physical iPhone, the version has no effect.
 - A `run:` fragment runs at the version of the e2e test that runs it. An e2e test that a `tool: e2e-execute` step runs uses its own version.

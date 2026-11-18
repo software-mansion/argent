@@ -339,7 +339,8 @@ describe("one snapshot key reported from two hosts", () => {
     // The key folds `ios-remote` to `ios`, so a cloud run and a local run of one
     // flow report the same key. A client exporting files by it (the CLI's
     // --output) reads this marker to keep the two runs' files apart.
-    const flowFile = await writeFlow("hosts", "steps:\n  - snapshot: shot\n");
+    // Version 2: the settle mocked above is the current runner's.
+    const flowFile = await writeFlow("hosts", "version: 2\nsteps:\n  - snapshot: shot\n");
     const run = (device: string) =>
       runFlow(makeRegistry(), {
         name: "hosts",

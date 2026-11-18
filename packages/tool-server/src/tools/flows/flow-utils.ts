@@ -823,8 +823,7 @@ export type FlowRequires = {
 export type FlowFile = {
   /**
    * The file format version of a file older than the current one (a file with
-   * no `version` key is version 1); absent for a current file. On an iOS
-   * simulator it picks the tree selectors resolve on ({@link usesViewHierarchy}).
+   * no `version` key is version 1); absent for a current file. See {@link isVersion1}.
    */
   version?: number;
   /** Fragments only: documented entry-state contract. "" when unset. */
@@ -3896,11 +3895,10 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 const FLOW_FILE_VERSION = 2;
 
 /**
- * Whether an e2e test resolves selectors on the view hierarchy on an iOS
- * simulator, as before version 2 moved them to the tree `describe` shows. Other
- * platforms read one tree at every version.
+ * Whether an e2e test file is older than version 2. On an iOS simulator such a
+ * file runs on the e2e runner from before version 2 (`version-1/flow-run.ts`).
  */
-export function usesViewHierarchy(flow: Pick<FlowFile, "version">): boolean {
+export function isVersion1(flow: Pick<FlowFile, "version">): boolean {
   return (flow.version ?? FLOW_FILE_VERSION) < 2;
 }
 
@@ -3913,8 +3911,8 @@ function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["
 
 /**
  * Serialize a full flow file to YAML: `version` always (an older file keeps its
- * own, so a rewrite never moves it to another tree), other fields only when not
- * empty or defaulted.
+ * own, so a rewrite never moves it to another runner), other fields only when
+ * not empty or defaulted.
  */
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = {
