@@ -1,6 +1,6 @@
 ---
 name: argent-native-profiler
-description: Diagnose native CPU hotspots, UI hangs, and memory issues. Use Instruments (xctrace) on iOS simulators and Mac apps, or Perfetto on Android.
+description: Diagnose native CPU hotspots, UI hangs, and memory issues. Use Instruments (xctrace) on iOS simulators and Mac apps, or Perfetto on Android. Use when diagnosing native-level performance issues.
 ---
 
 ## 1. Tools and platforms
