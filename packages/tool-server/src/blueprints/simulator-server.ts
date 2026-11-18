@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
+import { Readable } from "node:stream";
 import {
   FAILURE_CODES,
   FailureError,
@@ -339,7 +340,10 @@ async function spawnSimulatorServerProcess(
     const STREAM_GRACE_MS = 500;
     let apiReadyTimer: NodeJS.Timeout | null = null;
 
-    const rl = readline.createInterface({ input: proc.stdout! });
+    const rl = readline.createInterface({
+      // A failed spawn (EMFILE) leaves no stdio; the `error` handler below rejects.
+      input: proc.stdout ?? Readable.from([]),
+    });
 
     const settle = (fn: () => void, cleanup?: () => void) => {
       if (settled) return;

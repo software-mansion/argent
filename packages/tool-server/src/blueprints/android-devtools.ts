@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
+import { Readable } from "node:stream";
 import {
   TypedEventEmitter,
   FAILURE_CODES,
@@ -177,7 +178,10 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
       fn();
     };
 
-    const rl = readline.createInterface({ input: proc.stdout! });
+    const rl = readline.createInterface({
+      // A failed spawn (EMFILE) leaves no stdio; the `error` handler below rejects.
+      input: proc.stdout ?? Readable.from([]),
+    });
     rl.on("line", async (rawLine: string) => {
       const line = rawLine.trim();
       // Keep the first lines, not the last: the reason leads the status block

@@ -100,10 +100,13 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
 
   let stdout = "";
   let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => {
+  // A failed spawn (EMFILE, ENOMEM) returns a child without stdio and emits
+  // `error` on the next tick, so the streams are optional here and the `error`
+  // listener below is attached in the same tick.
+  child.stdout?.on("data", (chunk: Buffer) => {
     stdout += chunk.toString("utf8");
   });
-  child.stderr.on("data", (chunk: Buffer) => {
+  child.stderr?.on("data", (chunk: Buffer) => {
     stderr += chunk.toString("utf8");
   });
 
@@ -162,7 +165,7 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
         )
       )
     );
-    child.stdin.on("error", (err) =>
+    child.stdin?.on("error", (err) =>
       fail(
         new FailureError(
           `Failed to write perfetto config to adb stdin: ${err.message}`,
@@ -198,7 +201,7 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
       succeed(parsed);
     };
 
-    child.stdout.on("data", () => tryResolve());
+    child.stdout?.on("data", () => tryResolve());
     child.once("exit", (code, signal) => {
       if (settled) return;
       // A signal kill leaves code=null.
@@ -239,8 +242,8 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
     // Inside the executor so a synchronous throw rejects the promise rather
     // than escaping.
     try {
-      child.stdin.write(cfgText);
-      child.stdin.end();
+      child.stdin?.write(cfgText);
+      child.stdin?.end();
     } catch (err) {
       fail(
         new FailureError(
