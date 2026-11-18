@@ -81,6 +81,7 @@ import { startNativeProfilerMacos } from "../src/tools/profiler/native-profiler/
 import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
+import { formatErrorForAgent } from "../src/utils/format-error";
 import { getDebugDir } from "../src/utils/react-profiler/debug/dump";
 import { listenForDarwinNotification, type NotifyHandle } from "../src/utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../src/utils/ios-profiler/startup";
@@ -1040,6 +1041,69 @@ WebKit Using System Malloc_0x108ed0000         0K         0K         0K         
     expect(launch).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
     expect(api.profilingActive).toBe(false);
+  });
+
+  it("rejects from the zone check when vmmap cannot read the process", async () => {
+    const actual =
+      await vi.importActual<typeof import("../src/utils/macos-apps")>("../src/utils/macos-apps");
+    // No process has this pid: macOS hands out pids below 100000. Where vmmap
+    // is missing, as on Linux, the spawn fails instead.
+    await expect(actual.processHasWebKitMallocZone(999_999)).rejects.toThrow(/vmmap/);
+  });
+
+  // Not knowing is not "no heap": a wrong attach costs the app.
+  it("refuses the bundled template when vmmap cannot read the app, with vmmap's error", async () => {
+    const api = await session();
+    const { app, launch } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+    webKitHeapMock.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "Command failed: vmmap -summary 4321\nvmmap[812]: [fatal] unable to read process 4321\n"
+        ),
+        { code: 1, killed: false, signal: null }
+      )
+    );
+
+    const err = await start(api, app, { device_id: deviceId }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "NATIVE_PROFILER_APP_HEAP_CHECK_FAILED",
+      error_kind: "subprocess",
+      failure_exit_code: 1,
+    });
+    expect((err as Error).message).toContain("unable to read process 4321");
+    // The agent reads vmmap's error once, not again as the cause.
+    expect(formatErrorForAgent(err)).toBe((err as Error).message);
+    expect((err as Error).message).toContain("malloc_stack_logging: true");
+    expect((err as Error).message).toContain('template_path: "Time Profiler"');
+    expect(launch).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(api.profilingActive).toBe(false);
+  });
+
+  it("refuses the bundled template when vmmap did not finish in time", async () => {
+    const api = await session();
+    const { app } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+    // What execFile rejects with when its timeout stopped the child.
+    webKitHeapMock.mockRejectedValue(
+      Object.assign(new Error("Command failed: vmmap -summary 4321\n"), {
+        code: null,
+        killed: true,
+        signal: "SIGTERM",
+      })
+    );
+
+    const err = await start(api, app, { device_id: deviceId }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "NATIVE_PROFILER_APP_HEAP_CHECK_FAILED",
+      error_kind: "timeout",
+      failure_signal: "SIGTERM",
+    });
+    expect((err as Error).message).toContain("vmmap did not finish in time");
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("records an app without that heap with the bundled template", async () => {

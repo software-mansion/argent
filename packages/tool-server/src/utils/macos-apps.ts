@@ -801,18 +801,16 @@ export function listsWebKitMallocZone(vmmapOutput: string): boolean {
 /**
  * Whether the process `pid` has the malloc zone of JavaScriptCore's heap, from
  * `vmmap -summary`, which takes 1 to 2 s on an app and suspends it while it
- * reads. False when it cannot tell.
+ * reads. Rejects with vmmap's error when it cannot tell: vmmap failed, or did
+ * not finish in 10 s. The timeout stops vmmap with SIGTERM, and vmmap resumes
+ * the process before it exits.
  */
 export async function processHasWebKitMallocZone(pid: number): Promise<boolean> {
-  try {
-    const { stdout } = await execFileAsync("vmmap", ["-summary", String(pid)], {
-      timeout: 10_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    return listsWebKitMallocZone(stdout);
-  } catch {
-    return false;
-  }
+  const { stdout } = await execFileAsync("vmmap", ["-summary", String(pid)], {
+    timeout: 10_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  return listsWebKitMallocZone(stdout);
 }
 
 /**
