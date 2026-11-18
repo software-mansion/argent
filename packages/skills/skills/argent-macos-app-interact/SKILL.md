@@ -35,10 +35,14 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) throug
 - Hint `The Mac is locked` or `fallback walk`: clicks and typing still work, elements can be missing (an open context menu among them), and a `hidden` check cannot pass. Ask the user to unlock when a target is missing.
 - An action that fails or has no effect: a minimized window takes no input. Restore it by choosing it in the Window menu with `menu-bar`; without such an item, ask the user.
 
+## Profiling
+
+Use `argent-native-profiler`. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
+
 ## E2E tests
 
 Read `references/e2e.md` before recording or writing a test for a Mac app.
 
 ## react-native-macos
 
-A Debug build loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). `debugger-*` and the React profiler do not take a Mac app id: read the screen with `describe`.
+A Debug build loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). Use `describe` to inspect the screen and the native profiler to measure performance. The JavaScript debugger and React profiler are unavailable for Mac apps.
