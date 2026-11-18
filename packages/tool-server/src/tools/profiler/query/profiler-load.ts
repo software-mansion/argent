@@ -16,8 +16,7 @@ import {
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
-import { InvalidToolInputError } from "../../../utils/capability";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
@@ -508,7 +507,7 @@ Use when you need to revisit past session data without capturing a new recording
 Modes:
 - list: Show all available profiling sessions in the project's debug directory.
 - load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
-- load_native: Restore native trace data (xctrace XML on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, .pftrace on Android). Requires session_id.<flag:macos-apps> Use this mode for Mac app IDs.</flag:macos-apps>
+- load_native: Restore native trace data (xctrace XML on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, .pftrace on Android). Requires session_id.
 Loading replaces the session in memory for this device_id (and Metro port, for React): the one the query tools and react-profiler-analyze read. The replaced session stays on disk; load it again by its session_id.
 Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or the session's trace files are missing from disk.`,
@@ -521,7 +520,7 @@ Fails if the session_id is not found or the session's trace files are missing fr
   },
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
-  capability: { ...RN_ONLY_TOOL_CAPABILITY, macos: { app: true } },
+  capability: REACT_PROFILER_TOOL_CAPABILITY,
   // load_native re-parses the whole export, which can outlast the 30s MCP fetch
   // timeout; an aborted call is replayed, not cancelled.
   longRunning: true,
@@ -549,12 +548,6 @@ Fails if the session_id is not found or the session's trace files are missing fr
               failure_area: "tool_server",
               error_kind: "validation",
             }
-          );
-        }
-        if (params.device_id && resolveDevice(params.device_id).platform === "macos") {
-          throw new InvalidToolInputError(
-            "A Mac app has no React profiler sessions: load_react takes the id of an iOS " +
-              "simulator or an Android device. Use load_native for the native profile of a Mac app."
           );
         }
         return loadReactSession(debugDir, params.session_id, metroPort(params), params.device_id);

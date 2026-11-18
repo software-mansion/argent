@@ -43,7 +43,9 @@ interface HangCommitCorrelation {
 
 const zodSchema = z.object({
   port: metroPortField,
-  device_id: metroDeviceIdParam("iOS Simulator/device UDID or Android serial"),
+  device_id: metroDeviceIdParam(
+    "Device ID from list-devices used for the native profile (iOS simulator UDID, Android serial<flag:macos-apps>, or Mac app ID</flag:macos-apps>)."
+  ),
 });
 
 export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
@@ -61,11 +63,12 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     failedMsg: ({ failureSignal }) =>
       `Failed to build combined performance report: ${failureSignal.error_code}`,
   },
-  // iOS reads xctrace output; Android re-queries the Perfetto .pftrace via
-  // loadAndroidCombinedData. Chromium has no native trace capture.
+  // iOS and Mac apps read xctrace output; Android re-queries the Perfetto
+  // .pftrace via loadAndroidCombinedData. Chromium has no native trace capture.
   capability: {
     apple: { simulator: true },
     android: { emulator: true, device: true, unknown: true },
+    macos: { app: true },
   },
   // The Android branch re-queries the .pftrace, so a cold trace-processor engine
   // re-pays the full parse past the 30s MCP fetch timeout, whose abort replays
@@ -294,7 +297,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       `**Native Profiler:** ${uiHangs.length} hangs, ` +
         (leaksRecorded ? `${memoryLeaks.length} leaks` : `leaks not recorded`),
       "",
-      `**Clock offset:** React started ${((reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,
+      `**Clock offset:** React started ${(Math.abs(reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,
       "",
     ];
 
@@ -401,7 +404,8 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
           mountComponents,
           // From parsedData, not the live session field: a recording started
           // after analyze must not re-label the data rendered here.
-          nativeApi.parsedData?.mallocStackLogging ?? null
+          nativeApi.parsedData?.mallocStackLogging ?? null,
+          nativeApi.platform === "macos"
         )
       );
     }
@@ -445,12 +449,14 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
  * That caveat comes from render.ts's shared `renderUnattributedLeaksNote`, so
  * its wording and capture-mode handling cannot drift from the analyze report.
  * A null/undefined `mallocStackLogging` makes it infer the capture mode from
- * the attributed count. Exported for unit testing.
+ * the attributed count; `macApp` gives a Mac app's note, as analyze does.
+ * Exported for unit testing.
  */
 export function renderCombinedMemoryLeaks(
   memoryLeaks: MemoryLeak[],
   mountComponents: Set<string>,
-  mallocStackLogging?: boolean | null
+  mallocStackLogging?: boolean | null,
+  macApp = false
 ): string[] {
   if (memoryLeaks.length === 0) return [];
 
@@ -479,7 +485,12 @@ export function renderCombinedMemoryLeaks(
   if (unattributedLeaks.length > 0) {
     lines.push(
       ``,
-      renderUnattributedLeaksNote(unattributedLeaks, attributedLeaks.length, mallocStackLogging)
+      renderUnattributedLeaksNote(
+        unattributedLeaks,
+        attributedLeaks.length,
+        mallocStackLogging,
+        macApp
+      )
     );
   }
 
