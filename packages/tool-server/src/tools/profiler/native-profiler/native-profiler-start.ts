@@ -45,16 +45,13 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only. When true, cold-launches the app under the profiler with Malloc Stack Logging enabled so " +
-        "memory leaks carry an allocation backtrace (responsible frame + library). Without it, leaks " +
-        "carry no backtrace (Instruments reports '<Call stack limit reached>'). Trade-offs: this " +
-        "RESTARTS the app (current state is lost), adds memory/CPU overhead, and makes the app " +
-        "noticeably slow to launch, so leave it off for pure CPU/hang profiling. Rejected up front " +
-        "under the all-processes capture (used where Xcode's `--device` recording is broken, or " +
-        "forced with ARGENT_IOS_CAPTURE=all-processes), which cannot cold-launch and records no leaks." +
+      "iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only. Enable allocation stacks from app launch. " +
+        "Restarts the app, clears its current state, and adds CPU and memory overhead. Leave it off for CPU and hang timing. " +
+        "On iOS, attach recordings typically lack allocation stacks. The all-processes capture " +
+        "(including ARGENT_IOS_CAPTURE=all-processes) rejects this option and records no leaks." +
         "<flag:macos-apps> On a Mac app, argent restarts the app with MallocStackLogging=1 and then attaches, " +
-        "on any Xcode; the app keeps the logging until restart-app. Leaks of objects allocated after " +
-        "the start carry a backtrace also without it, so use it only for older objects.</flag:macos-apps>"
+        "and logging stays active until restart-app. The bundled template can capture stacks for allocations during recording, " +
+        "so enable this for older allocations.</flag:macos-apps>"
     ),
 });
 
@@ -65,11 +62,9 @@ export const nativeProfilerStartTool: ToolDefinition<
   id: "native-profiler-start",
   // iOS can outlast the 30s MCP fetch timeout, whose replay would start a second xctrace.
   longRunning: true,
-  description: `Start native profiling on a booted device. iOS<flag:macos-apps> and Mac apps</flag:macos-apps>: Instruments via xctrace (CPU, hangs, memory leaks). Android: Perfetto (CPU, jank, RSS-growth weak signal).
-After starting, let the user interact with the app, then call native-profiler-stop.
-Use when you want to capture native CPU, hang, and memory data for a running app.
-Returns { status, pid, traceFile } confirming the recording has started. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ.<flag:macos-apps> On a Mac app, a warning says when the app runs with malloc stack logging.</flag:macos-apps>
-Fails if no app is running on the device, or the profiler cannot attach to the process.`,
+  description: `Start native profiling. Instruments records CPU, hangs, and leaks on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>. Perfetto records CPU, jank, and memory growth on Android.
+Start the target app first for an attach recording. Wait for this call to return before reproducing the scenario, then call native-profiler-stop while the app is still running.
+On Android, a warning names apps whose timings may be affected by native network capture.<flag:macos-apps> On a Mac app, a warning says when the app runs with malloc stack logging. Launch the app through Argent and use a development-signed build. If signing blocks profiling in a background session such as SSH, try the "Time Profiler" template for CPU and hangs without leak checks.</flag:macos-apps>`,
   zodSchema,
   interaction: {
     startedMsg: () => "Starting native profiler",

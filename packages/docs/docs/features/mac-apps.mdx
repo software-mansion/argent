@@ -41,7 +41,7 @@ Context menus and pop-up menus can temporarily bring the app window to the front
 - **Use menus:** choose commands such as File > Export while the app stays in the background.
 - **Open and save files:** answer file dialogs with a path.
 - **Inspect network traffic:** read requests made through `URLSession`.
-- **Profile performance:** record CPU time, UI hangs, and memory leaks with Xcode Instruments, and React renders in a react-native-macos app. See [Profile your app](#profile-your-app).
+- **Profile performance:** find CPU hotspots, UI hangs, and memory leaks. In a react-native-macos app, also find slow React renders. See [Profile your app](#profile-your-app).
 - **Test workflows:** record and replay [e2e tests](/docs/features/e2e), including screenshot comparisons.
 
 Text input supports accented characters and emoji. Argent disables automatic text correction so the app receives the text the agent types.
@@ -72,20 +72,13 @@ Stable identifiers help tests find controls after layout changes. See the [ident
 
 ## Profile your app
 
-The agent records a [native profile](/docs/features/profiling) of your app with Xcode Instruments. The profile contains the CPU time, the UI hangs, and the memory leaks. In a react-native-macos app, the agent also records a React profile. See [Profile a react-native-macos app](#profile-a-react-native-macos-app).
+Start the app through Argent and ask your agent to profile the interaction you want to investigate. Mac apps, including react-native-macos apps, use Instruments for native profiling and require a full Xcode installation. Use a build signed for development, such as a Debug build from Xcode. Development-signed Release builds also work. The hardened runtime and App Sandbox are supported.
 
-Profile a build that Xcode signed for development, such as your Debug build. Xcode adds the entitlement that allows debugging to these builds, also to a Release build. Archived builds, such as notarized or App Store builds, do not have it. Argent refuses to profile an app without this entitlement. For such an app, macOS asks for an administrator password, and Instruments records nothing while the dialog waits. The hardened runtime and the App Sandbox do not prevent profiling.
+Instruments attaches to the running app by default. Keep the app open until the agent stops the recording. If the app quits, crashes, or restarts during capture, record the interaction again because the trace may be incomplete. Allow about 15 to 25 seconds for a short recording to save and export.
 
-The profiler attaches to the running app that Argent started and does not restart it. A memory leak has an allocation backtrace only when the app allocated the object after the recording started. For older objects, the agent can restart the app with malloc stack logging. The app then loses its state and runs slower until its next restart.
+The default template checks for leaks about every 11 seconds. Each check can pause the app for several seconds. The report shows how much of a recorded hang overlapped a pause when that timing is available. To investigate the hang, ask the agent to repeat the recording without leak checks.
 
-Expect these effects:
-
-- **Slow stop:** the stop of a short recording takes about 15 to 25 seconds, because Instruments completes and exports the trace.
-- **Pauses for leak checks:** Instruments checks for leaks about every 11 seconds. macOS suspends the whole app for several seconds during each check. The calls of the agent wait until the app runs again.
-- **Longer hangs:** a suspension can make a hang longer. The report gives the suspended part of each hang that a suspension overlaps. To measure such a hang, the agent records again without leak checks.
-- **Late leaks:** a leak is in the profile only after a leak check has ended. Keep the recording on for about 25 seconds after the action that leaks.
-- **Partial data:** when the app quits, crashes, or restarts during the recording, the trace keeps only part of the data. Argent tells the agent. Record the scenario again, and do not quit the app before the stop.
-- **Instruments faults:** sometimes Instruments cannot attach to the app, or does not end after the stop. Argent detects both and tells the agent. The data of such a recording can be incomplete or missing. Record the scenario again.
+See the [profiling guide](/docs/features/profiling#limits) for leak recording guidance and the [Mac profiling tool reference](/docs/reference/tools#profiling-a-mac-app) for signing and recording options.
 
 ### Profile a react-native-macos app
 
@@ -121,7 +114,7 @@ Most distributed or notarized apps do not allow Argent to control them. Use your
 | A copy is already running                          | Save your work and quit that copy. To run another build in parallel, give it a different bundle identifier.                                                  |
 | The app has no window, or input has no effect      | Open a standard window. Restore a minimized window through the app's Window menu.                                                                            |
 | A restart stops at a save prompt                   | Ask the agent to answer the prompt, then retry the restart.                                                                                                  |
-| The profiler refuses the app                       | Profile a build that Xcode signed for development, such as the Debug build. See [Profile your app](#profile-your-app).                                       |
+| The profiler refuses the app                       | Try an Xcode build signed for development. See the [signing requirements](/docs/reference/tools#profiling-a-mac-app).                                        |
 | The React profiler does not find the app on Metro  | Start a Debug build of react-native-macos 0.76 or later that loads its JavaScript from this Metro. If Metro does not use port 8081, tell the agent the port. |
 | A control is missing                               | Scroll it into view. If the control still has no useful label, add a stable accessibility identifier.                                                        |
 | The tree reports that the Mac is locked            | Unlock the Mac and retry.                                                                                                                                    |

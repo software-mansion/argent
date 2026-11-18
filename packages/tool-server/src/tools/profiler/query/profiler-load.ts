@@ -507,7 +507,7 @@ Use when you need to revisit past session data without capturing a new recording
 Modes:
 - list: Show all available profiling sessions in the project's debug directory.
 - load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
-- load_native: Load a native profiler session (xctrace XML on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, .pftrace on Android). Requires session_id.
+- load_native: Restore native trace data (xctrace XML on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, .pftrace on Android). Requires session_id.
 Loading replaces the session in memory for this device_id (and Metro port, for React): the one the query tools and react-profiler-analyze read. The replaced session stays on disk; load it again by its session_id.
 Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or the session's trace files are missing from disk.`,
