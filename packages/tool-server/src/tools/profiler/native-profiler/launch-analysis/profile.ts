@@ -31,6 +31,7 @@ import {
   parseLifecyclePhases,
   keepRunningRows,
   truncateCpuXml,
+  weighSamplesByPeriod,
 } from "../../../../utils/ios-launch-time/trace-exports";
 import {
   coreExportFailureMessage,
@@ -340,7 +341,15 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   let laterRows = 0;
   if (exported.cpu) {
     const running = keepRunningRows(await fsp.readFile(exported.cpu, "utf8"));
-    const cut = truncateCpuXml(running.xml, endNs);
+    const weighed = weighSamplesByPeriod(running.xml);
+    if (weighed.periodNs !== null && weighed.periodNs > 1_000_000) {
+      const period = weighed.periodNs / 1_000_000;
+      notes.push(
+        `xctrace sampled the CPU every ${period} ms in this recording, not every 1 ms, ` +
+          `so work shorter than ${period} ms can be missing from the samples. Run again for 1 ms samples.`
+      );
+    }
+    const cut = truncateCpuXml(weighed.xml, endNs);
     ({ sessionId, cpuXmlPath } = await writeProfilerSession(cut.xml));
     // The launch-window copy is the one to analyze; drop the full export.
     await fsp.rm(exported.cpu, { force: true });

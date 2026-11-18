@@ -193,6 +193,59 @@ export function truncateCpuXml(
 }
 
 /**
+ * The interval xctrace sampled the CPU at, from the sample times. The App Launch
+ * template asks for 1 ms and 5 ms, xctrace uses one of them, which one changes
+ * from run to run, and every row keeps the same weight either way. A thread
+ * that keeps running gets one sample per tick, so the most common gap between
+ * a thread's consecutive samples is the interval. Null when too few gaps agree.
+ */
+function samplePeriodNs(xml: string): number | null {
+  const registry = valueRegistry(xml, ["sample-time"]);
+  const times = new Map<string, number[]>();
+  for (const [row] of xml.matchAll(/<row>.*?<\/row>/gs)) {
+    const thread = row.match(/<thread\s+(?:id|ref)="(\d+)"/)?.[1];
+    const time = Number(rowValue(row, "sample-time", registry));
+    if (thread === undefined || !Number.isFinite(time)) continue;
+    const series = times.get(thread);
+    if (series) series.push(time);
+    else times.set(thread, [time]);
+  }
+  const counts = new Map<number, number>();
+  let gaps = 0;
+  for (const series of times.values()) {
+    series.sort((a, b) => a - b);
+    for (let i = 1; i < series.length; i++) {
+      const gap = Math.round((series[i]! - series[i - 1]!) / 100_000) * 100_000;
+      if (gap <= 0) continue;
+      counts.set(gap, (counts.get(gap) ?? 0) + 1);
+      gaps++;
+    }
+  }
+  const [period, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [0, 0];
+  return gaps >= 20 && count * 2 >= gaps ? period : null;
+}
+
+/**
+ * Gives every sample the weight of the interval xctrace sampled at. Leaves the
+ * XML as it is when the interval is unclear, or when the weights differ between
+ * samples and so do not stand for one tick each.
+ */
+export function weighSamplesByPeriod(xml: string): { xml: string; periodNs: number | null } {
+  const periodNs = samplePeriodNs(xml);
+  const weight = /<weight\s+id="(\d+)"[^>]*>(\d+)<\/weight>/g;
+  const weights = new Set([...xml.matchAll(weight)].map((match) => Number(match[2])));
+  if (periodNs === null || weights.size !== 1 || weights.has(periodNs)) return { xml, periodNs };
+  const fmt = `${(periodNs / 1_000_000).toFixed(2)} ms`;
+  return {
+    xml: xml.replace(
+      weight,
+      (_, id: string) => `<weight id="${id}" fmt="${fmt}">${periodNs}</weight>`
+    ),
+    periodNs,
+  };
+}
+
+/**
  * Every element in `text` that defines an id, with its full text. A nested
  * definition (a frame in a backtrace) is listed as well as its parent.
  */

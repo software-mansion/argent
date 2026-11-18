@@ -10,6 +10,7 @@ import {
   parseLifecyclePhases,
   keepRunningRows,
   truncateCpuXml,
+  weighSamplesByPeriod,
 } from "../../src/utils/ios-launch-time/trace-exports";
 import { parseCpuXml } from "../../src/utils/ios-profiler/pipeline/xml-parser";
 
@@ -144,6 +145,58 @@ describe("truncateCpuXml", () => {
     const { xml, keptRows } = truncateCpuXml(CPU, 50_000_000);
     expect(keptRows).toBe(0);
     expect(parseCpuXml(xml)).toEqual([]);
+  });
+});
+
+/** `count` samples per thread, `gapNs` apart, all weighing 1 ms as xctrace exports them. */
+function ticks(gapNs: number, count: number, threads = ["Main Thread"]): string {
+  let id = 0;
+  const rows: string[] = [];
+  const weight = ++id;
+  threads.forEach((name, index) => {
+    const thread = ++id;
+    for (let tick = 0; tick < count; tick++) {
+      const time = 100_000_000 + index * 300_000 + tick * gapNs;
+      const threadCell =
+        tick === 0 ? `<thread id="${thread}" fmt="${name}"/>` : `<thread ref="${thread}"/>`;
+      const weightCell =
+        rows.length === 0
+          ? `<weight id="${weight}" fmt="1.00 ms">1000000</weight>`
+          : `<weight ref="${weight}"/>`;
+      rows.push(
+        `<row><sample-time id="${++id}">${time}</sample-time>${threadCell}${weightCell}` +
+          `<tagged-backtrace id="${++id}"><frame id="${++id}" name="work()"/></tagged-backtrace></row>`
+      );
+    }
+  });
+  return `<?xml version="1.0"?><trace-query-result><node><schema name="time-profile"/>${rows.join("")}</node></trace-query-result>`;
+}
+
+describe("weighSamplesByPeriod", () => {
+  it("weighs each sample at the interval of a 5 ms recording", () => {
+    const { xml, periodNs } = weighSamplesByPeriod(ticks(5_000_000, 30, ["Main Thread", "JS"]));
+    expect(periodNs).toBe(5_000_000);
+    const samples = parseCpuXml(xml);
+    expect(samples).toHaveLength(60);
+    expect(new Set(samples.map((sample) => sample.weightNs))).toEqual(new Set([5_000_000]));
+  });
+
+  it("leaves a 1 ms recording as it is", () => {
+    const input = ticks(1_000_000, 30);
+    expect(weighSamplesByPeriod(input)).toEqual({ xml: input, periodNs: 1_000_000 });
+  });
+
+  it("leaves the weights when there are too few samples to tell the interval", () => {
+    const input = ticks(5_000_000, 10);
+    expect(weighSamplesByPeriod(input)).toEqual({ xml: input, periodNs: null });
+  });
+
+  it("leaves the weights when they differ between samples", () => {
+    const input = ticks(5_000_000, 30).replace(
+      '<weight ref="1"/>',
+      '<weight id="999" fmt="300.00 ms">300000000</weight>'
+    );
+    expect(weighSamplesByPeriod(input)).toEqual({ xml: input, periodNs: 5_000_000 });
   });
 });
 

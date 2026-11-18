@@ -11,6 +11,7 @@ import {
   type FailureSignal,
   type ToolContext,
 } from "@argent/registry";
+import { parseCpuXml } from "../../src/utils/ios-profiler/pipeline/xml-parser";
 import { profileLaunch } from "../../src/tools/profiler/native-profiler/launch-analysis/profile";
 import { measureLaunch } from "../../src/tools/profiler/native-profiler/launch-analysis/measure";
 import {
@@ -250,6 +251,28 @@ describe('mode "profile" on a simulator', () => {
     expect(session).toContain("render()");
     expect(session).not.toContain("afterFirstFrame()");
     expect(session).not.toContain("__ulock_wait2");
+  });
+
+  it("weighs samples at the interval xctrace used and warns when it is not 1 ms", async () => {
+    const rows = Array.from(
+      { length: 30 },
+      (_, tick) =>
+        `<row><sample-time id="${100 + tick}">${100_000_000 + tick * 5_000_000}</sample-time>` +
+        (tick === 0
+          ? '<thread id="2" fmt="Main Thread"/><thread-state id="3" fmt="Running">Running</thread-state>' +
+            '<weight id="4">1000000</weight>'
+          : '<thread ref="2"/><thread-state ref="3"/><weight ref="4"/>') +
+        `<tagged-backtrace id="${200 + tick}"><frame id="${300 + tick}" name="setUp()"/></tagged-backtrace></row>`
+    );
+    state.exports.set("cpu", cpu(rows));
+    const result = await profile();
+    // 100–245 ms, all before the first frame at 300 ms.
+    expect(result.profilerSession.cpuSamples).toBe(30);
+    const session = await readFile(result.profilerSession.cpuXml, "utf8");
+    expect(new Set(parseCpuXml(session).map((sample) => sample.weightNs))).toEqual(
+      new Set([5_000_000])
+    );
+    expect(result.warning).toContain("xctrace sampled the CPU every 5 ms");
   });
 
   it("reports no lifecycle export error when the simulator trace has no lifecycle table", async () => {
