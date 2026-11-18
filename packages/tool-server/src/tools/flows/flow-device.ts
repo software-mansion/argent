@@ -17,6 +17,17 @@ import {
 } from "./flow-utils";
 
 /**
+ * An iOS simulator, local or remote: the one device kind where the e2e file
+ * version picks the tree (see `usesViewHierarchy`).
+ */
+export function isIosSimulatorDevice({
+  platform,
+  kind,
+}: Pick<DeviceInfo, "platform" | "kind">): boolean {
+  return platform === "ios-remote" || (platform === "ios" && kind !== "device");
+}
+
+/**
  * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in flow-utils.
  * Wider than the authoring set by `ios-remote`: a remote simulator is a device
  * a run can select, never something a flow file names.

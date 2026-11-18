@@ -97,7 +97,8 @@ async function run(
   try {
     const dir = path.join(root, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
-    const flow = serializeFlow({ executionPrerequisite: "", steps });
+    // Version 2: the stale-id hint reads the accessibility tree. Version 1 reads the view hierarchy.
+    const flow = serializeFlow({ version: 2, executionPrerequisite: "", steps });
     await fs.writeFile(path.join(dir, "flow.yaml"), flow, "utf8");
     const r = await createRunFlowTool(sim.registry).execute(
       {},
@@ -140,7 +141,9 @@ describe.concurrent("a selector miss on an id", () => {
     expect(reason).toContain('no visible element matched selector id="house.fill"');
     expect(reason).toContain(STALE);
     expect(reason).toContain("add an await or scroll-to step before this one");
-    expect(reason).toContain("recorded on an iOS simulator by an older Argent");
+    expect(reason).toContain(
+      "a selector written for an e2e test without `version: 2`, which runs on the view hierarchy"
+    );
     expect(reason).toContain("re-record the step, or target the control `describe` shows there");
     expect(reason).not.toContain("if it is off-screen");
     expect(extraReads(sim)).toBe(1);
@@ -204,7 +207,7 @@ describe.concurrent("a selector miss on an id", () => {
     });
 
     expect(reason).toContain('no element on an iOS simulator has the role "AXScrollArea"');
-    expect(reason).toContain("by an older Argent");
+    expect(reason).toContain("an e2e test without `version: 2`");
     expect(extraReads(sim)).toBe(0);
   }, 20_000);
 

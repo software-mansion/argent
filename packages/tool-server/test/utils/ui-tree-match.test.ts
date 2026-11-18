@@ -292,6 +292,22 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("text", "^(?!.*Rex)", [field], "matches")).toBe(true);
   });
 
+  it("a regex text condition does not read an iOS text field with no text as empty", () => {
+    // The simulator's view tree has no typed text: a field holding "Rex" reads "".
+    const field = node({
+      role: "AXTextField",
+      identifier: "name",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [field], "matches", { viewHierarchy: true })).toBe(
+      false
+    );
+    expect(
+      evaluateCondition("text", "^(?!.*Rex)", [field], "matches", { viewHierarchy: true })
+    ).toBe(false);
+  });
+
   it("a regex text condition does not read a password field with no text as empty", () => {
     // The iOS tree drops a typed secret: a field holding one reads "".
     const field = node({
@@ -311,20 +327,46 @@ describe("ui-tree-match", () => {
       identifier: "name",
       frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
     });
+    const mac = { textFieldsShowText: true };
     // A Mac app's fields report their text, so there an empty field reads as empty,
     // but a password field never does: argent never reads its text.
-    expect(evaluateCondition("text", "^$", [field], "matches", undefined, true)).toBe(true);
+    expect(evaluateCondition("text", "^$", [field], "matches", mac)).toBe(true);
     const secret = { ...field, password: true };
-    expect(evaluateCondition("text", "^$", [secret], "matches", undefined, true)).toBe(false);
+    expect(evaluateCondition("text", "^$", [secret], "matches", mac)).toBe(false);
     // Every check reads only its value, also when its placeholder names it.
     const named = { ...field, label: "Email" };
-    expect(evaluateCondition("text", "^$", [named], "matches", undefined, true)).toBe(true);
-    expect(evaluateCondition("text", ".+", [named], "matches", undefined, true)).toBe(false);
-    expect(evaluateCondition("text", "Email", [named], "contains", undefined, true)).toBe(false);
+    expect(evaluateCondition("text", "^$", [named], "matches", mac)).toBe(true);
+    expect(evaluateCondition("text", ".+", [named], "matches", mac)).toBe(false);
+    expect(evaluateCondition("text", "Email", [named], "contains", mac)).toBe(false);
     const filled = { ...named, value: "a@b.c" };
-    expect(evaluateCondition("text", "^$", [filled], "matches", undefined, true)).toBe(false);
-    expect(evaluateCondition("text", "^a@b\\.c$", [filled], "matches", undefined, true)).toBe(true);
-    expect(evaluateCondition("text", "A@B.C", [filled], "equals", undefined, true)).toBe(true);
+    expect(evaluateCondition("text", "^$", [filled], "matches", mac)).toBe(false);
+    expect(evaluateCondition("text", "^a@b\\.c$", [filled], "matches", mac)).toBe(true);
+    expect(evaluateCondition("text", "A@B.C", [filled], "equals", mac)).toBe(true);
+  });
+
+  // Each tree names its own flag, so a Mac flag can never turn on the view
+  // hierarchy rule, nor the other way round.
+  it.each([
+    { tree: "iOS view hierarchy (version 1)", options: { viewHierarchy: true }, empty: false },
+    { tree: "iOS accessibility tree, Android, Chromium, Vega", options: {}, empty: true },
+    { tree: "macOS", options: { textFieldsShowText: true }, empty: true },
+  ])("the empty field rule on the $tree", ({ options, empty }) => {
+    const field = node({
+      role: "AXTextField",
+      identifier: "name",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+    const secret = { ...field, password: true };
+    const filled = { ...field, value: "Rex" };
+    expect(evaluateCondition("text", "^$", [field], "matches", options)).toBe(empty);
+    expect(evaluateCondition("text", "^$", [secret], "matches", options)).toBe(false);
+    expect(evaluateCondition("text", "^Rex$", [filled], "matches", options)).toBe(true);
+    // Only a Mac app reads a field through its value alone: elsewhere the
+    // field's label also counts.
+    const labelled = { ...field, label: "Name" };
+    expect(evaluateCondition("text", "Name", [labelled], "contains", options)).toBe(
+      options.textFieldsShowText !== true
+    );
   });
 
   it("a regex text condition does not read a container with hoisted text as empty", () => {
@@ -1875,7 +1917,9 @@ describe("reading order on a landscape UI", () => {
     expect(firstInReadingOrder(labels, o)?.identifier).toBe("label-airplane");
     // In the frame space the rows run right to left: the last row comes first.
     expect(firstInReadingOrder(labels)?.identifier).toBe("label-bluetooth");
-    expect(evaluateCondition("text", "airplane", labels, "contains", o)).toBe(true);
+    expect(evaluateCondition("text", "airplane", labels, "contains", { orientation: o })).toBe(
+      true
+    );
     expect(evaluateCondition("text", "airplane", labels, "contains")).toBe(false);
     // A field-less selector resolves to the user's next element, and the frame
     // returned is the one to act on: the switch where the panel has it.

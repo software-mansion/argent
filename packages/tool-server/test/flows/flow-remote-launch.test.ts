@@ -72,7 +72,9 @@ async function run(
   return Object.assign(result as FlowRunResult, { launched, restartArgs });
 }
 
+// Version 2 gates the launch on the accessibility tree; version 1 on native devtools.
 const CROSS_PLATFORM: FlowFile = {
+  version: 2,
   executionPrerequisite: "",
   steps: [{ kind: "launch", app: { ios: "com.acme.app", android: "com.acme.app.android" } }],
 };
@@ -137,7 +139,7 @@ describe("launch args from an ios { app, args } entry", () => {
     ["a local simulator", LOCAL],
     ["a remote simulator", REMOTE],
   ])("forwards them as launchArgs on %s", async (_label, device) => {
-    await writeFlow("with-args", WITH_ARGS);
+    await writeFlow("with-args", { ...WITH_ARGS, version: 2 });
 
     const result = await run("with-args", device);
 

@@ -38,9 +38,8 @@ import {
  * in; the daemon reports the interface orientation, which turns the flow's
  * directions and reading order on a landscape UI (`flow-orientation.ts`).
  *
- * The injected view hierarchy reader (`queryFullHierarchyTree`), the simulator
- * source before the accessibility tree, stays for e2e tests recorded on it.
- * Nothing calls it until the file version selects it.
+ * A version 1 e2e test on a simulator reads the injected view hierarchy
+ * instead (`queryFullHierarchyTree`), as before version 2.
  *
  * Physical devices (`queryIosDeviceFlowTree`): the XCUITest runner accessibility
  * snapshot, the same tree `describe` serves, reshaped into the flow contract.
@@ -294,7 +293,7 @@ export async function queryIosSimulatorFlowTree(
   };
 }
 
-// ---- The view hierarchy source, as it was before the accessibility tree.
+// ---- Version 1 e2e tests: the view hierarchy source, as it was before version 2.
 
 interface RawRect {
   x: number;

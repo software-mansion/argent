@@ -1248,7 +1248,7 @@ describe("flow composition (run:)", () => {
     });
     await fs.writeFile(
       path.join(tmpDir, ".argent", "flows", "newer.yaml"),
-      "version: 2\nsteps:\n  - echo: hi\n",
+      "version: 3\nsteps:\n  - echo: hi\n",
       "utf8"
     );
 
@@ -1265,7 +1265,7 @@ describe("flow composition (run:)", () => {
       kind: "run",
       status: "error",
       reason:
-        'could not load fragment "newer.yaml": The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it.',
+        'could not load fragment "newer.yaml": The e2e test file is version 3, but this Argent reads up to version 2. Update Argent to run it.',
     });
   });
 
@@ -2569,7 +2569,9 @@ describe("flow composition (run:)", () => {
   });
 
   it("expands a referenced standalone flow inline, launch step and all", async () => {
+    // Version 2 gates the launch on the accessibility tree mockRegistry serves.
     await writeFlow("other-e2e", {
+      version: 2,
       executionPrerequisite: "",
       steps: [
         { kind: "launch", app: "com.acme.app" },
@@ -2577,6 +2579,7 @@ describe("flow composition (run:)", () => {
       ],
     });
     await writeFlow("main", {
+      version: 2,
       executionPrerequisite: "",
       steps: [{ kind: "run", flow: "other-e2e.yaml" }],
     });
@@ -2665,6 +2668,8 @@ describe("flow composition (run:)", () => {
 
   it("executes a leading launch step from scratch (restart-app) and reports it", async () => {
     await writeFlow("main", {
+      // Version 2 gates the launch on the accessibility tree mockRegistry serves.
+      version: 2,
       executionPrerequisite: "",
       steps: [
         { kind: "launch", app: "com.acme.app" },
@@ -2706,9 +2711,11 @@ describe("flow composition (run:)", () => {
   });
 
   // An iOS simulator launch passes once the accessibility tree names the
-  // launched app as the foreground app, and pins later reads to it.
+  // launched app as the foreground app, and pins later reads to it. That is
+  // version 2: version 1 gates on native devtools and reads the view hierarchy.
   describe("iOS launch gate", () => {
     const launchThenEcho = {
+      version: 2,
       executionPrerequisite: "",
       steps: [
         { kind: "launch" as const, app: "com.acme.app" },
@@ -2721,6 +2728,7 @@ describe("flow composition (run:)", () => {
       "passes a %s launch once the tree names it as the foreground app",
       async (bundleId) => {
         await writeFlow("main", {
+          version: 2,
           executionPrerequisite: "",
           steps: [
             { kind: "launch", app: bundleId },
@@ -2881,6 +2889,7 @@ describe("flow composition (run:)", () => {
 
     it("fails a step whose read finds another app in the foreground after the launch", async () => {
       await writeFlow("main", {
+        version: 2,
         executionPrerequisite: "",
         steps: [
           { kind: "launch", app: "com.acme.app" },
@@ -2908,6 +2917,7 @@ describe("flow composition (run:)", () => {
     // front, a `hidden` check would pass on another app's tree.
     it("still fails the read after a tool step: the pin survives it", async () => {
       await writeFlow("main", {
+        version: 2,
         executionPrerequisite: "",
         steps: [
           { kind: "launch", app: "com.acme.app" },
@@ -2974,6 +2984,7 @@ describe("flow composition (run:)", () => {
     // `runLaunch`, so it never reaches `treeSourceGate`. Point taps and `tool:`
     // steps resolve no selectors.
     await writeFlow("main", {
+      version: 2,
       executionPrerequisite: "",
       steps: [
         { kind: "tool", name: "restart-app", args: { bundleId: "com.apple.Preferences" } },

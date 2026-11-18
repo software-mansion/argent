@@ -30,7 +30,7 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosSimulator } from "../../utils/device-info";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import { isFlagOffered } from "../../utils/capability";
-import { bindDeviceArgs } from "./flow-device";
+import { bindDeviceArgs, isIosSimulatorDevice } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import { readIosSimulatorUiTree } from "./flow-ios-tree";
 import { NATIVE_DESCRIBE_ROLES } from "../describe/platforms/ios/ios-native-adapter";
@@ -73,7 +73,8 @@ import {
 
 /**
  * The app an iOS simulator tree read expects in the foreground, and whether the
- * runner vouches for it (see `queryIosSimulatorFlowTree`).
+ * runner vouches for it (see `queryIosSimulatorFlowTree`, and
+ * `queryFullHierarchyTree` for a version 1 e2e test).
  */
 export interface FlowTreeTarget {
   /**
@@ -85,6 +86,7 @@ export interface FlowTreeTarget {
    * Whether the runner still vouches that `bundleId` is what is on screen. A
    * pinned read fails when the tree names another foreground app (the app
    * crashed, or a step opened another one). Unpinned, the id is only a hint.
+   * A version 1 pinned read targets the app directly instead of auto-resolving.
    */
   pinned: boolean;
   /**
@@ -96,6 +98,13 @@ export interface FlowTreeTarget {
 
 /** Everything a directive needs to act on the run's device. */
 export interface ActionEnv {
+  /**
+   * The run is on an iOS simulator and the file of the step being run is
+   * version 1 ({@link usesViewHierarchy}): selectors resolve on the view
+   * hierarchy, under the rules from before version 2. Never set on another
+   * device, where every version behaves the same. A `run:` fragment sets its own.
+   */
+  viewHierarchy?: boolean;
   registry: Registry;
   ctx?: ToolContext;
   device: DeviceInfo;
@@ -107,15 +116,26 @@ export interface ActionEnv {
    * Other raw `tool:` steps keep it; a launch attempt drops it until it
    * succeeds (see `runLaunch` in flow-run). Shared with nested
    * `run:` flows, since ExecState is per-run. Only iOS tree reads consume it
-   * (see `fetchFlowTree`).
+   * (see `fetchFlowTree`), and only in a version 2 file.
    */
   treeTarget?: FlowTreeTarget;
+  /**
+   * {@link treeTarget} under the rules from before version 2, which the reads
+   * of a version 1 file use: another raw `tool:` step demotes it to a hint, a
+   * foreground-changing one drops it, and `launch-app`/`restart-app` set it as
+   * a hint. Every step keeps both targets whatever its own file's version, so
+   * each read sees the target a run of its version alone would have.
+   */
+  viewHierarchyTarget?: FlowTreeTarget;
   /**
    * Run-scoped memo of a tree source that answered nothing: written by a
    * {@link settleTree} that failed every read attempt, cleared by any directive
    * read that comes back — they all go through {@link readFlowTree} — by a
-   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), and
-   * by a nested orchestrator step, which can do either out of this holder's sight.
+   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), by a
+   * version 1 raw `tool:` step that demotes a pinned {@link viewHierarchyTarget},
+   * by a `run:` step that changes the version (the other tree is not the one
+   * that failed), and by a nested orchestrator step, which can do either out of
+   * this holder's sight.
    * One holder per run, built in flow-run's ExecState and shared by every
    * `deviceEnv`. A `tool:` step's own read clears nothing: it goes through
    * `invokeSubTool` and never reaches {@link readFlowTree}. Nor is the clear
@@ -492,7 +512,8 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * frame, and the settle that took already cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.treeTarget).then(
+  const target = env.viewHierarchy ? env.viewHierarchyTarget : env.treeTarget;
+  return fetchFlowTree(env.registry, env.device, target, env.viewHierarchy).then(
     (data) => {
       if (env.treeOutage) env.treeOutage.proven = undefined;
       if (env.lastRead) {
@@ -843,7 +864,7 @@ async function scrollToVisible(
   const missed = async (reason: string): Promise<ScrollResolve> => {
     const stale = await staleSelectorReason(env, target, reason);
     if (stale === "aborted") return { aborted: true };
-    return { reason: stale ?? reason, ...warnedBy(warning) };
+    return { reason: stale ?? withVersionHint(env, reason), ...warnedBy(warning) };
   };
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
@@ -864,7 +885,12 @@ async function scrollToVisible(
     // clip window the axis check measures the target against.
     const region = within ? flowSelectorToFrame(tree, within, orientation) : FULL_SCREEN;
     if (!region) {
-      return { reason: `scroll container ${describeSelector(within!)} is not visible` };
+      return {
+        reason: withVersionHint(
+          env,
+          `scroll container ${describeSelector(within!)} is not visible`
+        ),
+      };
     }
 
     const frame = flowSelectorToFrame(tree, target, orientation);
@@ -922,15 +948,30 @@ function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
 }
 
+// Only a version 2 file gets these reasons, so the stale selector came from a
+// file without the key: copied from one, or the key was added afterwards.
 const OLDER_FLOW =
-  "an e2e test recorded on an iOS simulator by an older Argent can carry an id or role from the " +
-  "view hierarchy, such as an SF Symbol name on an icon inside a button";
+  "a selector written for an e2e test without `version: 2`, which runs on the view hierarchy, " +
+  "can carry an id or role from that hierarchy, such as an SF Symbol name on an icon inside a button";
 
 const RE_RECORD = "re-record the step, or target the control `describe` shows there.";
 
+const VIEW_HIERARCHY_HINT =
+  "This e2e test file has no `version: 2`, so on an iOS simulator it resolves selectors on the " +
+  "view hierarchy, not on the tree `describe` shows; a selector taken from `describe` needs " +
+  "`version: 2` at the top of the file.";
+
+/** The accessibility tree reasons below apply: a version 2 file on an iOS simulator. */
 function isIosSimulatorEnv(env: ActionEnv): boolean {
-  const { platform, kind } = env.device;
-  return platform === "ios-remote" || (platform === "ios" && kind !== "device");
+  return !env.viewHierarchy && isIosSimulatorDevice(env.device);
+}
+
+/**
+ * A miss in a version 1 file on an iOS simulator: the reason unchanged, then
+ * the hint that the file reads another tree than `describe`.
+ */
+function withVersionHint(env: ActionEnv, reason: string): string {
+  return env.viewHierarchy ? `${reason}. ${VIEW_HIERARCHY_HINT}` : reason;
 }
 
 /** A role anywhere in the selector that passes `test` (given it lowercased). */
@@ -1071,7 +1112,7 @@ export async function selectorMissReason(
 ): Promise<DirectiveOutcome> {
   const stale = await staleSelectorReason(env, sel);
   if (stale === "aborted") return ABORTED_OUTCOME;
-  return { ok: false, reason: stale ?? offscreenHint(sel) };
+  return { ok: false, reason: stale ?? withVersionHint(env, offscreenHint(sel)) };
 }
 
 /**
@@ -1953,14 +1994,11 @@ async function waitForCondition(
           : undefined;
       if (
         !blind &&
-        evaluateCondition(
-          step.condition,
-          step.expectedText,
-          lastMatches,
-          step.textMatch,
-          data.uiOrientation,
-          env.device.platform === "macos"
-        )
+        evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch, {
+          orientation: data.uiOrientation,
+          viewHierarchy: env.viewHierarchy,
+          textFieldsShowText: env.device.platform === "macos",
+        })
       ) {
         return { ok: true };
       }
@@ -2048,26 +2086,27 @@ async function waitForCondition(
       ? ` (the final poll could not read the UI tree: ${fetchError})`
       : "";
   // Nothing matched: say so when the selector looks stale.
-  if (explainMiss && lastMatches.length === 0 && step.condition !== "hidden") {
+  const missed = explainMiss && lastMatches.length === 0 && step.condition !== "hidden";
+  if (missed) {
     const stale = await staleSelectorReason(env, step.selector);
     if (stale === "aborted") return ABORTED_OUTCOME;
     if (stale) return { ok: false, reason: stale + blipNote };
   }
-  return {
-    ok: false,
-    reason:
-      assertReason(
-        step.condition,
-        step.selector,
-        step.expectedText,
-        step.textMatch,
-        lastMatches,
-        // The read `lastMatches` came from is the last one that answered, and
-        // only a read that answers writes the orientation.
-        readingOrientation(env),
-        env.device.platform === "macos"
-      ) + blipNote,
-  };
+  const reason =
+    assertReason(
+      step.condition,
+      step.selector,
+      step.expectedText,
+      step.textMatch,
+      lastMatches,
+      // The read `lastMatches` came from is the last one that answered, and
+      // only a read that answers writes the orientation.
+      readingOrientation(env),
+      env.device.platform === "macos"
+    ) + blipNote;
+  // The hint is about the tree a selector resolves on, so it follows only a
+  // miss whose final read answered: after a failed read it would read as the fix.
+  return { ok: false, reason: missed && lastReadTrusted ? withVersionHint(env, reason) : reason };
 }
 
 // `await: { idle: true }` asks one question a selector condition cannot: has

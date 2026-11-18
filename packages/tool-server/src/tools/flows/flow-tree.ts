@@ -1,15 +1,21 @@
 import type { DeviceInfo, Platform, Registry } from "@argent/registry";
 import type { FlowTreeTarget } from "./flow-actions";
-import { queryIosDeviceFlowTree, queryIosSimulatorFlowTree } from "./flow-ios-tree";
+import {
+  queryFullHierarchyTree,
+  queryIosDeviceFlowTree,
+  queryIosSimulatorFlowTree,
+} from "./flow-ios-tree";
 import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { queryChromiumTree } from "./flow-chromium-tree";
 import { queryVegaTree } from "./flow-vega-tree";
 import { queryMacosTree } from "./flow-macos-tree";
+import { isIosSimulatorDevice } from "./flow-device";
 import type { DescribeTreeData } from "../describe/contract";
 
 /**
  * Fetch the tree a flow resolves selectors against: on an iOS simulator the
- * accessibility tree `describe` shows, on Android the full view hierarchy
+ * accessibility tree `describe` shows (the injected view hierarchy for a
+ * version 1 file, `viewHierarchy`), on Android the full view hierarchy
  * rather than the trimmed tree `describe` walks, on Chromium/Vega/macOS that
  * same describe tree re-shaped into the flow contract (flat leaves, hoisted
  * `subtreeText`).
@@ -28,8 +34,13 @@ import type { DescribeTreeData } from "../describe/contract";
 export async function fetchFlowTree(
   registry: Registry,
   device: DeviceInfo,
-  target?: FlowTreeTarget
+  target?: FlowTreeTarget,
+  viewHierarchy = false
 ): Promise<DescribeTreeData> {
+  // A version 1 file on an iOS simulator keeps the tree it was written against.
+  if (viewHierarchy && isIosSimulatorDevice(device)) {
+    return queryFullHierarchyTree(registry, device, target);
+  }
   const source = FLOW_TREE_SOURCES[device.platform];
   if (!source) {
     throw new Error(`ui-tree matching is not supported on platform "${device.platform}"`);

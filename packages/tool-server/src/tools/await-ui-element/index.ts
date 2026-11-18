@@ -205,14 +205,9 @@ const capability: ToolCapability = {
 // recorder reuse the exact selector semantics; `evaluateMatches` is a
 // params-shaped wrapper for this tool and its tests.
 export function evaluateMatches(params: Params, matches: DescribeNode[]): boolean {
-  return evaluateCondition(
-    params.condition,
-    params.expectedText,
-    matches,
-    params.textMatch,
-    undefined,
-    isMacos(params)
-  );
+  return evaluateCondition(params.condition, params.expectedText, matches, params.textMatch, {
+    textFieldsShowText: isMacos(params),
+  });
 }
 
 function isMacos(params: Params): boolean {

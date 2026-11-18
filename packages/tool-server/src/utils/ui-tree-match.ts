@@ -623,6 +623,16 @@ export function textCheckTarget(
   );
 }
 
+/** What the tree under a `text` check can show. Each caller names its flags. */
+export interface EvaluateConditionOptions {
+  /** Screen direction for the reading order of the matches. */
+  orientation?: UiOrientation;
+  /** An iOS view hierarchy (version 1 e2e test): a text field has no typed text there. */
+  viewHierarchy?: boolean;
+  /** A Mac app: a field shows its text, read through `macFieldText`. */
+  textFieldsShowText?: boolean;
+}
+
 // Evaluated over ALL elements matching a selector. `visible` holds if ANY match
 // is on-screen; `hidden` only if NONE is; `text` reads the first VISIBLE match
 // in reading order (the first overall if none is visible), so a stale zero-area
@@ -634,8 +644,7 @@ export function evaluateCondition(
   expectedText: string | undefined,
   matches: DescribeNode[],
   textMatch: TextMatchMode = "contains",
-  orientation?: UiOrientation,
-  textFieldsShowText = false
+  { orientation, viewHierarchy = false, textFieldsShowText = false }: EvaluateConditionOptions = {}
 ): boolean {
   switch (condition) {
     case "exists":
@@ -661,6 +670,8 @@ export function evaluateCondition(
       if (
         textMatch === "matches" &&
         first.password !== true &&
+        // The view hierarchy carries no typed text, so a filled field reads "" there.
+        !(viewHierarchy && first.role === "AXTextField") &&
         !assertText(first) &&
         !nodeText(first) &&
         uiTreeMatchInternals.createRegExp(expectedText).test("")

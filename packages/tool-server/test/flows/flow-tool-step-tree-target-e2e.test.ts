@@ -74,7 +74,8 @@ async function runFlow(
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, "flow.yaml"),
-    serializeFlow({ executionPrerequisite: "", steps }),
+    // Version 2: the ax-service tree and its launch gate. Version 1 reads the view hierarchy.
+    serializeFlow({ version: 2, executionPrerequisite: "", steps }),
     "utf8"
   );
   const r = await createRunFlowTool(simulator(tapOpens)).execute(

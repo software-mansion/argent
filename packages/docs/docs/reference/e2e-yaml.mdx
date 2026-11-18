@@ -52,16 +52,29 @@ steps:
 
 The file has four top-level keys:
 
-| Key                     | Required | Description                                                                                        |
-| ----------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                  |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                            |
-| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                          |
-| `version`               | no       | The file format version. The value is `1`. Argent writes it. A file without `version` is version 1 |
+| Key                     | Required | Description                                                                                                          |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                                    |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                                              |
+| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                                            |
+| `version`               | no       | The file format version. Argent writes `2`. A file without `version` is version 1. See [File version](#file-version) |
 
 Argent refuses a file with a `version` that is higher than the version it reads. Update Argent to run that file.
 
 Argent releases from before the `version` key refuse a file that has the key. To run the file on such a release, delete the `version` line.
+
+### File version
+
+On an iOS simulator, local or remote, the version sets the tree that Argent resolves selectors on:
+
+| Version                  | Tree on an iOS simulator                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `2`                      | The accessibility tree of `describe`. See [Runner tree and discovery tree](#runner-tree-and-discovery-tree) |
+| `1`, or no `version` key | The native view hierarchy of the app, as in Argent releases from before version 2                           |
+
+- On other platforms and on a physical iPhone, the version has no effect.
+- Each file runs at its own version. This is also true for a `run:` fragment and for an e2e test that a `tool: e2e-execute` step runs.
+- A selector from `describe` can miss in a version 1 e2e test. To change a version 1 e2e test, set `version: 2`, replay the e2e test and replace each selector that fails.
 
 An e2e test has one of two shapes:
 
@@ -170,6 +183,8 @@ The runner resolves a selector against the runner tree. On some platforms, the r
 | Vega            | Toolkit page source                                                                       | Same source                |
 | Mac app         | The elements of the app tree that have an id, a label, a value, a clickable role or focus | The full app tree, nested  |
 | HarmonyOS       | None                                                                                      | `uitest` layout dump       |
+
+A version 1 e2e test on an iOS simulator resolves selectors on the native view hierarchy of the app. See [File version](#file-version).
 
 On an iOS simulator and on a physical iPhone, the runner and `describe` read one tree. Copy ids, text and roles from `describe`. On an iOS simulator, a toggle has the role `AXSwitch` in e2e tests, `describe`, `await-ui-element` and `ui-tree`. The runner tree on an iOS simulator has these differences:
 
