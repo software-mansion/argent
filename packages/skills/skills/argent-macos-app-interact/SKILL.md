@@ -37,14 +37,7 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) throug
 
 ## Profiling
 
-Follow `argent-native-profiler`, with these differences:
-
-- `native-profiler-start` attaches to the running app that argent started; it does not restart it (except with `malloc_stack_logging`). Never pass `app_process`.
-- `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`: the build has no `com.apple.security.get-task-allow` (an archived, notarized or App Store build). Profile a build Xcode signed for development, such as the Debug build from `xcodebuild ... build`. Do not sign files or add entitlements.
-- Leaks of objects allocated after the start already carry a backtrace. Use `malloc_stack_logging: true` only for leaks of older objects: it restarts the app (state lost), and the app stays slow until `restart-app`. Call `restart-app` before a later CPU or hang pass.
-- Keep the app running until `native-profiler-stop`: a quit, crash or `restart-app` during the recording leaves only part of the trace.
-- During a recording, Instruments' leak check suspends the app for several seconds about every 11 s: a tap or `describe` then takes longer, as it waits for the app to run again.
-- Only the native profiler takes a Mac app id: `react-profiler-*`, `profiler-cpu-query`, `profiler-commit-query`, `profiler-combined-report` and `profiler-load` `load_react` refuse it.
+Use `argent-native-profiler`. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
 
 ## E2E tests
 
@@ -52,4 +45,4 @@ Read `references/e2e.md` before recording or writing a test for a Mac app.
 
 ## react-native-macos
 
-A Debug build loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). `debugger-*` and the React profiler do not take a Mac app id: read the screen with `describe`, and profile with the native profiler (see Profiling).
+A Debug build loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). Use `describe` to inspect the screen and the native profiler to measure performance. The JavaScript debugger and React profiler are unavailable for Mac apps.

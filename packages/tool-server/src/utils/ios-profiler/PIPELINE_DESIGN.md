@@ -47,11 +47,11 @@ Each hang has a `startNs` and `durationNs`. The correlator filters CPU samples w
 
 Top 5 suspected functions and top 3 call chains (ranked by sample frequency within the window) are attached to each hang.
 
-The correlator also adds up the CPU weight of the hang thread's own samples in the window (the main thread in Instruments' hangs, matched by `normalizeThreadName`). When that thread ran for less than 10% of the hang, without the time when the app was suspended, it mostly waited, and the hang gets `hangThreadRanMs`. This needs samples of the thread elsewhere in the trace, so that its name is known to match. When such a hang holds work of argent's or Instruments' library, the report says that the main thread very possibly waited and names no cause: the tool's work ran during the wait, for example argent's delivery of the click that started a sleep.
+The correlator sets `hangThreadRanMs` when the hang thread ran for less than 10% of the hang after subtracting suspended time and the trace contains samples from that thread. When a report shows this wait alongside activity from Argent or Instruments, it presents that activity as context for the wait.
 
-### Mac apps: the app's suspensions in the hangs
+### Mac app suspensions
 
-Instruments' leak check suspends the whole Mac app, so a hang that a check overlaps holds the check's pause in the trace. During a recording the tool-server watches the app's suspend count (`argent-macos-helper watch-suspension`), and the stop puts the windows on the trace's timeline (`<start-date>` of the table of contents). `suspendedTimeInHangs` (`app-suspensions.ts`) measures the part of each hang's recorded span when the app was suspended, and `withSuspendedTime` gives it to the hang as `suspendedMs`. The hang keeps its recorded length, label and severity. A pause makes a hang of fixed work longer by the pause, but a main thread that waits for a sleep, a deadline, I/O or another process waits on through the pause, so the app's own hang is between the recorded length less `suspendedMs` and the recorded length, and the trace cannot tell the two apart. An overlap under 20 ms is not counted: the watch reads the count every 10 ms.
+At stop, Argent aligns suspension intervals to the trace using the trace's start date. In `app-suspensions.ts`, overlaps under 20 ms are ignored because the watcher polls every 10 ms. Each hang keeps its recorded duration, label, and severity. The report uses `suspendedMs` to show the overlap because a pause can delay work in the app, while an external wait can continue through it.
 
 ### Call chain extraction
 

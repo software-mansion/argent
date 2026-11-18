@@ -411,7 +411,7 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
 
 const zodSchema = z.object({
   device_id: metroDeviceIdParam(
-    "iOS Simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial."
+    "Target device id from `list-devices` (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial)."
   ),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
@@ -435,15 +435,12 @@ type Params = z.infer<typeof zodSchema>;
 
 export const profilerStackQueryTool: ToolDefinition<Params, string> = {
   id: "profiler-stack-query",
-  description: `Query native profiler trace data for iterative investigation of native performance.
+  description: `Inspect a native profile after native-profiler-analyze or profiler-load.
 Modes:
 - hang_stacks: Full CPU context during a specific hang (by hang_index).
 - function_callers: Who calls function_name and what it calls.
 - thread_breakdown: CPU time split by thread, optionally filtered.
-- leak_stacks: Memory leak details (iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only), optionally filtered by object_type.
-Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after native-profiler-analyze.
-Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
-Fails if native-profiler-stop → native-profiler-analyze has not been run or no parsed trace data is in memory.`,
+- leak_stacks: Memory leak details (iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only). Requires a trace with leak data.`,
   zodSchema,
   readOnly: true,
   interaction: {

@@ -7,7 +7,7 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Profile on a simulator.
 
-Mac app (`platform: "macos"`), also react-native-macos: not supported; `react-profiler-*` reject a Mac app id. Follow `argent-native-profiler`.
+For Mac apps (`platform: "macos"`), including react-native-macos, use `argent-native-profiler`.
 
 ## 1. Tools
 

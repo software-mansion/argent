@@ -97,10 +97,8 @@ const zodSchema = z.object({
 
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
-  description: `Stop native profiling and export trace data: CPU, hangs, and leaks XML from xctrace on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>; the Perfetto .pftrace on Android.
-Use when the user has finished the interaction to profile and you need to export the trace.
-Returns { traceFile, exportedFiles, exportDiagnostics? }; traceFile is the raw trace bundle and exportedFiles the exports, all downloadable artifacts materialized to local paths.
-Fails if no active native-profiler-start session exists for the given device_id.`,
+  description: `End a native profiling session started by native-profiler-start and save the trace as a downloadable artifact.
+On iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, export CPU, hangs, and leaks XML from Instruments. Check warning and exportDiagnostics for partial or skipped exports. On Android, save the Perfetto .pftrace.`,
   zodSchema,
   interaction: {
     startedMsg: () => "Stopping native profiler",

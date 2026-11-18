@@ -502,54 +502,19 @@ The menu list stops at 2000 items or eight submenu levels. Check `truncated` and
 
 ### Profiling a Mac app
 
-`native-profiler-start`, `native-profiler-stop`, `native-profiler-analyze`, `profiler-stack-query`, and `profiler-load` accept a Mac app ID. `profiler-load` rejects a Mac app ID with `mode: "load_react"`. Other profiler tools are unsupported. See [Profiling](#profiling) for the behavior that all platforms share.
+Pass the Mac app's `device_id` to `native-profiler-start`, `native-profiler-stop`, `native-profiler-analyze`, and `profiler-stack-query`. Use `profiler-load` with `mode: "load_native"` to reopen a saved session. See [Profiling](#profiling) for shared behavior.
 
-`native-profiler-start` attaches Instruments to the running app. It records with the bundled Argent template, as on iOS: CPU samples, UI hangs, and memory leaks.
+- **Start.** Launch the app through Argent first and omit `app_process`. The bundled Instruments template captures CPU samples, UI hangs, and memory leaks. In a desktop session, Argent requires `com.apple.security.get-task-allow` on signed builds to avoid an administrator prompt that blocks recording. If you get `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`, use a development-signed build. In a background session such as SSH, pass `template_path: "Time Profiler"` to profile CPU and hangs on a signed build without that entitlement.
+- **Trace older allocations.** The bundled template can capture allocation stacks for objects allocated during recording. To trace allocations from launch, set `malloc_stack_logging: true`. This restarts the app and clears its current state. If start reports that it restarted the app, malloc stack logging stays active even if Instruments fails to attach. Use `restart-app` to remove the overhead before measuring CPU or hangs.
+- **Stop and recover.** Check `warning` and `exportDiagnostics` for an incomplete trace or skipped exports. If Instruments failed to attach or exited during startup, confirm the app is running and start a new recording. If the app ended or Instruments stalled during stop, repeat the scenario when you need a complete trace.
 
-| Requirement or parameter | macOS behavior                                                                                                                                                                                |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Running app              | Start the app with `boot-device` or `launch-app`. Without `malloc_stack_logging`, the tool fails with `NATIVE_PROFILER_NO_RUNNING_APPS` when the app does not run. It does not start the app. |
-| Debugging entitlement    | The app needs `com.apple.security.get-task-allow`. Otherwise the tool fails with `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`. The hardened runtime and the App Sandbox do not change this.           |
-| `template_path`          | Replaces the Argent template.                                                                                                                                                                 |
-| `app_process`            | Rejected. The device ID names the app.                                                                                                                                                        |
-| `malloc_stack_logging`   | Quits the app and starts it again with `MallocStackLogging=1`, then attaches. The app loses its state.                                                                                        |
+#### Interpret pauses and leak results
 
-Without the entitlement, macOS lets Instruments record the app only after an administrator types a password in a system dialog. Instruments records nothing while the dialog waits, so Argent does not start the recording. macOS shows this dialog only in the desktop session of the user. In a background session, for example over SSH, `launchctl managername` prints `Background`. There, the tool accepts an app without the entitlement when `template_path` is set, because the Time Profiler template records it. The tool still rejects the default template, because its Leaks and Allocations instruments cannot attach to the app. See [Profile your app](/docs/features/mac-apps#profile-your-app) for the builds that have the entitlement.
+During capture, Argent can wait up to 25 seconds before sending an action to a suspended app. If an action times out with `MACOS_APP_RPC_TIMEOUT`, check the app with `describe` before retrying. An action that was already sent may have taken effect.
 
-With `malloc_stack_logging: true`:
+When suspension timing is available, the report keeps the duration Instruments recorded and shows how much of the hang overlapped a pause. The overlap can extend a hang when the app has work to finish. A wait for something like a timer or I/O can continue through the pause. Repeat the same actions with `template_path: "Time Profiler"` to measure hangs without leak checks.
 
-- When the app runs, Argent checks the entitlement before it quits the app.
-- Argent also checks the new process, because the build on disk can differ. When the new process lacks the entitlement, the tool fails, and the error says that the app runs with malloc stack logging.
-- The result has a `warning` that says that Argent started the app again.
-- The app keeps malloc stack logging and runs slower until `restart-app` starts it again. While this process runs, each later `native-profiler-start` returns a `warning` about it.
-
-Without `malloc_stack_logging`, a memory leak has an allocation backtrace only when the app allocated the object after the start of the recording.
-
-`native-profiler-start` returns 1.5 seconds after xctrace reports that tracing started, because the instruments start to record some time after this report. When xctrace quits in this time, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_EXITED`, and the error contains the last output of xctrace.
-
-`native-profiler-stop` takes about 15 to 25 seconds for a short recording, because xctrace completes the trace and exports it. A long recording takes more time. The result has the same fields as on iOS: `traceFile`, `exportedFiles`, and `exportDiagnostics`.
-
-| Condition                                                             | Result                                                                                                                                                                                                                                                            |
-| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The app quit, crashed, or started again during the recording          | A `warning`. The trace contains only part of the data. The `native-profiler-analyze` report has the same note below its title.                                                                                                                                    |
-| xctrace does not end after the stop                                   | When xctrace uses no CPU time and writes nothing to the trace for one fifth of the recording time, from 30 to 120 seconds, Argent ends it and adds a `warning`. The exported data can be incomplete or missing. This fault of xctrace also occurs without Argent. |
-| xctrace reports errors at the end of the recording                    | A `warning` with these errors.                                                                                                                                                                                                                                    |
-| xctrace could not attach to the app                                   | The trace contains no data. The tool does not export the tables, and the `warning` tells the agent to record again. `exportDiagnostics.skipped` and the `native-profiler-analyze` report give the reason.                                                         |
-| The app ended, and xctrace cannot list the trace tables in 60 seconds | The tool does not export the tables. After a crash, the trace can contain almost no data, and each export takes more than a minute. `exportDiagnostics.skipped` and the `cpu`, `hangs`, and `leaks` entries of `exportDiagnostics.errors` give the reason.        |
-| The recording is still on after 10 minutes                            | Argent stops it. Argent ends xctrace when it does not end in the 2 minutes after this stop.                                                                                                                                                                       |
-
-`native-profiler-analyze` returns a report with the title "macOS Instruments Analysis". The report has the same sections as an iOS simulator report.
-
-#### Leak checks suspend the app
-
-Instruments suspends the whole app for several seconds when it checks for leaks, about every 11 seconds. Nothing in the app runs in this time. During the recording, Argent watches when macOS holds the app suspended:
-
-- A call to the app, such as a tap, `describe`, or a screenshot, waits until the app runs again, for at most 25 seconds. A suspension can start during a call and last past its timeout. The call then fails with `MACOS_APP_RPC_TIMEOUT` and says how long the app was suspended. Check the app before you repeat the call, because the action can have happened.
-- `native-profiler-analyze` keeps each UI hang with the length and the type that Instruments recorded. For a hang that a suspension overlaps, the report also gives the suspended part. When a suspension overlaps a hang, a note below the title gives the number of suspensions and of the hangs that they overlap.
-
-A suspension makes a hang of fixed work longer. It does not make a hang longer when the main thread waits for something that continues during the suspension, for example a sleep, a deadline, I/O, or another process. Thus the app's own part of the hang is between the recorded length minus the suspended part and the recorded length. To measure such a hang, record the same actions again with `template_path: "Time Profiler"`, which does not check for leaks.
-
-A leak check can take several seconds. When a recording with leak checks is shorter than 20 seconds and finds no leak, the report has a note below its title. The note says that the trace can hold no finished leak check, and that the app must not be reported as free of leaks. A template without the Leaks instrument, for example `Time Profiler`, records no leak data. The report then says that memory leaks were not checked.
+A short recording may end before a leak check finishes. Follow the report's warning and [allow time for a leak check](/docs/features/profiling#limits). With `Time Profiler`, the report says that memory leaks were not checked.
 
 ### Additional limitations
 
@@ -587,20 +552,11 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 | `profiler-cpu-query`        | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`      | Query native trace data for iterative native investigation                   |
 
-`native-profiler-start` records with Instruments on an iOS simulator and on a [Mac app](#profiling-a-mac-app), and with Perfetto on Android. The bundled Argent template of Instruments starts the first check for memory leaks about 4 seconds after `native-profiler-start` returns, and the next checks about every 11 seconds. A leak is in the trace only after a check that started after the leak has ended. Keep the recording on for about 25 seconds after the action that leaks. Otherwise the trace does not contain the leak.
+Argent caps Instruments recordings at 10 minutes on iOS simulators and [Mac apps](#profiling-a-mac-app). Call `native-profiler-stop` to recover the available trace after the cap or an unexpected exit.
 
-On an iOS simulator and on a Mac app, these rules apply while `native-profiler-stop` runs on a device:
+While stop is saving and exporting on the same target, a second stop joins the first. Start and analyze wait for it to finish. Retry `profiler-load` or `profiler-combined-report` after stop completes if the tool reports that the capture is still in progress.
 
-- A second `native-profiler-stop` on the same device returns the result of the stop that runs.
-- `native-profiler-start` and `native-profiler-analyze` wait until the stop has ended.
-- `profiler-load` and `profiler-combined-report` refuse to run until the stop has ended.
-
-In a report from Instruments, `native-profiler-analyze` gives the CPU time that Argent and Instruments used inside the app during the recording, and the share of all CPU time:
-
-- Argent: the code that Argent runs inside the app, for example for `describe` and taps on a Mac app.
-- Instruments: the recorder that Instruments loads into the app to track the memory allocations.
-
-The CPU hotspots do not include this time. A suspect function of a hang in this code has the mark "argent's own library" or "Instruments' own library". When the main thread ran for less than 10% of such a hang, the report tells that the main thread very possibly waited, and does not name a cause. When neither tool used CPU time inside the app, the report does not contain this note.
+Instruments reports exclude CPU time attributed to Argent and Instruments from app hotspots. Percentages still use all sampled CPU time with call stacks. Hang reports label suspect functions from either tool. If the report says the main thread likely waited, treat those functions as context for the wait.
 
 In the `top_functions` and `time_window` modes, `profiler-cpu-query` gives the self time of each call-tree node as a share of the sampled time. A function that runs on several call paths has one row for each path, and `top_n` counts rows. With `react_only`, `profiler-cpu-query` lists only the functions with a PascalCase name, which is the name format of a React component.
 
