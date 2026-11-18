@@ -279,6 +279,23 @@ describe("flow-add-step tap selector capture", () => {
     expect(yaml).not.toContain("tok-REVIEW-4242");
   });
 
+  it("still records the text a text field holds on a tree that is not the simulator's", async () => {
+    // The same node from the runner of a physical iPhone or from a Mac app:
+    // only the simulator tree gained this text, so only there is it left out.
+    const filled = n({
+      role: "AXTextField",
+      value: "linda",
+      frame: { x: 0.1, y: 0.125, width: 0.8, height: 0.055 },
+    });
+    for (const source of ["xcuitest-runner", "macos-devtools"] as const) {
+      setTree([filled], source);
+      await recordTap({ x: 0.5, y: 0.15 });
+    }
+
+    const tap = { kind: "tap", selector: { text: "linda" } };
+    expect(await recordedSteps()).toEqual([tap, tap]);
+  });
+
   it("records an iOS simulator text field that holds text by its label", async () => {
     setSimulatorFields({ label: "Token", value: "tok-REVIEW-4242" });
 
