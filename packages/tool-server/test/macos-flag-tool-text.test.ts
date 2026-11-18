@@ -67,19 +67,22 @@ describe("Mac app text with the macos-apps flag on", () => {
   });
 });
 
+const catalog = definitionsById(createRegistry());
+
+/** A tool's description and input properties as GET /tools renders them. */
+function advertised(id: string, flagOn: boolean) {
+  const def = catalog.get(id)!;
+  const text = renderFlagGated(
+    { description: def.description, inputSchema: advertisedSchema(def) },
+    (f) => flagOn && f === MACOS_APPS_FLAG
+  );
+  const schema = text.inputSchema as {
+    properties: Record<string, { description: string; enum?: string[] }>;
+  };
+  return { description: text.description, properties: schema.properties };
+}
+
 describe("the native profiler tools' Mac app text", () => {
-  const definitions = definitionsById(createRegistry());
-
-  function advertised(id: string, flagOn: boolean) {
-    const def = definitions.get(id)!;
-    const text = renderFlagGated(
-      { description: def.description, inputSchema: advertisedSchema(def) },
-      (f) => flagOn && f === MACOS_APPS_FLAG
-    );
-    const schema = text.inputSchema as { properties: Record<string, { description: string }> };
-    return { description: text.description, properties: schema.properties };
-  }
-
   it.each([
     "native-profiler-start",
     "native-profiler-stop",
@@ -140,5 +143,47 @@ describe("the native profiler tools' Mac app text", () => {
     const off = advertised("profiler-load", false);
     expect(off.description).toMatch(/load_native: .*\(xctrace XML on iOS, \.pftrace on Android\)/);
     expect(JSON.stringify(off)).not.toMatch(MAC_TEXT);
+  });
+});
+
+describe("the React profiler tools' Mac app text", () => {
+  it.each([
+    "react-profiler-start",
+    "react-profiler-stop",
+    "react-profiler-status",
+    "react-profiler-analyze",
+    "react-profiler-fiber-tree",
+    "react-profiler-renders",
+    "react-profiler-cpu-summary",
+    "profiler-cpu-query",
+    "profiler-commit-query",
+    "profiler-combined-report",
+  ])("%s documents the Mac app ID only with the flag on", (id) => {
+    const on = advertised(id, true).properties.device_id!.description;
+    expect(on).toMatch(/Mac app/);
+    expect(on).toContain("list-devices");
+    expect(on).not.toContain("debugger-connect");
+    expect(JSON.stringify(advertised(id, false))).not.toMatch(MAC_TEXT);
+  });
+
+  it("react-profiler-start documents Mac setup and native capture only with the flag on", () => {
+    const on = advertised("react-profiler-start", true).description;
+    expect(on).toMatch(/react-native-macos.*Debug build.*Metro/);
+    expect(on).toContain("without debugger-connect");
+    expect(on).toMatch(/Mac app[^.\n]*native-profiler-start/);
+    const off = advertised("react-profiler-start", false).description;
+    expect(off).toContain("native-profiler-start");
+    expect(off).not.toMatch(MAC_TEXT);
+  });
+
+  it("react-profiler-analyze offers the macos platform only with the flag on", () => {
+    expect(advertised("react-profiler-analyze", true).properties.platform).toMatchObject({
+      type: "string",
+      enum: ["ios", "android", "macos"],
+    });
+    expect(advertised("react-profiler-analyze", false).properties.platform).toMatchObject({
+      type: "string",
+      enum: ["ios", "android"],
+    });
   });
 });

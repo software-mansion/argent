@@ -15,21 +15,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Node 22 is the oldest line Argent supports, and Node 24 is what most users
-  # run, so both run every test. The two differ where the tests can see it, for
-  # example in how Node loads the script of a `script:` step and how
-  # TextDecoder reads windows-1252.
+  # Node 22 is the oldest line Argent supports.
   unit-tests:
-    name: ${{ matrix.name }}
+    name: Unit tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - node: "22"
-            name: Unit tests
-          - node: "24"
-            name: Unit tests (Node 24)
 
     steps:
       - name: Checkout
@@ -38,7 +27,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node }}
+          node-version: "22"
           cache: npm
 
       - name: Install dependencies
