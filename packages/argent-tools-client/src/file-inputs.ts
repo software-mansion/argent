@@ -309,9 +309,9 @@ async function uploadTar(
   signal?: AbortSignal
 ): Promise<string> {
   const { size } = await stat(tarPath);
-  // fetch can settle without reading the body (an early error reply): the
-  // stream then keeps its fd, or its deferred open fails after the caller
-  // removes the archive, with nothing listening.
+  // fetch can settle without reading the body (a refused connection, an early
+  // error reply): the stream then keeps its fd, or its deferred open fails
+  // after the caller removes the archive, with nothing listening.
   const body = createReadStream(tarPath).on("error", () => {});
   // `duplex: "half"` is required to stream a Node Readable request body via
   // undici's fetch, but it isn't in the DOM RequestInit type.

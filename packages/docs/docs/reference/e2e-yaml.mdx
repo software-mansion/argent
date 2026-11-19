@@ -171,15 +171,14 @@ The runner resolves a selector against a different tree than the `describe` tool
 
 On an iOS simulator and Android, an id absent from `describe` can still resolve in an e2e test. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
 
-On a Mac app:
+### Selectors on Mac apps
 
-- The runner and `describe` read the same app tree. The runner keeps the elements that the table above names, except a window, a sheet, an alert, a popover and a scroll bar. The runner does not keep these, also when they have an id or a label. Copy ids and roles from `describe` only for the elements that the runner keeps.
-- Thus `role: AXSheet` does not match an open sheet, also in `within`. To wait for a sheet, select an element in the sheet, for example its button.
-- The runner reads up to 12000 elements, and `describe` reads up to 3000.
-- The runner reads the tree again when elements did not answer or Argent could not read the web content.
-- The runner calls a password field `[password]`, so only an `id` or `role` selector matches it.
-- When several elements match, an action and a `text` condition choose one of them. A match in an open menu or an open combo box list comes first. A match in an alert, a sheet or a popover comes next, the upper one first when one lies over another. A match in a window comes last. A `text` condition does not read a text area that holds a matching text, for example a web editor around the paragraph that the selector names.
-- A recorded click that is not at the center of an element can keep its coordinates. This applies to a slider, a stepper, a text area, the text in a text area and a disclosure triangle, for example a SwiftUI `DisclosureGroup`. It also applies to an element that is not clickable and is not text. Examples are a click on a canvas, a chart, a map, a seek bar or the empty space of a container. A replay of a selector clicks the center, and there the click does something else. A click on other text keeps its coordinates only when another element is at the center of the text.
+Copy control identifiers and `AX` roles from `describe`. The runner uses the same app tree.
+
+- **Select controls inside a window or dialog.** Windows, sheets, alerts, popovers, and scroll bars cannot be selector targets, even with an identifier. To wait for a sheet, select a button inside it.
+- **Use identifiers for password fields.** Password fields expose no text value. An `id` or `role` selector can match them.
+- **Expect foreground controls to take priority.** When several elements match, menus and combo box lists come first, then the uppermost dialog, then the window. Text checks prefer a matching paragraph over its containing editor.
+- **Keep recorded coordinates when position matters.** Sliders, disclosure triangles, and canvas clicks can behave differently at the element's center. Argent preserves coordinates for these clicks when needed.
 
 ## Directives
 
@@ -230,18 +229,15 @@ Use the map form for an e2e test that runs on more than one platform:
 
 A run on a remote simulator uses the `ios` entry. If the map has no `ios` entry, the run uses the `native` entry.
 
-When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry. On a Mac app, Argent saves a `macos: { app, args }` entry when the restarted app got arguments. Otherwise Argent saves `launch: <bundle id>`. A run then selects the Mac app only with `--platform macos` or `--device`.
+When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry.
 
-A Mac app is the device, and the device id is `macos-app-<bundle id>`. The `macos-apps` flag must be on, which is the default. The runner selects the Mac app in this order:
+An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the e2e test as a fragment.
 
-| Run                                                                                                                                          | Device                                                                                                             |
-| -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `--device macos-app-<bundle id>`                                                                                                             | That app                                                                                                           |
-| No `--device`, and a leading launch with the `macos` key alone, with `--platform macos`, or with a `requires` block that allows only `macos` | The app that the launch step names. The runner starts the app, so the app does not have to run before the e2e test |
-| No `--device`, `--platform macos`, no launch step                                                                                            | The one running Mac app. When two or more Mac apps run, the run fails and lists them. Pass `--device`              |
-| No `--device`, no `--platform`, and no `macos`-only launch                                                                                   | The one running device of the other platforms. The runner does not select a running Mac app                        |
+### Launch a Mac app
 
-The launch step restarts the app as [`restart-app`](/docs/reference/tools#the-device) does, and fails in the same cases. When the build is in another git worktree of the project, or in the DerivedData folder of Xcode for such a worktree, the step reports a warning. The runner gives this warning only when the e2e test does not run [over a link](#e2e-tests-over-a-link). A `tool:` step calls `file-panel` or `menu-bar`:
+Use the bundle identifier in `launch.macos`. Start your intended `.app` through Argent once before the first test. Later launches reuse that build path. Without a saved path, Argent uses the newest matching build found by Spotlight.
+
+For example, save this test as `.argent/e2e/open-document.yaml`. Replace the bundle identifier, control identifier, and file path with your app's values:
 
 ```yaml
 steps:
@@ -251,9 +247,28 @@ steps:
     args: { action: choose, path: ~/Documents/note.txt }
 ```
 
-When the agent records a `file-panel` `stub` with no `panelKind`, Argent saves the `panelKind` that the stub used. The app writes the file when the save panel gets the answer. Without `panelKind`, a replay finds that file and keeps the answer for the next open panel.
+Run the test with:
 
-An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the e2e test as a fragment.
+```bash
+argent e2e run open-document --platform macos
+```
+
+The `launch` step restarts the app using the same rules as [`restart-app`](/docs/reference/tools#start-and-restart-an-app). Save prompts must be answered before a restart can proceed. The `macos-apps` flag must remain enabled.
+
+| How you select the app                                                             | Behavior                                                                   |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `--device macos-app-<bundle id>`                                                   | Uses that app.                                                             |
+| `--platform macos` with a leading `launch`                                         | Starts the app named by the launch step.                                   |
+| A launch with only the `macos` key, or macOS-only `requires` with a leading launch | Selects the named app without needing `--platform`.                        |
+| `--platform macos` without a launch step                                           | Uses the only running Mac app. With several running apps, pass `--device`. |
+
+Without a macOS selection, automatic device detection excludes Mac apps. Recorded tests with `launch: <bundle id>` need `--platform macos` or `--device`.
+
+A Mac launch accepts `{ app, args }` for launch arguments. Without `args`, the app receives no arguments. When recording a restart with arguments, Argent saves them under `macos`.
+
+A launch from another git worktree produces a warning, including builds in that worktree's Xcode DerivedData folder. Start the intended build before retrying. Worktree warnings are unavailable for [tests over a link](#e2e-tests-over-a-link).
+
+Use `tool` steps for `file-panel` and `menu-bar`. For prepared file answers, set `panelKind: open` or `panelKind: save` explicitly. Otherwise, a save can create the destination and cause a later replay to infer an open answer. Recording fills in `panelKind` automatically.
 
 ### Swipe
 
@@ -395,7 +410,7 @@ A snapshot compares the current screen, or the frame of `cropOn`, with a stored 
 
 Baselines live in `__baselines__/<test>/` beside the e2e test file, for example `.argent/e2e/__baselines__/checkout/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. A run on a remote simulator uses `ios` in the key. It uses the same baseline as a local iOS run with the same capture geometry. Run `argent e2e run <name> --update-baselines` to write the baselines from a known-good state. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses. The step reason then says that a remote simulator wrote the baseline. Review each baseline before you commit it.
 
-On a Mac app, the capture is the app window at one pixel per point, plus a sheet, a popover, an alert or a menu that reaches past the window. The baseline key holds `macos` and the size of the capture in points, for example `summary__macos-900x640.png`. A different size looks for a different baseline. Write the baseline again after a change of the window size.
+Mac snapshots capture the app window and attached dialogs or menus at one pixel per point. Baseline names include `macos` and the capture size, such as `summary__macos-900x640.png`. Keep the window size consistent between runs. After an intentional resize, update and review the baseline.
 
 An e2e test that a `tool: e2e-execute` step runs uses its own baselines, in `__baselines__/<test>/` beside the real file of that e2e test. A run with `--update-baselines` also writes the baselines of each e2e test that a `tool: e2e-execute` step runs. When the step sets `updateBaselines`, Argent uses the value of the step.
 
@@ -577,12 +592,33 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 
 `argent e2e run` replays an e2e test without an agent and exits non-zero on failure. The command sends the e2e test to the tool-server that the CLI uses. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-| Command                      | Description                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist |
-| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                            |
-| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                         |
-| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                     |
+| Command                      | Description                                                                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist                      |
+| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                                                 |
+| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                                              |
+| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                                          |
+| `argent e2e list <dir>`      | List the e2e tests that `argent e2e run <dir>` runs. The path must not contain `..`                                   |
+| `argent e2e list <dir> -r`   | List the e2e tests that `argent e2e run <dir> -r` runs                                                                |
+| `argent e2e list --json`     | Print the same list as a JSON document. See [The `argent e2e list` JSON document](#the-argent-e2e-list-json-document) |
+
+`argent e2e list` skips the same subdirectories as `argent e2e run <dir> --recursive`: `__baselines__`, `node_modules` and dot-directories other than `.argent`, at any depth. Argent always reads the directory that you name, also when it is one of these directories.
+
+When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes `warning: no .argent/e2e or .argent/flows directory in the current working directory` on stderr. When the directories hold no e2e test, `argent e2e list` writes `No e2e tests found in .argent/e2e or .argent/flows` on stderr. In both cases, stdout is empty and the exit code is 0. When one of the directories exists but Argent cannot read it, `argent e2e list` writes `Could not read e2e test directory: <dir>` on stderr and gives exit code 2.
+
+`argent e2e list <dir>` prints paths relative to the current directory for a relative `<dir>`, and absolute paths for an absolute `<dir>`. `argent e2e run` accepts each printed path. Argent puts `./` in front of a printed path that starts with `-`, so that `argent e2e run` does not read the path as an option.
+
+Argent writes an error on stderr and gives exit code 2 when `<dir>`:
+
+- does not exist
+- is not a directory
+- cannot be read
+- is empty text
+- has a `..` segment
+
+When you give `-r` without `<dir>`, Argent writes `e2e list --recursive requires a directory path` on stderr and gives exit code 2.
+
+When Argent finds no e2e test in `<dir>`, Argent writes `No e2e tests found in <dir>` on stderr, prints nothing on stdout and gives exit code 0. Without `-r`, Argent writes `Pass -r/--recursive to include subdirectories.` on the next line. With `--json`, Argent prints `{ "e2eTests": [] }`.
 
 | Option               | Description                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -590,7 +626,7 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 | `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either    |
 | `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines` |
 | `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                           |
-| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Dot-directories and `node_modules` are skipped                                                                    |
+| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                             |
 | `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                 |
 | `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                               |
 | `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                     |
@@ -671,6 +707,36 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
+
+### The `argent e2e list` JSON document
+
+`argent e2e list --json` writes one document on stdout. The document holds an `e2eTests` array. The array has the same order as the plain output. Each entry holds these fields:
+
+| Field        | Description                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `path`       | The path that the plain output prints                                                                                            |
+| `name`       | The name that `argent e2e run <name>` accepts. Only for a file directly in `.argent/e2e` or `.argent/flows`                      |
+| `legacy`     | `true` for an e2e test in `.argent/flows`                                                                                        |
+| `shadowedBy` | The path of an earlier entry with the same name. `argent e2e run <name>` runs that entry instead. Only when such an entry exists |
+
+```json
+{
+  "e2eTests": [
+    { "path": ".argent/e2e/login.yaml", "name": "login", "legacy": false },
+    { "path": ".argent/e2e/suite/pay.yaml", "legacy": false },
+    {
+      "path": ".argent/flows/login.yaml",
+      "name": "login",
+      "legacy": true,
+      "shadowedBy": ".argent/e2e/login.yaml"
+    }
+  ]
+}
+```
+
+When Argent finds no e2e test, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
+
+`argent e2e list <dir> --json` gives each entry only the `path` field. With `--json`, Argent writes each `<dir>` error as the JSON error object on stderr.
 
 <a id="flows-over-a-link" />
 

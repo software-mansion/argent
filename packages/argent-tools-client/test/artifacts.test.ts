@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, mkdir, rm, readFile, writeFile, stat, symlink, readdir } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   materializeArtifacts,
   isArtifactHandle,
@@ -188,6 +189,45 @@ describe("materializeArtifacts", () => {
     expect((result as { file: null }).file).toBeNull();
   });
 
+  it("caps a cache-path download that over-streams past its declared size", async () => {
+    // The durable branch stops an under-declared body with `readCapped`; the
+    // temp-cache branch must do the same. A compromised tool-server announces
+    // 8 bytes and streams 200,000: the body has to be abandoned once it passes
+    // the declared size, before the whole thing is held in memory.
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= 100) {
+          controller.close();
+          return;
+        }
+        pulled++;
+        controller.enqueue(new Uint8Array(2000));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const floodFetch = (async () => new Response(body)) as unknown as typeof fetch;
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "cacheflood",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: 8, // declares 8, delivers 200_000
+    };
+
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: floodFetch }
+    );
+
+    expect((result as { video: null }).video).toBeNull();
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThan(100);
+  });
+
   it("scopes the cache dir by device and omits the device segment when absent", () => {
     expect(artifactDir("DEV-9").endsWith("DEV-9")).toBe(true);
     expect(artifactDir()).not.toContain("undefined");
@@ -344,6 +384,9 @@ describe("materializeArtifacts directory bundles", () => {
     await mkdir(join(bundlePath, "sub"), { recursive: true });
     await writeFile(join(bundlePath, "top.txt"), "top");
     await writeFile(join(bundlePath, "sub", "nested.txt"), "nested");
+    // Incompressible payload so the tar body is deterministically larger than a
+    // directory's few-hundred-byte stat entry (what the server reports as `size`).
+    await writeFile(join(bundlePath, "payload.bin"), randomBytes(64 * 1024));
     const tarPath = join(hostDir, "session.tar.gz");
     execFileSync("tar", ["-czf", tarPath, "-C", hostDir, "session.trace"]);
     const tarGz = await readFile(tarPath);
@@ -409,6 +452,41 @@ describe("materializeArtifacts directory bundles", () => {
     expect(accepts).toEqual(["application/zstd, application/gzip"]);
     const extracted = (result as { traceFile: string }).traceFile;
     expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
+  });
+
+  it("remote: a bundle whose declared size is the folder's stat entry still downloads", async () => {
+    // The server reports a directory's `size` from `stat` — a few hundred bytes
+    // on macOS — while the tar body is megabytes. The cap must not trust it for
+    // archives, or an iOS trace over `argent link` is cut off mid-stream.
+    const { tarGz } = await makeBundle();
+    expect(tarGz.length).toBeGreaterThan(256);
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= tarGz.length) {
+          controller.close();
+          return;
+        }
+        const chunk = tarGz.subarray(pulled, pulled + 16 * 1024);
+        pulled += chunk.length;
+        controller.enqueue(new Uint8Array(chunk));
+      },
+    });
+    const streamingFetch = (async () => new Response(body)) as unknown as typeof fetch;
+    const h: ArtifactHandle = {
+      ...archiveHandle("big", join(hostDir, "gone.trace")),
+      size: 256, // folder's stat entry, not the tar's
+    };
+    const { result } = await materializeArtifacts(
+      { traceFile: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: streamingFetch }
+    );
+
+    const extracted = (result as { traceFile: string | null }).traceFile;
+    expect(extracted).not.toBeNull();
+    if (!extracted) return;
+    expect((await stat(extracted)).isDirectory()).toBe(true);
+    expect((await readFile(join(extracted, "payload.bin"))).length).toBe(64 * 1024);
   });
 
   it("remote: a failed bundle download rewrites to null", async () => {

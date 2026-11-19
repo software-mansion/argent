@@ -548,6 +548,21 @@ describe("uninstall — prune bundled content", () => {
     expect(fs.existsSync(targetDir)).toBe(false);
   });
 
+  it("removes a link to a directory that sits at a bundled file's path", () => {
+    const bundledDir = path.join(tmpDir, "bundled");
+    const targetDir = path.join(tmpDir, ".cursor", "rules");
+    const linkedDir = path.join(tmpDir, "elsewhere");
+
+    writeFile(path.join(bundledDir, "argent.md"));
+    writeFile(path.join(linkedDir, "notes.md"), "user");
+    writeFile(path.join(targetDir, "vendor.md"), "vendor");
+    fs.symlinkSync(linkedDir, path.join(targetDir, "argent.md"));
+
+    expect(removeBundledContent(bundledDir, targetDir).removedPaths).toEqual(["argent.md"]);
+    expect(fs.readdirSync(targetDir)).toEqual(["vendor.md"]);
+    expect(fs.readdirSync(linkedDir)).toEqual(["notes.md"]);
+  });
+
   it("handles missing source or target directories gracefully", () => {
     const result = removeBundledContent(path.join(tmpDir, "missing"), path.join(tmpDir, "target"));
     expect(result).toEqual({ removedPaths: [], removedRoot: false });
