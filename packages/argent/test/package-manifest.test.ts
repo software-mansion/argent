@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import semver from "semver";
 import { describe, expect, it } from "vitest";
 
 describe("package manifest", () => {
@@ -13,6 +14,30 @@ describe("package manifest", () => {
     expect(pkg.files).toContain("dylibs/");
     expect(pkg.files).toContain("bin/");
     expect(pkg.files).toContain("skills/");
+  });
+
+  it("admits only Node releases that run TypeScript and have zstd, in both published packages", () => {
+    const engines = (dir: string) =>
+      (
+        JSON.parse(
+          fs.readFileSync(
+            path.resolve(import.meta.dirname, "..", "..", dir, "package.json"),
+            "utf8"
+          )
+        ) as { engines: { node: string } }
+      ).engines.node;
+    const range = engines("argent");
+
+    expect(engines("argent-alias")).toBe(range);
+    // Node runs TypeScript with no flag from 22.18.0 and 23.6.0, which a
+    // `script:` step of an e2e test needs. zstd in node:zlib landed in 22.15.0
+    // and 23.8.0.
+    for (const v of ["22.18.0", "22.99.0", "23.8.0", "24.0.0", "26.0.0"]) {
+      expect(semver.satisfies(v, range), v).toBe(true);
+    }
+    for (const v of ["20.19.0", "22.14.0", "22.17.1", "23.0.0", "23.7.0"]) {
+      expect(semver.satisfies(v, range), v).toBe(false);
+    }
   });
 
   it("exports the client and keeps deep paths resolvable", () => {
@@ -154,5 +179,41 @@ describe("native-binary placement (producer/consumer path agreement)", () => {
       path.posix.join(binSrcRoot!, "darwin/argent-macos-helper")
     );
     expect(MACOS_DYLIBS_DIR).toBe(path.posix.join(dylibsSrc!, "macos"));
+  });
+});
+
+// The runner's Xcode project ships as source, and the tool-server hashes that
+// tree into the runner's cache key. Both walk it by entry name: the bundler
+// with IOS_RUNNER_SKIP_NAMES, the fingerprint with FINGERPRINT_NOISE. A name
+// only the fingerprint knew (`build` and `Build`, once) made the bundler copy
+// a leftover Xcode build, stale `.xctestrun` included, into `dist/` and from
+// there into a locally packed tarball.
+describe("iOS runner tree (bundler/fingerprint agreement)", () => {
+  const workspaceRoot = path.resolve(import.meta.dirname, "..", "..", "..");
+  const bundleTools = fs.readFileSync(
+    path.join(workspaceRoot, "packages/argent/scripts/bundle-tools.cjs"),
+    "utf8"
+  );
+  const runnerArtifact = fs.readFileSync(
+    path.join(workspaceRoot, "packages/tool-server/src/utils/ios-device/runner-artifact.ts"),
+    "utf8"
+  );
+
+  // The string entries of a `const NAME = new Set([...])` literal.
+  function setLiteral(src: string, name: string): string[] {
+    const m = src.match(new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`));
+    if (!m) throw new Error(`set literal ${name} not found`);
+    return [...m[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]).sort();
+  }
+
+  it("the bundler skips exactly the names the fingerprint leaves out", () => {
+    const skipped = setLiteral(bundleTools, "IOS_RUNNER_SKIP_NAMES");
+
+    expect(skipped).toEqual(setLiteral(runnerArtifact, "FINGERPRINT_NOISE"));
+    expect(skipped).toEqual(expect.arrayContaining(["build", "Build"]));
+    // By entry name at any depth, the way the fingerprint walks the tree.
+    expect(bundleTools).toContain(
+      "filter: (src) => !IOS_RUNNER_SKIP_NAMES.has(path.basename(src)),"
+    );
   });
 });

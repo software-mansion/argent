@@ -171,15 +171,14 @@ The runner resolves a selector against a different tree than the `describe` tool
 
 On an iOS simulator and Android, an id absent from `describe` can still resolve in an e2e test. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
 
-On a Mac app:
+### Selectors on Mac apps
 
-- The runner and `describe` read the same app tree. The runner keeps the elements that the table above names, except a window, a sheet, an alert, a popover and a scroll bar. The runner does not keep these, also when they have an id or a label. Copy ids and roles from `describe` only for the elements that the runner keeps.
-- Thus `role: AXSheet` does not match an open sheet, also in `within`. To wait for a sheet, select an element in the sheet, for example its button.
-- The runner reads up to 12000 elements, and `describe` reads up to 3000.
-- The runner reads the tree again when elements did not answer or Argent could not read the web content.
-- The runner calls a password field `[password]`, so only an `id` or `role` selector matches it.
-- When several elements match, an action and a `text` condition choose one of them. A match in an open menu or an open combo box list comes first. A match in an alert, a sheet or a popover comes next, the upper one first when one lies over another. A match in a window comes last. A `text` condition does not read a text area that holds a matching text, for example a web editor around the paragraph that the selector names.
-- A recorded click that is not at the center of an element can keep its coordinates. This applies to a slider, a stepper, a text area, the text in a text area and a disclosure triangle, for example a SwiftUI `DisclosureGroup`. It also applies to an element that is not clickable and is not text. Examples are a click on a canvas, a chart, a map, a seek bar or the empty space of a container. A replay of a selector clicks the center, and there the click does something else. A click on other text keeps its coordinates only when another element is at the center of the text.
+Copy control identifiers and `AX` roles from `describe`. The runner uses the same app tree.
+
+- **Select controls inside a window or dialog.** Windows, sheets, alerts, popovers, and scroll bars cannot be selector targets, even with an identifier. To wait for a sheet, select a button inside it.
+- **Use identifiers for password fields.** Password fields expose no text value. An `id` or `role` selector can match them.
+- **Expect foreground controls to take priority.** When several elements match, menus and combo box lists come first, then the uppermost dialog, then the window. Text checks prefer a matching paragraph over its containing editor.
+- **Keep recorded coordinates when position matters.** Sliders, disclosure triangles, and canvas clicks can behave differently at the element's center. Argent preserves coordinates for these clicks when needed.
 
 ## Directives
 
@@ -212,13 +211,43 @@ The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a
 
 A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
 
-A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
+A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time. The report of the step shows the placeholder, not the value. See [Secrets](/docs/reference/configuration#secrets) and [Typed secrets in a report](#typed-secrets-in-a-report).
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
 ### Typed text
 
 On an Android phone or tablet, the tool-server reads the field back after a `type` step types. The step fails when the text is not in the field, and Argent does not press Enter. A raw `tool: keyboard` step and a `tool: run-sequence` step that holds one fail the same way. The step passes when the read-back cannot conclude, and on every other platform. See the [tools reference](/docs/reference/tools#typed-text-on-android).
+
+### Typed secrets in a report
+
+A text field that is not secure shows a typed secret on the screen. The reason of a failed `text` check quotes the text of its element. Argent keeps a typed secret out of the quoted text with two rules.
+
+The first rule applies on each platform. Argent knows each value that a `type` step or the `keyboard`, `fill` or `paste` tool typed on a device. In the quoted text, Argent replaces a value with its placeholder when the screen shows the value exactly as typed. The comparison is case-sensitive:
+
+```
+element matched id="status" but its text was "Signed in with {{secret:API_TOKEN}}" (wanted to contain "Saved")
+```
+
+The second rule applies on an iOS simulator. A text field can change a typed value. For example, the field can capitalize, correct or format the value. Thus, after a tool typed a secret on an iOS simulator, the quoted text does not contain the text of a text field. The quoted text contains a note instead:
+
+```
+element matched id="token" but its text was "Token [text withheld: a secret was typed on this device]" (wanted to contain "Saved")
+```
+
+The second rule applies to each text field on that simulator. It also applies to an empty field, which reads as its placeholder. The label of the field and the text of other elements stay in the quoted text. The check reads the text of the field as before. Only the quoted text changes.
+
+Argent keeps the values in memory, for each device, until the tool-server stops. Thus the two rules also apply in a later e2e test of a directory run, in a nested `e2e-execute` run and in the run around it. The rules also apply after the app starts again.
+
+Argent changes only the text that the reason quotes from the screen. The other words of the reason and the text that the check expects do not change. The first rule also applies to the note of a failed `text` check of the `await-ui-element` tool.
+
+A report can show a typed secret in these cases:
+
+- An element that is not a text field shows a text that the app derives from the secret, for example a capitalized name.
+- A `tool:` step reads the screen, for example with `describe`. The result of the step contains the text of the screen.
+- On a physical iPhone, Android, Chromium or a Mac app, a text field shows the secret in a changed form. The second rule applies only on an iOS simulator.
+- A later e2e test of a directory run fails. That e2e test typed no secret, so Argent takes the screenshot of the failed step.
+- A different tool-server typed the secret, or no Argent tool typed it.
 
 ### Launch map
 
@@ -234,18 +263,15 @@ Use the map form for an e2e test that runs on more than one platform:
 
 A run on a remote simulator uses the `ios` entry. If the map has no `ios` entry, the run uses the `native` entry.
 
-When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry. On a Mac app, Argent saves a `macos: { app, args }` entry when the restarted app got arguments. Otherwise Argent saves `launch: <bundle id>`. A run then selects the Mac app only with `--platform macos` or `--device`.
+When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry.
 
-A Mac app is the device, and the device id is `macos-app-<bundle id>`. The `macos-apps` flag must be on, which is the default. The runner selects the Mac app in this order:
+An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the e2e test as a fragment.
 
-| Run                                                                                                                                          | Device                                                                                                             |
-| -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `--device macos-app-<bundle id>`                                                                                                             | That app                                                                                                           |
-| No `--device`, and a leading launch with the `macos` key alone, with `--platform macos`, or with a `requires` block that allows only `macos` | The app that the launch step names. The runner starts the app, so the app does not have to run before the e2e test |
-| No `--device`, `--platform macos`, no launch step                                                                                            | The one running Mac app. When two or more Mac apps run, the run fails and lists them. Pass `--device`              |
-| No `--device`, no `--platform`, and no `macos`-only launch                                                                                   | The one running device of the other platforms. The runner does not select a running Mac app                        |
+### Launch a Mac app
 
-The launch step restarts the app as [`restart-app`](/docs/reference/tools#the-device) does, and fails in the same cases. When the build is in another git worktree of the project, or in the DerivedData folder of Xcode for such a worktree, the step reports a warning. The runner gives this warning only when the e2e test does not run [over a link](#e2e-tests-over-a-link). A `tool:` step calls `file-panel` or `menu-bar`:
+Use the bundle identifier in `launch.macos`. Start your intended `.app` through Argent once before the first test. Later launches reuse that build path. Without a saved path, Argent uses the newest matching build found by Spotlight.
+
+For example, save this test as `.argent/e2e/open-document.yaml`. Replace the bundle identifier, control identifier, and file path with your app's values:
 
 ```yaml
 steps:
@@ -255,9 +281,28 @@ steps:
     args: { action: choose, path: ~/Documents/note.txt }
 ```
 
-When the agent records a `file-panel` `stub` with no `panelKind`, Argent saves the `panelKind` that the stub used. The app writes the file when the save panel gets the answer. Without `panelKind`, a replay finds that file and keeps the answer for the next open panel.
+Run the test with:
 
-An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the e2e test as a fragment.
+```bash
+argent e2e run open-document --platform macos
+```
+
+The `launch` step restarts the app using the same rules as [`restart-app`](/docs/reference/tools#start-and-restart-an-app). Save prompts must be answered before a restart can proceed. The `macos-apps` flag must remain enabled.
+
+| How you select the app                                                             | Behavior                                                                   |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `--device macos-app-<bundle id>`                                                   | Uses that app.                                                             |
+| `--platform macos` with a leading `launch`                                         | Starts the app named by the launch step.                                   |
+| A launch with only the `macos` key, or macOS-only `requires` with a leading launch | Selects the named app without needing `--platform`.                        |
+| `--platform macos` without a launch step                                           | Uses the only running Mac app. With several running apps, pass `--device`. |
+
+Without a macOS selection, automatic device detection excludes Mac apps. Recorded tests with `launch: <bundle id>` need `--platform macos` or `--device`.
+
+A Mac launch accepts `{ app, args }` for launch arguments. Without `args`, the app receives no arguments. When recording a restart with arguments, Argent saves them under `macos`.
+
+A launch from another git worktree produces a warning, including builds in that worktree's Xcode DerivedData folder. Start the intended build before retrying. Worktree warnings are unavailable for [tests over a link](#e2e-tests-over-a-link).
+
+Use `tool` steps for `file-panel` and `menu-bar`. For prepared file answers, set `panelKind: open` or `panelKind: save` explicitly. Otherwise, a save can create the destination and cause a later replay to infer an open answer. Recording fills in `panelKind` automatically.
 
 ### Swipe
 
@@ -326,7 +371,17 @@ The `text` comparators:
 | `equals`   | Case-insensitive full match     |
 | `matches`  | Case-sensitive JavaScript regex |
 
-`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: on a simulator Argent can't read its typed text, so `matches` never reads an iOS text field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
+`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: `matches` never reads an iOS text field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
+
+On an iOS simulator, a `text` check reads a text field as follows:
+
+- A text field reads as the text that it contains.
+- An empty text field reads as its placeholder.
+- A text field with an accessibility label reads as the label, then a space, then the text or the placeholder. For example, an empty field with the label `Email` and the placeholder `Required` reads as `Email Required`.
+- Argent does not read the text in a secure text field.
+- The runner knows a text field by the class name of its view. The name must contain `TextField`, `TextView` or `SearchField`. Argent does not read the text in a text field of a different class, for example a `UITextField` subclass with the name `AmountField`. For such a field, `matches: '^$'` passes also when the field contains text.
+
+On an iOS simulator, Argent does not use the text in a text field as the selector of a recorded tap.
 
 A negative condition passes before the element appears, for a typo, and on the wrong screen. First prove the screen and the same selector with `visible`. Then perform the action and check `hidden`.
 
@@ -399,7 +454,7 @@ A snapshot compares the current screen, or the frame of `cropOn`, with a stored 
 
 Baselines live in `__baselines__/<test>/` beside the e2e test file, for example `.argent/e2e/__baselines__/checkout/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. A run on a remote simulator uses `ios` in the key. It uses the same baseline as a local iOS run with the same capture geometry. Run `argent e2e run <name> --update-baselines` to write the baselines from a known-good state. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses. The step reason then says that a remote simulator wrote the baseline. Review each baseline before you commit it.
 
-On a Mac app, the capture is the app window at one pixel per point, plus a sheet, a popover, an alert or a menu that reaches past the window. The baseline key holds `macos` and the size of the capture in points, for example `summary__macos-900x640.png`. A different size looks for a different baseline. Write the baseline again after a change of the window size.
+Mac snapshots capture the app window and attached dialogs or menus at one pixel per point. Baseline names include `macos` and the capture size, such as `summary__macos-900x640.png`. Keep the window size consistent between runs. After an intentional resize, update and review the baseline.
 
 An e2e test that a `tool: e2e-execute` step runs uses its own baselines, in `__baselines__/<test>/` beside the real file of that e2e test. A run with `--update-baselines` also writes the baselines of each e2e test that a `tool: e2e-execute` step runs. When the step sets `updateBaselines`, Argent uses the value of the step.
 
@@ -416,12 +471,14 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 
 Use a `script` step for setup or cleanup that device steps cannot do. The script must be a local file with one of these extensions:
 
-| Extension | Language   |
-| --------- | ---------- |
-| `.mjs`    | JavaScript |
-| `.mts`    | TypeScript |
+| Extension | Language   | Module type                               |
+| --------- | ---------- | ----------------------------------------- |
+| `.mjs`    | JavaScript | ES module                                 |
+| `.mts`    | TypeScript | ES module                                 |
+| `.js`     | JavaScript | The `package.json` of the project decides |
+| `.ts`     | TypeScript | The `package.json` of the project decides |
 
-Node reads both as an ES module, whatever the `type` field of the `package.json` of the project holds. Parsing rejects each other extension, such as `.js` or `.ts`. See [TypeScript scripts](#typescript-scripts) for the limits of an `.mts` file.
+Parsing rejects each other extension, such as `.cjs` or `.tsx`. See [Module type](#module-type) for a `.js` or `.ts` file, and [TypeScript scripts](#typescript-scripts) for the limits of a `.ts` or `.mts` file.
 
 Over a link, the tool-server rejects an e2e test with a `script` step, and the `e2e-add-script` tool refuses to record one. Record and replay an e2e test with a `script` step without a link. An argent client that is older than the tool-server can record a `script` step when the computer of the tool-server has the `project_root` path, for example over a link to `127.0.0.1`. A replay over the link then rejects the e2e test. See [E2E tests over a link](#e2e-tests-over-a-link).
 
@@ -429,10 +486,10 @@ A `script` step needs no device. An e2e test of script steps alone runs with no 
 
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
-| Key       | Required | Description                                                                                                                                      |
-| --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `path`    | yes      | An `.mjs` or `.mts` file, relative to the e2e test file that holds the step. Write the extension in lowercase, and match the letter case on disk |
-| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                         |
+| Key       | Required | Description                                                                                                                                                    |
+| --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | yes      | An `.mjs`, `.mts`, `.js` or `.ts` file, relative to the e2e test file that holds the step. Write the extension in lowercase, and match the letter case on disk |
+| `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                                       |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -471,39 +528,62 @@ On iOS, Android, Vega and macOS, a `script` step above the `launch` step runs be
 
 On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone, or the `requires` block allows only `chromium`. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform` and the `requires` block does not allow only `chromium`.
 
+### Module type
+
+An `.mjs` or `.mts` script is an ES module in every project.
+
+A `.js` or `.ts` script has the module type that Node gives each `.js` file in the same directory. Node reads the `type` field of the nearest `package.json`:
+
+| `type`     | Result                                                                                                             |
+| ---------- | ------------------------------------------------------------------------------------------------------------------ |
+| `module`   | The script is an ES module. A call to `require` makes the step fail                                                |
+| `commonjs` | The script is a CommonJS module. ES module syntax makes the step fail                                              |
+| Not set    | Node reads a script that holds ES module syntax as an ES module. Node reads each other script as a CommonJS module |
+
+Node counts each of these as ES module syntax:
+
+- An `import` statement or an `export` statement. An `export {}` statement alone is sufficient.
+- A reference to `import.meta`.
+- An `await` at the top level of the script.
+- A `const` or `let` declaration at the top level with the name `require`, `module`, `exports`, `__dirname` or `__filename`.
+
+A call to `import()` is not ES module syntax. In a `.ts` script, Node looks for the syntax after it removes the types. Thus an `import type` statement is not ES module syntax.
+
+A React Native project usually does not set `type`. When `type` is not set, Node usually prints a warning for a script that it reads as an ES module. Argent turns this warning off, so the log of the step does not hold it.
+
+When `type` is `module`, the error of Node for a call to `require` in a `.js` script tells you to rename the script to `.cjs`. Parsing rejects a `.cjs` file and a `.cts` file. Use an `import` statement in place of the call to `require`.
+
+Use the `.mjs` or `.mts` extension for a script that must behave the same in every project.
+
 ### TypeScript scripts
 
-Node runs an `.mts` script without a build step. Node removes the type annotations and runs the code that remains. Argent adds no compiler.
+Node runs a `.ts` or `.mts` script without a build step. Node removes the type annotations and runs the code that remains. Argent adds no compiler.
 
-The tool-server must run on a Node release that runs TypeScript:
+Each Node version that Argent supports runs TypeScript. The Node build must also include TypeScript support. The `nodejs` package of Debian and of Ubuntu does not include it. On such a host, use a Node build from nodejs.org.
 
-- Node 22.18 or a later release of Node 22
-- Node 23.6 or a later release of Node 23
-- Node 24 or later
-
-The Node build must also include TypeScript support. The `nodejs` package of Debian and of Ubuntu does not include it. On such a host, use a Node build from nodejs.org.
-
-A script that imports a TypeScript file has the same requirement, also when the script is an `.mjs` file.
+A script that imports a TypeScript file has the same requirement, also when the script is an `.mjs` or `.js` file.
 
 When the Node of the tool-server does not run TypeScript, the result depends on the place of the TypeScript file:
 
-| Place                                   | Result                                                                                                                           |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| An `.mts` step of the e2e test          | Argent rejects the e2e test before step 1, also when the step is in a `when` block. `argent e2e run` prints `not run (rejected)` |
-| An `.mts` step of a `run:` fragment     | The `run` step is errored, and no step of the fragment runs                                                                      |
-| An `.mts` file for `e2e-add-script`     | The script does not start, and the tool records no step                                                                          |
-| A TypeScript file that a script imports | The step is errored when Node loads the file                                                                                     |
+| Place                                       | Result                                                                                                                           |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| A `.ts` or `.mts` step of the e2e test      | Argent rejects the e2e test before step 1, also when the step is in a `when` block. `argent e2e run` prints `not run (rejected)` |
+| A `.ts` or `.mts` step of a `run:` fragment | The `run` step is errored, and no step of the fragment runs                                                                      |
+| A `.ts` or `.mts` file for `e2e-add-script` | The script does not start, and the tool records no step                                                                          |
+| A TypeScript file that a script imports     | The step is errored when Node loads the file                                                                                     |
 
-The reason names the Node version of the tool-server. A tool-server that runs keeps its Node version. To change the Node version, stop the tool-server with `argent server stop`. Then run Argent on the other Node version. Use `.mjs` files when you cannot change the Node version.
+The reason names the Node version of the tool-server. A tool-server that runs keeps its Node build. To change the Node build, stop the tool-server with `argent server stop`. Then run Argent on the other Node build.
 
-On Node 23.6 to 24.2, type stripping is experimental. Node writes a warning to the log of each step that loads a TypeScript file.
+When you cannot change the Node build, write the script and the files that it imports in JavaScript. Use an `.mjs` file in place of an `.mts` file. Use a `.js` file in place of a `.ts` file, or an `.mjs` file when the file is an ES module.
+
+On Node 23.8 to 24.2, type stripping is experimental. Node writes a warning to the log of each step that loads a TypeScript file.
 
 These limits apply:
 
 - Node does not check the types. See [Type check](#type-check).
 - Node does not read `tsconfig.json`. A path alias from `paths` does not resolve.
 - Node accepts only the syntax that it can remove. An `enum`, a `namespace` that holds code, or a parameter property makes the step fail.
-- Each relative import needs the file extension, for example `./helpers.mts`.
+- Each relative import needs the file extension, for example `./helpers.ts`.
 - An import of a type needs `import type`.
 - Node does not run a TypeScript file from `node_modules`.
 - An imported `.ts` or `.js` file can have a different module type. See [Imported files](#imported-files).
@@ -512,13 +592,15 @@ A frame in a failed step has the line and the column of the TypeScript source. A
 
 ### Imported files
 
-The `.mts` and `.mjs` extensions set the module type of one file. An imported `.mts` or `.mjs` file is an ES module too. An imported `.ts` or `.js` file takes its module type from the `type` field of the nearest `package.json`:
+The `.mts` and `.mjs` extensions set the module type of one file. An imported `.mts` or `.mjs` file is an ES module too. An imported `.ts` or `.js` file takes its module type from the `type` field of the nearest `package.json`, as a `.ts` or `.js` script does. See [Module type](#module-type).
 
-| `type`     | An imported `.ts` or `.js` file that has an `export` statement                                                               |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `module`   | Node loads the file as an ES module                                                                                          |
-| `commonjs` | The step fails. The reason says that the file does not provide the export, or that the file is a CommonJS module             |
-| Not set    | Node loads the file as an ES module. Node writes a `MODULE_TYPELESS_PACKAGE_JSON` warning to the log of the step in each run |
+| `type`     | An imported `.ts` or `.js` file that has an `export` statement                                                   |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| `module`   | Node loads the file as an ES module                                                                              |
+| `commonjs` | The step fails. The reason says that the file does not provide the export, or that the file is a CommonJS module |
+| Not set    | Node loads the file as an ES module                                                                              |
+
+When `type` is not set, Node has a `MODULE_TYPELESS_PACKAGE_JSON` warning for a file that it loads as an ES module. Argent turns this warning off, so the log of the step does not hold it.
 
 Give a file the `.mts` or `.mjs` extension when a script imports it and the project does not set `type` to `module`.
 
@@ -542,11 +624,11 @@ Node does not check the types of a TypeScript script. To check the types, run `t
 | Option                       | Effect                                                            |
 | ---------------------------- | ----------------------------------------------------------------- |
 | `noEmit`                     | `tsc` checks the files and writes no output                       |
-| `allowImportingTsExtensions` | `tsc` accepts an import that ends in `.mts`                       |
+| `allowImportingTsExtensions` | `tsc` accepts an import that ends in `.ts` or `.mts`              |
 | `erasableSyntaxOnly`         | `tsc` reports the syntax that Node cannot remove                  |
 | `verbatimModuleSyntax`       | `tsc` reports an import of a type that does not use `import type` |
 
-Without these options, `tsc` rejects an import that ends in `.mts`, and accepts an `enum` that Node rejects.
+Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and accepts an `enum` that Node rejects.
 
 <a id="the-argent-flow-command" />
 
@@ -554,12 +636,37 @@ Without these options, `tsc` rejects an import that ends in `.mts`, and accepts 
 
 `argent e2e run` replays an e2e test without an agent and exits non-zero on failure. The command sends the e2e test to the tool-server that the CLI uses. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-| Command                      | Description                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist |
-| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                            |
-| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                         |
-| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                     |
+| Command                      | Description                                                                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist                      |
+| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                                                 |
+| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                                              |
+| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                                          |
+| `argent e2e list <dir>`      | List the e2e tests that `argent e2e run <dir>` runs. The path must not contain `..`                                   |
+| `argent e2e list <dir> -r`   | List the e2e tests that `argent e2e run <dir> -r` runs                                                                |
+| `argent e2e list --json`     | Print the same list as a JSON document. See [The `argent e2e list` JSON document](#the-argent-e2e-list-json-document) |
+
+`argent e2e list` skips the same subdirectories as `argent e2e run <dir> --recursive`: `__baselines__`, `node_modules` and dot-directories other than `.argent`, at any depth. Argent always reads the directory that you name, also when it is one of these directories.
+
+`argent e2e list` and `argent e2e run <dir>` skip a YAML file that is not an e2e test. Such a file has no top-level `steps` key, for example a `docker-compose.yaml`. Argent does not skip an empty file. Argent does not skip a file that has a YAML syntax error and holds `steps` or a top-level `version:` line. A directory run reports such a file as a failed e2e test. Argent does not skip a file with a newer `version`. `argent e2e run <name>` and `argent e2e run <path>.yaml` always run the file that you name.
+
+`argent e2e list` writes a warning on stderr for an empty file and for a file with a YAML syntax error, for example `warning: <path> is empty`. Stdout holds only the paths.
+
+When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes `warning: no .argent/e2e or .argent/flows directory in the current working directory` on stderr. When the directories hold no e2e test, `argent e2e list` writes `No e2e tests found in .argent/e2e or .argent/flows` on stderr. In both cases, stdout is empty and the exit code is 0. When one of the directories exists but Argent cannot read it, `argent e2e list` writes `Could not read e2e test directory: <dir>` on stderr and gives exit code 2.
+
+`argent e2e list <dir>` prints paths relative to the current directory for a relative `<dir>`, and absolute paths for an absolute `<dir>`. `argent e2e run` accepts each printed path. Argent puts `./` in front of a printed path that starts with `-`, so that `argent e2e run` does not read the path as an option.
+
+Argent writes an error on stderr and gives exit code 2 when `<dir>`:
+
+- does not exist
+- is not a directory
+- cannot be read
+- is empty text
+- has a `..` segment
+
+When you give `-r` without `<dir>`, Argent writes `e2e list --recursive requires a directory path` on stderr and gives exit code 2.
+
+When Argent finds no e2e test in `<dir>`, Argent writes `No e2e tests found in <dir>` on stderr, prints nothing on stdout and gives exit code 0. Without `-r`, Argent writes `Pass -r/--recursive to include subdirectories.` on the next line. With `--json`, Argent prints `{ "e2eTests": [] }`.
 
 | Option               | Description                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -567,7 +674,7 @@ Without these options, `tsc` rejects an import that ends in `.mts`, and accepts 
 | `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either    |
 | `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines` |
 | `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                           |
-| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Dot-directories and `node_modules` are skipped                                                                    |
+| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                             |
 | `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                 |
 | `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                               |
 | `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                     |
@@ -648,6 +755,42 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
+
+### The `argent e2e list` JSON document
+
+`argent e2e list --json` writes one document on stdout. The document holds an `e2eTests` array. The array has the same order as the plain output. Each entry holds these fields:
+
+| Field        | Description                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `path`       | The path that the plain output prints                                                                                            |
+| `name`       | The name that `argent e2e run <name>` accepts. Only for a file directly in `.argent/e2e` or `.argent/flows`                      |
+| `legacy`     | `true` for an e2e test in `.argent/flows`                                                                                        |
+| `shadowedBy` | The path of an earlier entry with the same name. `argent e2e run <name>` runs that entry instead. Only when such an entry exists |
+| `warning`    | The problem in the file, as one of the codes below. Only when the file is empty or has a YAML syntax error                       |
+
+| `warning` code | Meaning                                    |
+| -------------- | ------------------------------------------ |
+| `empty`        | The file is empty or holds only whitespace |
+| `syntax-error` | The file has a YAML syntax error           |
+
+```json
+{
+  "e2eTests": [
+    { "path": ".argent/e2e/login.yaml", "name": "login", "legacy": false },
+    { "path": ".argent/e2e/suite/pay.yaml", "legacy": false },
+    {
+      "path": ".argent/flows/login.yaml",
+      "name": "login",
+      "legacy": true,
+      "shadowedBy": ".argent/e2e/login.yaml"
+    }
+  ]
+}
+```
+
+When Argent finds no e2e test, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. The top-level `warning` field is not the `warning` field of an entry. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
+
+`argent e2e list <dir> --json` gives each entry only the `path` field, and the `warning` field when it applies. With `--json`, Argent writes each `<dir>` error as the JSON error object on stderr.
 
 <a id="flows-over-a-link" />
 

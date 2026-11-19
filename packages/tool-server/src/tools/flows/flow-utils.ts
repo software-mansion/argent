@@ -3194,9 +3194,19 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
     if (miscased) {
       badEntry(raw, `a \`script\` path must use the lowercase ${miscased} extension`);
     }
+    // Node's own error for `require` in a `.js` file it read as an ES module
+    // ends by advising this rename, so a path that arrives here with it is
+    // usually following that advice and needs the way out, not the list again.
+    const commonJsOnly = COMMONJS_ONLY_EXTENSIONS.find((extension) => lower.endsWith(extension));
+    if (commonJsOnly) {
+      badEntry(
+        raw,
+        `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE}, and ${commonJsOnly} is not accepted — where the project's package.json sets "type": "module", use \`import\` in the script in place of \`require\``
+      );
+    }
     badEntry(
       raw,
-      `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE} — the extension pins the module type whatever the project's package.json says`
+      `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE} — a JavaScript or TypeScript file`
     );
   }
   if (!SCRIPT_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
@@ -3208,7 +3218,10 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   return value;
 }
 
-/** ".mjs or .mts", for the messages that name every spelling a script may take. */
+/** The spellings that pin a file to CommonJS, which {@link SCRIPT_FILE_EXTENSIONS} leaves out. */
+const COMMONJS_ONLY_EXTENSIONS = [".cjs", ".cts"] as const;
+
+/** ".mjs, .mts, .js or .ts", for the messages that name every spelling a script may take. */
 const SCRIPT_EXTENSIONS_FOR_MESSAGE = `${SCRIPT_FILE_EXTENSIONS.slice(0, -1).join(", ")} or ${SCRIPT_FILE_EXTENSIONS.slice(-1)[0]}`;
 
 /**

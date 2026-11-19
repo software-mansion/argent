@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "mcpName": "io.github.software-mansion/argent",
   "description": "MCP server for iOS Simulator, Android Emulator, Chromium app and Mac app control",
   "license": "Apache-2.0",
@@ -51,7 +51,7 @@
   },
   "private": false,
   "engines": {
-    "node": ">=20.12.0"
+    "node": "^22.18.0 || >=23.8.0"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

@@ -272,6 +272,12 @@ export interface FlowScriptExecutorOptions {
   maxTimeoutMs?: number;
   heapLimitMb?: number;
   queueWaitMs?: number;
+  /**
+   * More Node options for each script process, and for the probe that asks
+   * what one can run. For tests: `--no-experimental-strip-types` stands in a
+   * Node build that has no TypeScript support.
+   */
+  nodeOptions?: readonly string[];
 }
 
 interface ResolvedBounds {
@@ -365,7 +371,7 @@ export class FlowScriptExecutor {
    * life of the process.
    */
   stripsTypes(): Promise<boolean | undefined> {
-    this.typeStripping ??= probeTypeStripping();
+    this.typeStripping ??= probeTypeStripping(this.options.nodeOptions ?? []);
     return this.typeStripping;
   }
 
@@ -535,11 +541,18 @@ export class FlowScriptExecutor {
         // The runner rides in as a preload, not as the entry module, so the
         // *script* is what `process.argv[1]`/`require.main` name and an "am I
         // the main module?" guard runs its body. Node awaits an `--import`
-        // module before the entry, which leaves room for the handshake.
+        // module before the entry, which leaves room for the handshake. The
+        // preload also sends a CommonJS entry through the ESM loader, which
+        // leaves `module.id` and `module.parent` unlike a main module's; the
+        // runner's `claimMainModuleIdentity` puts those back. A CommonJS `.ts`
+        // entry also gets a reduced `require` there, so the runner loads that
+        // one itself: see its `loadEntryAsPlainNodeDoes`.
         execArgv: [
           `--max-old-space-size=${bounds.heapLimitMb}`,
           "--import",
           pathToFileURL(runnerPath).href,
+          TYPELESS_PACKAGE_WARNING_FLAG,
+          ...(this.options.nodeOptions ?? []),
         ],
         // Index 3 is a sink, and the protocol channel sits above it. The
         // channel is inherited by the script, Node parses it inside its own
@@ -1085,6 +1098,15 @@ function realPathOrSelf(candidate: string): string {
 }
 
 /**
+ * The flag that silences one Node warning by its code. A `.js` or `.ts` script
+ * with `import` in a project whose package.json sets no `type` — the ordinary
+ * React Native layout — makes Node print it on every run, into the step's log,
+ * and what it advises is setting `type` on the whole project for the sake of
+ * one e2e script.
+ */
+const TYPELESS_PACKAGE_WARNING_FLAG = "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON";
+
+/**
  * The three layouts the runner can be in — the published bundle (beside
  * `tool-server.cjs` in `dist`), the compiled package and the workspace source
  * — are all `path.join(__dirname, name)`. The tool-server package is CommonJS,
@@ -1104,11 +1126,11 @@ function resolveRunnerPath(runnerDir: string | undefined): string {
 
 /**
  * `process.features.typescript`, read in a process started the way a script's
- * is: this binary, the environment {@link buildChildEnv} leaves, and none of
- * this process's own flags. Any failure to ask is `undefined`, never `false`:
+ * is: this binary, the environment {@link buildChildEnv} leaves, the executor's
+ * `nodeOptions`, and none of this process's own flags. Any failure to ask is `undefined`, never `false`:
  * a refusal has to rest on an answer.
  */
-function probeTypeStripping(): Promise<boolean | undefined> {
+function probeTypeStripping(nodeOptions: readonly string[]): Promise<boolean | undefined> {
   return new Promise((resolve) => {
     let env: NodeJS.ProcessEnv;
     try {
@@ -1122,7 +1144,7 @@ function probeTypeStripping(): Promise<boolean | undefined> {
     try {
       execFile(
         process.execPath,
-        ["-p", "process.features.typescript"],
+        [...nodeOptions, "-p", "process.features.typescript"],
         { env, timeout: TYPE_STRIPPING_PROBE_TIMEOUT_MS, windowsHide: true },
         (err, stdout) => {
           const answer = err ? "" : stdout.trim();

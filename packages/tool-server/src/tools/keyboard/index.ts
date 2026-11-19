@@ -8,6 +8,7 @@ import {
   redactSecretsFromError,
   resolveSecretPlaceholders,
 } from "../../utils/secrets";
+import { noteTypedSecrets } from "../../utils/typed-secrets";
 import type { KeyboardParams, KeyboardResult } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeIosDeviceImpl } from "./platforms/ios-device";
@@ -234,6 +235,8 @@ React Native: after typing, the next tap outside the field may only close the ke
         clientSecrets: options?.clientSecrets,
       });
       if (secrets.length === 0) return dispatch(services, params, options);
+      // Before the keys go out: a failure partway leaves part of a value typed.
+      noteTypedSecrets(params.udid, secrets);
       try {
         const result = await dispatch(services, { ...params, text }, options);
         // Echo the placeholder form, never the resolved value.
