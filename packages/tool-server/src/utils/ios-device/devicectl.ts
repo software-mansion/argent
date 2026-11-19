@@ -12,6 +12,7 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { appendHintToMessage } from "./usbmux-protocol";
+import { assertXcodeFirstLaunchDone } from "../dependency-errors";
 
 /**
  * Wrappers around `xcrun devicectl` for discovery, app lifecycle, and connection readiness.
@@ -123,6 +124,7 @@ async function runDevicectl(
   action: string,
   opts: RunDevicectlOptions = {}
 ): Promise<{ stdout: string; stderr: string; json: unknown | null }> {
+  assertXcodeFirstLaunchDone("devicectl");
   const timeoutMs = opts.timeoutMs ?? DEVICECTL_TIMEOUT_MS;
   let jsonPath: string | null = null;
   const argv = ["devicectl", ...args];
@@ -216,7 +218,7 @@ interface DevicectlListPayload {
 /**
  * List physical iPhones CoreDevice can currently see. Physical-device support
  * is iPhone-only for now: iPads are deliberately skipped. Returns an empty
- * list off-macOS and when devicectl is missing or fails.
+ * list off-macOS and when devicectl is missing, refused, or fails.
  */
 export async function listIosPhysicalDevices(): Promise<IosPhysicalDevice[]> {
   if (process.platform !== "darwin") {

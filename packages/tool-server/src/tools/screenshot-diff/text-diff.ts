@@ -7,15 +7,10 @@ import {
   type FontGeometryReasonCode,
 } from "./font-diff";
 
-export type TextChangeKind =
-  | "moved"
-  | "appeared"
-  | "disappeared"
-  | "content_changed"
-  | "font_changed";
-export type TextChangeSource = "ocr";
-export type TextAnalysisProvider = "ocr";
-export type TextReasonCode =
+type TextChangeKind = "moved" | "appeared" | "disappeared" | "content_changed" | "font_changed";
+type TextChangeSource = "ocr";
+type TextAnalysisProvider = "ocr";
+type TextReasonCode =
   | "exact_normalized_match"
   | "ocr_noise_tolerated"
   | "position_delta"
@@ -26,7 +21,7 @@ export type TextReasonCode =
   | "normalized_text_changed"
   | FontGeometryReasonCode;
 
-export interface TextRegionWord {
+interface TextRegionWord {
   text: string;
   confidence: number;
   bounds: DiffBounds;

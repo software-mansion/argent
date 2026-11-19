@@ -16,11 +16,7 @@ import { assertExternalCapability } from "../utils/external-devices";
 import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
 
 // Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
-export {
-  ensureAutomationEnabled,
-  isEntitlementBypassActive,
-  setAccessibilityPrefsPreBoot,
-} from "../utils/ax-prefs";
+export { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../utils/ax-prefs";
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
@@ -51,6 +47,8 @@ export function axServiceRef(
 
 export interface AXDescribeElement {
   label?: string;
+  /** The VoiceOver hint. Only `describe` sends it, and a daemon older than this field does not. */
+  hint?: string;
   frame?: { x: number; y: number; width: number; height: number };
   tapPoint?: { x: number; y: number };
   traits?: string[];
@@ -65,7 +63,7 @@ export interface AXDescribeResponse {
 }
 
 /** A `tree` node, in document order; `parentIndex` names its accessibility parent. */
-export interface AXTreeNode extends AXDescribeElement {
+export interface AXTreeNode extends Omit<AXDescribeElement, "hint"> {
   index: number;
   parentIndex?: number;
   roleDescription?: string;

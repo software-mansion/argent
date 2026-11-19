@@ -8,7 +8,7 @@
 import { flagNameFor, isRetiredField, type JsonSchema } from "./flag-parser.js";
 
 /** A rejected value, addressed by its path in the payload; an empty path means the payload. */
-export interface InvalidField {
+interface InvalidField {
   path: (string | number)[];
   message: string;
 }

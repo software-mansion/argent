@@ -59,6 +59,7 @@ function parsedDataA(): NativeProfilerParsedData {
     ],
     cpuHotspots: [],
     memoryLeaks: [],
+    leaksRecorded: true,
     mallocStackLogging: true,
     wallClockStartMs: A_START, // frozen at analyze — the anchor that must be used
   };
@@ -141,5 +142,22 @@ describe("iOS combined-report frozen anchor (pass-5 finding 0)", () => {
     expect(after).not.toContain("Hangs Without React Commit Match");
     expect(clockOffset(after)).toBe(clockOffset(before));
     expect(after).toBe(before);
+  });
+});
+
+describe("the combined report's clock offset", () => {
+  afterEach(() => clearCachedProfilerPaths(PORT, DEVICE));
+
+  // The native profiler of a Mac app starts recording about 4.7 s after
+  // react-profiler-start returns; the line read "-4.7s before".
+  it.each([
+    [4700, "React started 4.7s before native profiler"],
+    [-2300, "React started 2.3s after native profiler"],
+  ])("names a native start %d ms after React's without a sign", async (nativeLagMs, text) => {
+    cachePaths(await writeReactCommits());
+    const api = await buildIosSession();
+    api.parsedData = { ...parsedDataA(), wallClockStartMs: A_START + nativeLagMs };
+
+    expect(clockOffset(await run(api))).toBe(`**Clock offset:** ${text}`);
   });
 });

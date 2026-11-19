@@ -17,12 +17,10 @@ vi.mock("child_process", () => ({
   // (file, args, options?, cb) — record the argv + options and return canned stdout.
   execFile: (file: string, args: string[], ...rest: unknown[]) => {
     const options = rest.find((r) => typeof r === "object" && r !== null) as
-      | { maxBuffer?: number; timeout?: number }
-      | undefined;
+      { maxBuffer?: number; timeout?: number } | undefined;
     rec.calls.push({ fn: "execFile", file, args, options });
     const cb = rest.find((r) => typeof r === "function") as
-      | ((e: unknown, r: { stdout: string; stderr: string }) => void)
-      | undefined;
+      ((e: unknown, r: { stdout: string; stderr: string }) => void) | undefined;
     // `--toc` discovery: advertise a known CPU schema so the cpu export runs
     // the TOC-resolved path (not just the brute-force fallback).
     const stdout = args.includes("--toc") ? 'data table schema="time-profile" /' : "";

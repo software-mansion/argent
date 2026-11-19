@@ -2,13 +2,8 @@ import { z } from "zod";
 import { promises as fs } from "fs";
 import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { astLookupCandidates } from "../../../utils/react-profiler/component-names";
-
-const zodSchema = z.object({
-  component_name: z.string().describe("Name of the React component to look up"),
-  project_root: z.string().describe("Absolute path to the RN project root"),
-});
 
 /**
  * A project tree can't ride along in a tool call, so `kind: "directory"` fails
@@ -19,11 +14,27 @@ const fileInputs: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "directory" },
 ];
 
+const zodSchema = z.object({
+  component_name: z.string().describe("Name of the React component to look up"),
+  project_root: z.string().describe("Absolute path to the RN project root"),
+});
+
 export const reactProfilerComponentSourceTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   Record<string, unknown>
 > = {
   id: "react-profiler-component-source",
+  description: `Find a named React component's source in the project: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source.
+Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
+Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).
+When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col). Check it before assuming the returned file is the one you meant.`,
+  zodSchema,
+  readOnly: true,
+  // react-profiler-analyze runs the same AST lookup for each component in its
+  // table (file, line and other matches) and adds the source of the located ones
+  // among the top five; agents read any other file themselves. The SDK still
+  // calls it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: ({ params }) => `Finding source for ${params.component_name}`,
     completedMsg: ({ params, result }) =>
@@ -31,15 +42,10 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to find source for ${params.component_name}: ${failureSignal.error_code}`,
   },
-  description: `Find a React component's source via tree-sitter AST lookup: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source for a named React component.
-Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
-Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).
-When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col). Check it before assuming the returned file is the one you meant.`,
-  zodSchema,
   // Declared so the tool catalogue groups this with the other react-profiler-*
   // tools; the HTTP gate itself is a no-op here, as there is no device arg to
   // inspect.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  capability: REACT_PROFILER_TOOL_CAPABILITY,
   fileInputs,
   services: () => ({}),
   async execute(_services, params) {

@@ -2,7 +2,14 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
-import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
+import {
+  jsRuntimeDebuggerBlueprint,
+  type JsRuntimeDebuggerApi,
+} from "../../src/blueprints/js-runtime-debugger";
+import {
+  reactProfilerSessionBlueprint,
+  type ReactProfilerSessionApi,
+} from "../../src/blueprints/react-profiler-session";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { scopeTempHome } from "../helpers/temp-home";
 
@@ -26,13 +33,26 @@ let mockPort: number;
 let registry: Registry;
 
 const DEVICES = [
-  { logicalDeviceId: "logical-aaa", deviceName: "iPhone 16 Pro Max" },
-  { logicalDeviceId: "logical-bbb", deviceName: "Pixel 9" },
+  { logicalDeviceId: "logical-aaa", deviceName: "iPhone 16 Pro Max", platform: "ios" },
+  { logicalDeviceId: "logical-bbb", deviceName: "Pixel 9", platform: "android" },
 ];
+/** One app on both devices, as when one project runs on iOS and Android. */
+const APP_ID = "com.example.app";
 
-function handleCDPMessage(ws: WebSocket, raw: string) {
+function handleCDPMessage(ws: WebSocket, raw: string, logicalDeviceId: string | null) {
   const { id, method } = JSON.parse(raw) as { id: number; method: string };
   switch (method) {
+    case "ReactNativeApplication.enable": {
+      const device = DEVICES.find((d) => d.logicalDeviceId === logicalDeviceId);
+      ws.send(
+        JSON.stringify({
+          method: "ReactNativeApplication.metadataUpdated",
+          params: { appIdentifier: APP_ID, platform: device?.platform, deviceName: "unused" },
+        })
+      );
+      ws.send(JSON.stringify({ id, result: {} }));
+      break;
+    }
     case "Debugger.enable":
       ws.send(JSON.stringify({ id, result: { debuggerId: "mock" } }));
       ws.send(
@@ -85,7 +105,12 @@ beforeAll(async () => {
     });
 
     wss = new WebSocketServer({ server: mockServer });
-    wss.on("connection", (ws) => ws.on("message", (raw) => handleCDPMessage(ws, raw.toString())));
+    wss.on("connection", (ws, req) => {
+      const logicalDeviceId = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+        "device"
+      );
+      ws.on("message", (raw) => handleCDPMessage(ws, raw.toString(), logicalDeviceId));
+    });
 
     mockServer.listen(0, "127.0.0.1", () => {
       mockPort = (mockServer.address() as { port: number }).port;
@@ -95,6 +120,7 @@ beforeAll(async () => {
 
   registry = new Registry();
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
+  registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerTool(debuggerConnectTool);
 });
 
@@ -124,5 +150,18 @@ describe("multi-device debugger routing (mock Metro, two devices)", () => {
     await expect(
       registry.invokeTool("debugger-connect", { port: mockPort, device_id: "not-a-real-device" })
     ).rejects.toThrow(/No debugger target matches device_id "not-a-real-device"/);
+  });
+
+  it("records the app and platform each runtime reports, which Metro's list does not carry", async () => {
+    const ios = await registry.resolveService<JsRuntimeDebuggerApi>(
+      `JsRuntimeDebugger:${mockPort}:logical-aaa`
+    );
+    const android = await registry.resolveService<ReactProfilerSessionApi>(
+      `ReactProfilerSession:${mockPort}:logical-bbb`
+    );
+
+    expect(ios.runtimeApp).toEqual({ appId: APP_ID, platform: "ios" });
+    // The React profiler reads it from its session.
+    expect(android.runtimeApp).toEqual({ appId: APP_ID, platform: "android" });
   });
 });

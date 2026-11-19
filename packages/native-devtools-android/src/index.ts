@@ -7,10 +7,11 @@ export { PERFETTO_VERSION } from "./bundled-meta.js";
 
 // `__dirname/..` is the package root in both modes: this package in dev, the
 // published argent package once bundle-tools.cjs has copied bin/ and assets/
-// there. bin/ is gitignored and holds only the helper APK.
+// there. bin/ is gitignored and holds the helper APK and, under
+// network-inspector/, the network inspector agent.
 //
 // ARGENT_NATIVE_DEVTOOLS_ANDROID_BIN_DIR overrides bin/, like ARGENT_SIMULATOR_SERVER_DIR.
-function binDir(): string {
+export function binDir(): string {
   return process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_BIN_DIR ?? path.join(__dirname, "..", "bin");
 }
 

@@ -292,10 +292,9 @@ describe("formatDescribeTree", () => {
     expect(out).toContain("tap_y = frame.y + frame.height / 2");
   });
 
-  // Physical iOS: the XCUITest runner is single-finger only, so the header
-  // must not recommend gesture-pinch (agents follow it verbatim, straight into
-  // a capability reject) and must say where zoom lives instead.
-  it("omits gesture-pinch from the xcuitest-runner header and names the alternative", () => {
+  // Physical iOS plays two fingers through the runner's touch synthesizer, so
+  // the header recommends gesture-pinch there like on every other source.
+  it("recommends gesture-pinch in the xcuitest-runner header", () => {
     const root: DescribeNode = {
       role: "Application",
       frame: { x: 0, y: 0, width: 1, height: 1 },
@@ -310,11 +309,10 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "xcuitest-runner" });
     expect(out).toContain("Source: xcuitest-runner");
     expect(out).toContain("Mode: nested");
-    expect(out).not.toContain("gesture-pinch");
     expect(out).toContain(
-      "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
-        "No two-finger gestures on physical iOS."
+      "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
+    expect(out).not.toContain("No two-finger gestures");
   });
 
   // format-tree.ts is deployed shared code: the xcuitest-runner branch above
@@ -335,7 +333,7 @@ describe("formatDescribeTree", () => {
         "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.\n" +
         "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n" +
         "\n" +
-        "ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n"
+        "ROOT  AXGroup (0.000,0.000,1.000,1.000)\n"
     );
   });
 
@@ -387,6 +385,13 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "uiautomator" });
     expect(out).toMatch(/\[clickable,long-clickable,checked,disabled\]/);
     expect(out).toMatch(/\[scrollHidden=7\]/);
+
+    // `uitest` reports `longClickable`, but HarmonyOS has no long-press tool.
+    const harmony = formatDescribeTree(root, { source: "harmony-uitest" });
+    expect(harmony).toMatch(/\[clickable,checked,disabled\]/);
+    expect(harmony).not.toContain("long-clickable");
+    // Suppressed at render: most of those nodes carry no other flag.
+    expect(harmony).toMatch(/\[scrollHidden=7\]/);
   });
 
   // scrollHidden=0 is the "no clipped children" signal from the Android
@@ -406,6 +411,102 @@ describe("formatDescribeTree", () => {
     };
     const out = formatDescribeTree(root, { source: "uiautomator" });
     expect(out).not.toContain("scrollHidden");
+  });
+
+  it("prints the VoiceOver hint after the id and before the flags, escaped like the other attributes", () => {
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "AXButton",
+          label: "Pay",
+          value: "Ready",
+          identifier: "pay",
+          hint: 'Line one\nsays "go" C:\\tmp',
+          selected: true,
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+        }),
+      ],
+    };
+    const [line] = elementLines(formatDescribeTree(root, { source: "ax-service" }));
+    expect(line).toContain(
+      'AXButton "Pay" value="Ready" id="pay" hint="Line one\\nsays "go" C:\\\\tmp" [selected]'
+    );
+  });
+
+  it("prints no hint attribute when the hint is absent or empty", () => {
+    const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({ role: "AXButton", label: "A", frame }),
+        leaf({ role: "AXButton", label: "B", hint: "", frame }),
+      ],
+    };
+    expect(formatDescribeTree(root, { source: "ax-service" })).not.toContain("hint=");
+  });
+
+  it("omits a hint identical to the label and keeps one that differs in any way", () => {
+    const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({ role: "AXLink", label: "Poland", hint: "Poland", frame }),
+        leaf({ role: "AXLink", label: "Warsaw", hint: "Capital of Poland", frame }),
+        leaf({ role: "AXButton", label: "Save", hint: "save", frame }),
+      ],
+    };
+    const out = formatDescribeTree(root, { source: "ax-service" });
+    expect(out).toContain('AXLink "Poland"  (');
+    expect(out).toContain('AXLink "Warsaw" hint="Capital of Poland"');
+    expect(out).toContain('AXButton "Save" hint="save"');
+  });
+
+  it.each(["ax-service", "native-devtools"] as const)(
+    "lists an unlabelled %s element that reports only a hint, disabled or selected",
+    (source) => {
+      const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+      const root: DescribeNode = {
+        role: "AXGroup",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          leaf({ role: "AXGroup", hint: "Opens the menu", frame }),
+          leaf({ role: "AXGroup", disabled: true, frame }),
+          leaf({ role: "AXGroup", selected: true, frame }),
+          leaf({ role: "AXGroup", hint: "Current tab", selected: true, frame }),
+          // Reports nothing, so it stays out as a decorative grouping.
+          leaf({ role: "AXGroup", hint: "", frame }),
+        ],
+      };
+      expect(elementLines(formatDescribeTree(root, { source }))).toEqual([
+        '  AXGroup hint="Opens the menu"  (0.100,0.200,0.300,0.100)',
+        "  AXGroup [disabled]  (0.100,0.200,0.300,0.100)",
+        "  AXGroup [selected]  (0.100,0.200,0.300,0.100)",
+        '  AXGroup hint="Current tab" [selected]  (0.100,0.200,0.300,0.100)',
+      ]);
+    }
+  );
+
+  it.each([
+    "uiautomator",
+    "cdp-dom",
+    "vega-automation",
+    "harmony-uitest",
+    "xcuitest-runner",
+  ] as const)("keeps pruning an empty %s leaf that is only disabled or selected", (source) => {
+    const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+    const root: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({ role: "View", disabled: true, frame }),
+        leaf({ role: "View", selected: true, frame }),
+      ],
+    };
+    expect(elementLines(formatDescribeTree(root, { source }))).toEqual([]);
   });
 
   // identifier is the Android resource-id (and the iOS native-devtools
@@ -465,7 +566,23 @@ describe("formatDescribeTree", () => {
       ],
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
-    expect(out).toMatch(/\(0\.123, 0\.500, 0\.100, 0\.050\)/);
+    expect(out).toMatch(/\(0\.123,0\.500,0\.100,0\.050\)/);
+  });
+
+  it("keeps the sign and the leading zero of a negative coordinate", () => {
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "AXButton",
+          label: "X",
+          frame: { x: -0.125, y: 0.5, width: 1, height: 0.05 },
+        }),
+      ],
+    };
+    const out = formatDescribeTree(root, { source: "ax-service" });
+    expect(out).toContain("(-0.125,0.500,1.000,0.050)");
   });
 
   // Long Compose / RN trees can stack 200+ wrapper layers. The renderer uses

@@ -54,7 +54,7 @@ function deepFindMarker(value: unknown): string | null {
 }
 
 function flowPath(name: string, projectRoot = root): string {
-  return path.join(projectRoot, ".argent", "flows", `${name}.yaml`);
+  return path.join(projectRoot, ".argent", "e2e", `${name}.yaml`);
 }
 
 async function steps(name: string, projectRoot = root): Promise<FlowStep[]> {
@@ -139,6 +139,21 @@ describe("recording a script step", () => {
     expect(await steps("checkout")).toEqual([{ kind: "script", path: "../../scripts/seed.mjs" }]);
   });
 
+  it("records a plain .js script under the extension it was given", async () => {
+    await write(
+      "scripts/seed.js",
+      `const os = require("node:os");\noutput.kind = typeof os.platform();`
+    );
+    await start("plainjs");
+
+    const result = await addScript("plainjs", "../../scripts/seed.js");
+
+    expect(result.status).toBe("pass");
+    expect(result.outputJson).toBe('{"kind":"string"}');
+    expect(result.recorded).toBe("1. script: ../../scripts/seed.js");
+    expect(await steps("plainjs")).toEqual([{ kind: "script", path: "../../scripts/seed.js" }]);
+  });
+
   it("does not add output details to the success message", async () => {
     await write("scripts/seed.mjs", `output.user = { id: "u_1" };`);
     await start("checkout");
@@ -146,7 +161,7 @@ describe("recording a script step", () => {
     const result = await addScript("checkout", "../../scripts/seed.mjs");
 
     expect(result.outputJson).toBe('{"user":{"id":"u_1"}}');
-    expect(result.message).toBe('Added script step to "checkout" flow.');
+    expect(result.message).toBe('Added script step to "checkout" e2e test.');
   });
 
   it("hands the document over as text, so nothing in it is read as a directive", async () => {
@@ -190,7 +205,7 @@ describe("recording a script step", () => {
     expect(result.outputTruncated).toBe(true);
     expect(result.outputJson).toMatch(/^\{"blob":"y+$/);
     expect(result.stepCount).toBe(1);
-    expect(result.message).toBe('Added script step to "big" flow.');
+    expect(result.message).toBe('Added script step to "big" e2e test.');
     expect(() => JSON.parse(result.outputJson!)).toThrow();
   });
 
@@ -364,7 +379,7 @@ describe("recording a script step", () => {
 
     expect(result.outputJson).toBe(JSON.stringify({ blob: "y".repeat(1000) }));
     expect(result).not.toHaveProperty("outputTruncated");
-    expect(result.message).toBe('Added script step to "small" flow.');
+    expect(result.message).toBe('Added script step to "small" e2e test.');
   });
 
   it("never cuts a multi-byte character in half", async () => {
@@ -552,10 +567,10 @@ describe("a script that did not pass records nothing", () => {
     const base = { message: "", stepCount: 1 } as const;
 
     expect(completedMsg({ params, result: { ...base, status: "pass" } })).toBe(
-      "Added script step to flow checkout"
+      "Added script step to e2e test checkout"
     );
     expect(completedMsg({ params, result: { ...base, status: "fail" } })).toBe(
-      "Script for flow checkout failed; nothing recorded"
+      "Script for e2e test checkout failed; nothing recorded"
     );
   });
 
@@ -710,7 +725,7 @@ describe("the paths flow-add-script accepts", () => {
     ["an absolute path", "/tmp/seed.mjs", 'path: "/tmp/seed.mjs"'],
     ["a drive-relative prefix", "C:seed.mjs", 'path: "C:seed.mjs"'],
     ["an uppercase extension", "scripts/SEED.MJS", 'path: "scripts/SEED.MJS"'],
-    ["a wrong extension", "scripts/seed.js", 'path: "scripts/seed.js"'],
+    ["a wrong extension", "scripts/seed.cjs", 'path: "scripts/seed.cjs"'],
     ["a basename outside the charset", "scripts/seed order.mjs", 'path: "scripts/seed order.mjs"'],
     ["an empty path", "", 'path: ""'],
   ];
@@ -806,7 +821,7 @@ describe("a recording this server cannot reach", () => {
     expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
     expect(signal?.failure_stage).toBe("flow_add_script_client_mode");
     expect(message).toContain(
-      'Cannot add a script step to flow "remote": the recording is over a link'
+      'Cannot add a script step to e2e test "remote": the recording is over a link'
     );
     expect(message).toContain("Nothing ran and no step was recorded.");
     await expect(fs.stat(marker)).rejects.toThrow();

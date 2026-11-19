@@ -4,22 +4,21 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { pressButton, type RunnerButton } from "../../utils/ios-device/runner-commands";
 import { RunnerCommandError } from "../../utils/ios-device/runner-client";
-import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, resolveDevice, harmonyConnectKey } from "../../utils/device-info";
+import {
+  HARMONY_INTERACTION_TIMEOUT_MS,
+  assertHarmonyDisplayReady,
+  harmonyDisplay,
+  holdUitestQueue,
+  HARMONY_DISPLAY_TIMEOUT_MS,
+  remainingBudget,
+} from "../../utils/harmony-uitest";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../../utils/android-input";
 import { ensureDep } from "../../utils/check-deps";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-  button: z
-    .enum(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"])
-    .describe("Hardware button to press"),
-});
-
-type Params = z.infer<typeof zodSchema>;
 
 interface Result {
   pressed: string;
@@ -40,12 +39,24 @@ export const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>
   // Vega buttons / D-pad go through the `tv-remote` tool; the capability omits
   // `vega`, so this entry only keeps the record total.
   "vega": new Set([]),
+  // Verified on a device; `uitest` answers `No Error` to any keyID, so
+  // unverified mappings are left out.
+  "harmony": new Set(["home", "back", "power"]),
+  // A Mac app has no hardware buttons; the capability omits `macos` as well.
+  "macos": new Set([]),
 };
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  harmony: { device: true },
+};
+
+const HARMONY_BUTTON_KEYS: Partial<Record<Params["button"], string>> = {
+  home: "Home",
+  back: "Back",
+  power: "Power",
 };
 
 // Hardware buttons the XCUITest runner can press. power and appSwitch have no XCTest API.
@@ -64,21 +75,37 @@ function isPhysicalIosButton(button: Params["button"]): button is RunnerButton {
   return PHYSICAL_IOS_BUTTONS.has(button);
 }
 
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .describe(
+      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
+    ),
+  button: z
+    .enum(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"])
+    .describe("Hardware button to press"),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const buttonTool: ToolDefinition<Params, Result> = {
   id: "button",
+  description: `Press a device hardware button (iOS simulator or physical device, Android emulator or device<flag:harmonyos>, HarmonyOS device</flag:harmonyos>).
+Supported buttons depend on the platform: buttons not present on the target (e.g. 'back' on iOS, 'actionButton' on Android, 'power' or 'appSwitch' on a physical iPhone<flag:harmonyos>, anything beyond home/back/power on HarmonyOS</flag:harmonyos>) are rejected with a clear error.
+Use when you need to trigger hardware button events.
+Returns { pressed: buttonName }.
+Fails if the device backend is not reachable: the simulator-server for iOS, <flag:harmonyos>\`hdc\` for HarmonyOS, </flag:harmonyos>or \`adb\` for Android.`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Pressing ${params.button} button`,
     completedMsg: ({ params }) => `Pressed ${params.button} button`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to press ${params.button} button: ${failureSignal.error_code}`,
   },
-  description: `Press a device hardware button (iOS simulator or physical device, Android emulator or device). iOS simulators send a Down then Up event automatically; Android injects a single \`adb\` key event.
-Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton; buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android, 'power' or 'appSwitch' on a physical iPhone) are rejected with a clear error.
-Use when you need to trigger hardware button events.
-Returns { pressed: buttonName }.
-Fails if the device backend is not reachable: the simulator-server for iOS, or \`adb\` for Android (Android presses are injected with \`adb shell input keyevent\`).`,
-  zodSchema,
   capability,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the press would land once per replay.
+  longRunning: true,
   // Declare only the service the resolved path actually consumes. The Android
   // path uses `adb`, so a sim-server here would spawn a service the tool never
   // uses (up to a 30s ready-wait) and could throw ServiceInitializationError
@@ -86,7 +113,7 @@ Fails if the device backend is not reachable: the simulator-server for iOS, or \
   // Declare the runner only for a button this path can press. A rejected button must not pay a runner cold start.
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
-    if (device.platform === "android") return {};
+    if (device.platform === "android" || device.platform === "harmony") return {};
     if (isIosPhysicalDevice(device)) {
       return isPhysicalIosButton(params.button)
         ? { iosDeviceRunner: iosDeviceRunnerRef(device) }
@@ -94,13 +121,16 @@ Fails if the device backend is not reachable: the simulator-server for iOS, or \
     }
     return { simulatorServer: simulatorServerRef(device) };
   },
-  async execute(services, params) {
+  async execute(services, params, ctx) {
     const device = resolveDevice(params.udid);
-    if (!BUTTONS_BY_PLATFORM[device.platform].has(params.button)) {
+    const available = BUTTONS_BY_PLATFORM[device.platform];
+    if (!available.has(params.button)) {
+      // Name the supported set, as `keyboard` does.
       throw new UnsupportedOperationError(
         "button",
         device,
-        `button '${params.button}' is not available on ${device.platform}`
+        `button '${params.button}' is not available on ${device.platform}. ` +
+          `Supported: ${[...available].join(", ")}`
       );
     }
     if (isIosPhysicalDevice(device)) {
@@ -139,6 +169,38 @@ Fails if the device backend is not reachable: the simulator-server for iOS, or \
       // clean 424 install hint on a missing binary.
       await ensureDep("adb");
       await injectAndroidKeycode(params.udid, ANDROID_BUTTON_KEYCODES[params.button]!);
+      return { pressed: params.button };
+    }
+    if (device.platform === "harmony") {
+      // The guard above ensures a key name exists.
+      await ensureDep("hdc");
+      const connectKey = harmonyConnectKey(device.id);
+      const deadline = Date.now() + HARMONY_INTERACTION_TIMEOUT_MS;
+      // Prefilter without queueing; the trusted check is inside the hold.
+      if (params.button !== "power") {
+        assertHarmonyDisplayReady(await harmonyDisplay(connectKey), `press ${params.button}`);
+      }
+      await holdUitestQueue(
+        connectKey,
+        deadline,
+        async (ui) => {
+          // `power` is exempt: it is the key that wakes a suspended panel.
+          if (params.button !== "power") {
+            assertHarmonyDisplayReady(
+              await harmonyDisplay(
+                connectKey,
+                Math.min(
+                  HARMONY_DISPLAY_TIMEOUT_MS,
+                  remainingBudget(connectKey, deadline, "the display re-read")
+                )
+              ),
+              `press ${params.button}`
+            );
+          }
+          await ui.keyEvent(HARMONY_BUTTON_KEYS[params.button]!);
+        },
+        ctx?.signal
+      );
       return { pressed: params.button };
     }
     const api = services.simulatorServer as SimulatorServerApi;

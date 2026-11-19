@@ -61,8 +61,10 @@ export interface ArtifactHandle {
   mtimeMs?: number;
   /**
    * Set when `hostPath` is a directory (e.g. an Instruments `.trace` bundle).
-   * `GET /artifacts/:id` then streams a gzipped tar that the client unpacks —
-   * only for a remote client; a local one uses the directory in place.
+   * `GET /artifacts/:id` then streams a compressed tar (zstd or gzip, see
+   * `@argent/archive`) that the client unpacks — only for a remote client; a
+   * local one uses the directory in place. The value names no compression; it
+   * stays `"tar.gz"` because older clients match on it.
    */
   archive?: "tar.gz";
   /**
@@ -124,7 +126,7 @@ export interface RegisterArtifactOptions {
   /** Override the inferred MIME type. */
   mimeType?: string;
   /**
-   * Force directory (tar.gz) delivery even if the path can't be stat'd at
+   * Force directory (archive) delivery even if the path can't be stat'd at
    * registration (e.g. a `.trace` bundle from a recovered session). Otherwise
    * directories are auto-detected via stat.
    */
@@ -144,19 +146,6 @@ export interface RegisterArtifactOptions {
 export class ArtifactStore {
   private readonly entries = new Map<string, ArtifactEntry>();
 
-  /**
-   * @public
-   * Every caller is in tool-server — `tools/flows/flow-visual`,
-   * `tools/screenshot`, `tools/screenshot-diff`, `tools/screen-recording-stop`,
-   * both `tools/profiler/native-profiler` stop/analyze handlers and
-   * `tools/profiler/react/react-profiler-analyze` — and the dead-code gate runs
-   * against an unbuilt tree, where a cross-workspace edge cannot form. See
-   * `knip.jsonc`.
-   *
-   * To re-audit whether this tag is still earned, rename the member and read
-   * the `Property 'register' does not exist` errors `tsc --build` reports. Do
-   * not grep `.register(`: `registerTool` / `registerBlueprint` swamp the hits.
-   */
   async register(opts: RegisterArtifactOptions): Promise<ArtifactHandle> {
     const { hostPath, kind } = opts;
     const filename = opts.filename ?? basename(hostPath);
@@ -190,22 +179,10 @@ export class ArtifactStore {
     return handle;
   }
 
-  /**
-   * @public
-   * The only caller is the tool-server `GET /artifacts/:id` route, and the
-   * dead-code gate runs against an unbuilt tree, where a cross-workspace edge
-   * cannot form. See `knip.jsonc`.
-   */
   get(id: string): ArtifactEntry | undefined {
     return this.entries.get(id);
   }
 
-  /**
-   * @public
-   * The only caller is the tool-server `/artifacts` route, and the dead-code
-   * gate runs against an unbuilt tree, where a cross-workspace edge cannot
-   * form. See `knip.jsonc`.
-   */
   list(): ArtifactListItem[] {
     return [...this.entries.entries()].map(([id, entry]) => ({
       id,

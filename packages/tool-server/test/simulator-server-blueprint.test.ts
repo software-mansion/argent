@@ -37,6 +37,12 @@ vi.mock("@argent/configuration-core", async () => {
   return { ...actual, getAndroidSdkRoot: () => androidSdkRootMock() };
 });
 
+const sendCommandMock = vi.fn(async (..._args: unknown[]) => ({}));
+vi.mock("../src/utils/simulator-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/simulator-client")>()),
+  sendCommand: (...args: unknown[]) => sendCommandMock(...args),
+}));
+
 vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryPath: () => "/fake/bin/simulator-server",
   simulatorServerRunDir: () => "/fake/bin",
@@ -265,6 +271,34 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(1, "key Down 41\n");
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");
+  });
+
+  it("sends capture_on_demand while a profiler records, and nothing once disposed", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const { trackProfilingRun, isProfiling, __resetProfilingDevicesForTesting } =
+      await import("../src/utils/profiling-devices");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55558);
+    const instance = await factoryPromise;
+
+    // An older server rejects the command; the profiler must not notice.
+    sendCommandMock.mockRejectedValueOnce(new Error("unknown variant"));
+    const run = { profilingActive: true };
+    trackProfilingRun("emulator-5554", run);
+    run.profilingActive = false;
+    isProfiling("emulator-5554");
+    await instance.dispose();
+    trackProfilingRun("emulator-5554", { profilingActive: true });
+
+    expect(sendCommandMock.mock.calls).toEqual([
+      [instance.api, { cmd: "capture_on_demand", enabled: true }],
+      [instance.api, { cmd: "capture_on_demand", enabled: false }],
+    ]);
+    __resetProfilingDevicesForTesting();
   });
 
   it("rejects when the caller forgets to pass DeviceInfo via options", async () => {

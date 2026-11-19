@@ -11,7 +11,7 @@ below refer to the toolkit.
 
 Update the docs in the same pull request as the change:
 
-- MCP tools, CLI, config keys, flow files -> the matching page in
+- MCP tools, CLI, config keys, e2e test files -> the matching page in
   `packages/docs/docs/reference/`, plus `docs/features/` if the user facing capability
   changed.
 - Install, platforms, editor setup, telemetry -> `packages/docs/docs/fundamentals/`.

@@ -1,4 +1,10 @@
-import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  getFailureSignal,
+  type DeviceInfo,
+  type Registry,
+  type ToolDependency,
+} from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import {
   buildAppStateMessage,
@@ -201,6 +207,8 @@ export async function describeIos(
     axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
     degraded = axApi.degraded;
   } catch (err) {
+    // Not an empty screen, and the reboot the empty tree prescribes is refused too.
+    if (isFirstLaunchRefusal(err)) throw err;
     // Carry on with an empty tree so the native-devtools fallback below still
     // runs. A missing TCP-transport artifact is a config error, not a boot-state
     // one, so it must not read as degraded.
@@ -299,10 +307,12 @@ export async function describeIos(
 
     // Degrade a rejection (the env re-apply this runs first fails on a sim that
     // went away mid-call) rather than letting the outer catch turn a named
-    // remedy into a bare "could not be read".
-    const state = await nativeApi
-      .appConnectionState(target.bundleId)
-      .catch(() => "indeterminate" as const);
+    // remedy into a bare "could not be read". A refusal is not an unmeasured
+    // app, which would be told to restart, so it goes to the outer catch.
+    const state = await nativeApi.appConnectionState(target.bundleId).catch((err: unknown) => {
+      if (isFirstLaunchRefusal(err)) throw err;
+      return "indeterminate" as const;
+    });
     if (state !== "connected") {
       // The diagnosis rides out as a hint in every state: `hint` is describe's
       // only prose channel, and the one place `should_restart` is rendered as
@@ -334,7 +344,11 @@ export async function describeIos(
     return { tree: nativeTree, source: "native-devtools", hint };
   } catch (err) {
     // The service answered but no hierarchy came back: no connected app to
-    // auto-target, an ambiguous frontmost, or the query threw. Returning the
+    // auto-target, an ambiguous frontmost, the query threw, or measuring the
+    // app was refused because Xcode's component install is pending. That
+    // refusal says nothing about the accessibility read, so it is not thrown:
+    // a wait keeps polling until the tree fills, and the hint carries the
+    // refusal's reason. Returning the
     // bare tree would say the screen is empty when it could not be read — and
     // `await-ui-element`'s blind-read guard keys off `hint` / `should_restart`,
     // so with neither set a `hidden` wait resolves against an element that may
@@ -342,6 +356,10 @@ export async function describeIos(
     // invent beyond the message the resolver already carries.
     return { tree, source: "ax-service", hint: unexplainedHint(hint, errMsg(err), params) };
   }
+}
+
+function isFirstLaunchRefusal(err: unknown): boolean {
+  return getFailureSignal(err)?.error_code === FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING;
 }
 
 function errMsg(err: unknown): string {
