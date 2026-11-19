@@ -5,7 +5,8 @@ import { requestedConditions, type NetworkConditionsParams } from "../schema";
 import type { AndroidServices, NetworkConditionsResult } from "../types";
 
 const NETWORK_UP_TIMEOUT_MS = 15_000;
-const NETWORK_UP_POLL_MS = 500;
+const NETWORK_DOWN_TIMEOUT_MS = 5_000;
+const NETWORK_POLL_MS = 500;
 
 function onlyOfflineSupported(): FailureError {
   return new FailureError(
@@ -14,6 +15,34 @@ function onlyOfflineSupported(): FailureError {
     {
       error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
       failure_stage: "network_conditions_params",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    }
+  );
+}
+
+function networkDidNotReturn(serial: string): FailureError {
+  return new FailureError(
+    `Turned Wi-Fi and mobile data back on for ${serial}, but no network came up within ` +
+      `${NETWORK_UP_TIMEOUT_MS / 1000} s. Check the emulator's network, then call ` +
+      "network-conditions again with no conditions.",
+    {
+      error_code: FAILURE_CODES.ANDROID_NETWORK_RESTORE_TIMEOUT,
+      failure_stage: "network_conditions_reset",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
+}
+
+function networkStayedUp(serial: string): FailureError {
+  return new FailureError(
+    `${serial} still has a network with Wi-Fi and mobile data off, so network-conditions cannot ` +
+      "take it offline. An Android TV emulator connects over Ethernet, which Argent cannot turn off. " +
+      "Wi-Fi and mobile data are back on.",
+    {
+      error_code: FAILURE_CODES.ANDROID_OFFLINE_UNSUPPORTED,
+      failure_stage: "network_conditions_offline",
       failure_area: "tool_server",
       error_kind: "unsupported",
     }
@@ -33,12 +62,28 @@ async function hasDefaultNetwork(serial: string): Promise<boolean> {
   return /Active default network: \d+/.test(out);
 }
 
-async function waitForNetwork(serial: string): Promise<void> {
-  const deadline = Date.now() + NETWORK_UP_TIMEOUT_MS;
+const networkIsUp = (serial: string) => hasDefaultNetwork(serial).catch(() => false);
+
+async function pollUntil(check: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await hasDefaultNetwork(serial).catch(() => false)) return;
-    await new Promise((resolve) => setTimeout(resolve, NETWORK_UP_POLL_MS));
+    if (await check()) return true;
+    await new Promise((resolve) => setTimeout(resolve, NETWORK_POLL_MS));
   }
+  return false;
+}
+
+async function waitForNetwork(serial: string): Promise<void> {
+  const up = await pollUntil(() => networkIsUp(serial), NETWORK_UP_TIMEOUT_MS);
+  if (!up) throw networkDidNotReturn(serial);
+}
+
+async function goOffline(serial: string): Promise<void> {
+  await setRadios(serial, false);
+  const down = await pollUntil(async () => !(await networkIsUp(serial)), NETWORK_DOWN_TIMEOUT_MS);
+  if (down) return;
+  await setRadios(serial, true);
+  throw networkStayedUp(serial);
 }
 
 export const androidImpl: PlatformImpl<
@@ -54,8 +99,8 @@ export const androidImpl: PlatformImpl<
     if (conditions && !offlineOnly) throw onlyOfflineSupported();
 
     if (conditions) {
-      await setRadios(serial, false);
-    } else {
+      await goOffline(serial);
+    } else if (!(await networkIsUp(serial))) {
       await setRadios(serial, true);
       await waitForNetwork(serial);
     }

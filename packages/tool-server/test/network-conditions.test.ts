@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TypedEventEmitter } from "@argent/registry";
+import { FAILURE_CODES, TypedEventEmitter, getFailureSignal } from "@argent/registry";
 
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
@@ -59,7 +59,7 @@ function adbArgs(): string[][] {
 
 beforeEach(() => {
   vi.mocked(runAdb).mockClear();
-  vi.mocked(adbShell).mockClear();
+  vi.mocked(adbShell).mockReset().mockResolvedValue("Active default network: 101\n");
 });
 
 describe("network-conditions parameters", () => {
@@ -162,6 +162,8 @@ describe("network-conditions on an Android emulator", () => {
   );
 
   it("turns Wi-Fi and mobile data off for offline", async () => {
+    vi.mocked(adbShell).mockResolvedValue("Active default network: none\n");
+
     await expect(
       networkConditionsTool.execute({} as never, { udid: androidEmulator, offline: true })
     ).resolves.toEqual({ scope: "device", conditions: { offline: true } });
@@ -170,6 +172,28 @@ describe("network-conditions on an Android emulator", () => {
       ["-s", androidEmulator, "shell", "svc", "wifi", "disable"],
       ["-s", androidEmulator, "shell", "svc", "data", "disable"],
     ]);
+  });
+
+  it("fails offline and turns the radios back on when a network stays up", async () => {
+    vi.useFakeTimers();
+    try {
+      const offline = networkConditionsTool
+        .execute({} as never, { udid: androidEmulator, offline: true })
+        .catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(6_000);
+      const err = await offline;
+
+      expect((err as Error).message).toMatch(/still has a network/);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_OFFLINE_UNSUPPORTED);
+      expect(adbArgs()).toEqual([
+        ["-s", androidEmulator, "shell", "svc", "wifi", "disable"],
+        ["-s", androidEmulator, "shell", "svc", "data", "disable"],
+        ["-s", androidEmulator, "shell", "svc", "wifi", "enable"],
+        ["-s", androidEmulator, "shell", "svc", "data", "enable"],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("turns the radios on at a reset and waits until a network is up", async () => {
@@ -188,7 +212,35 @@ describe("network-conditions on an Android emulator", () => {
     expect(adbShell).toHaveBeenCalledTimes(2);
   });
 
+  it("leaves the radios alone at a reset when a network is already up", async () => {
+    await expect(
+      networkConditionsTool.execute({} as never, { udid: androidEmulator })
+    ).resolves.toEqual({ scope: "device", conditions: null });
+
+    expect(adbArgs()).toEqual([]);
+  });
+
+  it("fails a reset when no network comes up", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(adbShell).mockResolvedValue("Active default network: none\n");
+
+      const reset = networkConditionsTool
+        .execute({} as never, { udid: androidEmulator })
+        .catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(16_000);
+      const err = await reset;
+
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/no network came up within 15 s/);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_NETWORK_RESTORE_TIMEOUT);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still turns Wi-Fi on when the telephony service has not started yet", async () => {
+    vi.mocked(adbShell).mockResolvedValueOnce("Active default network: none\n");
     vi.mocked(runAdb)
       .mockResolvedValueOnce({ stdout: "", stderr: "" } as never)
       .mockRejectedValueOnce(new Error("svc data enable failed: cmd: Can't find service: phone"));
