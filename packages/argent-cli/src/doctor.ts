@@ -68,6 +68,7 @@ interface DoctorContext {
   paths: ToolsServerPaths;
   globalOnPath: boolean;
   localInstalled: boolean;
+  localPackageDir: string | null;
   argentCommand: string;
   globalInstallFix: string;
   projectInstallFix: string;
@@ -233,9 +234,9 @@ function editorsSection(ctx: DoctorContext): DoctorSection {
   return { title: "Editors (MCP config)", checks };
 }
 
-function listRuleFiles(): string[] {
+function listRuleFiles(rulesDir: string = RULES_DIR): string[] {
   try {
-    return fs.readdirSync(RULES_DIR).filter((f) => f.endsWith(".md"));
+    return fs.readdirSync(rulesDir).filter((f) => f.endsWith(".md"));
   } catch {
     return [];
   }
@@ -257,12 +258,18 @@ function summarizeList(items: string[], shown = 5): string {
   return items.length > shown ? `${head} and ${items.length - shown} more` : head;
 }
 
+function localContentDir(ctx: DoctorContext, name: "skills" | "rules"): string | undefined {
+  if (!ctx.localPackageDir) return undefined;
+  const dir = path.join(ctx.localPackageDir, name);
+  return fs.existsSync(dir) ? dir : undefined;
+}
+
 function skillsSection(ctx: DoctorContext): DoctorSection {
   const checks: DoctorCheck[] = [];
   const { skillDirs, ruleDirs } = managedTargets(ctx);
   const initFix = `${ctx.argentCommand} init`;
 
-  const bundled = listBundledSkills();
+  const bundled = listBundledSkills(localContentDir(ctx, "skills"));
   const missing = bundled.filter(
     (skill) => !skillDirs.some((dir) => fs.existsSync(path.join(dir, skill)))
   );
@@ -283,7 +290,7 @@ function skillsSection(ctx: DoctorContext): DoctorSection {
     checks.push(check("ok", `${bundled.length}/${bundled.length} argent skills installed`));
   }
 
-  const ruleFiles = listRuleFiles();
+  const ruleFiles = listRuleFiles(localContentDir(ctx, "rules"));
   for (const dir of ruleDirs) {
     const absent = ruleFiles.filter((f) => !fs.existsSync(path.join(dir, f)));
     checks.push(
@@ -392,13 +399,15 @@ export function resolveDoctorRoot(cwd: string, homeDir: string = homedir()): str
 function buildContext(paths: ToolsServerPaths, cwd: string): DoctorContext {
   const projectRoot = resolveDoctorRoot(cwd);
   const globalOnPath = isGloballyInstalled();
+  const local = probeLocalInstall(projectRoot);
   return {
     projectRoot,
     configured: findConfigured(projectRoot),
     running: paths.version ?? getInstalledVersion() ?? "unknown",
     paths,
     globalOnPath,
-    localInstalled: probeLocalInstall(projectRoot).installed,
+    localInstalled: local.installed,
+    localPackageDir: resolveInstallMode(projectRoot) === "local" ? local.packageDir : null,
     argentCommand: globalOnPath ? MCP_BINARY_NAME : `npx ${PACKAGE_NAME}`,
     globalInstallFix: formatShellCommand(
       globalInstallCommand(detectPackageManager(), PACKAGE_NAME)
