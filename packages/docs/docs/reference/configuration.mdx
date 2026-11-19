@@ -171,6 +171,8 @@ A change in a secrets file applies to the next tool call. An environment variabl
 
 A name that no source defines fails the step at run time. Argent redacts each resolved value in the reports and logs. Thus do not use a placeholder for content that a report must show.
 
+A text field that is not secure shows the typed value on the screen. A tool that reads the screen, for example `describe`, returns the value. For the text that a failed check of an e2e test quotes from the screen, see [Typed secrets in a report](/docs/reference/e2e-yaml#typed-secrets-in-a-report).
+
 ### Secrets over a link
 
 With `argent link` or `ARGENT_TOOLS_URL`, the tool-server can run on a different computer, for example a hosted Mac. By default, that computer must define each secret. Enable the `forward-secrets` flag to use the secrets of the client instead:

@@ -18,6 +18,39 @@ import { summarizeHangBlocking } from "../profiler-shared/native-frame-class";
 const MAX_INLINE_HOTSPOTS = 5;
 const MAX_INLINE_HANGS = 3;
 
+/** A function of a hang as the report shows it, marked when a tool's library holds it. */
+function hangFunctionName(hang: UiHang, fn: string): string {
+  const label = hang.toolingLabels?.[fn];
+  return label ? `${demangleSymbol(fn)} (${label})` : demangleSymbol(fn);
+}
+
+/**
+ * Said of a hang whose main thread ran for less than 10% of it (`hangThreadRanMs`) when
+ * a function of argent's or Instruments' library ran in it: the tool's work ran while
+ * the main thread waited, so the report must not name it as the cause. Empty otherwise.
+ */
+function waitedToolHangNote(hang: UiHang): string {
+  if (hang.hangThreadRanMs === undefined || !hang.toolingLabels) return "";
+  return (
+    `The main thread ran for only ${hang.hangThreadRanMs} ms of this hang, so it very ` +
+    `possibly waited, for example in a sleep, for a lock, for I/O or for another thread.`
+  );
+}
+
+/**
+ * Follows a hang's recorded duration when macOS held the app suspended during the
+ * hang: the suspended part, and the range of the app's own hang (app-suspensions.ts).
+ * Empty otherwise.
+ */
+export function hangSuspendedNote(hang: UiHang): string {
+  if (hang.suspendedMs === undefined || !(hang.suspendedMs > 0)) return "";
+  const ownMs = Math.max(0, hang.durationMs - hang.suspendedMs);
+  return (
+    `, ${hang.suspendedMs}ms of it while the app was suspended ` +
+    `(the app's own hang: ${ownMs} to ${hang.durationMs}ms)`
+  );
+}
+
 /**
  * Said where an iOS capture with no Leaks table would otherwise read as "0 leaks":
  * the analyze report (with a warning not to report the app as leak-free) and
@@ -53,6 +86,12 @@ interface RenderInput {
    * leak-free. Undefined (Android) leaves the report unchanged.
    */
   leaksRecorded?: boolean;
+  /**
+   * Mac apps: true when a note in freshnessNote says that the trace can miss
+   * findings (the app ended during the recording, or no leak check finished), so
+   * a report with no finding must not read as all clear.
+   */
+  mayMissFindings?: boolean;
 }
 
 interface InlineCap {
@@ -68,8 +107,15 @@ interface InlineCap {
 export async function renderNativeProfilerReport(
   input: RenderInput
 ): Promise<NativeProfilerAnalyzeResult> {
-  const { payload, traceFile, freshnessNote, cpuDiagnostic, mallocStackLogging, leaksRecorded } =
-    input;
+  const {
+    payload,
+    traceFile,
+    freshnessNote,
+    cpuDiagnostic,
+    mallocStackLogging,
+    leaksRecorded,
+    mayMissFindings,
+  } = input;
   const exportErrors = input.exportErrors ?? {};
   const bottlenecksTotal = payload.bottlenecks.length;
   const status: "ok" | "analysis_failed" =
@@ -80,7 +126,14 @@ export async function renderNativeProfilerReport(
 
   const fullReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic, leaksRecorded)
+      ? renderAllClear(
+          payload,
+          exportErrors,
+          freshnessNote,
+          cpuDiagnostic,
+          leaksRecorded,
+          mayMissFindings
+        )
       : renderFullReport(
           payload,
           exportErrors,
@@ -99,7 +152,14 @@ export async function renderNativeProfilerReport(
 
   const inlineReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic, leaksRecorded)
+      ? renderAllClear(
+          payload,
+          exportErrors,
+          freshnessNote,
+          cpuDiagnostic,
+          leaksRecorded,
+          mayMissFindings
+        )
       : renderFullReport(
           payload,
           exportErrors,
@@ -182,9 +242,9 @@ export function renderTraceProcessorUnavailable(err: TraceProcessorUnavailableEr
 }
 
 function reportTitle(payload: ProfilerPayload): string {
-  return payload.metadata.platform.toLowerCase() === "android"
-    ? "Android Perfetto Analysis"
-    : "iOS Instruments Analysis";
+  const platform = payload.metadata.platform.toLowerCase();
+  if (platform === "android") return "Android Perfetto Analysis";
+  return platform === "macos" ? "macOS Instruments Analysis" : "iOS Instruments Analysis";
 }
 
 function renderAllClear(
@@ -192,7 +252,8 @@ function renderAllClear(
   exportErrors?: Record<string, string>,
   freshnessNote?: string,
   cpuDiagnostic?: string,
-  leaksRecorded?: boolean
+  leaksRecorded?: boolean,
+  mayMissFindings?: boolean
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -228,7 +289,9 @@ function renderAllClear(
     lines.push(
       leaksRecorded === false
         ? `No CPU hotspots or UI hangs detected. Memory leaks were not checked (see above).`
-        : `All clear — no CPU hotspots, UI hangs, or memory issues detected.`,
+        : mayMissFindings
+          ? `No CPU hotspots, UI hangs, or memory issues detected, but this trace can miss them (see above).`
+          : `All clear — no CPU hotspots, UI hangs, or memory issues detected.`,
       ``,
       `Consider re-profiling under heavier load or longer duration to catch issues that don't appear in short sessions.`
     );
@@ -367,22 +430,23 @@ function renderFullReport(
       );
       uiHangs.forEach((b, i) => {
         lines.push(
-          `| ${i + 1} | ${b.hangType} | ${b.jankReason ?? "—"} | ${b.startTimeFormatted} | ${b.durationMs}ms | ${severityEmoji(b.severity)} |`
+          `| ${i + 1} | ${b.hangType} | ${b.jankReason ?? "—"} | ${b.startTimeFormatted} | ${b.durationMs}ms${hangSuspendedNote(b)} | ${severityEmoji(b.severity)} |`
         );
       });
     } else {
       lines.push(`| # | Type | Start | Duration | Severity |`, `|---|---|---|---|---|`);
       uiHangs.forEach((b, i) => {
         lines.push(
-          `| ${i + 1} | ${b.hangType} | ${b.startTimeFormatted} | ${b.durationMs}ms | ${severityEmoji(b.severity)} |`
+          `| ${i + 1} | ${b.hangType} | ${b.startTimeFormatted} | ${b.durationMs}ms${hangSuspendedNote(b)} | ${severityEmoji(b.severity)} |`
         );
       });
     }
 
     const hangDetailSlice = isFinite(cap.hangLimit) ? uiHangs.slice(0, cap.hangLimit) : uiHangs;
     for (const hang of hangDetailSlice) {
+      const waitedNote = waitedToolHangNote(hang);
       const header =
-        `**${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms)**` +
+        `**${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms${hangSuspendedNote(hang)})**` +
         (hang.jankReason ? ` — reason: \`${hang.jankReason}\`` : "") +
         (hang.gcOverlapMs && hang.gcOverlapMs > 0
           ? ` — +${Math.round(hang.gcOverlapMs)}ms in GC`
@@ -402,7 +466,7 @@ function renderFullReport(
           lines.push(`App call chains during this hang:`);
           hang.appCallChains.forEach((entry, i) => {
             lines.push(
-              `${i + 1}. \`${entry.chain.map(demangleSymbol).join(" > ")}\` (${entry.sampleCount} samples)`
+              `${i + 1}. \`${entry.chain.map((fn) => hangFunctionName(hang, fn)).join(" > ")}\` (${entry.sampleCount} samples)`
             );
           });
         }
@@ -411,15 +475,17 @@ function renderFullReport(
         lines.push(`${header} — app call chains during this hang:`);
         hang.appCallChains.forEach((entry, i) => {
           lines.push(
-            `${i + 1}. \`${entry.chain.map(demangleSymbol).join(" > ")}\` (${entry.sampleCount} samples)`
+            `${i + 1}. \`${entry.chain.map((fn) => hangFunctionName(hang, fn)).join(" > ")}\` (${entry.sampleCount} samples)`
           );
         });
+        if (waitedNote) lines.push(``, waitedNote);
       } else if (hang.suspectedFunctions.length > 0) {
         lines.push(``);
         lines.push(`${header} — during this hang, the most active functions were:`);
         for (const fn of hang.suspectedFunctions) {
-          lines.push(`- \`${demangleSymbol(fn)}\``);
+          lines.push(`- \`${hangFunctionName(hang, fn)}\``);
         }
+        if (waitedNote) lines.push(``, waitedNote);
       } else {
         lines.push(``);
         lines.push(header);
@@ -460,7 +526,12 @@ function renderFullReport(
     if (unattributedLeaks.length > 0) {
       lines.push(
         ``,
-        renderUnattributedLeaksNote(unattributedLeaks, attributedLeaks.length, mallocStackLogging)
+        renderUnattributedLeaksNote(
+          unattributedLeaks,
+          attributedLeaks.length,
+          mallocStackLogging,
+          payload.metadata.platform.toLowerCase() === "macos"
+        )
       );
     }
   }
@@ -500,13 +571,15 @@ function renderFullReport(
   if (uiHangs.length > 0) {
     lines.push(`### UI Hangs`, ``);
     for (const b of uiHangs) {
-      const funcNote =
-        b.suspectedFunctions.length > 0
-          ? ` Likely caused by: \`${demangleSymbol(b.suspectedFunctions[0]!)}\`.`
+      const waitedNote = waitedToolHangNote(b);
+      const funcNote = waitedNote
+        ? ` ${waitedNote}`
+        : b.suspectedFunctions.length > 0
+          ? ` Likely caused by: \`${hangFunctionName(b, b.suspectedFunctions[0]!)}\`.`
           : "";
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
-        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): ${hangCoreAdvice(b)}${reasonNote}${funcNote}`
+        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms${hangSuspendedNote(b)}): ${hangCoreAdvice(b)}${reasonNote}${funcNote}`
       );
     }
     lines.push(``);
@@ -561,6 +634,13 @@ function renderFullReport(
   return lines.join("\n");
 }
 
+/** Why a leak of a Mac app has no allocation backtrace without malloc stack logging. */
+export const MAC_UNATTRIBUTED_LEAKS =
+  "On a Mac app without malloc stack logging, only an object allocated after the start of the " +
+  "recording has an allocation backtrace. These are most likely older objects or benign system " +
+  "allocations, not confirmed app leaks. To attribute them, record again with " +
+  "`malloc_stack_logging: true`.";
+
 function renderLeaksNotRecordedNote(): string {
   return `> ⚠️ **Memory leaks:** ${LEAKS_NOT_RECORDED} Do not report the app as leak-free.`;
 }
@@ -573,14 +653,25 @@ function renderLeaksNotRecordedNote(): string {
  * into parsedData); null/undefined when unknown. It only disambiguates the
  * zero-attributed case: explicit `true` names the malloc capture that recorded
  * nothing, anything else gets the `--attach` framing.
+ *
+ * On a Mac app, attributed leaks do not prove malloc stack logging: without it,
+ * Instruments still records a backtrace for each object allocated after the start.
  */
 export function renderUnattributedLeaksNote(
   unattributedLeaks: MemoryLeak[],
   attributedCount: number,
-  mallocStackLogging?: boolean | null
+  mallocStackLogging?: boolean | null,
+  macApp = false
 ): string {
   const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
   const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+  if (macApp && mallocStackLogging !== true) {
+    return (
+      `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
+      `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
+      MAC_UNATTRIBUTED_LEAKS
+    );
+  }
   // Attribution evidence decides first: a responsible frame exists only if the
   // target ran under malloc stack logging — possible even under `--attach`, if
   // the app was launched with the diagnostic externally — so an explicit

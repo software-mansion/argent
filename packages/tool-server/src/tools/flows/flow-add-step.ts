@@ -74,6 +74,7 @@ import {
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { IOS_TEXT_INPUT_ROLE } from "./flow-ios-tree";
 import {
   getDescribeTapPoint,
   type DescribeFrame,
@@ -776,6 +777,19 @@ function namedCentre(tree: DescribeNode, frame: DescribeFrame): string {
 }
 
 /**
+ * The node a recorded selector is derived from. On an iOS simulator the value
+ * of a text input is the text typed into it, and that text never becomes a
+ * selector: it does not name the field, and it can be the value of a
+ * `{{secret:…}}` placeholder, which must not reach the YAML. Without it the
+ * field records by its label, then by its role.
+ */
+function withoutTypedText(node: DescribeNode, { source }: DescribeTreeData): DescribeNode {
+  return source === "native-devtools" && node.role === IOS_TEXT_INPUT_ROLE
+    ? { ...node, value: undefined }
+    : node;
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -824,7 +838,7 @@ async function captureTapSelector(
     let selector = supplied;
     if (!selector) {
       if (!tapped) return { warning: "no element found under the tap; kept coordinates (brittle)" };
-      selector = deriveSelector(tapped) ?? undefined;
+      selector = deriveSelector(withoutTypedText(tapped, data)) ?? undefined;
       if (!selector)
         return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
     }
