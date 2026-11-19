@@ -6,6 +6,7 @@ import {
   flowScriptExecutor,
 } from "../../../src/tools/flows/script/flow-script-executor";
 import { createScriptWorkspace, type ScriptWorkspace } from "../../helpers/flow-script-workspace";
+import { hostRunsTypeScript } from "../../helpers/host-typescript";
 
 const workspaces: ScriptWorkspace[] = [];
 
@@ -535,5 +536,29 @@ describe("flow script executor — the tool server's one executor", () => {
       projectRoot: ws.dir,
     });
     expect(result.output).toEqual({ viaShared: true });
+  });
+});
+
+describe("flow script executor — whether a script process runs TypeScript", () => {
+  it("answers as Node does, and asks once", async () => {
+    const shared = executor();
+    const asked = shared.stripsTypes();
+
+    expect(await asked).toBe(hostRunsTypeScript);
+    expect(shared.stripsTypes()).toBe(asked);
+  });
+
+  it("is not answered by a flag on the tool server, which no script process is given", async () => {
+    // The flag turns stripping off where it exists, and stops Node from
+    // starting at all where it does not, so either way it would change the
+    // answer if it reached the process that is asked.
+    const before = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = "--no-experimental-strip-types";
+    try {
+      expect(await executor().stripsTypes()).toBe(hostRunsTypeScript);
+    } finally {
+      if (before === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = before;
+    }
   });
 });

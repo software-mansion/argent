@@ -1,7 +1,13 @@
 import type { Bottleneck, CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../types";
 import { parseCpuFile, parseHangsFile, parseLeaksFile } from "./xml-parser";
 import { correlateHangsWithCpu, aggregateLeaks } from "./01-correlate";
-import { aggregateCpuHotspots } from "./02-aggregate";
+import { aggregateCpuHotspots, toolingWeightNs, withAppCallsThroughArgent } from "./02-aggregate";
+import {
+  suspendedTimeInHangs,
+  withSuspendedTime,
+  type AppSuspensionSpan,
+  type SuspensionAdjustment,
+} from "../app-suspensions";
 
 interface PipelineOutput {
   bottlenecks: Bottleneck[];
@@ -9,6 +15,12 @@ interface PipelineOutput {
   uiHangs: UiHang[];
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
+  /** CPU time of the libraries argent and Instruments load into the app, which the hotspots leave out. */
+  toolingCpuMs: { argent: number; instruments: number };
+  /** CPU time of the samples with a stack, the tools' included: what the hotspot shares are of. */
+  totalCpuMs: number;
+  /** What the app's suspensions overlapped in the hangs. Null when none were passed. */
+  suspensionAdjustment?: SuspensionAdjustment | null;
 }
 
 interface PipelineOptions {
@@ -17,6 +29,11 @@ interface PipelineOptions {
    * capture is host-wide; null for the device strategy, already scoped by `--attach`.
    */
   cpuFilterPid?: number | null;
+  /**
+   * Mac apps: when macOS held the app suspended, on the trace's timeline. Each hang
+   * gets the suspended part of its span. Null or absent gives the hangs none.
+   */
+  appSuspensions?: AppSuspensionSpan[] | null;
 }
 
 export async function runIosProfilerPipeline(
@@ -28,13 +45,34 @@ export async function runIosProfilerPipeline(
     parseHangsFile(files.hangs ?? null),
     parseLeaksFile(files.leaks ?? null),
   ]);
+  for (const sample of cpuSamples) sample.stack = withAppCallsThroughArgent(sample.stack);
 
-  const { uiHangs, hangSampleTimestamps } = correlateHangsWithCpu(rawHangs, cpuSamples);
+  const suspensions =
+    options.appSuspensions != null ? suspendedTimeInHangs(rawHangs, options.appSuspensions) : null;
+  const correlated = correlateHangsWithCpu(rawHangs, cpuSamples, suspensions?.suspendedNs);
+  const { hangSampleTimestamps } = correlated;
+  const uiHangs = suspensions
+    ? correlated.uiHangs.map((hang, i) => withSuspendedTime(hang, suspensions.suspendedNs[i]!))
+    : correlated.uiHangs;
 
   const cpuHotspots = aggregateCpuHotspots(cpuSamples, hangSampleTimestamps);
   const memoryLeaks = aggregateLeaks(rawLeaks);
 
   const bottlenecks: Bottleneck[] = [...cpuHotspots, ...uiHangs, ...memoryLeaks];
 
-  return { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
+  const totalNs = cpuSamples.reduce((sum, s) => sum + (s.stack.length > 0 ? s.weightNs : 0), 0);
+  const tooling = toolingWeightNs(cpuSamples);
+  return {
+    bottlenecks,
+    cpuSamples,
+    uiHangs,
+    cpuHotspots,
+    memoryLeaks,
+    toolingCpuMs: {
+      argent: Math.round(tooling.argent / 1_000_000),
+      instruments: Math.round(tooling.instruments / 1_000_000),
+    },
+    totalCpuMs: Math.round(totalNs / 1_000_000),
+    suspensionAdjustment: suspensions?.summary ?? null,
+  };
 }
