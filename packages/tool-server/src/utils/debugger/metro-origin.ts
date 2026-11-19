@@ -15,15 +15,15 @@ import * as os from "node:os";
  *
  * So no single Origin satisfies every Metro. `127.0.0.1` covers bare React
  * Native and Expo's default. The rest of the list covers an Expo whose server
- * URL was moved to another host, which can only be found by trying.
+ * URL was moved to another host and whose manifest did not name it (see
+ * {@linkcode expoManifestOrigin}), which can only be found by trying.
  */
-export function metroOriginCandidates(wsUrl: string, remembered?: string): string[] {
+export function metroOriginCandidates(wsUrl: string): string[] {
   const { protocol, host, port } = new URL(wsUrl);
   const scheme = protocol === "wss:" ? "https://" : "http://";
   const at = (hostname: string) => `${scheme}${bracketed(hostname)}${port ? `:${port}` : ""}`;
 
   const candidates = [
-    remembered,
     scheme + host.replace("localhost", "127.0.0.1"),
     at("localhost"),
     process.env.REACT_NATIVE_PACKAGER_HOSTNAME?.trim() || undefined,
@@ -36,9 +36,10 @@ export function metroOriginCandidates(wsUrl: string, remembered?: string): strin
 
 /**
  * The Origin an Expo dev server expects, read from the host of the bundle URL
- * in its manifest. Expo builds both from the same hostname when
- * `REACT_NATIVE_PACKAGER_HOSTNAME` is set, which is the case the cheaper
- * guesses can miss (a hostname or an address on no local interface).
+ * in its manifest. Expo builds both from the same hostname:
+ * `REACT_NATIVE_PACKAGER_HOSTNAME` when it is set, else `127.0.0.1` for a
+ * request to a loopback host. Asking costs one HTTP request, where a wrong
+ * guess costs an upgrade that evicts the debugger attached to the page.
  *
  * `undefined` when the server is not Expo, or answers with anything else.
  */

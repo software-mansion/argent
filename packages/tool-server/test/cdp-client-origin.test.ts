@@ -7,14 +7,18 @@ import { CDPClient } from "../src/utils/debugger/cdp-client";
 import { metroOriginCandidates } from "../src/utils/debugger/metro-origin";
 
 /**
- * A Metro behind Expo's dev server: the upgrade completes for any Origin, then
- * the socket is terminated unless the Origin's host is `expectedHost`. Answers
- * `Runtime.evaluate` on a kept socket. `manifestHost` makes `GET /` answer an
- * Expo manifest whose bundle URL is on that host.
+ * A Metro behind Expo's dev server. Like React Native's inspector proxy, each
+ * upgrade first evicts the socket already on the page (close 1000,
+ * `[NEW_DEBUGGER_OPENED]`), or with `pageMissing` closes the new one (1011,
+ * `[PAGE_NOT_FOUND]`). Then, like Expo, it terminates the socket unless the
+ * Origin's host is `expectedHost`. Answers `Runtime.evaluate` on a kept socket.
+ * `manifestHost` makes `GET /` answer an Expo manifest whose bundle URL is on
+ * that host.
  */
 async function startExpoLikeMetro(options: {
   expectedHost: (port: number) => string;
   manifestHost?: (port: number) => string;
+  pageMissing?: boolean;
 }) {
   const origins: (string | undefined)[] = [];
   const server: Server = createServer((req, res) => {
@@ -32,8 +36,15 @@ async function startExpoLikeMetro(options: {
   });
   const wss = new WebSocketServer({ server });
   let port = 0;
+  let attached: import("ws").WebSocket | undefined;
   wss.on("connection", (socket, req) => {
     origins.push(req.headers.origin);
+    if (options.pageMissing) {
+      socket.close(1011, "[PAGE_NOT_FOUND] Debugger page not found");
+      return;
+    }
+    attached?.close(1000, "[NEW_DEBUGGER_OPENED] New debugger opened for the same app instance");
+    attached = socket;
     const host = req.headers.origin ? new URL(req.headers.origin).host : undefined;
     if (host !== options.expectedHost(port)) {
       socket.terminate();
@@ -111,7 +122,7 @@ describe("CDPClient Origin negotiation with Metro", () => {
     expect(metro.origins).toEqual([`http://devbox.test:${metro.port}`]);
   });
 
-  it("falls back to the host in Expo's manifest", async () => {
+  it("asks Expo's manifest before guessing, so no upgrade evicts the attached debugger", async () => {
     metro = await startExpoLikeMetro({
       expectedHost: (port) => `bundles.test:${port}`,
       manifestHost: (port) => `bundles.test:${port}`,
@@ -120,8 +131,45 @@ describe("CDPClient Origin negotiation with Metro", () => {
 
     await client.connect();
 
-    expect(metro.origins.at(-1)).toBe(`http://bundles.test:${metro.port}`);
+    expect(metro.origins).toEqual([`http://bundles.test:${metro.port}`]);
     expect(client.isConnected()).toBe(true);
+  });
+
+  it("does not read another debugger taking the page as a refused Origin", async () => {
+    metro = await startExpoLikeMetro({
+      expectedHost: (port) => `bundles.test:${port}`,
+      manifestHost: (port) => `bundles.test:${port}`,
+    });
+    const other = new CDPClient(metro.url);
+    client = new CDPClient(metro.url);
+
+    // Two clients inside one settle window: whichever upgrades last evicts the
+    // other, which is a lost socket, not a reason to try more Origins.
+    await Promise.all([other.connect(), client.connect()]);
+
+    expect(metro.origins).toEqual([
+      `http://bundles.test:${metro.port}`,
+      `http://bundles.test:${metro.port}`,
+    ]);
+    expect([other.isConnected(), client.isConnected()].filter(Boolean)).toHaveLength(1);
+    await other.disconnect();
+  });
+
+  it("reports a page React Native cannot find as a lost socket, not an Origin problem", async () => {
+    metro = await startExpoLikeMetro({
+      expectedHost: (port) => `127.0.0.1:${port}`,
+      pageMissing: true,
+    });
+    client = new CDPClient(metro.url);
+    const events: string[] = [];
+    client.events.on("connected", () => events.push("connected"));
+    client.events.on("disconnected", () => events.push("disconnected"));
+
+    await client.connect();
+
+    expect(metro.origins).toHaveLength(1);
+    expect(events).toEqual(["connected", "disconnected"]);
+    expect(client.isConnected()).toBe(false);
   });
 
   it("names the Origin problem when no candidate is kept", async () => {
@@ -143,21 +191,36 @@ describe("CDPClient Origin negotiation with Metro", () => {
   });
 });
 
+describe("CDPClient without an Origin (Chromium)", () => {
+  it("reports a socket that fails to open as disconnected", async () => {
+    const server = createServer((_req, res) => {
+      res.statusCode = 404;
+      res.end();
+    });
+    server.on("upgrade", (_req, socket) => socket.end("HTTP/1.1 404 Not Found\r\n\r\n"));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+    const chromium = new CDPClient(`ws://127.0.0.1:${port}/devtools/page/x`, {
+      sendOrigin: false,
+    });
+    const disconnected = vi.fn();
+    chromium.events.on("disconnected", disconnected);
+
+    await expect(chromium.connect()).rejects.toThrow(/404/);
+
+    expect(disconnected).toHaveBeenCalled();
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+});
+
 describe("metroOriginCandidates", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("puts the remembered Origin first, then 127.0.0.1, without duplicates", () => {
+  it("puts 127.0.0.1 first, without duplicates", () => {
     vi.stubEnv("REACT_NATIVE_PACKAGER_HOSTNAME", " 127.0.0.1 ");
-    const candidates = metroOriginCandidates(
-      "ws://localhost:8081/inspector/debug",
-      "http://10.0.0.2:8081"
-    );
+    const candidates = metroOriginCandidates("ws://localhost:8081/inspector/debug");
 
-    expect(candidates.slice(0, 3)).toEqual([
-      "http://10.0.0.2:8081",
-      "http://127.0.0.1:8081",
-      "http://localhost:8081",
-    ]);
+    expect(candidates.slice(0, 2)).toEqual(["http://127.0.0.1:8081", "http://localhost:8081"]);
     expect(new Set(candidates).size).toBe(candidates.length);
   });
 
