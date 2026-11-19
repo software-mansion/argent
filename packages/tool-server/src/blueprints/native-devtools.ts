@@ -697,6 +697,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const networkConditions = new Map<string, NetworkThrottle>();
     /** Attach mode: whether the provider's capture was on before Argent first throttled the app. */
     const providerCapture = new Map<string, boolean>();
+    /** Apps that a failed call may have left partly throttled, so a reset still clears them. */
+    const unconfirmedThrottles = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const noteInitFailure = (err: unknown): void => {
@@ -883,7 +885,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     /** A provider keeps the app connected after Argent leaves, so the app would stay throttled. */
     const releaseLentThrottles = async (): Promise<void> => {
-      const cleared = [...networkConditions.keys()]
+      const throttled = new Set([...networkConditions.keys(), ...unconfirmedThrottles]);
+      const cleared = [...throttled]
         .filter((bundleId) => connections.has(bundleId))
         .map((bundleId) => clearThrottle(bundleId).catch(() => {}));
       await Promise.race([
@@ -1190,11 +1193,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         const previous = networkConditions.get(bundleId) ?? null;
         storeThrottle(bundleId, throttle);
         if (!connections.has(bundleId)) return;
-        if (!throttle && !previous) return;
+        if (!throttle && !previous && !unconfirmedThrottles.has(bundleId)) return;
         try {
           if (throttle) await applyThrottle(bundleId, throttle);
           else await clearThrottle(bundleId);
+          unconfirmedThrottles.delete(bundleId);
         } catch (err) {
+          if (throttle) unconfirmedThrottles.add(bundleId);
           if ((networkConditions.get(bundleId) ?? null) === throttle) {
             storeThrottle(bundleId, previous);
           }
@@ -1277,6 +1282,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         connections.clear();
         activatedBundleIds.clear();
         networkConditions.clear();
+        unconfirmedThrottles.clear();
         providerCapture.clear();
         /**
          * Attach mode owns only its end of the connection: hang up and leave

@@ -50,6 +50,7 @@ type LentAgentOptions = {
   captureOn?: boolean;
   /** An older agent that has no `NativeDevtoolsIos.getConditions`. */
   failsGetConditions?: boolean;
+  refusesConditions?: boolean;
 };
 
 /** Follows the capture state of the agent in the app: throttling turns capture on. */
@@ -60,6 +61,9 @@ function captureAfter(method: unknown, captureOn: boolean): boolean {
 }
 
 function cdpReply(id: unknown, method: unknown, options: Required<LentAgentOptions>) {
+  if (method === "Network.emulateNetworkConditions" && options.refusesConditions) {
+    return { id, error: { message: "rejected" } };
+  }
   if (method !== "NativeDevtoolsIos.getConditions") return { id, result: {} };
   if (options.failsGetConditions) return { id, error: { message: "Unknown method" } };
   return { id, result: { enabled: options.captureOn } };
@@ -68,11 +72,12 @@ function cdpReply(id: unknown, method: unknown, options: Required<LentAgentOptio
 async function startLentAgent({
   captureOn = true,
   failsGetConditions = false,
+  refusesConditions = false,
 }: LentAgentOptions = {}): Promise<LentAgent> {
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
-  const state = { captureOn, failsGetConditions };
+  const state = { captureOn, failsGetConditions, refusesConditions };
 
   const server = net.createServer((socket) => {
     sockets.push(socket);
@@ -449,6 +454,25 @@ describe("a provider that lends its native-devtools agent", () => {
       const instance = await instantiate();
       await waitForConnectedBundle(instance.api);
       await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+
+      await instance.dispose();
+
+      expect(cdpMethods(agent).slice(-2)).toEqual([
+        "NativeDevtoolsIos.configure",
+        "Network.enable",
+      ]);
+
+      await agent.close();
+    });
+
+    it("clears a throttle the app refused before it hangs up", async () => {
+      const agent = await startLentAgent({ refusesConditions: true });
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+      await expect(instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE)).rejects.toThrow(
+        "rejected"
+      );
 
       await instance.dispose();
 
