@@ -75,7 +75,7 @@ export function createScreenRecordingStartTool(
     description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
-A physical iPhone must be on a USB cable (list-devices transportType "wired"). Its first recording on a Mac compiles a capture helper and macOS asks the user to allow camera access for "ios-screen-stream"; tell them to click Allow. No touch markers are drawn on a phone.
+A physical iPhone must be on a USB cable (list-devices transportType "wired"). Its first recording on this host compiles a capture helper and the OS asks the user to allow camera access for "ios-screen-stream"; tell them to click Allow. No touch markers are drawn on a phone.
 Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
 Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed (local devices only), or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
     zodSchema,
