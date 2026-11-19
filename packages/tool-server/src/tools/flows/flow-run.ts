@@ -3195,9 +3195,15 @@ async function execLeafStep(
         // `Registry.invokeTool` does not assert capabilities (only the HTTP edge
         // does), and most tools pick their backend by elimination: on a Mac app
         // a raw `tool: gesture-pinch` would reach the simulator-server. Refuse it
-        // here with the tool's own capability message instead.
+        // here with the tool's own capability message instead. The kind is read
+        // again: any raw step can start the app (`tool: boot-device` does its
+        // first start), and the start records the kind.
         if (device?.platform === "macos") {
-          assertSupported(step.name, registry.getTool(step.name)?.capability, device);
+          assertSupported(
+            step.name,
+            registry.getTool(step.name)?.capability,
+            resolveDevice(device.id)
+          );
         }
         prepared = await prepareToolStepInputs(
           registry,

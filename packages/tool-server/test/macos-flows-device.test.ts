@@ -48,8 +48,9 @@ function makeRegistry(
     /** restart-app's answer: its note, or the error it fails with. */
     restart?: { note?: string } | Error;
     /**
-     * Runs before launch-app, restart-app or a nested e2e-execute answers, as the
-     * real ones (the nested run through its launch) write their record.
+     * Runs before launch-app, restart-app, boot-device or a nested e2e-execute
+     * answers, as the real ones (the nested run through its launch) write their
+     * record.
      */
     onStart?: () => Promise<void>;
     capabilityOf?: (tool: string) => unknown;
@@ -70,6 +71,10 @@ function makeRegistry(
         if (opts.restart instanceof Error) throw opts.restart;
         await opts.onStart?.();
         return { restarted: true, bundleId: args.bundleId, ...opts.restart };
+      }
+      if (tool === "boot-device") {
+        await opts.onStart?.();
+        return { platform: "macos", id: args.udid, booted: true };
       }
       if (tool === "e2e-execute") {
         await opts.onStart?.();
@@ -568,6 +573,29 @@ describe("raw tool steps on a Mac app", () => {
       expect(calls.map((c) => c.tool)).not.toContain("native-find-views");
     }
   );
+
+  it("gates the steps after a raw boot-device step by the kind its start recorded", async () => {
+    // boot-device gets the run's udid and makes the app's first start.
+    const { registry, calls } = makeRegistry({
+      capabilityOf: catalystCapabilityOf,
+      onStart: () => recordKind(true),
+    });
+    await writeFlow("raw-boot", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "boot-device", args: {} },
+        { kind: "tool", name: "native-find-views", args: { bundleId: APP, identifier: "x" } },
+      ],
+    });
+    const result = await run(registry, "raw-boot", { device: MAC_DEVICE });
+    expect(result.steps.map((s) => `${s.tool}:${s.status}`)).toEqual([
+      "boot-device:pass",
+      "native-find-views:error",
+    ]);
+    expect(result.steps[1]?.reason).toContain("not supported on macos catalyst");
+    expect(calls.find((c) => c.tool === "boot-device")?.args.udid).toBe(MAC_DEVICE);
+    expect(calls.map((c) => c.tool)).not.toContain("native-find-views");
+  });
 
   it.each([
     { start: "a Mac Catalyst app's first start", before: undefined, after: true },
