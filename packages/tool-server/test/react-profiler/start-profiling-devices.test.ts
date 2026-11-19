@@ -6,16 +6,25 @@ import {
   rememberLogicalKeyedDevice,
   resetDeviceAliases,
 } from "../../src/utils/debugger/device-alias";
-import { __resetProfilingDevicesForTesting, isProfiling } from "../../src/utils/profiling-devices";
+import {
+  __resetProfilingDevicesForTesting,
+  isProfiling,
+  registerCaptureOnDemandSender,
+} from "../../src/utils/profiling-devices";
 import { registerIosNetworkCaptures } from "../../src/blueprints/ios-network-records";
 
 import { createReactProfilerStartTool } from "../../src/tools/profiler/react/react-profiler-start";
+import type { RuntimeDevices } from "../../src/utils/debugger/runtime-device";
 
-const findRuntimeDeviceMock = vi.hoisted(() =>
-  vi.fn(async (): Promise<string | undefined> => undefined)
+type ProbeOptions = { awaitSerials?: readonly string[]; waitSerials?: readonly string[] };
+const findRuntimeDevicesMock = vi.hoisted(() =>
+  vi.fn(async (_cdp?: unknown, _opts?: ProbeOptions): Promise<RuntimeDevices> => ({
+    found: [],
+    unresolved: [],
+  }))
 );
 vi.mock("../../src/utils/debugger/runtime-device", () => ({
-  findRuntimeDevice: () => findRuntimeDeviceMock(),
+  findRuntimeDevices: (cdp: unknown, opts?: ProbeOptions) => findRuntimeDevicesMock(cdp, opts),
 }));
 
 const LOGICAL_ID = "1c3346c4a6889e88dbb8116da34f0f4af6f8067c";
@@ -74,7 +83,8 @@ function fakeSession(deviceId: string, onStart: (api: ReactProfilerSessionApi) =
 afterEach(() => {
   __resetProfilingDevicesForTesting();
   resetDeviceAliases();
-  findRuntimeDeviceMock.mockReset();
+  findRuntimeDevicesMock.mockReset();
+  findRuntimeDevicesMock.mockResolvedValue({ found: [], unresolved: [] });
 });
 
 describe("react-profiler-start registers the run where the device's calls look", () => {
@@ -97,9 +107,60 @@ describe("react-profiler-start registers the run where the device's calls look",
     expect(sent.at(-1)).toBe("Profiler.stop");
   });
 
-  it("registers a run keyed by a logicalDeviceId under the device it runs on too", async () => {
+  it("registers a run keyed by a logicalDeviceId under every id of the device it runs on too", async () => {
     rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
-    findRuntimeDeviceMock.mockResolvedValue("emulator-5554");
+    findRuntimeDevicesMock.mockResolvedValue({
+      found: ["emulator-5554", "127.0.0.1:5555"],
+      unresolved: [],
+    });
+    const { api, registry } = fakeSession(LOGICAL_ID);
+    const tool = createReactProfilerStartTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { device_id: LOGICAL_ID, port: 8081, sample_interval_us: 100, force: false }
+    );
+
+    expect(isProfiling("emulator-5554")).toBe(true);
+    expect(isProfiling("127.0.0.1:5555")).toBe(true);
+    expect(isProfiling(LOGICAL_ID)).toBe(true);
+    expect(result).not.toHaveProperty("__argentNote");
+
+    // Every way a run ends clears the session's flag, which releases them all.
+    api.profilingActive = false;
+    for (const id of ["emulator-5554", "127.0.0.1:5555", LOGICAL_ID]) {
+      expect(isProfiling(id)).toBe(false);
+    }
+  });
+
+  // Only an awaited serial is kept when it answers after the grace window, so
+  // the probe must await the one the agent drives the device by.
+  it("asks the probe to wait in full for a serial with a simulator-server", async () => {
+    const WIRELESS = "192.168.1.5:5555";
+    rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
+    const sends: boolean[] = [];
+    registerCaptureOnDemandSender(WIRELESS, "ws://127.0.0.1:9000", (onDemand) =>
+      sends.push(onDemand)
+    );
+    findRuntimeDevicesMock.mockImplementation(async (_cdp, opts) => ({
+      found: opts?.waitSerials?.includes(WIRELESS) ? ["R58M123ABC", WIRELESS] : ["R58M123ABC"],
+      unresolved: [],
+    }));
+    const { registry } = fakeSession(LOGICAL_ID);
+    const tool = createReactProfilerStartTool(registry);
+
+    await tool.execute(
+      {},
+      { device_id: LOGICAL_ID, port: 8081, sample_interval_us: 100, force: false }
+    );
+
+    expect(isProfiling(WIRELESS)).toBe(true);
+    expect(sends).toEqual([true]);
+  });
+
+  it("adds no unknown-device note when the device is found under one serial", async () => {
+    rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
+    findRuntimeDevicesMock.mockResolvedValue({ found: ["emulator-5554"], unresolved: [] });
     const { registry } = fakeSession(LOGICAL_ID);
     const tool = createReactProfilerStartTool(registry);
 
@@ -109,8 +170,36 @@ describe("react-profiler-start registers the run where the device's calls look",
     );
 
     expect(isProfiling("emulator-5554")).toBe(true);
-    expect(isProfiling(LOGICAL_ID)).toBe(true);
     expect(result).not.toHaveProperty("__argentNote");
+  });
+
+  // A provider's device is driven by its `ext:` id, while adb finds it by the
+  // serial behind it.
+  it("registers the run under a provider's id for the found serial", async () => {
+    const PROVIDER_ID = "ext:acme-3f2a9c:emulator-5556";
+    rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
+    const sends: boolean[] = [];
+    registerCaptureOnDemandSender(PROVIDER_ID, "ws://127.0.0.1:9000", (onDemand) =>
+      sends.push(onDemand)
+    );
+    registerCaptureOnDemandSender("ext:acme-3f2a9c:emulator-5558", "ws://127.0.0.1:9001", () => {});
+    findRuntimeDevicesMock.mockResolvedValue({ found: ["emulator-5556"], unresolved: [] });
+    const { api, registry } = fakeSession(LOGICAL_ID);
+    const tool = createReactProfilerStartTool(registry);
+
+    await tool.execute(
+      {},
+      { device_id: LOGICAL_ID, port: 8081, sample_interval_us: 100, force: false }
+    );
+
+    expect(isProfiling(PROVIDER_ID)).toBe(true);
+    expect(sends).toEqual([true]);
+    expect(isProfiling("ext:acme-3f2a9c:emulator-5558")).toBe(false);
+
+    api.profilingActive = false;
+    expect(isProfiling(PROVIDER_ID)).toBe(false);
+    expect(isProfiling("emulator-5556")).toBe(false);
+    expect(sends).toEqual([true, false]);
   });
 
   it("notes that captures go on when the device cannot be found", async () => {
@@ -136,7 +225,7 @@ describe("react-profiler-start registers the run where the device's calls look",
       { device_id: "emulator-5554", port: 8081, sample_interval_us: 100, force: false }
     );
 
-    expect(findRuntimeDeviceMock).not.toHaveBeenCalled();
+    expect(findRuntimeDevicesMock).not.toHaveBeenCalled();
     expect(isProfiling("emulator-5554")).toBe(true);
   });
 });
@@ -157,7 +246,7 @@ describe("react-profiler-start looks up native network capture on the device it 
 
   async function startOnSimA(runtimeApp?: { appId: string; platform: "ios" }) {
     rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
-    findRuntimeDeviceMock.mockResolvedValue(SIM_A);
+    findRuntimeDevicesMock.mockResolvedValue({ found: [SIM_A], unresolved: [] });
     const { api, registry } = fakeSession(LOGICAL_ID);
     Object.assign(api, { runtimeApp });
     return createReactProfilerStartTool(registry).execute(
@@ -183,7 +272,9 @@ describe("react-profiler-start looks up native network capture on the device it 
     try {
       const result = await startOnSimA();
 
-      expect(result.warning).toContain(`Native network capture is on for ${APP} on this device`);
+      expect(result.warning).toContain(
+        `Native network capture is on for ${APP} on ${SIM_A}, the device this profile runs on`
+      );
     } finally {
       unregister();
     }

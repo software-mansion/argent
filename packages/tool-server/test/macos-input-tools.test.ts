@@ -547,6 +547,49 @@ describe("native-* view tools on a Mac app", () => {
     }
   );
 
+  it("native-view-at-point with hitTest sends the hit-test request, without the flag", async () => {
+    const reply = { view: { className: "NSButton" } };
+    const { invoke, calls } = harness({
+      "ViewHierarchy.userInteractableViewAtPoint": () => reply,
+    });
+    const result = await invoke("native-view-at-point", {
+      bundleId: MAC_BUNDLE_ID,
+      x: 50,
+      y: 50,
+      hitTest: true,
+    });
+    expect(result).toEqual({ status: "ok", ...reply });
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["ViewHierarchy.userInteractableViewAtPoint", { x: 50, y: 50 }],
+    ]);
+  });
+
+  it("native-view-at-point with hitTest: false sends the plain request", async () => {
+    const { invoke, calls } = harness({ "ViewHierarchy.viewAtPoint": () => ({ view: null }) });
+    const result = await invoke("native-view-at-point", {
+      bundleId: MAC_BUNDLE_ID,
+      x: 50,
+      y: 50,
+      hitTest: false,
+    });
+    expect(result).toEqual({ status: "ok", view: null });
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["ViewHierarchy.viewAtPoint", { x: 50, y: 50 }],
+    ]);
+  });
+
+  it("a failed hit-test through native-view-at-point keeps the hit-test error code", async () => {
+    const { invoke } = harness({
+      "ViewHierarchy.userInteractableViewAtPoint": () => ({ error: "no window" }),
+    });
+    const err = await errorOf(
+      invoke("native-view-at-point", { bundleId: MAC_BUNDLE_ID, x: 1, y: 1, hitTest: true })
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_DEVTOOLS_USER_INTERACTABLE_VIEW_AT_POINT_ERROR
+    );
+  });
+
   it("fails on an error in the library's result", async () => {
     const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ error: "no window" }) });
     const err = await errorOf(
