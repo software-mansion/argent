@@ -180,6 +180,23 @@ describe("native devtools network conditions", () => {
     await vi.waitFor(() => expect(relaunched.received).toEqual([ACTIVATE]));
   });
 
+  it("still clears at a reset after a throttle the app refused", async () => {
+    const { api, agent } = await setup((msg) =>
+      msg.payload.method === "Network.emulateNetworkConditions"
+        ? { error: { message: "rejected" } }
+        : { result: {} }
+    );
+    await expect(api.setNetworkConditions(BUNDLE, SLOW)).rejects.toThrow("rejected");
+    agent.received.length = 0;
+
+    await api.setNetworkConditions(BUNDLE, null);
+
+    expect(agent.received).toEqual([
+      ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [] }],
+      ["CDP", "Network.disable", {}],
+    ]);
+  });
+
   it("keeps conditions a later call set while an earlier call was failing", async () => {
     const { api } = await setup((msg) =>
       msg.payload.params?.latency === 900 ? undefined : { result: {} }
