@@ -128,7 +128,19 @@ export function flattenHoisting<T>(
   //     an inner scroller whose rect extends past the outer viewport — a
   //     content-sized embedded RecyclerView / UICollectionView straddling the
   //     outer fold would report rows below the fold as visible.
-  if (scrollClip && view.rect && rectFullyOutside(view.rect, scrollClip)) return "";
+  //
+  // A view with no area has nothing to scroll out of the window: a 0x0 wrapper
+  // whose children overflow it sits on the window's left or top edge whenever
+  // its child does, and the edge-inclusive test would drop that visible child
+  // with it. Its children are tested on their own.
+  if (
+    scrollClip &&
+    view.rect &&
+    view.rect.w > 0 &&
+    view.rect.h > 0 &&
+    rectFullyOutside(view.rect, scrollClip)
+  )
+    return "";
   const childClip = view.scrolls && view.rect ? intersectClip(view.rect, scrollClip) : scrollClip;
 
   const childText: string[] = [];
