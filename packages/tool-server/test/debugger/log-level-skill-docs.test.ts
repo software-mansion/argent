@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { LogFileWriter } from "../../src/utils/debugger/log-file-writer";
+import { CONSOLE_LEVELS } from "../../src/tools/debugger/debugger-log-registry";
 import { scopeTempHome } from "../helpers/temp-home";
 
 scopeTempHome("argent-log-level-docs-home-");
@@ -13,28 +14,6 @@ scopeTempHome("argent-log-level-docs-home-");
  * for the levels CDP delivers.
  */
 const SKILL = path.resolve(__dirname, "../../../skills/skills/argent-metro-debugger/SKILL.md");
-
-/** `Runtime.consoleAPICalled.type`, the only levels that reach the writer. */
-const CDP_CONSOLE_TYPES = [
-  "log",
-  "debug",
-  "info",
-  "error",
-  "warning",
-  "dir",
-  "dirxml",
-  "table",
-  "trace",
-  "clear",
-  "startGroup",
-  "startGroupCollapsed",
-  "endGroup",
-  "assert",
-  "profile",
-  "profileEnd",
-  "count",
-  "timeEnd",
-];
 
 let nextPort = 59240;
 
@@ -77,7 +56,7 @@ describe("metro-debugger flat-log level column", () => {
   });
 
   it("documents no token a CDP level cannot produce", () => {
-    const producible = CDP_CONSOLE_TYPES.map(displayFor);
+    const producible = CONSOLE_LEVELS.map(displayFor);
     for (const token of documentedTokens()) {
       expect(producible, `\`${token}\` is documented but never written`).toContain(token);
     }

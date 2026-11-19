@@ -24,7 +24,7 @@ Pass the same `device_id`, the id from `list-devices`, to every call. With two o
 | `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                  |
 | `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                |
 | `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
-| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                         |
+| `debugger-log-registry`                              | Console log summary, the newest entries inline, and the log file path (§4)                                             |
 | `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                             |
 | `view-network-logs` → `view-network-request-details` | JS-level HTTP traffic, then the headers and body of one request                                                        |
 
@@ -46,7 +46,7 @@ What the `guidance` does not tell you:
 
 ## 4. Reading Console Logs (Log Registry)
 
-Logs are written to a flat log file on disk. `debugger-log-registry` returns the summary and the file path.
+Logs are written to a flat log file on disk. `debugger-log-registry` returns the summary, the file path and `entries`: the newest 20 console entries, oldest first, each message cut to 300 characters. Pass `levels: ["warning", "error"]` to see only those, and `tail` (max 100) for more. Each `entries[].id` is the `[L:<id>]` anchor of that line in the file. Read `entries` first; search the file only for older lines or full messages, and only if you can read files.
 
 ### Flat log format
 
