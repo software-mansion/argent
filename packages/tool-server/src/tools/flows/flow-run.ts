@@ -40,6 +40,7 @@ import {
   E2E_FILE_TEMPLATES,
   flowNameCasingError,
   isBlockStep,
+  isVersion1,
   parseFlow,
   precedesLeadingLaunch,
   runTargetName,
@@ -108,6 +109,7 @@ import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-elec
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import {
   isIosPhysicalDevice,
+  isIosSimulator,
   isMacosBundleId,
   macosAppIdFromBundleId,
   parseChromiumCdpPort,
@@ -116,6 +118,7 @@ import {
 import { assertSupported, MACOS_APPS_FLAG } from "../../utils/capability";
 import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
 import { getTrackedMacosApp, otherWorktreeOfBuild } from "../../utils/macos-apps";
+import { createRunFlowTool as createVersion1RunFlowTool } from "./version-1/flow-run";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import type { ArtifactHandle } from "../../artifacts";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
@@ -1480,6 +1483,7 @@ type Params = z.infer<typeof zodSchema>;
 export function createRunFlowTool(
   registry: Registry
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
+  const version1 = createVersion1RunFlowTool(registry);
   return {
     id: "e2e-execute",
     description: `Run a saved YAML e2e test end to end. Use when
@@ -1505,7 +1509,7 @@ Without a link, every step kind runs.`,
     longRunning: true,
     fileInputs,
     services: () => ({}),
-    async execute(_services, params, ctx?: ToolContext) {
+    async execute(services, params, ctx?: ToolContext) {
       const runStartedAt = Date.now();
       const signal = ctx?.signal;
       const { filePath, flowName, viaUpload, shadowed } = await resolveFlowSource(
@@ -1694,6 +1698,13 @@ Without a link, every step kind runs.`,
       // The device the run STARTS on — `state.device` moves when a chromium
       // launch boots one, so the status-bar restore below must not follow it.
       const device = resolved.device;
+
+      // An e2e test file older than version 2 on an iOS simulator runs on the
+      // runner it was written for: the whole call, kept unchanged in version-1/.
+      // Nothing has touched the device yet, and it repeats the checks above.
+      if (device !== null && isIosSimulator(device) && isVersion1(flow)) {
+        return version1.execute(services, params, ctx);
+      }
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
       // never drives a snapshot diff. Pinned before step 1 — it's a device-level

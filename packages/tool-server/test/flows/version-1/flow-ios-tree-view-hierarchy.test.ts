@@ -6,25 +6,28 @@ import {
   type DeviceInfo,
   type Registry,
 } from "@argent/registry";
-import type { NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
-import type { DescribeNode } from "../../src/tools/describe/contract";
+import type { NativeDevtoolsApi } from "../../../src/blueprints/native-devtools";
+import type { DescribeNode } from "../../../src/tools/describe/contract";
 import {
   MAX_LISTED_APPS,
   MAX_TARGETING_REASON_CHARS,
   queryFullHierarchyTree,
-} from "../../src/tools/flows/flow-ios-tree";
-import { evaluateCondition, selectorToFrame } from "../../src/utils/ui-tree-match";
-import { resolveNativeTargetApp } from "../../src/utils/native-target-app";
+} from "../../../src/tools/flows/version-1/flow-ios-tree";
+import {
+  evaluateCondition,
+  selectorToFrame,
+} from "../../../src/tools/flows/version-1/ui-tree-match";
+import { resolveNativeTargetApp } from "../../../src/utils/native-target-app";
 import {
   __resetDeviceSetCacheForTesting,
   rememberDeviceSet,
   simctlTargetForUdid,
-} from "../../src/utils/ios-device-sets";
+} from "../../../src/utils/ios-device-sets";
 
 // A pass-through spy, so the case below can count which reasons pay for the
 // device-set lookup while every other case keeps the real memo.
-vi.mock("../../src/utils/ios-device-sets", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/utils/ios-device-sets")>();
+vi.mock("../../../src/utils/ios-device-sets", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/utils/ios-device-sets")>();
   return { ...actual, simctlTargetForUdid: vi.fn(actual.simctlTargetForUdid) };
 });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { DeviceInfo, Registry } from "@argent/registry";
-import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
-import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
+import type { NativeAppState, NativeDevtoolsApi } from "../../../src/blueprints/native-devtools";
+import { queryFullHierarchyTree } from "../../../src/tools/flows/version-1/flow-ios-tree";
 
 // A getFullHierarchy read that returns no windows is the signal of an untrusted
 // read — a backgrounded app, a window that has not attached yet, or a system

@@ -821,6 +821,11 @@ export type FlowRequires = {
 };
 
 export type FlowFile = {
+  /**
+   * The file format version of a file older than the current one (a file with
+   * no `version` key is version 1); absent for a current file. See {@link isVersion1}.
+   */
+  version?: number;
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
   /** Absent when the flow runs on any target. */
@@ -3887,7 +3892,15 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
  * The e2e file format version this build writes and the newest it reads. A file
  * without `version` is version 1.
  */
-const FLOW_FILE_VERSION = 1;
+const FLOW_FILE_VERSION = 2;
+
+/**
+ * Whether an e2e test file is older than version 2. On an iOS simulator such a
+ * file runs on the e2e runner from before version 2 (`version-1/flow-run.ts`).
+ */
+export function isVersion1(flow: Pick<FlowFile, "version">): boolean {
+  return (flow.version ?? FLOW_FILE_VERSION) < 2;
+}
 
 function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["requires"] {
   return {
@@ -3896,10 +3909,14 @@ function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["
   };
 }
 
-/** Serialize a full flow file to YAML: `version` always, other fields only when not empty or defaulted. */
+/**
+ * Serialize a full flow file to YAML: `version` always (an older file keeps its
+ * own, so a rewrite never moves it to another runner), other fields only when
+ * not empty or defaulted.
+ */
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = {
-    version: FLOW_FILE_VERSION,
+    version: flow.version ?? FLOW_FILE_VERSION,
     ...(flow.requires ? { requires: requiresToYaml(flow.requires) } : {}),
     steps: flow.steps.map(toYamlStep),
   };
@@ -4013,6 +4030,7 @@ export function parseFlow(content: string): FlowFile {
   });
 
   const flow: FlowFile = {
+    ...(version < FLOW_FILE_VERSION ? { version } : {}),
     executionPrerequisite: parsed.executionPrerequisite ?? "",
     ...(parsed.requires === undefined ? {} : { requires: parseRequires(parsed.requires) }),
     steps,
