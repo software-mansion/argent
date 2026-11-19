@@ -66,7 +66,7 @@ A step can also start or stop the [network capture](/docs/features/network) of t
 
 The start step and the stop step pass also when a layer of the capture is not ready or did not stop. In the report of the replay, the result of each of these steps gives the state of each layer and the reason. The JSON report of `argent e2e run` also contains this result. Ask the agent to check this state after each replay.
 
-Use a local script for setup or cleanup that device steps cannot do. Ask the agent to add the script at the required point in the e2e test.
+Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test.
 
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 

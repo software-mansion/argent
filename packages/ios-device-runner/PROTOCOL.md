@@ -213,6 +213,18 @@ Flat list in emission order; `parentIndex` links reconstruct the tree.
   `degraded`, `reasonCode: "node_cap"`). Depth is also capped: the raw walk
   stops at depth 100 and emission at depth 60; unlike the node cap,
   depth-dropped content does not mark the snapshot `degraded`.
+- Hosted view services: when `com.apple.SafariViewService` is in the
+  foreground (an `ASWebAuthenticationSession` or `SFSafariViewController`
+  sheet is up), its tree is added under the root as an `Application` node,
+  emitted before the app's own nodes and capped at 1000 of the 1500 nodes. On
+  iOS 26 the app's own tree no longer contains the sheet. The service is read
+  without activating it, so the screen and the registered target stay as they
+  are, and its frames are in the same viewport points. It is skipped when the
+  service is suspended or in the background (a suspended service blocks the
+  capture past the watchdog), when its tree is not the app's size (a sheet
+  still animating), and when the app's tree already holds the sheet's
+  `BrowserView` (iOS 18 and earlier). A failed hosted capture never fails the
+  snapshot.
 - `quality`: `{state: healthy|degraded, backend: "xctest", reason?,
 reasonCode?}`.
 
