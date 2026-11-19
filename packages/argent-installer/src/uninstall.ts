@@ -27,6 +27,7 @@ import {
   probeLocalInstall,
   resolveInstallMode,
   removeInstallRecord,
+  removePath,
   resolveProjectRoot,
   RULES_DIR,
   SKILLS_DIR,
@@ -125,7 +126,7 @@ export function removeBundledContent(sourceDir: string, targetDir: string): Bund
     try {
       if (!fs.existsSync(targetPath)) continue;
       if (fs.lstatSync(targetPath).isDirectory()) continue;
-      fs.rmSync(targetPath, { force: true });
+      removePath(targetPath);
       removedPaths.push(relativePath);
     } catch {
       // non-fatal
@@ -209,20 +210,11 @@ export function removeBundledSkillInstalls(
   for (const skillName of skillNames) {
     const targetPath = path.join(targetDir, skillName);
     try {
-      // lstat, not existsSync: an editor dir holds symlinks into .agents/skills,
-      // which this run has already emptied, so the links are dangling.
-      // existsSync follows the link and reports them missing; lstat sees the
-      // link itself.
-      const stats = fs.lstatSync(targetPath, { throwIfNoEntry: false });
-      if (!stats) continue;
-
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
-        fs.rmSync(targetPath, { recursive: true, force: true });
-      } else {
-        fs.rmSync(targetPath, { force: true });
-      }
-
-      removedPaths.push(skillName);
+      // Not gated on existsSync: an editor dir holds symlinks into
+      // .agents/skills, which this run has already emptied, so the links are
+      // dangling. existsSync follows the link and reports them missing;
+      // removePath looks at the link itself.
+      if (removePath(targetPath)) removedPaths.push(skillName);
     } catch {
       // non-fatal
     }

@@ -211,9 +211,39 @@ The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a
 
 A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
 
-A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
+A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time. The report of the step shows the placeholder, not the value. See [Secrets](/docs/reference/configuration#secrets) and [Typed secrets in a report](#typed-secrets-in-a-report).
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
+
+### Typed secrets in a report
+
+A text field that is not secure shows a typed secret on the screen. The reason of a failed `text` check quotes the text of its element. Argent keeps a typed secret out of the quoted text with two rules.
+
+The first rule applies on each platform. Argent knows each value that a `type` step or the `keyboard`, `fill` or `paste` tool typed on a device. In the quoted text, Argent replaces a value with its placeholder when the screen shows the value exactly as typed. The comparison is case-sensitive:
+
+```
+element matched id="status" but its text was "Signed in with {{secret:API_TOKEN}}" (wanted to contain "Saved")
+```
+
+The second rule applies on an iOS simulator. A text field can change a typed value. For example, the field can capitalize, correct or format the value. Thus, after a tool typed a secret on an iOS simulator, the quoted text does not contain the text of a text field. The quoted text contains a note instead:
+
+```
+element matched id="token" but its text was "Token [text withheld: a secret was typed on this device]" (wanted to contain "Saved")
+```
+
+The second rule applies to each text field on that simulator. It also applies to an empty field, which reads as its placeholder. The label of the field and the text of other elements stay in the quoted text. The check reads the text of the field as before. Only the quoted text changes.
+
+Argent keeps the values in memory, for each device, until the tool-server stops. Thus the two rules also apply in a later e2e test of a directory run, in a nested `e2e-execute` run and in the run around it. The rules also apply after the app starts again.
+
+Argent changes only the text that the reason quotes from the screen. The other words of the reason and the text that the check expects do not change. The first rule also applies to the note of a failed `text` check of the `await-ui-element` tool.
+
+A report can show a typed secret in these cases:
+
+- An element that is not a text field shows a text that the app derives from the secret, for example a capitalized name.
+- A `tool:` step reads the screen, for example with `describe`. The result of the step contains the text of the screen.
+- On a physical iPhone, Android, Chromium or a Mac app, a text field shows the secret in a changed form. The second rule applies only on an iOS simulator.
+- A later e2e test of a directory run fails. That e2e test typed no secret, so Argent takes the screenshot of the failed step.
+- A different tool-server typed the secret, or no Argent tool typed it.
 
 ### Launch map
 
@@ -351,7 +381,17 @@ The `text` comparators:
 
 On Chromium, the text of an element has the letter case that the page shows. For example, a button with the CSS `text-transform: uppercase` reads as `SAVE` when its HTML has `Save`. Write a `matches` regex in the letter case that the page shows.
 
-`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: on a simulator Argent can't read its typed text, so `matches` never reads an iOS text field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
+`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: `matches` never reads an iOS text field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
+
+On an iOS simulator, a `text` check reads a text field as follows:
+
+- A text field reads as the text that it contains.
+- An empty text field reads as its placeholder.
+- A text field with an accessibility label reads as the label, then a space, then the text or the placeholder. For example, an empty field with the label `Email` and the placeholder `Required` reads as `Email Required`.
+- Argent does not read the text in a secure text field.
+- The runner knows a text field by the class name of its view. The name must contain `TextField`, `TextView` or `SearchField`. Argent does not read the text in a text field of a different class, for example a `UITextField` subclass with the name `AmountField`. For such a field, `matches: '^$'` passes also when the field contains text.
+
+On an iOS simulator, Argent does not use the text in a text field as the selector of a recorded tap.
 
 A negative condition passes before the element appears, for a typo, and on the wrong screen. First prove the screen and the same selector with `visible`. Then perform the action and check `hidden`.
 
@@ -606,12 +646,37 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 
 `argent e2e run` replays an e2e test without an agent and exits non-zero on failure. The command sends the e2e test to the tool-server that the CLI uses. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-| Command                      | Description                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist |
-| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                            |
-| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                         |
-| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                     |
+| Command                      | Description                                                                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist                      |
+| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                                                 |
+| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                                              |
+| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                                          |
+| `argent e2e list <dir>`      | List the e2e tests that `argent e2e run <dir>` runs. The path must not contain `..`                                   |
+| `argent e2e list <dir> -r`   | List the e2e tests that `argent e2e run <dir> -r` runs                                                                |
+| `argent e2e list --json`     | Print the same list as a JSON document. See [The `argent e2e list` JSON document](#the-argent-e2e-list-json-document) |
+
+`argent e2e list` skips the same subdirectories as `argent e2e run <dir> --recursive`: `__baselines__`, `node_modules` and dot-directories other than `.argent`, at any depth. Argent always reads the directory that you name, also when it is one of these directories.
+
+`argent e2e list` and `argent e2e run <dir>` skip a YAML file that is not an e2e test. Such a file has no top-level `steps` key, for example a `docker-compose.yaml`. Argent does not skip an empty file. Argent does not skip a file that has a YAML syntax error and holds `steps` or a top-level `version:` line. A directory run reports such a file as a failed e2e test. Argent does not skip a file with a newer `version`. `argent e2e run <name>` and `argent e2e run <path>.yaml` always run the file that you name.
+
+`argent e2e list` writes a warning on stderr for an empty file and for a file with a YAML syntax error, for example `warning: <path> is empty`. Stdout holds only the paths.
+
+When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes `warning: no .argent/e2e or .argent/flows directory in the current working directory` on stderr. When the directories hold no e2e test, `argent e2e list` writes `No e2e tests found in .argent/e2e or .argent/flows` on stderr. In both cases, stdout is empty and the exit code is 0. When one of the directories exists but Argent cannot read it, `argent e2e list` writes `Could not read e2e test directory: <dir>` on stderr and gives exit code 2.
+
+`argent e2e list <dir>` prints paths relative to the current directory for a relative `<dir>`, and absolute paths for an absolute `<dir>`. `argent e2e run` accepts each printed path. Argent puts `./` in front of a printed path that starts with `-`, so that `argent e2e run` does not read the path as an option.
+
+Argent writes an error on stderr and gives exit code 2 when `<dir>`:
+
+- does not exist
+- is not a directory
+- cannot be read
+- is empty text
+- has a `..` segment
+
+When you give `-r` without `<dir>`, Argent writes `e2e list --recursive requires a directory path` on stderr and gives exit code 2.
+
+When Argent finds no e2e test in `<dir>`, Argent writes `No e2e tests found in <dir>` on stderr, prints nothing on stdout and gives exit code 0. Without `-r`, Argent writes `Pass -r/--recursive to include subdirectories.` on the next line. With `--json`, Argent prints `{ "e2eTests": [] }`.
 
 | Option               | Description                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -619,7 +684,7 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 | `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either    |
 | `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines` |
 | `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                           |
-| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Dot-directories and `node_modules` are skipped                                                                    |
+| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                             |
 | `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                 |
 | `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                               |
 | `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                     |
@@ -700,6 +765,42 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
+
+### The `argent e2e list` JSON document
+
+`argent e2e list --json` writes one document on stdout. The document holds an `e2eTests` array. The array has the same order as the plain output. Each entry holds these fields:
+
+| Field        | Description                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `path`       | The path that the plain output prints                                                                                            |
+| `name`       | The name that `argent e2e run <name>` accepts. Only for a file directly in `.argent/e2e` or `.argent/flows`                      |
+| `legacy`     | `true` for an e2e test in `.argent/flows`                                                                                        |
+| `shadowedBy` | The path of an earlier entry with the same name. `argent e2e run <name>` runs that entry instead. Only when such an entry exists |
+| `warning`    | The problem in the file, as one of the codes below. Only when the file is empty or has a YAML syntax error                       |
+
+| `warning` code | Meaning                                    |
+| -------------- | ------------------------------------------ |
+| `empty`        | The file is empty or holds only whitespace |
+| `syntax-error` | The file has a YAML syntax error           |
+
+```json
+{
+  "e2eTests": [
+    { "path": ".argent/e2e/login.yaml", "name": "login", "legacy": false },
+    { "path": ".argent/e2e/suite/pay.yaml", "legacy": false },
+    {
+      "path": ".argent/flows/login.yaml",
+      "name": "login",
+      "legacy": true,
+      "shadowedBy": ".argent/e2e/login.yaml"
+    }
+  ]
+}
+```
+
+When Argent finds no e2e test, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. The top-level `warning` field is not the `warning` field of an entry. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
+
+`argent e2e list <dir> --json` gives each entry only the `path` field, and the `warning` field when it applies. With `--json`, Argent writes each `<dir>` error as the JSON error object on stderr.
 
 <a id="flows-over-a-link" />
 

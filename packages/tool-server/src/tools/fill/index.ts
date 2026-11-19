@@ -6,6 +6,7 @@ import { isAndroidTv } from "../../utils/adb";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isRemoteTvOsSimulator } from "../../utils/sim-remote";
 import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
+import { noteTypedSecrets } from "../../utils/typed-secrets";
 import { iosRequires } from "../describe/platforms/ios";
 import { androidRequires } from "../describe/platforms/android";
 import { fillIos } from "./ios";
@@ -107,6 +108,7 @@ Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIF
       const { text, secrets } = resolveSecretPlaceholders(params.text, {
         clientSecrets: options?.clientSecrets,
       });
+      noteTypedSecrets(params.udid, secrets);
       try {
         return await dispatch(services, { udid: params.udid, text }, options);
       } catch (err) {
