@@ -104,6 +104,16 @@ describe("shouldAutoScreenshot", () => {
     expect(shouldAutoScreenshot("simulator-server")).toBe(false);
     expect(shouldAutoScreenshot("activate-sso")).toBe(false);
   });
+
+  it.each(["menu-bar", "mcp__argent__file-panel"])(
+    "captures nothing after %s action list, which only reads",
+    (tool) => {
+      expect(shouldAutoScreenshot(tool, { udid: "u", action: "list" })).toBe(false);
+      expect(shouldAutoDescribe(tool, { udid: "u", action: "list" })).toBe(false);
+      expect(shouldAutoScreenshot(tool, { udid: "u", action: "choose" })).toBe(true);
+      expect(shouldAutoDescribe(tool, { udid: "u", action: "choose" })).toBe(true);
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

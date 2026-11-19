@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { gunzipSync, zstdCompressSync } from "node:zlib";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, mkdir, rm, readFile, writeFile, stat, symlink, readdir } from "node:fs/promises";
@@ -93,6 +94,22 @@ describe("materializeArtifacts", () => {
 
     expect(seen).toHaveLength(1);
     expect((seen[0]!.headers as Record<string, string>).Authorization).toBe("Bearer secret-token");
+  });
+
+  it("asks for no archive format when downloading a single file", async () => {
+    const seen: Array<RequestInit | undefined> = [];
+    const recordingFetch = (async (_url: string, init?: RequestInit) => {
+      seen.push(init);
+      return { ok: true, arrayBuffer: async () => new Uint8Array(PNG).buffer };
+    }) as unknown as typeof fetch;
+
+    await materializeArtifacts(
+      { image: handle("img1", "shot.png", "image/png") },
+      { toolsUrl: "http://remote:3001", fetchImpl: recordingFetch }
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers).not.toHaveProperty("Accept");
   });
 
   it("omits the Authorization header when no auth token is present", async () => {
@@ -291,7 +308,7 @@ describe("materializeArtifacts local short-circuit", () => {
   });
 });
 
-// ── directory bundles (e.g. .trace) delivered as tar.gz ──────────────
+// ── directory bundles (e.g. .trace) delivered as a compressed tar ────
 
 function fakeFetchBuffer(map: Record<string, Buffer>): typeof fetch {
   return (async (url: string) => {
@@ -321,8 +338,7 @@ describe("materializeArtifacts directory bundles", () => {
     await rm(hostDir, { recursive: true, force: true });
   });
 
-  // Build a real .trace-like bundle and a gzipped tar of it (as the server would
-  // stream on demand), so the client extraction runs against genuine tar output.
+  // A real bundle and its gzipped tar, as a server streams it when zstd isn't asked for.
   async function makeBundle(): Promise<{ bundlePath: string; tarGz: Buffer }> {
     const bundlePath = join(hostDir, "session.trace");
     await mkdir(join(bundlePath, "sub"), { recursive: true });
@@ -373,6 +389,25 @@ describe("materializeArtifacts directory bundles", () => {
     expect(extracted).toBe(join(artifactDir(), "session.trace"));
     expect((await stat(extracted)).isDirectory()).toBe(true);
     expect(await readFile(join(extracted, "top.txt"), "utf8")).toBe("top");
+    expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
+  });
+
+  it("remote: asks for zstd and unpacks a zstd bundle", async () => {
+    const { tarGz } = await makeBundle();
+    const zst = zstdCompressSync(gunzipSync(tarGz));
+    const accepts: Array<string | undefined> = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      accepts.push((init?.headers as Record<string, string> | undefined)?.Accept);
+      return fakeFetchBuffer({ t5: zst })(url, init);
+    }) as unknown as typeof fetch;
+
+    const { result } = await materializeArtifacts(
+      { traceFile: archiveHandle("t5", join(hostDir, "gone.trace")) },
+      { toolsUrl: "http://remote:3001", fetchImpl }
+    );
+
+    expect(accepts).toEqual(["application/zstd, application/gzip"]);
+    const extracted = (result as { traceFile: string }).traceFile;
     expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
   });
 

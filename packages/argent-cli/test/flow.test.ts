@@ -35,6 +35,17 @@ vi.mock("@argent/tools-client", async (importOriginal) => ({
   materializeArtifacts: materializeArtifactsMock,
 }));
 
+// The help lists `macos` from this flag, the host and the link, and reads the
+// link only with the flag on, off macOS. Off here, so no test depends on the
+// host or on the developer's flags files: test/e2e-help-platform.test.ts covers
+// that line. Every other flag reads as it does in production.
+vi.mock("@argent/configuration-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/configuration-core")>();
+  const isFeatureEnabled: typeof actual.isFeatureEnabled = (name, ...rest) =>
+    name === "macos-apps" ? false : actual.isFeatureEnabled(name, ...rest);
+  return { ...actual, isFeatureEnabled };
+});
+
 interface StepFixture {
   index: number;
   kind: string;
@@ -391,7 +402,7 @@ describe("argent e2e run", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
       "e2e-execute",
       {
-        flow_path: path.join(runRoot, "checkout.yaml"),
+        e2e_test_path: path.join(runRoot, "checkout.yaml"),
         project_root: runRoot,
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -482,7 +493,7 @@ describe("argent e2e run", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
       "e2e-execute",
       {
-        flow_path: checkoutPath,
+        e2e_test_path: checkoutPath,
         project_root: process.cwd(),
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -552,7 +563,7 @@ describe("argent e2e run", () => {
         // A name is sent as the path it resolves to, never as a `name` source:
         // one identity keys the report, __baselines__/, and --output whichever
         // form the operator typed.
-        flow_path: path.join(runRoot, ".argent", "flows", "saved.yaml"),
+        e2e_test_path: path.join(runRoot, ".argent", "flows", "saved.yaml"),
         project_root: runRoot,
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -561,12 +572,13 @@ describe("argent e2e run", () => {
     );
   });
 
-  it("resolves a name and its spelled-out path to the same flow_path", async () => {
+  it("resolves a name and its spelled-out path to the same e2e_test_path", async () => {
     const previousCwd = process.cwd();
     const sent = async (ref: string): Promise<unknown> => {
       toolsClientMock.callTool.mockClear();
       await expect(flow(["run", ref], opts)).rejects.toThrow("process.exit:0");
-      return (toolsClientMock.callTool.mock.calls[0]![1] as { flow_path: string }).flow_path;
+      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string })
+        .e2e_test_path;
     };
     try {
       process.chdir(tempRoot);
@@ -601,7 +613,8 @@ describe("argent e2e run", () => {
       } finally {
         process.chdir(previousCwd);
       }
-      return (toolsClientMock.callTool.mock.calls[0]![1] as { flow_path: string }).flow_path;
+      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string })
+        .e2e_test_path;
     }
 
     it("runs a name saved under .argent/e2e", async () => {
@@ -1198,7 +1211,7 @@ describe("argent e2e run", () => {
     }
   );
 
-  it("sends flow_path and project_root to e2e-execute", async () => {
+  it("sends e2e_test_path and project_root to e2e-execute", async () => {
     // The tool-server decides what a run can do, local or over a link: an
     // uploaded flow that is self-contained runs, one that reads beside its
     // file is refused there.
@@ -1207,7 +1220,7 @@ describe("argent e2e run", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
     expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("e2e-execute");
     expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
-      flow_path: checkoutPath,
+      e2e_test_path: checkoutPath,
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
@@ -1414,7 +1427,8 @@ describe("argent e2e run", () => {
       process.chdir(previousCwd);
     }
 
-    expect(logs.join("\n")).toBe("No e2e tests found in .argent/e2e or .argent/flows");
+    expect(logs).toEqual([]);
+    expect(errs).toEqual(["No e2e tests found in .argent/e2e or .argent/flows"]);
   });
 
   it("lists both e2e test directories as bare paths, with legacy and shadow notes on stderr", async () => {
@@ -1472,20 +1486,150 @@ describe("argent e2e run", () => {
     ]);
   });
 
-  it("says neither e2e test directory exists", async () => {
-    const listRoot = path.join(tempRoot, "list-no-dirs-project");
-    await fsp.mkdir(listRoot, { recursive: true });
+  it("prints the list as JSON with --json, in the plain order and with no stderr notes", async () => {
+    const listRoot = path.join(tempRoot, "list-json-project");
+    const e2eDir = path.join(listRoot, ".argent", "e2e");
+    const legacyDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(path.join(e2eDir, "suite"), { recursive: true });
+    await fsp.mkdir(legacyDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(e2eDir, "login.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(e2eDir, "suite", "pay.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(legacyDir, "login.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(legacyDir, "signup.yaml"), "steps: []\n"),
+    ]);
     const previousCwd = process.cwd();
     try {
       process.chdir(listRoot);
       await flow(["list"], opts);
+      const plainPaths = [...logs];
+      logs.length = 0;
+      errs.length = 0;
+      await flow(["list", "--json"], opts);
+
+      expect(errs).toEqual([]);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toBe(JSON.stringify(JSON.parse(logs[0]!), null, 2));
+      const { e2eTests } = JSON.parse(logs[0]!);
+      expect(e2eTests).toEqual([
+        { path: ".argent/e2e/login.yaml", name: "login", legacy: false },
+        { path: ".argent/e2e/suite/pay.yaml", legacy: false },
+        {
+          path: ".argent/flows/login.yaml",
+          name: "login",
+          legacy: true,
+          shadowedBy: ".argent/e2e/login.yaml",
+        },
+        { path: ".argent/flows/signup.yaml", name: "signup", legacy: true },
+      ]);
+      expect(e2eTests.map((t: { path: string }) => t.path).join("\n")).toBe(plainPaths.join("\n"));
     } finally {
       process.chdir(previousCwd);
     }
+  });
 
-    expect(logs.join("\n")).toBe(
-      "No .argent/e2e or .argent/flows directory in the current working directory."
-    );
+  it.each([
+    {
+      label: "neither e2e test directory exists",
+      dirs: [],
+      stdout: [],
+      stderr: [
+        "warning: no .argent/e2e or .argent/flows directory in the current working directory",
+      ],
+      doc: { e2eTests: [], warning: "no-e2e-directory" },
+    },
+    {
+      label: "only .argent/flows exists",
+      dirs: [".argent/flows"],
+      test: ".argent/flows/a.yaml",
+      stdout: [".argent/flows/a.yaml"],
+      stderr: ["note: 1 test listed from .argent/flows (legacy); move it to .argent/e2e"],
+      doc: { e2eTests: [{ path: ".argent/flows/a.yaml", name: "a", legacy: true }] },
+    },
+    {
+      label: "the e2e test directories are empty",
+      dirs: [".argent/e2e", ".argent/flows"],
+      stdout: [],
+      stderr: ["No e2e tests found in .argent/e2e or .argent/flows"],
+      doc: { e2eTests: [] },
+    },
+  ])(
+    "prints list and list --json when $label",
+    async ({ label, dirs, test, stdout, stderr, doc }) => {
+      const listRoot = path.join(tempRoot, `list-${label.replaceAll(" ", "-")}`);
+      await fsp.mkdir(listRoot, { recursive: true });
+      for (const dir of dirs) await fsp.mkdir(path.join(listRoot, dir), { recursive: true });
+      if (test) await fsp.writeFile(path.join(listRoot, test), "steps: []\n");
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(listRoot);
+        await flow(["list"], opts);
+        expect(logs).toEqual(stdout);
+        expect(errs).toEqual(stderr);
+        logs.length = 0;
+        errs.length = 0;
+        await flow(["list", "--json"], opts);
+      } finally {
+        process.chdir(previousCwd);
+      }
+
+      expect(errs).toEqual([]);
+      expect(logs).toEqual([JSON.stringify(doc, null, 2)]);
+    }
+  );
+
+  it.skipIf(!canDenyRead)(
+    "fails list and list --json with exit 2 when .argent/e2e cannot be read",
+    async () => {
+      const listRoot = path.join(tempRoot, "list-locked-e2e-dir");
+      const locked = path.join(listRoot, ".argent", "e2e");
+      await fsp.mkdir(locked, { recursive: true });
+      await fsp.chmod(locked, 0o000);
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(listRoot);
+        await expect(flow(["list"], opts)).rejects.toThrow("process.exit:2");
+        expect(logs).toEqual([]);
+        expect(errs).toEqual(["Could not read e2e test directory: .argent/e2e"]);
+        errs.length = 0;
+        await expect(flow(["list", "--json"], opts)).rejects.toThrow("process.exit:2");
+      } finally {
+        process.chdir(previousCwd);
+        await fsp.chmod(locked, 0o755);
+      }
+
+      expect(logs).toEqual([]);
+      expect(errs.map((line) => JSON.parse(line))).toEqual([
+        { event: "error", error: "Could not read e2e test directory: .argent/e2e" },
+      ]);
+    }
+  );
+
+  it.each([
+    [["--frobnicate"], "Unknown flag: --frobnicate"],
+    [["extra"], 'unexpected argument "extra"; e2e list takes no arguments'],
+  ])("rejects `list %s` as a usage error with exit 2", async (args, message) => {
+    await expect(flow(["list", ...args], opts)).rejects.toThrow("process.exit:2");
+    expect(logs).toEqual([]);
+    expect(errs.join("\n")).toBe(`Error: ${message}\nRun \`argent e2e --help\`.`);
+
+    for (const jsonArgs of [
+      ["--json", ...args],
+      [...args, "--json"],
+    ]) {
+      errs.length = 0;
+      await expect(flow(["list", ...jsonArgs], opts)).rejects.toThrow("process.exit:2");
+      expect(logs).toEqual([]);
+      expect(errs).toHaveLength(1);
+      expect(JSON.parse(errs[0]!)).toEqual({ event: "error", error: message });
+    }
+  });
+
+  it.each([[["--json", "--help"]], [["-h"]]])("prints the help for `list %s`", async (args) => {
+    await flow(["list", ...args], opts);
+
+    expect(logs.join("\n")).toContain("Usage: argent e2e");
+    expect(logs.join("\n")).toContain("list [--json]");
   });
 
   it("renders the report — echo lines unnumbered, real steps numbered, reasons and fragment tags shown — and exits 1 on failure", async () => {
@@ -2188,7 +2332,9 @@ describe("argent e2e run", () => {
   // resolution included, and cannot license a claim about the YAML.
   it.each([
     ["FLOW_FILE_INVALID", "not run (invalid e2e test)"],
+    ["FLOW_FILE_NEWER_VERSION", "not run (needs a newer Argent)"],
     ["FLOW_DEVICE_RESOLUTION", "not run (no device resolved)"],
+    ["FLOW_REQUIREMENTS_UNMET", "not run (requires not met)"],
     ["A_CODE_THIS_CLI_DOES_NOT_MAP", "not run (rejected)"],
   ])("renders a %s rejection of a single flow as %j", async (errorCode, verdict) => {
     toolsClientMock.callTool.mockRejectedValue(
@@ -2360,12 +2506,12 @@ describe("argent e2e run <dir>", () => {
     // never with onProgress (batch output is failures-only).
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
     expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(1, "e2e-execute", {
-      flow_path: path.join(flowsDir, "a-login.yaml"),
+      e2e_test_path: path.join(flowsDir, "a-login.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
     expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(2, "e2e-execute", {
-      flow_path: path.join(flowsDir, "b-checkout.yaml"),
+      e2e_test_path: path.join(flowsDir, "b-checkout.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
@@ -2377,6 +2523,56 @@ describe("argent e2e run <dir>", () => {
     expect(out).not.toMatch(/✓ {2}1 tap/);
     expect(out).not.toContain("Failed e2e tests");
     expect(out).toContain("PASS — 2 e2e tests: 2 passed, 0 failed, 0 skipped");
+  });
+
+  it("skips a flow whose requires: excludes the target and runs the rest", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+          errorCode: "FLOW_REQUIREMENTS_UNMET",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report() });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs).toContain("  · skipped (requires not met)\n    excludes device SIM-1 (ios)");
+    expect(logs.at(-1)).toMatch(/^\nPASS — 2 e2e tests: 1 passed, 0 failed, 1 skipped/);
+    expect(errs).toEqual([]);
+  });
+
+  it("exits 2 with a NONE RAN verdict when requires: skipped every flow", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+        errorCode: "FLOW_REQUIREMENTS_UNMET",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.at(-1)).toMatch(/^\nNONE RAN — 2 e2e tests: 0 passed, 0 failed, 2 skipped/);
+    expect(errs).toEqual([`No e2e test in ${flowsDir} ran on the selected target.`]);
+  });
+
+  it("reports a requires: skip with its reason, and ok: false when nothing ran, under --json", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+        errorCode: "FLOW_REQUIREMENTS_UNMET",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const out = JSON.parse(logs.join("\n"));
+    expect(out).toMatchObject({ ok: false, total: 2, skipped: 2 });
+    expect(out.e2eTests[0]).toEqual({
+      path: "a-login.yaml",
+      status: "skip",
+      reason: "excludes device SIM-1 (ios)",
+    });
   });
 
   it("ends each flow verdict with its run time and the batch verdict with the batch time", async () => {
@@ -2599,6 +2795,7 @@ describe("argent e2e run <dir>", () => {
     ["FLOW_FILE_INVALID", "not run (invalid e2e test)"],
     ["FLOW_ENTRY_UNRECOGNIZED", "not run (invalid e2e test)"],
     ["FLOW_E2E_HAS_PREREQUISITE", "not run (invalid e2e test)"],
+    ["FLOW_FILE_NEWER_VERSION", "not run (needs a newer Argent)"],
     ["FLOW_DEVICE_RESOLUTION", "not run (no device resolved)"],
     ["A_CODE_THIS_CLI_DOES_NOT_MAP", "not run (rejected)"],
   ])("renders a %s rejection as %j", async (errorCode, verdict) => {
@@ -3068,7 +3265,7 @@ describe("argent e2e run <dir>", () => {
     await expect(flow(["run", flowsDir, "--recursive"], opts)).rejects.toThrow("process.exit:0");
 
     const flowPaths = toolsClientMock.callTool.mock.calls.map(
-      (c) => (c[1] as { flow_path: string }).flow_path
+      (c) => (c[1] as { e2e_test_path: string }).e2e_test_path
     );
     expect(flowPaths).toEqual([
       path.join(flowsDir, "a-login.yaml"),
@@ -3086,7 +3283,7 @@ describe("argent e2e run <dir>", () => {
     await expect(flow(["run", dirYaml], opts)).rejects.toThrow("process.exit:0");
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith("e2e-execute", {
-      flow_path: path.join(dirYaml, "one.yaml"),
+      e2e_test_path: path.join(dirYaml, "one.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
@@ -3200,7 +3397,13 @@ describe("argent e2e run <dir>", () => {
     await expect(flow(["run", flowsDir, "--json", "-r"], opts)).rejects.toThrow("process.exit:1");
 
     // A single parseable object on stdout — no headers or verdict lines.
+    // `flows` is the deprecated spelling of `e2eTests`, with the same content.
     const parsed = JSON.parse(logs.join("\n")) as Record<string, unknown>;
+    const entries = [
+      { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
+      { path: "b-checkout.yaml", status: "fail", error: "boom" },
+      { path: path.join("sub", "c-search.yaml"), status: "skip" },
+    ];
     expect(parsed).toEqual({
       ok: false,
       total: 3,
@@ -3208,11 +3411,8 @@ describe("argent e2e run <dir>", () => {
       failed: 1,
       skipped: 1,
       durationMs: 5500,
-      flows: [
-        { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
-        { path: "b-checkout.yaml", status: "fail", error: "boom" },
-        { path: path.join("sub", "c-search.yaml"), status: "skip" },
-      ],
+      e2eTests: entries,
+      flows: entries,
     });
   });
 
@@ -3304,7 +3504,7 @@ describe("argent e2e run <dir>", () => {
       expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
       expect(toolsClientMock.callTool).toHaveBeenCalledWith(
         "e2e-execute",
-        expect.objectContaining({ flow_path: path.join(suiteDir, "open.yaml") })
+        expect.objectContaining({ e2e_test_path: path.join(suiteDir, "open.yaml") })
       );
       expect(errs.join("\n")).not.toContain("Could not read e2e test directory");
     } finally {

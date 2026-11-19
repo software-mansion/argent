@@ -65,6 +65,8 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
     }
     await api.dispatchKeyEvent({
       type: "keyDown",
+      // Chromium needs carriage-return text for Enter's default form submission.
+      ...(named.key === "Enter" ? { text: "\r" } : {}),
       key: named.key,
       code: named.code,
       windowsVirtualKeyCode: named.windowsVirtualKeyCode,

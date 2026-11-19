@@ -100,6 +100,8 @@ function targetFlagsFor(target: "global" | "local" | "both"): string[] {
   return [`--${target}`];
 }
 
+let updateScheduled = false;
+
 const zodSchema = z.object({
   target: z
     .enum(["auto", "global", "local", "both"])
@@ -111,20 +113,18 @@ const zodSchema = z.object({
     ),
 });
 
-let updateScheduled = false;
-
 export const updateArgentTool: ToolDefinition<{
   target?: "auto" | "global" | "local" | "both";
 }> = {
   id: "update-argent",
+  description:
+    "Apply a pending Argent update. Call this only when the user has explicitly consented in this conversation to updating Argent, e.g. after an update notification reports a new version. Returns { message } with the update status, version info, and whether the tool server restarts. Fails if no update is available or an update is already in progress.",
+  zodSchema,
   interaction: {
     startedMsg: () => `Updating Argent to ${getUpdateState().installableVersion ?? "latest"}`,
     completedMsg: () => `Updated Argent to ${getUpdateState().installableVersion ?? "latest"}`,
     failedMsg: ({ failureSignal }) => `Failed to update Argent: ${failureSignal.error_code}`,
   },
-  description:
-    "Apply a pending Argent update. Only call this tool when the user has explicitly consented to updating Argent in this conversation. Use when an update notification indicates a new version is available and the user agrees to update. By default updates the install serving this session; pass `target` to choose global/local/both. Returns { message } with the update status and version info. The tool server will restart automatically after the update. Fails if no update is available or an update is already in progress.",
-  zodSchema,
   services: () => ({}),
   async execute(_services, params, _options) {
     const { updateAvailable, updateInstallable, currentVersion, installableVersion } =

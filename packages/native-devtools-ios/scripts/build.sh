@@ -322,6 +322,27 @@ if [[ "$TRANSPORT" == "unix" ]]; then
   fi
 fi
 
+# Native Mac apps (unix transport only): the submodule's build-macos.sh builds
+# and signs the library, its bootstrap and argent-macos-helper into build/macos/,
+# on this volume, and each is renamed into place, so an app that has the old
+# file mapped keeps it. The bootstrap shares its basename with the iOS one,
+# hence dylibs/macos/.
+MACOS_BUILD="${SUBMODULE_DIR}/scripts/build-macos.sh"
+if [[ "$TRANSPORT" == "unix" && ! -f "${MACOS_BUILD}" ]]; then
+  echo "Skipping macOS app artifacts: no ${MACOS_BUILD}" >&2
+elif [[ "$TRANSPORT" == "unix" ]]; then
+  MACOS_OUT="${ROOT_DIR}/build/macos"
+  MACOS_IDENTITY="-"
+  [[ "$MODE" == "release" ]] && MACOS_IDENTITY="${CODESIGN_IDENTITY:-${IDENTITY:--}}"
+  OUT_DIR="${MACOS_OUT}" IDENTITY="${MACOS_IDENTITY}" bash "${MACOS_BUILD}"
+  mkdir -p "${ROOT_DIR}/dylibs/macos"
+  mv -f "${MACOS_OUT}/libNativeDevtoolsMacos.dylib" "${MACOS_OUT}/libArgentInjectionBootstrap.dylib" \
+    "${ROOT_DIR}/dylibs/macos/"
+  if [[ -f "${MACOS_OUT}/argent-macos-helper" ]]; then
+    mv -f "${MACOS_OUT}/argent-macos-helper" "${BIN_DIR}/argent-macos-helper"
+  fi
+fi
+
 if [[ "$MODE" == "release" ]]; then
   IDENTITY="${CODESIGN_IDENTITY:-${IDENTITY:-}}"
   if [[ -n "$IDENTITY" ]]; then

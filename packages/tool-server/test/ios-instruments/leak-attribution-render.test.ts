@@ -162,3 +162,38 @@ describe("leak attribution rendering", () => {
     expect(res.report).not.toContain("unattributed leak group");
   });
 });
+
+describe("leak attribution rendering on a Mac app", () => {
+  function macPayload(leaks: MemoryLeak[]): ProfilerPayload {
+    return { ...payload(leaks), metadata: { ...payload(leaks).metadata, platform: "macOS" } };
+  }
+
+  it("says only newer objects have a backtrace, and does not claim malloc stack logging", async () => {
+    for (const mallocStackLogging of [false, null]) {
+      const res = await renderNativeProfilerReport({
+        payload: macPayload([
+          leak(true, "swift::swift_slowAllocTyped(...)", "libswiftCore.dylib"),
+          leak(false, "<Call stack limit reached>"),
+        ]),
+        traceFile: null,
+        mallocStackLogging,
+      });
+      expect(res.report).toContain(
+        "On a Mac app without malloc stack logging, only an object allocated after the start of " +
+          "the recording has an allocation backtrace."
+      );
+      expect(res.report).not.toContain("malloc stack logging was active");
+      expect(res.report).not.toContain("--attach");
+    }
+  });
+
+  it("keeps the malloc capture's note when malloc_stack_logging was on", async () => {
+    const res = await renderNativeProfilerReport({
+      payload: macPayload([leak(false, "<Call stack limit reached>")]),
+      traceFile: null,
+      mallocStackLogging: true,
+    });
+    expect(res.report).toContain("ran with malloc stack logging enabled");
+    expect(res.report).not.toContain("On a Mac app");
+  });
+});

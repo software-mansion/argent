@@ -10,17 +10,7 @@ import type {
   SessionContext,
   RootCauseVote,
 } from "../types/pipeline";
-import { deriveReason } from "./utils";
-
-const EMPTY_REASON_HISTOGRAM = () => ({
-  parent: 0,
-  props: 0,
-  hooks: 0,
-  context: 0,
-  state: 0,
-  force_update: 0,
-  unknown: 0,
-});
+import { deriveReason, emptyReasonHistogram } from "./utils";
 
 export function reduce(
   commitTree: DevToolsCommitTree,
@@ -72,7 +62,7 @@ export function reduce(
         sumSq: 0,
         min: Infinity,
         max: -Infinity,
-        reasonHistogram: EMPTY_REASON_HISTOGRAM(),
+        reasonHistogram: emptyReasonHistogram(),
         propFreq: new Map(),
         hookFreq: new Map(),
         parentFreq: new Map(),

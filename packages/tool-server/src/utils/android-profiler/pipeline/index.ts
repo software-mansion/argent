@@ -9,6 +9,7 @@ import {
   summarizeHangBlocking,
 } from "../../profiler-shared/native-frame-class";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { adbCommandPrefix } from "../../adb-server";
 import { ensureTraceProcessorReady } from "@argent/native-devtools-android";
 import { runTpQuery } from "./run-tp";
 import { foldHangAnnotations } from "./hang-fold";
@@ -556,8 +557,9 @@ function describeStacklessSamples(
     : `${head} No stack was unwound at all: Perfetto only unwinds a process it can read ` +
         `\`/proc/<pid>/mem\` for. Profile a debug build, or add ` +
         `\`<profileable android:shell="true"/>\` to \`<application>\` and rebuild — verify with ` +
-        `\`adb shell dumpsys package ${appPackage}\`, which shows \`DEBUGGABLE\` for a profileable ` +
-        `target. Platform packages such as \`com.android.settings\` are never profileable.`;
+        `\`${adbCommandPrefix(process.env)}adb shell dumpsys package ${appPackage}\`, which shows ` +
+        `\`DEBUGGABLE\` for a profileable target. Platform packages such as ` +
+        `\`com.android.settings\` are never profileable.`;
 }
 
 function cpuRowsToAggregatorRows(

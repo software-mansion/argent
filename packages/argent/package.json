@@ -1,8 +1,8 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.30.1",
+  "version": "0.33.0",
   "mcpName": "io.github.software-mansion/argent",
-  "description": "MCP server for iOS Simulator and Android Emulator control",
+  "description": "MCP server for iOS Simulator, Android Emulator, Chromium app and Mac app control",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -15,7 +15,6 @@
       "default": "./dist/client.js"
     },
     "./assets/manifest": "./assets/manifest.json",
-    "./assets/trace-processor/engine": "./assets/trace-processor/engine.mjs",
     "./assets/trace-processor/engine_bundle.node": "./assets/trace-processor/engine_bundle.node.js",
     "./bin/argent-simulator-server": "./bin/argent-simulator-server.cjs",
     "./dist/bundled-paths": "./dist/bundled-paths.js",
@@ -52,7 +51,7 @@
   },
   "private": false,
   "engines": {
-    "node": ">=20.12.0"
+    "node": "^22.18.0 || >=23.8.0"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

@@ -31,6 +31,8 @@ import {
   type ExternalDevice,
 } from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
+import { registerCaptureOnDemandSender } from "../utils/profiling-devices";
+import { firstSimulatorPoll } from "../utils/simulator-watcher";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -473,6 +475,27 @@ async function spawnSimulatorServerProcess(
   });
 }
 
+/**
+ * Keeps the server capturing on demand while a profiler records on the device.
+ * A server without the command rejects it at once, which is ignored. Not for
+ * MoQ, whose control track has no such command.
+ */
+function withCaptureOnDemand(
+  deviceId: string,
+  instance: ServiceInstance<SimulatorServerApi>
+): ServiceInstance<SimulatorServerApi> {
+  const unregister = registerCaptureOnDemandSender(deviceId, instance.api.apiUrl, (enabled) => {
+    sendCommand(instance.api, { cmd: "capture_on_demand", enabled }).catch(() => {});
+  });
+  return {
+    ...instance,
+    dispose: async () => {
+      unregister();
+      await instance.dispose();
+    },
+  };
+}
+
 export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, DeviceInfo> = {
   namespace: SIMULATOR_SERVER_NAMESPACE,
   getURN(device: DeviceInfo) {
@@ -530,7 +553,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     const claim = externalClaimForAnyId(device.id);
 
     if (claim) {
-      return buildAttachedInstance(device, claim);
+      return withCaptureOnDemand(device.id, await buildAttachedInstance(device, claim));
     }
 
     if (device.platform === "ios-remote") {
@@ -553,7 +576,9 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
             "presses, and `keyboard` to type (see the argent-tv-interact skill)"
         );
       }
-      await ensureAutomationEnabled(device.id).catch(() => {});
+      // Input could open an app from the home screen, which must not launch
+      // before the watcher has armed native-devtools injection.
+      await Promise.all([ensureAutomationEnabled(device.id).catch(() => {}), firstSimulatorPoll()]);
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
       // through adb (gRPC bridge / screen-sharing agent respectively).
@@ -612,7 +637,6 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     // The first command a foldable gets must already name its live panel, so
     // the probe runs before the instance is handed out.
     await attachFoldableDisplay(instance.api, device);
-
-    return instance;
+    return withCaptureOnDemand(device.id, instance);
   },
 };
