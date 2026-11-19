@@ -99,6 +99,23 @@ function macosAppTargets(pool: CDPTarget[], bundleId: string, port: number): CDP
   );
 }
 
+/**
+ * The targets of the one device whose name `matches` accepts, or undefined when
+ * no device or more than one does.
+ *
+ * A udid or serial is never echoed by Metro, but each target carries the name
+ * the app reported for its device, and the caller can say which names fit the
+ * id it holds (a simulator's name, an Android model). Two identical emulators
+ * report the same name, so only a single matching device counts: guessing
+ * between them would drive one while reporting the other.
+ */
+function targetsNamedFor(pool: CDPTarget[], matches: unknown): CDPTarget[] | undefined {
+  if (typeof matches !== "function") return undefined;
+  const named = pool.filter((t) => typeof t.deviceName === "string" && matches(t.deviceName));
+  const devices = new Set(named.map(deviceKey));
+  return devices.size === 1 && !devices.has(undefined) ? named : undefined;
+}
+
 /** logicalDeviceIds Metro has ever listed in this process. */
 const seenLogicalDeviceIds = new Set<string>();
 
@@ -142,15 +159,24 @@ export function selectTarget(
         const key = deviceKey(t);
         if (key && !distinctDevices.has(key)) distinctDevices.set(key, describeDevice(t));
       }
-      if (distinctDevices.size > 1) {
+      const named =
+        distinctDevices.size > 1 ? targetsNamedFor(pool, options.deviceNameMatches) : undefined;
+      if (named) {
+        candidates = named;
+      } else if (distinctDevices.size > 1) {
         // Only a logicalDeviceId is a usable device_id; a legacy device's
         // internal key would read like one without being one.
         const listed = [...distinctDevices.values()].join(", ");
         throw new FailureError(
           `No debugger target matches device_id "${deviceId}". ` +
             `${distinctDevices.size} devices are connected to Metro on port ${port}: ` +
-            `${listed}. Re-target with the logicalDeviceId in parentheses — that is what ` +
-            `debugger-connect returns and what subsequent debugger-* calls must pass. ` +
+            `${listed}. ` +
+            (typeof options.deviceNameMatches === "function"
+              ? `More than one of them, or none, has this device's name, so it cannot ` +
+                `be told apart by name. `
+              : "") +
+            `Re-target with the logicalDeviceId in parentheses — debugger-connect returns ` +
+            `it, and it is accepted by every debugger-* call. ` +
             `A legacy-inspector device (RN 0.72 / Vega) reports none and cannot be singled ` +
             `out of a shared Metro: give it its own Metro port.`,
           {
@@ -167,7 +193,7 @@ export function selectTarget(
       // reporting success. It can also be the same iOS app under a new id, since
       // iOS derives the id from identifierForVendor, which a reinstall can reset.
       // Neither case can be told apart here, so the message covers both.
-      if (seenLogicalDeviceIds.has(deviceId)) {
+      if (!named && seenLogicalDeviceIds.has(deviceId)) {
         throw new FailureError(
           `Device with logicalDeviceId "${deviceId}" is no longer attached to Metro on port ${port} — ` +
             `its app likely exited or reloaded onto another Metro. ` +

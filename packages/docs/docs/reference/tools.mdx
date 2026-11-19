@@ -163,6 +163,16 @@ Call `screenshot` or `describe` to read the screen again.
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
 
+Give `debugger-connect` the device ID from `list-devices`. When several devices share one Metro, Argent finds the device by its name:
+
+| Device         | Name that Argent compares with the name that Metro reports |
+| -------------- | ---------------------------------------------------------- |
+| iOS simulator  | The name of the simulator                                  |
+| Android device | The model, `ro.product.model`                              |
+| Other devices  | No name. Use the `logicalDeviceId`.                        |
+
+When two devices on the Metro have the same name, `debugger-connect` fails. Two emulators made from one system image have the same name. The error lists the `logicalDeviceId` of each device. Give that `logicalDeviceId` to `debugger-connect`.
+
 ## Native devtools
 
 On a Mac app, these tools read the app through the Argent library:

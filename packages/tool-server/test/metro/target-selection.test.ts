@@ -266,6 +266,73 @@ describe("selectTarget", () => {
     expect(() => selectTarget([dev1, dev2], 8081, { deviceId: "unmatched" })).toThrow(/aaa.*bbb/);
   });
 
+  describe("resolving a udid by device name on a shared Metro", () => {
+    const UDID = "B7D5711C-0000-4000-8000-000000000000";
+    const device = (id: string, deviceName: string, logicalDeviceId: string) =>
+      makeTarget({
+        id,
+        deviceName,
+        reactNative: { logicalDeviceId, capabilities: { prefersFuseboxFrontend: true } },
+      });
+    const iphone = device("dev1", "iPhone", "d4d1e970");
+    const proMax = device("dev2", "iPhone 17 Pro Max", "ed43ae85");
+    const named = device("dev3", "iPhone 17 [ink-and-quill]", "27fb9b61");
+    const is = (name: string) => (reported: string) => reported === name;
+
+    it("picks the one device whose name matches", () => {
+      const result = selectTarget([iphone, proMax, named], 9001, {
+        deviceId: UDID,
+        deviceNameMatches: is("iPhone 17 [ink-and-quill]"),
+      });
+      expect(result.target.id).toBe("dev3");
+    });
+
+    it("refuses when two devices share the matching name", () => {
+      const twin = device("dev4", "iPhone 17 [ink-and-quill]", "aa11bb22");
+      const err = thrownBy(() =>
+        selectTarget([iphone, named, twin], 9001, {
+          deviceId: UDID,
+          deviceNameMatches: is("iPhone 17 [ink-and-quill]"),
+        })
+      );
+      expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
+      expect(err.message).toMatch(/cannot be told apart by name/);
+      expect(err.message).toMatch(/27fb9b61.*aa11bb22/);
+    });
+
+    it("refuses when no device has the name", () => {
+      const err = thrownBy(() =>
+        selectTarget([iphone, proMax], 9001, {
+          deviceId: UDID,
+          deviceNameMatches: is("iPhone 17 [ink-and-quill]"),
+        })
+      );
+      expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
+    });
+
+    it("keeps a matching logicalDeviceId ahead of the name", () => {
+      const result = selectTarget([iphone, named], 9001, {
+        deviceId: "d4d1e970",
+        deviceNameMatches: is("iPhone 17 [ink-and-quill]"),
+      });
+      expect(result.target.id).toBe("dev1");
+    });
+
+    it("picks the device's app runtime among its several targets", () => {
+      const worklet = makeTarget({
+        id: "dev3-2",
+        title: "Reanimated UI runtime",
+        deviceName: "iPhone 17 [ink-and-quill]",
+        reactNative: { logicalDeviceId: "27fb9b61" },
+      });
+      const result = selectTarget([iphone, worklet, named], 9001, {
+        deviceId: UDID,
+        deviceNameMatches: is("iPhone 17 [ink-and-quill]"),
+      });
+      expect(result.target.id).toBe("dev3");
+    });
+  });
+
   it("the ambiguous-mismatch error carries the DEBUGGER_TARGET_DEVICE_MISMATCH signal", () => {
     // The message is contract (asserted above and matched on by agents); the
     // signal gives telemetry a dedicated code — instead of the catch-all
