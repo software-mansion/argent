@@ -768,23 +768,6 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       writeMessage(socket, "Control", { command: "activateNetworkInspection" });
     };
 
-    const writeThrottle = (socket: net.Socket, throttle: NetworkThrottle): void => {
-      writeMessage(socket, "CDP", {
-        method: "NativeDevtoolsIos.configure",
-        params: { bypassPorts: [throttle.metroPort] },
-      });
-      writeMessage(socket, "CDP", {
-        method: "Network.emulateNetworkConditions",
-        params: throttle.conditions,
-      });
-    };
-
-    const sendNetworkSetup = (bundleId: string, socket: net.Socket): void => {
-      if (activatedBundleIds.has(bundleId)) writeActivation(socket);
-      const throttle = networkConditions.get(bundleId);
-      if (throttle) writeThrottle(socket, throttle);
-    };
-
     const isAppRunning = async (bundleId: string): Promise<boolean> => {
       const runningBundleIds = await host.listRunningBundleIds(udid);
       return runningBundleIds.has(bundleId);
@@ -876,6 +859,26 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", { bypassPorts: [] });
       await sendCdpRpc(bundleId, keepsCapture(bundleId) ? "Network.enable" : "Network.disable");
       providerCapture.delete(bundleId);
+    };
+
+    const reapplyThrottle = (bundleId: string, throttle: NetworkThrottle): void => {
+      applyThrottle(bundleId, throttle).catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `[native-devtools] could not re-apply network conditions to ${bundleId}: ${reason}\n`
+        );
+      });
+    };
+
+    const sendNetworkSetup = (bundleId: string, socket: net.Socket): void => {
+      if (activatedBundleIds.has(bundleId)) writeActivation(socket);
+      const throttle = networkConditions.get(bundleId);
+      if (throttle) reapplyThrottle(bundleId, throttle);
+    };
+
+    const storeThrottle = (bundleId: string, throttle: NetworkThrottle | null): void => {
+      if (throttle) networkConditions.set(bundleId, throttle);
+      else networkConditions.delete(bundleId);
     };
 
     /** A provider keeps the app connected after Argent leaves, so the app would stay throttled. */
@@ -1184,19 +1187,17 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       },
 
       async setNetworkConditions(bundleId, throttle) {
-        const previous = networkConditions.get(bundleId);
-        if (throttle) networkConditions.set(bundleId, throttle);
-        else networkConditions.delete(bundleId);
+        const previous = networkConditions.get(bundleId) ?? null;
+        storeThrottle(bundleId, throttle);
         if (!connections.has(bundleId)) return;
-        if (throttle) {
-          await applyThrottle(bundleId, throttle);
-          return;
-        }
-        if (!previous) return;
+        if (!throttle && !previous) return;
         try {
-          await clearThrottle(bundleId);
+          if (throttle) await applyThrottle(bundleId, throttle);
+          else await clearThrottle(bundleId);
         } catch (err) {
-          if (!networkConditions.has(bundleId)) networkConditions.set(bundleId, previous);
+          if ((networkConditions.get(bundleId) ?? null) === throttle) {
+            storeThrottle(bundleId, previous);
+          }
           throw err;
         }
       },
