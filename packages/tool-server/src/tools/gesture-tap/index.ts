@@ -55,7 +55,9 @@ function tapDescription(params: Params, tense: "present" | "past"): string {
         : `${tense === "present" ? "Tapping" : "Tapped"} ${count} times`;
 
   const button = params.button === "right" ? " with the right button" : "";
-  const modifiers = params.modifiers?.length ? ` holding ${params.modifiers.join("+")}` : "";
+  const modifiers = params.modifiers?.length
+    ? ` holding ${[...new Set(params.modifiers)].join("+")}`
+    : "";
   return `${action} at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%)${button}${modifiers}`;
 }
 

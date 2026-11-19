@@ -1293,6 +1293,9 @@ describe("output references", () => {
       "`tap.on.id`"
     );
     expect(
+      locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, modifiers: [command] }\n')
+    ).toBe("`tap.on.id`");
+    expect(
       locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
     ).toBe("`long-press.on.id`");
     expect(locatorNamed('steps:\n  - pinch: { on: { id: "{{output:map}}" }, scale: 2 }\n')).toBe(
@@ -1326,6 +1329,9 @@ describe("output references", () => {
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, button: left }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, modifiers: [] }\n')).toBe(
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n')).toBe(

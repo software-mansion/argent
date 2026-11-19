@@ -422,6 +422,59 @@ describe("a right tap recorded on a Mac app", () => {
   });
 });
 
+describe("a tap holding modifier keys recorded on a Mac app", () => {
+  const BOX = n({
+    identifier: "box.context",
+    label: "box.context",
+    frame: { x: 0.2, y: 0.4, width: 0.2, height: 0.1 },
+  });
+
+  it.each([
+    [
+      "keeps the keys on the captured selector, in canonical order without repeats",
+      [BOX],
+      { modifiers: ["command", "shift", "command"] },
+      { kind: "tap", selector: { identifier: "box.context" }, modifiers: ["shift", "command"] },
+      / holding shift\+command$/,
+    ],
+    [
+      "keeps the keys on a coordinate tap",
+      [],
+      { modifiers: ["option"] },
+      { kind: "tap", x: 0.3, y: 0.45, modifiers: ["option"] },
+      / holding option$/,
+    ],
+    [
+      "keeps the keys beside the right button and the click count",
+      [BOX],
+      { button: "right", clickCount: 2, modifiers: ["command", "control"] },
+      {
+        kind: "tap",
+        selector: { identifier: "box.context" },
+        times: 2,
+        button: "right",
+        modifiers: ["control", "command"],
+      },
+      / ×2 \(right button\) holding control\+command$/,
+    ],
+    [
+      "records an empty list as a plain tap",
+      [BOX],
+      { modifiers: [] },
+      { kind: "tap", selector: { identifier: "box.context" } },
+      /^(?!.*holding)/,
+    ],
+  ])("%s", async (_label, tree, extra, step, summary) => {
+    serve(tree, "macos-devtools");
+    await start("held");
+
+    const result = await record("held", "gesture-tap", { x: 0.3, y: 0.45, ...extra });
+
+    expect(await recordedSteps("held")).toEqual([step]);
+    expect(result.recorded).toMatch(summary);
+  });
+});
+
 describe("a file-panel stub recorded on a Mac app", () => {
   const FILE = "/tmp/argent-recorded-stub.txt";
 
