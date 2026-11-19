@@ -9,7 +9,7 @@ import {
 } from "../utils/android-global-proxy";
 import { withKeyedLock } from "../utils/keyed-lock";
 
-export const ANDROID_NETWORK_SHAPER_NAMESPACE = "AndroidNetworkShaper";
+const ANDROID_NETWORK_SHAPER_NAMESPACE = "AndroidNetworkShaper";
 
 export function androidNetworkShaperRef(serial: string): string {
   return `${ANDROID_NETWORK_SHAPER_NAMESPACE}:${serial}`;

@@ -186,7 +186,7 @@ class DelayedQueue {
  * The device's connection to the proxy as the link delivers it: what the device
  * sends arrives after the upload delay, what the proxy writes after the download delay.
  */
-export class ShapedSocket extends Duplex {
+class ShapedSocket extends Duplex {
   private bypassed: boolean | null = null;
   private readonly upload: DelayedQueue;
   private readonly download: DelayedQueue;
