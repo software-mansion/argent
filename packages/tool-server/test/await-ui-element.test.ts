@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
+import { axDaemonExitError } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import {
@@ -789,6 +790,38 @@ describe("await-ui-element tool", () => {
 
     expect(result.note).toMatch(/could not confirm the element is hidden/i);
     expect(result.note).toMatch(/boot-device/i); // decorated, so `===` cannot fire
+    expect(unmetUiWaitCause(result)).toBe("unreadable");
+  });
+
+  it("reports a crashed ax-service as itself, not as a simulator to reboot (#800)", async () => {
+    // Every poll starts the daemon again and it crashes again, so the note is
+    // the only place the wait can say why. It used to carry the boot caveat,
+    // whose reboot starts the same binary into the same crash.
+    const ax: AXServiceApi = {
+      ...makeFailingAXService(),
+      describe: async () => {
+        throw axDaemonExitError({ code: 139, signal: "SIGSEGV" }, "connected");
+      },
+    };
+    const tool = createAwaitUiElementTool(iosRegistry(ax));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Continue" },
+        timeoutMs: 40,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toContain("crashed with SIGSEGV");
+    expect(result.note).toContain("will not fix it");
+    expect(result.note).not.toContain("not booted through argent");
+    expect(result.note).not.toMatch(/call (boot-device|restart-app)/);
+    // No read happened, so the condition was not judged.
     expect(unmetUiWaitCause(result)).toBe("unreadable");
   });
 
