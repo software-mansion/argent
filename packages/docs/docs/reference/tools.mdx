@@ -119,19 +119,22 @@ On iOS:
 
 - The app must not be an Apple system app, and the native devtools must connect to it. If the result has a `status` field, follow its `message`, as for `native-network-logs`.
 - Argent delays the data that the app receives. The server gets each request and each upload immediately. With `uploadKbps`, the app gets the response after the time that the upload would take.
+- `downloadKbps` and `uploadKbps` are limits for the whole app. Requests that run at the same time share them. The app gets the response data at the download speed, as on a slow network.
+- `offline: true` also fails the requests that are already running, with the error `-1009` ("The Internet connection appears to be offline.").
+- While Argent shapes or inspects the requests of the app, the app does not use its HTTP cache. Each request goes to the server, and `offline` fails a request also when the cache has a response for it.
 - Argent does not change WebSocket connections and requests to the Metro port. Set `port` when Metro does not use the default port of the device.
 - After a restart of the app, Argent applies the conditions again when the native devtools connect. Requests before that time have no throttle.
 - On a simulator from a [device provider](./device-providers.mdx), a removal leaves the network capture of the provider as it was. A restart of the app removes the conditions there. Call `network-conditions` again after it.
 - When the tool-server stops or `stop-all-simulator-servers` stops the native devtools, the app removes the conditions.
 
-On Android, the emulator console cannot shape the Wi-Fi network of current system images. Thus `latencyMs`, `downloadKbps` and `uploadKbps` fail on an Android emulator. `offline: true` turns off Wi-Fi and mobile data with `svc`. A call without conditions turns on Wi-Fi and mobile data, and waits up to 15 seconds for a network. The emulator stays offline after the tool-server stops.
+On Android, the emulator console cannot shape the Wi-Fi network of current system images. Thus `latencyMs`, `downloadKbps` and `uploadKbps` fail on an Android emulator. `offline: true` turns off Wi-Fi and mobile data with `svc`. If the emulator still has a network after 5 seconds, the call fails with `error_kind: "unsupported"` and turns Wi-Fi and mobile data on again. An Android TV emulator connects over Ethernet, so `offline` fails there. A call without conditions does nothing when the emulator has a network. Otherwise it turns on Wi-Fi and mobile data, and fails with `error_kind: "timeout"` when no network comes up within 15 seconds. The emulator stays offline after the tool-server stops.
 
 While the Android emulator is offline:
 
 - Requests through `adb reverse` still work, because adb carries them.
 - The emulator cannot reach the host at `10.0.2.2`. A React Native app that loads from Metro at `10.0.2.2` loses its connection to Metro. The debugger tools then cannot reach the app until the network comes back.
 
-On Chromium, Argent applies the conditions to the page of the active tab. Argent applies them again after a tab switch with `chromium-tabs`, and before a tab that `chromium-tabs` opens loads its URL. Service workers, web workers and cross-site iframes keep the full speed. When the active tab closes outside Argent, or when another DevTools client detaches from the page, the conditions can go away. Call `network-conditions` again.
+On Chromium, Argent applies the conditions to the page of the active tab. Argent applies them again after a tab switch with `chromium-tabs`, and before a tab that `chromium-tabs` opens loads its URL. When `chromium-tabs close` closes the active tab, Argent moves to another tab and applies the conditions there. Service workers, web workers and cross-site iframes keep the full speed. When the active tab closes outside Argent, or when another DevTools client detaches from the page, the conditions can go away. Call `network-conditions` again.
 
 `network-conditions` fails on a physical iPhone and on a physical Android device.
 
