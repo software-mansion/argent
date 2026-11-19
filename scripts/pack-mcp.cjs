@@ -3,7 +3,9 @@
 "use strict";
 
 // Pins the argent-private-releases tag the native binaries and the
-// trace-processor bundle are downloaded from (default: argent-main):
+// trace-processor bundle are downloaded from (default: the newest
+// argent-private main build, argent-main-<sha>; see
+// scripts/resolve-main-binaries-tag.sh):
 //
 //   npm run pack:mcp -- argent-v0.7.1
 //

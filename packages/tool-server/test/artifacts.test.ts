@@ -2,13 +2,42 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { createServer } from "node:http";
+import { connect, type AddressInfo } from "node:net";
+import type { Transform } from "node:stream";
+import { ARCHIVE_CONTENT_TYPES, ARCHIVE_FORMATS, safeExtractArchive } from "@argent/archive";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { ArtifactStore } from "@argent/registry";
 import type { Registry } from "@argent/registry";
 
 const isFlagEnabledMock = vi.hoisted(() => vi.fn(() => false));
+const compressors = vi.hoisted(() => [] as Transform[]);
+const tarChildren = vi.hoisted(() => [] as ChildProcess[]);
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const spawn = (...args: Parameters<typeof actual.spawn>) => {
+    const child = (actual.spawn as (...a: typeof args) => ChildProcess)(...args);
+    if (args[0] === "tar") tarChildren.push(child);
+    return child;
+  };
+  return { ...actual, spawn };
+});
+
+vi.mock("@argent/archive", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/archive")>();
+  return {
+    ...actual,
+    createCompressor: (format: Parameters<typeof actual.createCompressor>[0]) => {
+      const compressor = actual.createCompressor(format);
+      compressors.push(compressor);
+      return compressor;
+    },
+  };
+});
 
 // supertest/superagent doesn't buffer binary bodies (gzip) by default.
 function binaryParser(res: NodeJS.ReadableStream, cb: (err: Error | null, body: Buffer) => void) {
@@ -259,6 +288,237 @@ describe("GET /artifacts/:id", () => {
       expect(listing).toContain("session.trace/top.txt");
       expect(listing).toContain("session.trace/sub/nested.txt");
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("streams a zstd tar when the client's Accept lists application/zstd", async () => {
+    const root = await mkdtemp(join(tmpdir(), "artifact-bundle-"));
+    try {
+      const bundle = join(root, "session.trace");
+      await mkdir(bundle);
+      await writeFile(join(bundle, "top.txt"), "top");
+
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: bundle,
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      const res = await supertest(handle.app)
+        .get(`/artifacts/${artifact.id}`)
+        .set("Accept", "application/zstd, application/gzip")
+        .buffer(true)
+        .parse(binaryParser as never);
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/zstd");
+      expect(res.headers["content-disposition"]).toContain("session.trace.tar.zst");
+      expect(res.headers.vary).toBe("Accept");
+      const archive = join(root, "out.archive");
+      await writeFile(archive, res.body);
+      const dest = await mkdtemp(join(root, "dest-"));
+      const member = await safeExtractArchive(archive, dest, "session.trace");
+      expect(await readFile(join(member, "top.txt"), "utf8")).toBe("top");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  describe.each(ARCHIVE_FORMATS)("when tar exits non-zero (%s)", (format) => {
+    let root: string;
+    const realPath = process.env.PATH;
+
+    // A `tar` on PATH that runs the real one, keeps the first FAKE_TAR_BYTES of
+    // its output, and exits 1.
+    beforeEach(async () => {
+      root = await mkdtemp(join(tmpdir(), "artifact-faketar-"));
+      const realTar = execFileSync("sh", ["-c", "command -v tar"], { encoding: "utf8" }).trim();
+      await mkdir(join(root, "bin"));
+      await writeFile(
+        join(root, "bin", "tar"),
+        `#!/bin/sh\n"${realTar}" "$@" | head -c "$FAKE_TAR_BYTES"\nexit 1\n`,
+        { mode: 0o755 }
+      );
+      process.env.PATH = `${join(root, "bin")}:${realPath}`;
+      const bundle = join(root, "B.trace");
+      await mkdir(bundle);
+      for (const n of ["a", "b", "c", "d"]) await writeFile(join(bundle, n), n.repeat(512));
+    });
+
+    afterEach(async () => {
+      process.env.PATH = realPath;
+      delete process.env.FAKE_TAR_BYTES;
+      await rm(root, { recursive: true, force: true });
+    });
+
+    async function download(bundle = "B.trace"): Promise<supertest.Response> {
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: join(root, bundle),
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      return supertest(handle.app)
+        .get(`/artifacts/${artifact.id}`)
+        .set("Accept", ARCHIVE_CONTENT_TYPES[format])
+        .buffer(true)
+        .parse(binaryParser as never);
+    }
+
+    it("cuts the response off when tar abandoned the archive", async () => {
+      process.env.FAKE_TAR_BYTES = "2560"; // a header boundary, so the cut tar still reads cleanly
+      await expect(download()).rejects.toThrow();
+    });
+
+    // tar skips an unreadable member, still writes the end-of-archive marker, and exits non-zero.
+    it("cuts the response off when tar wrote the whole archive", async () => {
+      process.env.FAKE_TAR_BYTES = "100000000";
+      await expect(download()).rejects.toThrow();
+    });
+
+    // HTTP/1.0 has no chunked framing to cut, so the response just ends; nginx
+    // proxies over HTTP/1.0 unless told otherwise.
+    it("sends no whole archive over HTTP/1.0 when tar wrote the whole archive", async () => {
+      process.env.FAKE_TAR_BYTES = "100000000";
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: join(root, "B.trace"),
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      const server = createServer(handle.app);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const response = await new Promise<Buffer>((resolve) => {
+        const chunks: Buffer[] = [];
+        const { port } = server.address() as AddressInfo;
+        const socket = connect(port, "127.0.0.1");
+        socket.on("data", (c: Buffer) => chunks.push(c));
+        socket.on("error", () => {});
+        socket.on("close", () => resolve(Buffer.concat(chunks)));
+        socket.write(
+          `GET /artifacts/${artifact.id} HTTP/1.0\r\nHost: 127.0.0.1:${port}\r\n` +
+            `Accept: ${ARCHIVE_CONTENT_TYPES[format]}\r\n\r\n`
+        );
+      });
+      server.close();
+      expect(response.toString("latin1")).not.toMatch(/^HTTP\/1\.1 [45]/);
+      const headerEnd = response.indexOf("\r\n\r\n");
+      const archivePath = join(root, "body");
+      await writeFile(archivePath, headerEnd === -1 ? "" : response.subarray(headerEnd + 4));
+      process.env.PATH = realPath;
+      const dest = await mkdtemp(join(root, "dest-"));
+      await expect(safeExtractArchive(archivePath, dest, "B.trace")).rejects.toThrow();
+    });
+  });
+
+  it.each(ARCHIVE_FORMATS)(
+    "stops tar and the %s compressor when the client aborts mid-download",
+    async (format) => {
+      const root = await mkdtemp(join(tmpdir(), "artifact-abort-"));
+      const server = createServer();
+      try {
+        const bundle = join(root, "big.trace");
+        await mkdir(bundle);
+        await writeFile(join(bundle, "blob"), randomBytes(8 << 20));
+        const registry = stubRegistry();
+        const artifact = await registry.artifacts.register({
+          hostPath: bundle,
+          kind: "native-profile-trace",
+        });
+        handle = createHttpApp(registry);
+        server.on("request", handle.app);
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const { port } = server.address() as AddressInfo;
+
+        const abort = new AbortController();
+        const res = await fetch(`http://127.0.0.1:${port}/artifacts/${artifact.id}`, {
+          headers: { Accept: ARCHIVE_CONTENT_TYPES[format] },
+          signal: abort.signal,
+        });
+        expect(res.headers.get("content-type")).toBe(ARCHIVE_CONTENT_TYPES[format]);
+        await res.body!.getReader().read();
+        abort.abort();
+        await vi.waitFor(() => expect(compressors.at(-1)?.destroyed).toBe(true));
+        await vi.waitFor(() => expect(tarChildren.at(-1)?.signalCode).toBe("SIGTERM"));
+      } finally {
+        server.closeAllConnections();
+        server.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
+
+  // tar exits before its last output is read when the client is slow.
+  it.each(ARCHIVE_FORMATS)(
+    "sends the whole %s archive to a slow client",
+    async (format) => {
+      const root = await mkdtemp(join(tmpdir(), "artifact-slow-"));
+      const server = createServer();
+      try {
+        const bundle = join(root, "B.trace");
+        await mkdir(bundle);
+        const blob = randomBytes(16 << 20);
+        await writeFile(join(bundle, "blob"), blob);
+        const registry = stubRegistry();
+        const artifact = await registry.artifacts.register({
+          hostPath: bundle,
+          kind: "native-profile-trace",
+        });
+        handle = createHttpApp(registry);
+        server.on("request", handle.app);
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const { port } = server.address() as AddressInfo;
+
+        const res = await fetch(`http://127.0.0.1:${port}/artifacts/${artifact.id}`, {
+          headers: { Accept: ARCHIVE_CONTENT_TYPES[format] },
+        });
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of res.body!) {
+          chunks.push(chunk);
+          await new Promise((resolve) => setTimeout(resolve, 3));
+        }
+        const archivePath = join(root, "body");
+        await writeFile(archivePath, Buffer.concat(chunks));
+        const dest = await mkdtemp(join(root, "dest-"));
+        const member = await safeExtractArchive(archivePath, dest, "B.trace");
+        expect((await readFile(join(member, "blob"))).equals(blob)).toBe(true);
+      } finally {
+        server.closeAllConnections();
+        server.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    60_000
+  );
+
+  it("answers 500 when tar cannot start, and leaves that answer whole", async () => {
+    const root = await mkdtemp(join(tmpdir(), "artifact-notar-"));
+    const realPath = process.env.PATH;
+    try {
+      const bundle = join(root, "B.trace");
+      await mkdir(bundle);
+      await writeFile(join(bundle, "a"), "a");
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: bundle,
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      // No `tar` on this PATH. The spawn fails, and the child still emits
+      // `close` with a non-zero code after the `error` that answered.
+      process.env.PATH = root;
+      const res = await supertest(handle.app).get(`/artifacts/${artifact.id}`);
+
+      expect(res.status).toBe(500);
+      // An error, so not labelled as the archive download it replaces.
+      expect(res.headers["content-type"]).toMatch(/^application\/json/);
+      expect(res.headers["content-disposition"]).toBeUndefined();
+      expect(res.body.error).toContain(`Failed to archive artifact "${artifact.id}"`);
+      // The child closes after the answer went out.
+      await vi.waitFor(() => expect(compressors.at(-1)!.destroyed).toBe(true));
+    } finally {
+      process.env.PATH = realPath;
       await rm(root, { recursive: true, force: true });
     }
   });

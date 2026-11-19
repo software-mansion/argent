@@ -19,6 +19,7 @@ import { isFoldableSimulator, isTvOsSimulator } from "../utils/ios-devices";
 import { deviceSetForUdid } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import { openMoqClient } from "../utils/moq-client";
+import { openMjpegStream } from "../tools/screen-recording/mjpeg-stream";
 import {
   createMoqTransport,
   fetchDisplayState,
@@ -298,6 +299,51 @@ function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_d
     return "ios";
   }
   return device.kind === "device" ? "android_device" : "android";
+}
+
+/**
+ * The emulator controller finds an AVD's gRPC bridge through the emulator's
+ * `avd/running/pid_*.ini` discovery file. An emulator started under another
+ * user or HOME, or with `-port`, has no such file where argent looks. The phone
+ * controller (screen-sharing agent over adb) needs only adb, so such an
+ * emulator is retried through it.
+ */
+const EMULATOR_NOT_DISCOVERED =
+  /not found among running emulators|Failed to find any running emulator/;
+
+const FIRST_FRAME_TIMEOUT_MS = 5_000;
+
+/**
+ * The phone controller prints its readiness lines before the agent injects
+ * input: a touch sent before the first frame is acked but never lands.
+ */
+async function waitForFirstFrame(streamUrl: string): Promise<void> {
+  if (!streamUrl) return;
+  const stream = await openMjpegStream(streamUrl, FIRST_FRAME_TIMEOUT_MS).catch(() => null);
+  if (!stream) return;
+  await stream
+    .waitForFirstFrame(FIRST_FRAME_TIMEOUT_MS)
+    .catch(() => {})
+    .finally(() => stream.close());
+}
+
+async function spawnWithEmulatorFallback(
+  device: DeviceInfo
+): ReturnType<typeof spawnSimulatorServerProcess> {
+  const subcommand = subcommandForDevice(device);
+  try {
+    return await spawnSimulatorServerProcess(device.id, subcommand);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (subcommand !== "android" || !EMULATOR_NOT_DISCOVERED.test(message)) throw err;
+    process.stderr.write(
+      `[sim ${device.id}] emulator not found through gRPC discovery; ` +
+        `falling back to the adb screen-sharing controller\n`
+    );
+    const server = await spawnSimulatorServerProcess(device.id, "android_device");
+    await waitForFirstFrame(server.streamUrl);
+    return server;
+  }
 }
 
 async function spawnSimulatorServerProcess(
@@ -592,10 +638,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
-    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
-      device.id,
-      subcommandForDevice(device)
-    );
+    const { proc, apiUrl, streamUrl } = await spawnWithEmulatorFallback(device);
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
