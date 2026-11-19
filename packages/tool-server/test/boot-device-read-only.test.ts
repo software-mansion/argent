@@ -337,6 +337,6 @@ describe("boot-device Android — readOnly and port", () => {
 
   it.each([5555, 5552, 5684])("rejects port %i in the schema", (port) => {
     const tool = createBootDeviceTool(registry);
-    expect(tool.zodSchema.safeParse({ avdName: AVD, port }).success).toBe(false);
+    expect(tool.zodSchema!.safeParse({ avdName: AVD, port }).success).toBe(false);
   });
 });
