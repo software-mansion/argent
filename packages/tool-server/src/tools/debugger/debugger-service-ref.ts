@@ -62,6 +62,11 @@ export const REACT_PROFILER_TOOL_CAPABILITY: ToolCapability = {
   macos: { app: true },
 };
 
+/** Whether a debugger tool's device id names a Chromium app rather than a Metro runtime. */
+export function isChromiumDebuggerTarget(deviceId: string | undefined): boolean {
+  return !!canonicalDeviceId(deviceId)?.startsWith(CHROMIUM_ID_PREFIX);
+}
+
 /**
  * Debugger service ref for a tool's `services()` callback. `port` is irrelevant
  * for Chromium — its CDP port lives inside the device id — so the 8081 default
@@ -75,7 +80,7 @@ export function debuggerServiceRef(params: { port?: number; device_id?: string }
   // The Metro path is the default, and has to tolerate undefined / empty /
   // malformed ids: pre-chromium tests and older callers expect a Metro URN back
   // even when device_id is missing.
-  if (deviceId && deviceId.startsWith(CHROMIUM_ID_PREFIX)) {
+  if (deviceId && isChromiumDebuggerTarget(deviceId)) {
     const device = resolveDevice(deviceId);
     return chromiumJsRuntimeDebuggerRef(device);
   }
