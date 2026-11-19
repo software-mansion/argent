@@ -30,6 +30,7 @@ import {
   AGENTS_DIR,
   ARGENT_SKILL_PREFIX,
   RETIRED_BUNDLED_PATHS,
+  RETIRED_GLOBAL_RULES,
   type RetiredFile,
 } from "./utils.js";
 import { isMap, parse as parseYamlText } from "yaml";
@@ -1931,7 +1932,8 @@ export interface RetiredTargetFiles {
 
 // Copying only adds files, so one an older version wrote and this one dropped
 // stays, and editors keep loading it. Same targets as copyRulesAndAgents, for
-// each scan's adapters and scope.
+// each scan's adapters and scope. Global rule dirs get no rule at all, so every
+// rule argent once copied there is retired.
 export function findRetiredRulesAndAgents(
   scans: ReadonlyArray<{ adapters: McpConfigAdapter[]; scope: ManagedContentScope }>,
   root: string,
@@ -1940,20 +1942,33 @@ export function findRetiredRulesAndAgents(
 ): RetiredTargetFiles[] {
   const targets = scans.flatMap(({ adapters, scope }) => {
     const { ruleTargets, agentTargets } = getManagedContentTargets(adapters, root, scope);
+    const globalRules = scope === "global";
     return [
-      ...ruleTargets.map((target) => ({ kind: "rules" as const, target, bundleDir: rulesDir })),
-      ...agentTargets.map((target) => ({ kind: "agents" as const, target, bundleDir: agentsDir })),
+      ...ruleTargets.map((target) => ({
+        kind: "rules" as const,
+        target,
+        bundleDir: globalRules ? null : rulesDir,
+        retired: globalRules
+          ? [...RETIRED_BUNDLED_PATHS.rules, ...RETIRED_GLOBAL_RULES]
+          : RETIRED_BUNDLED_PATHS.rules,
+      })),
+      ...agentTargets.map((target) => ({
+        kind: "agents" as const,
+        target,
+        bundleDir: agentsDir,
+        retired: RETIRED_BUNDLED_PATHS.agents,
+      })),
     ];
   });
   const found: RetiredTargetFiles[] = [];
   // Targets that are one dir share its files: list them once. That is a link to
   // a canonical dir, or the local and global target when root is the home dir.
   const seen = new Set<string>();
-  for (const { kind, target, bundleDir } of targets) {
+  for (const { kind, target, bundleDir, retired } of targets) {
     const dir = resolveLinkedDestination(target.targetPath);
     if (seen.has(`${kind}:${realpathOrSelf(dir)}`)) continue;
     seen.add(`${kind}:${realpathOrSelf(dir)}`);
-    const files = findRetiredFiles(RETIRED_BUNDLED_PATHS[kind], bundleDir, target.targetPath);
+    const files = findRetiredFiles(retired, bundleDir, target.targetPath);
     if (files.length === 0) continue;
     found.push({ kind, target, location: formatCopyDestination(target, dir, root), files });
   }
@@ -1969,8 +1984,13 @@ export function copyRulesAndAgents(
 ): string[] {
   const results: string[] = [];
   const managedTargets = getManagedContentTargets(adapters, root, scope);
+  // The rule only tells an agent in a project set up for argent what to do
+  // when argent is not installed. The usage guidance is in the MCP server's
+  // instructions, so a global copy would cost every session in every project
+  // tokens for nothing. findRetiredRulesAndAgents offers to remove old ones.
+  const globalScope = scope === "global";
 
-  for (const target of managedTargets.ruleTargets) {
+  for (const target of globalScope ? [] : managedTargets.ruleTargets) {
     try {
       const written = copyDir(rulesDir, target.targetPath);
       if (written) {
@@ -1993,6 +2013,18 @@ export function copyRulesAndAgents(
   }
 
   for (const target of managedTargets.codexConfigTargets) {
+    if (globalScope) {
+      // The section sits between argent's markers, so removing it loses
+      // nothing of the user's.
+      try {
+        if (removeCodexRules(target.targetPath)) {
+          results.push(`  Removed argent rules from ${target.targetPath} (developer_instructions)`);
+        }
+      } catch (err) {
+        results.push(`  Could not remove argent rules from ${target.targetPath}: ${err}`);
+      }
+      continue;
+    }
     try {
       const injected = injectCodexRules(target.targetPath, rulesDir);
       if (injected) {
