@@ -102,6 +102,15 @@ function macosAppTargets(pool: CDPTarget[], bundleId: string, port: number): CDP
 /** logicalDeviceIds Metro has ever listed in this process. */
 const seenLogicalDeviceIds = new Set<string>();
 
+/**
+ * React Native's inspector id: the first 20 bytes of a SHA-256 as 40 lowercase
+ * hex digits, on Android and on Apple platforms alike. A simulator UDID has
+ * dashes and an emulator serial its `emulator-` prefix. A physical Android
+ * serial of this shape would be refused the single-device fallback, and the
+ * refusal lists the id to retry with.
+ */
+const LOGICAL_DEVICE_ID_SHAPE = /^[0-9a-f]{40}$/;
+
 export function selectTarget(
   targets: CDPTarget[],
   port: number,
@@ -162,15 +171,23 @@ export function selectTarget(
         );
       }
       // The single-device fallback exists for UDIDs/serials Metro never echoes.
-      // A logicalDeviceId we have seen before that has vanished is usually a
-      // device that left; falling back would silently drive another device while
-      // reporting success. It can also be the same iOS app under a new id, since
-      // iOS derives the id from identifierForVendor, which a reinstall can reset.
-      // Neither case can be told apart here, so the message covers both.
-      if (seenLogicalDeviceIds.has(deviceId)) {
+      // A logicalDeviceId names one app on one device, so the device Metro lists
+      // is another one, and falling back would silently drive it while reporting
+      // success. One we have seen is usually a device that left. One we have not
+      // seen, known by its shape, is an app that exited before this process
+      // started or has not attached yet. Either can also be the same iOS app
+      // under a new id, since iOS derives the id from identifierForVendor, which
+      // a reinstall can reset. None of these can be told apart here, so the
+      // message covers them all.
+      const seen = seenLogicalDeviceIds.has(deviceId);
+      if (seen || LOGICAL_DEVICE_ID_SHAPE.test(deviceId)) {
+        const state = seen
+          ? `is no longer attached to Metro on port ${port} — ` +
+            `its app likely exited or reloaded onto another Metro. `
+          : `is not attached to Metro on port ${port} — its app is not running, ` +
+            `is still starting, or uses another Metro. `;
         throw new FailureError(
-          `Device with logicalDeviceId "${deviceId}" is no longer attached to Metro on port ${port} — ` +
-            `its app likely exited or reloaded onto another Metro. ` +
+          `Device with logicalDeviceId "${deviceId}" ${state}` +
             `Not falling back to the remaining device: ${[...distinctDevices.values()].join(", ")}. ` +
             `If the app exited, relaunch it on the target device (launch-app / restart-app), then ` +
             `retry with the same id: a relaunched app keeps its logicalDeviceId. If it was ` +
