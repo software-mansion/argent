@@ -1,5 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { listEmulatorPidsForAvd, parseEmulatorPidsForAvd } from "../src/utils/emulator-process";
+import {
+  listEmulatorPidsForAvd,
+  parseEmulatorPidsForAvd,
+  parseEmulatorProcessesForAvd,
+} from "../src/utils/emulator-process";
 
 const QEMU_MAC =
   "/Users/me/Library/Android/sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64 -avd Pixel_7 -no-snapshot-save -gpu auto";
@@ -46,6 +50,23 @@ describe("parseEmulatorPidsForAvd", () => {
 
   it("returns empty for empty output", () => {
     expect(parseEmulatorPidsForAvd("", "Pixel_7")).toEqual([]);
+  });
+});
+
+describe("parseEmulatorProcessesForAvd", () => {
+  it("reads -read-only and -port as whole arguments", () => {
+    const out = ps(
+      [501, `${QEMU_MAC} -read-only -port 5584`],
+      [502, QEMU_MAC.replace("-avd Pixel_7 ", "-avd Pixel_7 -read-only ")],
+      [503, `${QEMU_MAC} -port 5560`],
+      [504, `${QEMU_MAC} -read-only-ish -portal 5590`]
+    );
+    expect(parseEmulatorProcessesForAvd(out, "Pixel_7")).toEqual([
+      { pid: 501, readOnly: true, port: 5584 },
+      { pid: 502, readOnly: true, port: null },
+      { pid: 503, readOnly: false, port: 5560 },
+      { pid: 504, readOnly: false, port: null },
+    ]);
   });
 });
 
