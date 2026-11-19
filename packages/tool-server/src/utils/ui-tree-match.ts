@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { DescribeFrame, DescribeNode, UiOrientation } from "../tools/describe/contract";
+import {
+  getDescribeTapPoint,
+  type DescribeFrame,
+  type DescribeNode,
+  type UiOrientation,
+} from "../tools/describe/contract";
 import { nativeFrameToUi } from "../tools/flows/flow-orientation";
 
 /**
@@ -727,33 +732,27 @@ function frameArea(frame: DescribeFrame): number {
  * button over its container). Skips the synthetic root.
  *
  * The on-screen keyboard lies over the app, so a point where the keyboard
- * draws is a tap on the keyboard, also where an app element behind it (a list
- * row's icon under a key) is smaller than the key: only keyboard elements take
- * part there. A keyboard element whose frame holds every other one is not
- * where it draws: the input method's window on Android has containers as tall
- * as the window (`android:id/parentPanel`), which pass a tap above the keys to
- * the app.
+ * draws (see {@link keyboardDrawsAt}) is a tap on the keyboard, also where an
+ * app element behind it (a list row's icon under a key) is smaller than the
+ * key: only the keyboard's own elements take part there, not the tall
+ * containers of its window. In a gap between them nothing is hit.
  */
 export function nodeAtPoint(
   root: DescribeNode,
-  point: { x: number; y: number }
+  point: { x: number; y: number },
+  orientation?: UiOrientation
 ): DescribeNode | undefined {
   const hits: DescribeNode[] = [];
-  const keyboard: DescribeNode[] = [];
   const walk = (node: DescribeNode): void => {
-    if (isVisible(node)) {
-      if (node.keyboard === true) keyboard.push(node);
-      if (frameContains(node.frame, point.x, point.y)) hits.push(node);
-    }
+    if (isVisible(node) && frameContains(node.frame, point.x, point.y)) hits.push(node);
     for (const child of node.children) walk(child);
   };
   for (const child of root.children) walk(child);
-  const span = boundingFrame(keyboard);
-  const onKeyboard =
-    span !== undefined && hits.some((n) => n.keyboard === true && !frameWithin(span, n.frame));
+  const drawn = drawnKeyboard(root);
+  const onKeyboard = drawsAt(drawn, point, orientation);
   let best: DescribeNode | undefined;
   for (const node of hits) {
-    if (onKeyboard && node.keyboard !== true) continue;
+    if (onKeyboard && !drawn.includes(node)) continue;
     const layerDelta = (node.layer ?? 0) - (best?.layer ?? 0);
     if (
       best === undefined ||
@@ -766,14 +765,83 @@ export function nodeAtPoint(
   return best;
 }
 
-/** The smallest frame holding every given node's frame; undefined for none. */
-function boundingFrame(nodes: DescribeNode[]): DescribeFrame | undefined {
-  if (nodes.length === 0) return undefined;
+/**
+ * The elements the on-screen keyboard draws: its visible ones, other than one
+ * whose frame holds every other. The input method's window on Android has
+ * containers as tall as the window (`android:id/parentPanel`), which pass a
+ * tap above the keys to the app.
+ */
+function drawnKeyboard(root: DescribeNode): DescribeNode[] {
+  const keyboard: DescribeNode[] = [];
+  const walk = (node: DescribeNode): void => {
+    if (node.keyboard === true && isVisible(node)) keyboard.push(node);
+    for (const child of node.children) walk(child);
+  };
+  for (const child of root.children) walk(child);
+  const span = boundingFrame(keyboard.map((n) => n.frame));
+  return span === undefined ? [] : keyboard.filter((n) => !frameWithin(span, n.frame));
+}
+
+/**
+ * Whether the keyboard whose elements are `drawn` draws at `point`. The
+ * keyboard is docked at the bottom of the UI, and below its top edge it covers
+ * the screen also between its elements: the gaps between the keys and the free
+ * strip of the bottom row have no element of their own, and do not pass a
+ * touch to the app either. So a point counts when it lies in the smallest
+ * frame holding the elements, below the top of one of them in its column. A
+ * tip that pops up above the keys covers its own column, not the strip beside
+ * it. The test runs in the UI's orientation, where the keyboard's top is up.
+ */
+function drawsAt(
+  drawn: readonly DescribeNode[],
+  point: { x: number; y: number },
+  orientation: UiOrientation | undefined
+): boolean {
+  const frames = drawn.map((n) => nativeFrameToUi(n.frame, orientation));
+  const area = boundingFrame(frames);
+  if (area === undefined) return false;
+  const p = nativeFrameToUi({ ...point, width: 0, height: 0 }, orientation);
+  return (
+    frameContains(area, p.x, p.y) &&
+    frames.some((f) => f.x <= p.x && p.x <= f.x + f.width && f.y <= p.y)
+  );
+}
+
+/**
+ * Whether the on-screen keyboard draws at `point` (see {@link drawsAt}).
+ * `orientation` is the UI's, as the tree was read.
+ */
+export function keyboardDrawsAt(
+  root: DescribeNode,
+  point: { x: number; y: number },
+  orientation?: UiOrientation
+): boolean {
+  return drawsAt(drawnKeyboard(root), point, orientation);
+}
+
+/**
+ * Whether the on-screen keyboard covers an app element where an action touches
+ * it, the centre of its frame: a tap there presses a key, not the element. An
+ * element of the keyboard is never covered.
+ */
+export function underKeyboard(
+  root: DescribeNode,
+  node: DescribeNode,
+  orientation?: UiOrientation
+): boolean {
+  return (
+    node.keyboard !== true && keyboardDrawsAt(root, getDescribeTapPoint(node.frame), orientation)
+  );
+}
+
+/** The smallest frame holding every given frame; undefined for none. */
+function boundingFrame(frames: readonly DescribeFrame[]): DescribeFrame | undefined {
+  if (frames.length === 0) return undefined;
   let x1 = 1;
   let y1 = 1;
   let x2 = 0;
   let y2 = 0;
-  for (const { frame: f } of nodes) {
+  for (const f of frames) {
     x1 = Math.min(x1, f.x);
     y1 = Math.min(y1, f.y);
     x2 = Math.max(x2, f.x + f.width);

@@ -37,7 +37,9 @@ import type { RunnerSnapshotNode } from "../../src/utils/ios-device/runner-comma
 import {
   frameWithin,
   nodeAtPoint,
+  keyboardDrawsAt,
   selectorToNode,
+  underKeyboard,
   type Selector,
 } from "../../src/utils/ui-tree-match";
 
@@ -241,6 +243,9 @@ describe("keyboard flag: physical iPhone (XCUITest runner snapshot)", () => {
     expect(selectorToNode(tree, { text: "Done" })).toBe(
       leaf(tree, { role: "AXButton", label: "Done" })
     );
+    // The keyboard covers the same app elements as on the simulator.
+    const covered = tree.children.filter((n) => underKeyboard(tree, n));
+    expect(covered.map((n) => n.identifier ?? n.label)).toEqual(["Delete", "inputView"]);
   });
 
   it("leaves the describe tool's tree unmarked", async () => {
@@ -318,6 +323,129 @@ describe("the recorder's point lookup", () => {
   });
 });
 
+describe("an app element under the keyboard", () => {
+  it("is covered when the keyboard draws at the centre of its frame", () => {
+    const pad = iosTree("ios-27-iphone-decimal-pad-covered-delete");
+    const covered = leaf(pad, { role: "AXButton", label: "Delete" });
+    expect(underKeyboard(pad, covered)).toBe(true);
+    // The ranking takes it over the decimal pad's delete key, "Delete" too.
+    expect(selectorToNode(pad, { text: "Delete" })).toBe(covered);
+    // Above the keys: the field and the input accessory toolbar.
+    expect(underKeyboard(pad, leaf(pad, { identifier: "amount" }))).toBe(false);
+    expect(underKeyboard(pad, leaf(pad, { identifier: "Toolbar" }))).toBe(false);
+    // A key is never covered.
+    expect(underKeyboard(pad, leaf(pad, { label: "Delete", keyboard: true }))).toBe(false);
+    // Without the keyboard nothing is.
+    const none = iosTree("ios-27-iphone-no-keyboard");
+    expect(none.children.some((n) => underKeyboard(none, n))).toBe(false);
+  });
+
+  it("takes in the gaps between the keys, which have no element of their own", () => {
+    // The bottom row of the iPhone keyboard: Emoji, a free strip, Dictate.
+    const tree = iosTree("ios-27-iphone-name");
+    const strip = { x: 0.5, y: 0.96 };
+    expect(
+      tree.children.some(
+        (n) => n.keyboard === true && frameWithin({ ...strip, width: 0, height: 0 }, n.frame)
+      )
+    ).toBe(false);
+    expect(keyboardDrawsAt(tree, strip)).toBe(true);
+    // A tab bar item centred there is covered.
+    const tab: DescribeNode = {
+      role: "AXButton",
+      label: "Home",
+      frame: { x: 0.4, y: 0.94, width: 0.2, height: 0.04 },
+      children: [],
+    } as unknown as DescribeNode;
+    const withTab = { ...tree, children: [...tree.children, tab] };
+    expect(underKeyboard(withTab, tab)).toBe(true);
+    // A tap there is on the keyboard: the app's input view behind it is not the hit.
+    expect(nodeAtPoint(tree, strip)).toBeUndefined();
+    // The decimal pad: below the keys, left of Dictate.
+    const pad = iosTree("ios-27-iphone-decimal-pad-covered-delete");
+    const below = { x: 0.3, y: 0.96 };
+    expect(
+      pad.children.some(
+        (n) => n.keyboard === true && frameWithin({ ...below, width: 0, height: 0 }, n.frame)
+      )
+    ).toBe(false);
+    expect(keyboardDrawsAt(pad, below)).toBe(true);
+  });
+
+  it("lets a tip above the keys cover only its own width", () => {
+    // Gboard's "See more features" tip sits above the toolbar, at the left.
+    const tree = androidTree("android-36-settings-search");
+    const tip = leaf(tree, { role: "StaticText", label: "See more features" });
+    expect(tip.keyboard).toBe(true);
+    const beside = { x: 0.7, y: centre(tip).y };
+    expect(keyboardDrawsAt(tree, beside)).toBe(false);
+    // The recorder's lookup there finds the app, not a tall container of Gboard.
+    expect(nodeAtPoint(tree, beside)?.keyboard).toBeUndefined();
+    expect(keyboardDrawsAt(tree, centre(tip))).toBe(true);
+    expect(nodeAtPoint(tree, centre(tip))).toBe(tip);
+  });
+
+  it("finds nothing in a gap between the keys, not a tall container of Gboard", () => {
+    // Drop Gboard's elements at one point, short of the window-tall containers.
+    const tree = androidTree("android-36-settings-search");
+    const gap = { x: 0.5, y: 0.8 };
+    const holds = (n: DescribeNode) =>
+      n.frame.x <= gap.x &&
+      gap.x <= n.frame.x + n.frame.width &&
+      n.frame.y <= gap.y &&
+      gap.y <= n.frame.y + n.frame.height;
+    const tall = (n: DescribeNode) => n.frame.y < 0.1 && n.frame.height > 0.9;
+    const holed = {
+      ...tree,
+      children: tree.children.filter((n) => !(n.keyboard === true && holds(n) && !tall(n))),
+    };
+    expect(holed.children.some((n) => n.keyboard === true && holds(n))).toBe(true);
+    expect(keyboardDrawsAt(holed, gap)).toBe(true);
+    expect(nodeAtPoint(holed, gap)).toBeUndefined();
+  });
+
+  it("measures the keyboard's top in the UI's orientation", () => {
+    // The trees turned into the frames of a device held landscape right: the
+    // keyboard is at the bottom of the UI, at a side of the frames.
+    const toNative = (f: DescribeNode["frame"]) => ({
+      x: 1 - f.y - f.height,
+      y: f.x,
+      width: f.height,
+      height: f.width,
+    });
+    const turn = (tree: DescribeNode): DescribeNode => ({
+      ...tree,
+      children: tree.children.map((n) => ({ ...n, frame: toNative(n.frame) })),
+    });
+    const at = (p: { x: number; y: number }) => toNative({ ...p, width: 0, height: 0 });
+    // Beside Gboard's tip, and the decimal pad's free strip below the keys.
+    const search = androidTree("android-36-settings-search");
+    const tip = leaf(search, { role: "StaticText", label: "See more features" });
+    const beside = { x: 0.7, y: centre(tip).y };
+    const pad = iosTree("ios-27-iphone-decimal-pad-covered-delete");
+    const below = { x: 0.3, y: 0.96 };
+    expect(keyboardDrawsAt(turn(search), at(beside), "landscapeRight")).toBe(false);
+    expect(keyboardDrawsAt(turn(search), at(centre(tip)), "landscapeRight")).toBe(true);
+    expect(keyboardDrawsAt(turn(pad), at(below), "landscapeRight")).toBe(true);
+    // The app elements under the keys are the same as upright.
+    const name = turn(iosTree("ios-27-iphone-name"));
+    const covered = name.children.filter((n) => underKeyboard(name, n, "landscapeRight"));
+    expect(covered.map((n) => n.identifier ?? n.label)).toEqual(["Delete", "inputView"]);
+    // Read in the frames' own orientation, both come out wrong.
+    expect(keyboardDrawsAt(turn(search), at(beside))).toBe(true);
+    expect(keyboardDrawsAt(turn(pad), at(below))).toBe(false);
+  });
+
+  it("is judged by the keys on Android, not the input method's tall containers", () => {
+    const results = androidTree("android-36-settings-results");
+    expect(underKeyboard(results, leaf(results, { label: "Hearing devices" }))).toBe(true);
+    const above = leaf(results, { label: "Default notification sound" });
+    expect(underKeyboard(results, above)).toBe(false);
+    const search = androidTree("android-36-settings-search");
+    expect(underKeyboard(search, leaf(search, { role: "Button", label: "Back" }))).toBe(false);
+  });
+});
+
 // ── The e2e runner ──────────────────────────────────────────────────────────
 
 interface ToolCall {
@@ -326,6 +454,8 @@ interface ToolCall {
 }
 
 let tmpDir: string;
+// The tool calls of the run in progress, for a tree that changes after a gesture.
+let liveCalls: ToolCall[] = [];
 // The raw ax-service reply behind the served iOS tree: the stale-id reason
 // reads the accessibility tree again, hidden nodes included.
 let currentRaw: AXTreeResponse | undefined;
@@ -372,6 +502,7 @@ async function run(
     "utf8"
   );
   const calls: ToolCall[] = [];
+  liveCalls = calls;
   const result = await createRunFlowTool(mockRegistry(calls)).execute(
     {},
     { name: "kb", project_root: tmpDir, device }
@@ -521,6 +652,209 @@ describe("e2e runner: conditions and scroll-to ignore keys", () => {
   });
 });
 
+describe("e2e runner: an action does not press an element under the keyboard", () => {
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-keyboard-keys-"));
+    // Only Date is faked, and every tree read moves it on, so an action's
+    // wait for a covered element runs out in a few reads.
+    vi.useFakeTimers({ toFake: ["Date"] });
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Serve the tree `next` gives for each read, two seconds apart. */
+  function serveReads(
+    next: () => DescribeNode,
+    source: DescribeTreeData["source"] = "ax-service"
+  ): void {
+    currentRaw = undefined;
+    currentTreeData = () => {
+      vi.setSystemTime(Date.now() + 2000);
+      return { tree: next(), source };
+    };
+  }
+  const withoutKeys = (tree: DescribeNode): DescribeNode => ({
+    ...tree,
+    children: tree.children.filter((n) => n.keyboard !== true),
+  });
+  const covered = (selector: string) =>
+    `the element matching ${selector} is under the on-screen keyboard, so pressing it would ` +
+    `press a key. Close the keyboard before this step, or bring the element above it with a ` +
+    `scroll-to step`;
+  const gestures = (calls: ToolCall[]) => calls.filter((c) => c.tool.startsWith("gesture-"));
+
+  it("fails a tap on the app's Delete under the decimal pad and taps nothing", async () => {
+    // The base build tapped the delete key here, and the first ranking change
+    // the key "0" over the app's Delete.
+    const pad = iosTree("ios-27-iphone-decimal-pad-covered-delete");
+    serveReads(() => pad);
+    const result = await run([{ kind: "tap", selector: { text: "Delete" } }]);
+    expect(result.steps[0]!.status).toBe("fail");
+    expect(result.steps[0]!.reason).toBe(covered('text="Delete"'));
+    expect(gestures(result.calls)).toEqual([]);
+  });
+
+  it("taps the element once the keyboard has gone", async () => {
+    const pad = iosTree("ios-27-iphone-decimal-pad-covered-delete");
+    let reads = 0;
+    serveReads(() => {
+      const tree = reads++ < 3 ? pad : withoutKeys(pad);
+      // Log the read among the tool calls, to see what the tap followed.
+      liveCalls.push({ tool: "read", args: { keys: keys(tree).length } });
+      return tree;
+    });
+    const result = await run([{ kind: "tap", selector: { text: "Delete" } }]);
+    expect(result.ok).toBe(true);
+    expectTapOn(result.calls, leaf(pad, { role: "AXButton", label: "Delete" }));
+    const tap = result.calls.findIndex((c) => c.tool === "gesture-tap");
+    const readsBefore = result.calls.slice(0, tap).filter((c) => c.tool === "read");
+    expect(readsBefore[0]!.args.keys).toBeGreaterThan(0);
+    expect(readsBefore.at(-1)!.args.keys).toBe(0);
+  });
+
+  const hearing = { text: "Hearing devices" };
+  it.each<[string, Parameters<typeof serializeFlow>[0]["steps"][number]]>([
+    ["tap", { kind: "tap", selector: hearing }],
+    ["long-press", { kind: "long-press", selector: hearing }],
+    ["type", { kind: "type", into: hearing, text: "x" }],
+    ["pinch", { kind: "pinch", selector: hearing, scale: 2 }],
+    ["rotate", { kind: "rotate", selector: hearing, by: 90 }],
+    ["swipe from", { kind: "swipe", from: { selector: hearing }, direction: "up" }],
+  ])("fails %s on a search result under Gboard, with no gesture", async (_name, step) => {
+    serveReads(() => androidTree("android-36-settings-results"), "android-devtools");
+    const result = await run([step], ANDROID);
+    expect(result.steps[0]!.status).toBe("fail");
+    expect(result.steps[0]!.reason).toBe(covered('text="Hearing devices"'));
+    expect(gestures(result.calls)).toEqual([]);
+    expect(result.calls.some((c) => c.tool === "keyboard")).toBe(false);
+  });
+
+  it("lets a swipe end on an element under the keyboard", async () => {
+    serveReads(() => androidTree("android-36-settings-results"), "android-devtools");
+    const result = await run(
+      [
+        {
+          kind: "swipe",
+          from: { selector: { text: "Default notification sound" } },
+          to: { selector: hearing },
+        },
+      ],
+      ANDROID
+    );
+    expect(result.ok).toBe(true);
+    expect(gestures(result.calls).map((c) => c.tool)).toEqual(["gesture-swipe"]);
+  });
+
+  it("leaves the conditions alone: a covered element is visible", async () => {
+    serveReads(() => androidTree("android-36-settings-results"), "android-devtools");
+    const result = await run(
+      [{ kind: "assert", condition: "visible", selector: hearing }],
+      ANDROID
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("scroll-to says when the scroll moved a covered target away", async () => {
+    // Scrolling up moves the rows down, off the screen under the keyboard.
+    const before = androidTree("android-36-settings-results");
+    const after: DescribeNode = {
+      ...before,
+      children: before.children.filter((n) => n.label !== "Hearing devices"),
+    };
+    serveReads(
+      () => (liveCalls.some((c) => c.tool === "gesture-swipe") ? after : before),
+      "android-devtools"
+    );
+    const result = await run([{ kind: "scroll-to", target: hearing, direction: "up" }], ANDROID);
+    expect(result.steps[0]!.status).toBe("fail");
+    expect(result.steps[0]!.reason).toBe(
+      'the element matching text="Hearing devices" was under the on-screen keyboard, and ' +
+        "scrolling up did not bring it above the keyboard. Close the keyboard before this step"
+    );
+  });
+
+  it("scroll-to does not swipe where the keyboard covers the centre of its container", async () => {
+    // The app's input view spans the keyboard: its centre is on the keys.
+    serveReads(() => iosTree("ios-27-iphone-name"));
+    const result = await run([
+      {
+        kind: "scroll-to",
+        target: { text: "Terms" },
+        direction: "down",
+        within: { identifier: "inputView" },
+      },
+    ]);
+    expect(result.steps[0]!.status).toBe("fail");
+    expect(result.steps[0]!.reason).toBe(
+      'scroll-to swipes at the centre of id="inputView", which the on-screen keyboard covers, ' +
+        "so the swipe would land on the keyboard. Close the keyboard before this step, or name " +
+        "in within: a scroll container whose centre is above the keyboard"
+    );
+    expect(gestures(result.calls)).toEqual([]);
+  });
+
+  it("scroll-to checks the point it swipes at, also for a container centred off the screen", async () => {
+    // A sheet that runs past the bottom edge: the swipe goes down at y = 1.
+    const tree = iosTree("ios-27-iphone-name");
+    const sheet = {
+      role: "AXScrollView",
+      identifier: "sheet",
+      frame: { x: 0, y: 0.9, width: 1, height: 0.3 },
+      children: [],
+    } as unknown as DescribeNode;
+    serveReads(() => ({ ...tree, children: [...tree.children, sheet] }));
+    const result = await run([
+      {
+        kind: "scroll-to",
+        target: { text: "Terms" },
+        direction: "down",
+        within: { identifier: "sheet" },
+      },
+    ]);
+    expect(result.steps[0]!.reason).toMatch(/^scroll-to swipes at the centre of id="sheet"/);
+    expect(gestures(result.calls)).toEqual([]);
+  });
+
+  it("scroll-to goes on while the keyboard covers its target, then the tap lands", async () => {
+    // The results list scrolls the rows up; the first tree has the target on
+    // screen, under the keys.
+    const before = androidTree("android-36-settings-results");
+    const row = (n: DescribeNode) =>
+      n.keyboard !== true &&
+      [
+        "android:id/title",
+        "android:id/icon",
+        "com.google.android.settings.intelligence:id/breadcrumb",
+      ].includes(n.identifier ?? "");
+    const after: DescribeNode = {
+      ...before,
+      children: before.children.map((n) =>
+        row(n) ? { ...n, frame: { ...n.frame, y: n.frame.y - 0.4 } } : n
+      ),
+    };
+    serveReads(
+      () => (liveCalls.some((c) => c.tool === "gesture-swipe") ? after : before),
+      "android-devtools"
+    );
+    const result = await run(
+      [
+        { kind: "scroll-to", target: hearing, direction: "down" },
+        { kind: "tap", selector: hearing },
+      ],
+      ANDROID
+    );
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "scroll-to:pass",
+      "tap:pass",
+    ]);
+    expect(gestures(result.calls).map((c) => c.tool)).toEqual(["gesture-swipe", "gesture-tap"]);
+    expectTapOn(result.calls, leaf(after, { label: "Hearing devices" }));
+    expect(underKeyboard(after, leaf(after, { label: "Hearing devices" }))).toBe(false);
+  });
+});
+
 describe("e2e recorder: a recorded tap replays on the tapped element", () => {
   const FLOW = "rec";
 
@@ -592,6 +926,17 @@ describe("e2e recorder: a recorded tap replays on the tapped element", () => {
     const at = await replay(tree, step);
     expect(at.x).toBeCloseTo(centre(key).x, 5);
     expect(at.y).toBeCloseTo(centre(key).y, 5);
+  });
+  it("keeps coordinates for a tap on the part of a row above the keys", async () => {
+    // The row's title shows above Gboard, but its centre is under the keys:
+    // replay of a selector would not press it.
+    const tree = androidTree("android-36-settings-results");
+    const title = leaf(tree, { label: "Hear outgoing message sounds" });
+    expect(underKeyboard(tree, title)).toBe(true);
+    const point = { x: 0.3, y: 0.625 };
+    expect(nodeAtPoint(tree, point)).toBe(title);
+    const step = await recordTap(tree, point, ANDROID, "android-devtools");
+    expect(step).toEqual({ kind: "tap", ...point });
   });
 
   it("keeps coordinates for a tap between keys, where replay would press another key", async () => {

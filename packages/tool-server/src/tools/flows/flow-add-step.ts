@@ -82,6 +82,7 @@ import {
 } from "../describe/contract";
 import {
   nodeAtPoint,
+  underKeyboard,
   deriveSelector,
   deriveUniqueSelector,
   selectorToFrame,
@@ -786,7 +787,7 @@ async function captureTapSelector(
       launched ? { bundleId: launched, pinned: false } : undefined
     );
     const { tree, uiOrientation } = data;
-    const node = nodeAtPoint(tree, point);
+    const node = nodeAtPoint(tree, point, uiOrientation);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     // Ranked in the reading order replay will rank in: the UI's, on a
     // landscape UI.
@@ -802,12 +803,19 @@ async function captureTapSelector(
     }
     // The frame replay acts on: the derived selector resolves to it.
     const resolved = selectorToFrame(tree, selector, uiOrientation) ?? node.frame;
+    // Replay does not press an element whose centre the on-screen keyboard
+    // covers, so a tap on the part of it above the keys replays as coordinates.
+    if (underKeyboard(tree, node, uiOrientation)) {
+      return {
+        warning: `the on-screen keyboard covers the centre of ${describeSelector(selector)}, where replay taps; kept coordinates (brittle)`,
+      };
+    }
     // Replay taps the centre. A tap between keys finds the container of the
     // keys, whose centre is another key. A key keeps its selector: the label or
     // icon at its centre is part of the key.
     if (
       node.keyboard === true &&
-      nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node &&
+      nodeAtPoint(tree, getDescribeTapPoint(resolved), uiOrientation) !== node &&
       holdsKeys(tree, node)
     ) {
       return {
