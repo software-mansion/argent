@@ -20,14 +20,16 @@ set -euo pipefail
 # only: whoever can replace the tarball there can replace the checksum too.
 #
 # Usage: ./scripts/download-trace-processor.sh [release-tag]
-#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
+#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to the
+#                newest argent-private main build (argent-main-<sha>, see
+#                scripts/resolve-main-binaries-tag.sh).
 #
 # Requires:
 #   - gh CLI, logged in with `gh auth login` (the repo is public, but the
 #     `gh release view` pre-check still needs auth)
 
 REPO="software-mansion-labs/argent-private-releases"
-TAG="${1:-argent-main}"
+TAG="${1:-$(bash "$(dirname "$0")/resolve-main-binaries-tag.sh")}"
 DEST="packages/native-devtools-android/assets/trace-processor"
 TARBALL="trace-processor-wasm.tar.gz"
 CHECKSUM="${TARBALL}.sha256"
