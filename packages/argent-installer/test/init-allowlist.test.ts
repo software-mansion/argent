@@ -68,4 +68,27 @@ describe("configureAllowlist", () => {
     expect(adapter.addAllowlist).not.toHaveBeenCalled();
     expect(result.lines.join("\n")).toContain("skipped - would break the editor");
   });
+
+  it("reports a failed allowlist check and continues with the next editor", async () => {
+    const cursor = fakeAdapter({
+      name: "Cursor",
+      allowlistSkipReason: () => {
+        throw new Error("EISDIR");
+      },
+    });
+    const nextEditor = fakeAdapter();
+    const result = await configureAllowlist({
+      adapters: [cursor, nextEditor],
+      effectiveRoot: "/project",
+      scope: "global",
+      nonInteractive: true,
+    });
+
+    expect(cursor.addAllowlist).not.toHaveBeenCalled();
+    expect(nextEditor.addAllowlist).toHaveBeenCalledOnce();
+    expect(result.lines).toEqual([
+      expect.stringMatching(/Cursor: .*Error: EISDIR/),
+      expect.stringContaining("Editor"),
+    ]);
+  });
 });

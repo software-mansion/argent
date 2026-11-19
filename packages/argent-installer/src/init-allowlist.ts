@@ -63,12 +63,12 @@ export async function configureAllowlist(args: {
       lines.push(`${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config for this scope)")}`);
       continue;
     }
-    const skipReason = adapter.allowlistSkipReason?.(effectiveRoot, scope) ?? null;
-    if (skipReason) {
-      lines.push(`${pc.yellow("-")} ${adapter.name} ${pc.dim(`(skipped - ${skipReason})`)}`);
-      continue;
-    }
     try {
+      const skipReason = adapter.allowlistSkipReason?.(effectiveRoot, scope) ?? null;
+      if (skipReason) {
+        lines.push(`${pc.yellow("-")} ${adapter.name} ${pc.dim(`(skipped - ${skipReason})`)}`);
+        continue;
+      }
       adapter.addAllowlist!(effectiveRoot, scope);
       lines.push(`${pc.green("+")} ${adapter.name}`);
     } catch (err) {
