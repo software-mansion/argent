@@ -6,6 +6,7 @@ import { stripVTControlCharacters } from "node:util";
 import {
   classifyMcpEntry,
   findConfigured,
+  managedTargets,
   renderDoctorReport,
   resolveDoctorRoot,
   stripPackageBinDirs,
@@ -128,13 +129,29 @@ function writeArgentEntry(configPath: string): void {
 }
 
 describe("resolveDoctorRoot", () => {
+  const realHome = process.env.HOME;
+  afterEach(() => {
+    process.env.HOME = realHome;
+  });
+
   it("finds a config written to a parent directory with init's custom install directory", () => {
     const repo = path.join(projectRoot, "ws", "repo-a");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     fs.mkdirSync(path.join(repo, "src"));
     writeArgentEntry(path.join(projectRoot, "ws", ".mcp.json"));
     const homeDir = path.join(projectRoot, "home");
+    process.env.HOME = homeDir;
     expect(resolveDoctorRoot(path.join(repo, "src"), homeDir)).toBe(path.join(projectRoot, "ws"));
+  });
+
+  it("keeps the git root over a stale parent config when a global entry covers it", () => {
+    const homeDir = path.join(projectRoot, "home");
+    const app = path.join(homeDir, "Developer", "app");
+    fs.mkdirSync(path.join(app, ".git"), { recursive: true });
+    writeArgentEntry(path.join(homeDir, "Developer", ".mcp.json"));
+    writeArgentEntry(path.join(homeDir, ".cursor", "mcp.json"));
+    process.env.HOME = homeDir;
+    expect(resolveDoctorRoot(app, homeDir)).toBe(app);
   });
 
   it("keeps the git root when no parent has a config", () => {
@@ -155,6 +172,23 @@ describe("findConfigured", () => {
     writeArgentEntry(path.join(projectRoot, ".cursor", "mcp.json"));
     const cursor = findConfigured(projectRoot).filter((c) => c.adapter.name === "Cursor");
     expect(cursor.map((c) => c.scope)).toEqual(["global"]);
+  });
+});
+
+describe("managedTargets", () => {
+  const realHome = process.env.HOME;
+  afterEach(() => {
+    process.env.HOME = realHome;
+  });
+
+  it("checks rules only for project entries since init writes no global rules", () => {
+    const homeDir = path.join(projectRoot, "home");
+    const repo = path.join(projectRoot, "repo");
+    writeArgentEntry(path.join(homeDir, ".cursor", "mcp.json"));
+    writeArgentEntry(path.join(repo, ".cursor", "mcp.json"));
+    process.env.HOME = homeDir;
+    const { ruleDirs } = managedTargets({ projectRoot: repo, configured: findConfigured(repo) });
+    expect(ruleDirs).toEqual([path.join(repo, ".cursor", "rules")]);
   });
 });
 

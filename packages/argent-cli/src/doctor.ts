@@ -242,14 +242,14 @@ function listRuleFiles(rulesDir: string = RULES_DIR): string[] {
   }
 }
 
-function managedTargets(ctx: DoctorContext) {
+export function managedTargets(ctx: Pick<DoctorContext, "configured" | "projectRoot">) {
   const adaptersIn = (scope: "project" | "global") =>
     ctx.configured.filter((c) => c.scope === scope).map((c) => c.adapter);
   const local = getManagedContentTargets(adaptersIn("project"), ctx.projectRoot, "local");
   const global = getManagedContentTargets(adaptersIn("global"), ctx.projectRoot, "global");
   return {
     skillDirs: [...local.skillTargets, ...global.skillTargets].map((t) => t.targetPath),
-    ruleDirs: [...new Set([...local.ruleTargets, ...global.ruleTargets].map((t) => t.targetPath))],
+    ruleDirs: [...new Set(local.ruleTargets.map((t) => t.targetPath))],
   };
 }
 
@@ -378,6 +378,10 @@ function hasProjectConfig(dir: string): boolean {
   return findConfigured(dir).some((entry) => entry.scope === "project");
 }
 
+function hasAnyConfig(dir: string): boolean {
+  return findConfigured(dir).length > 0;
+}
+
 function ancestorsBelowHome(dir: string, homeDir: string): string[] {
   const ancestors: string[] = [];
   let current = path.dirname(dir);
@@ -390,7 +394,7 @@ function ancestorsBelowHome(dir: string, homeDir: string): string[] {
 
 export function resolveDoctorRoot(cwd: string, homeDir: string = homedir()): string {
   const projectRoot = resolveProjectRoot(cwd, homeDir);
-  if (projectRoot === path.resolve(homeDir) || hasProjectConfig(projectRoot)) return projectRoot;
+  if (projectRoot === path.resolve(homeDir) || hasAnyConfig(projectRoot)) return projectRoot;
   return (
     ancestorsBelowHome(projectRoot, path.resolve(homeDir)).find(hasProjectConfig) ?? projectRoot
   );
