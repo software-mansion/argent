@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { ReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -264,6 +265,32 @@ describe("prepareFileInputs — tar-upload kind", () => {
         { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
       )
     ).rejects.toThrow(/failed/i);
+  });
+
+  it("destroys the archive stream when fetch refuses the connection before reading it", async () => {
+    const appDir = path.join(tmpDir, "MyApp.app");
+    await fs.mkdir(appDir);
+    await fs.writeFile(path.join(appDir, "Info.plist"), "<plist/>");
+
+    let body: ReadStream | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        body = init.body as unknown as ReadStream;
+        return Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:9"));
+      })
+    );
+
+    await expect(
+      prepareFileInputs(
+        specs,
+        { appPath: appDir },
+        { includeContent: true, uploadEndpoint: { url: "http://127.0.0.1:9", token: "" } }
+      )
+    ).rejects.toThrow(/ECONNREFUSED/);
+
+    // The archive is deleted in `finally`; its stream must not keep the fd open.
+    expect(body?.destroyed).toBe(true);
   });
 
   it("skips upload and sends a path-only wrapper when the path is not local", async () => {

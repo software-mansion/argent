@@ -604,6 +604,10 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 
 `argent e2e list` skips the same subdirectories as `argent e2e run <dir> --recursive`: `__baselines__`, `node_modules` and dot-directories other than `.argent`, at any depth. Argent always reads the directory that you name, also when it is one of these directories.
 
+`argent e2e list` and `argent e2e run <dir>` skip a YAML file that is not an e2e test. Such a file has no top-level `steps` key, for example a `docker-compose.yaml`. Argent does not skip an empty file. Argent does not skip a file that has a YAML syntax error and holds `steps` or a top-level `version:` line. A directory run reports such a file as a failed e2e test. Argent does not skip a file with a newer `version`. `argent e2e run <name>` and `argent e2e run <path>.yaml` always run the file that you name.
+
+`argent e2e list` writes a warning on stderr for an empty file and for a file with a YAML syntax error, for example `warning: <path> is empty`. Stdout holds only the paths.
+
 When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes `warning: no .argent/e2e or .argent/flows directory in the current working directory` on stderr. When the directories hold no e2e test, `argent e2e list` writes `No e2e tests found in .argent/e2e or .argent/flows` on stderr. In both cases, stdout is empty and the exit code is 0. When one of the directories exists but Argent cannot read it, `argent e2e list` writes `Could not read e2e test directory: <dir>` on stderr and gives exit code 2. The list skips a subdirectory that Argent cannot read.
 
 `argent e2e list <dir>` prints paths relative to the current directory for a relative `<dir>`, and absolute paths for an absolute `<dir>`. `argent e2e run` accepts each printed path. Argent puts `./` in front of a printed path that starts with `-`, so that `argent e2e run` does not read the path as an option.
@@ -718,6 +722,12 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 | `name`       | The name that `argent e2e run <name>` accepts. Only for a file directly in `.argent/e2e` or `.argent/flows`                      |
 | `legacy`     | `true` for an e2e test in `.argent/flows`                                                                                        |
 | `shadowedBy` | The path of an earlier entry with the same name. `argent e2e run <name>` runs that entry instead. Only when such an entry exists |
+| `warning`    | The problem in the file, as one of the codes below. Only when the file is empty or has a YAML syntax error                       |
+
+| `warning` code | Meaning                                    |
+| -------------- | ------------------------------------------ |
+| `empty`        | The file is empty or holds only whitespace |
+| `syntax-error` | The file has a YAML syntax error           |
 
 ```json
 {
@@ -734,9 +744,9 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 }
 ```
 
-When Argent finds no e2e test, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
+When Argent finds no e2e test, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. The top-level `warning` field is not the `warning` field of an entry. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
 
-`argent e2e list <dir> --json` gives each entry only the `path` field. With `--json`, Argent writes each `<dir>` error as the JSON error object on stderr.
+`argent e2e list <dir> --json` gives each entry only the `path` field, and the `warning` field when it applies. With `--json`, Argent writes each `<dir>` error as the JSON error object on stderr.
 
 <a id="flows-over-a-link" />
 

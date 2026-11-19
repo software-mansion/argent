@@ -470,6 +470,55 @@ describe("describe full-hierarchy adapter", () => {
     expect(badge[0]!.frame.y).toBeCloseTo(270 / 800, 5);
   });
 
+  // A 0x0 view whose children overflow it (React Native `width: 0, height: 0`,
+  // the source view of Expo Router's zoom transition) sits at its child's
+  // origin. On the scroller's left or top edge it reads as fully outside the
+  // window, but it has no area to scroll out: its children are tested
+  // themselves.
+  it("keeps the children of a zero-area view on the scroll window's edge", () => {
+    const page = (x: number, identifier: string) => ({
+      className: "RCTView",
+      windowFrame: { x, y: 300, width: 0, height: 0 },
+      children: [
+        {
+          className: "RCTView",
+          identifier,
+          windowFrame: { x, y: 300, width: 300, height: 200 },
+          children: [],
+        },
+      ],
+    });
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            {
+              className: "RCTScrollView",
+              identifier: "pager",
+              windowFrame: { x: 0, y: 300, width: 400, height: 200 },
+              children: [
+                {
+                  className: "RCTScrollContentView",
+                  windowFrame: { x: 0, y: 300, width: 1200, height: 200 },
+                  // The first page at the window's left edge; the third one
+                  // past its right edge.
+                  children: [page(0, "first-page"), page(800, "third-page")],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = adaptFullHierarchyToDescribeResult(raw);
+
+    expect(findAll(tree, { identifier: "first-page" })).toHaveLength(1);
+    expect(findAll(tree, { identifier: "third-page" })).toHaveLength(0);
+  });
+
   // Nested scroll clips COMPOSE (intersect) rather than replace: a
   // content-sized UICollectionView straddles the outer RCTScrollView's fold.
   // Its own window frame must not re-admit cells the outer viewport has

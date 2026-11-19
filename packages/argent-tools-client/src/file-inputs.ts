@@ -333,6 +333,7 @@ async function uploadTar(
   signal?: AbortSignal
 ): Promise<string> {
   const { size } = await stat(tarPath);
+  const stream = createReadStream(tarPath);
   // `duplex: "half"` is required to stream a Node Readable request body via
   // undici's fetch, but it isn't in the DOM RequestInit type.
   const init: RequestInit & { duplex: "half" } = {
@@ -341,11 +342,19 @@ async function uploadTar(
       "content-type": ARCHIVE_CONTENT_TYPES[format],
       ...(endpoint.token ? { Authorization: `Bearer ${endpoint.token}` } : {}),
     },
-    body: createReadStream(tarPath) as unknown as BodyInit,
+    body: stream as unknown as BodyInit,
     duplex: "half",
     signal,
   };
-  const res = await fetch(`${endpoint.url}/upload`, init);
+  let res: Response;
+  try {
+    res = await fetch(`${endpoint.url}/upload`, init);
+  } catch (err) {
+    // A refused connection never reads the body; release its fd before the
+    // caller deletes the archive.
+    stream.destroy();
+    throw err;
+  }
   if (!res.ok) {
     let text = "";
     try {
