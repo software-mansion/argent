@@ -18,7 +18,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 ## Requirements
 
 - **macOS** with Xcode installed for iOS simulator work (`xcrun simctl`). On Linux `npm run dev` skips the iOS dylibs.
-- **Node.js 20.19+** (the lint toolchain's floor; the published package needs 20.12+)
+- **Node.js 22 (22.22.2+), 24 (24.15+) or 26+** (what the workspace dependencies accept; the published package needs 22.18+, excluding 23.0-23.7)
 - The [GitHub CLI](https://cli.github.com/) (`gh`), logged in with `gh auth login`, to download the prebuilt native binaries
 
 ---
@@ -97,7 +97,7 @@ This is an npm workspaces monorepo. All packages live under `packages/`:
 | `@argent/configuration-core`      | `packages/configuration-core`      | Feature flag registry, JSON storage and `isFlagEnabled`                                                                                         |
 | `@argent/update-core`             | `packages/update-core`             | npm release-age detection and install target resolution for `argent update`                                                                     |
 | `@argent/telemetry`               | `packages/telemetry`               | Opt-out telemetry client for the CLI, installer and tool-server                                                                                 |
-| `@argent/archive`                 | `packages/archive`                 | Shared tar.gz helpers for creating and extracting archives                                                                                      |
+| `@argent/archive`                 | `packages/archive`                 | Shared helpers for creating and extracting zstd or gzip compressed tar archives                                                                 |
 | `@argent/preview-window`          | `packages/preview-window`          | Electron host for the Argent Lens variant preview and selection UI                                                                              |
 | `@argent/ui`                      | `packages/ui`                      | Browser UI that streams a simulator and forwards taps and gestures to simulator-server                                                          |
 | `argent`                          | `packages/argent-alias`            | Alias package so `npx argent <command>` runs `@swmansion/argent` (outside the workspace)                                                        |

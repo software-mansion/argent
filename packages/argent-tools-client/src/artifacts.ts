@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 
-import { safeExtractTarGz } from "@argent/archive";
+import { ARCHIVE_CONTENT_TYPES, ARCHIVE_FORMATS, safeExtractArchive } from "@argent/archive";
 import { argentHomeDir, findProjectRoot, getConfigValueByKey } from "@argent/configuration-core";
 
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
@@ -78,7 +78,7 @@ export interface ArtifactHandle {
   /**
    * Present when the artifact is a directory bundle (e.g. an Instruments
    * `.trace`). Used in place locally; on a remote miss the download is a
-   * gzipped tar the client unpacks back into a directory.
+   * compressed tar the client unpacks back into a directory.
    */
   archive?: "tar.gz";
   /**
@@ -193,12 +193,13 @@ function configuredRecordingsDir(): string | null {
 }
 
 /**
- * Hard ceiling on a durable download, independent of the `size` a possibly
- * hostile tool-server announces: a durable file survives temp-cache GC, so an
- * over-declared body must not be able to fill the disk or client memory. Well
- * above any real recording (600 s cap at device-native h264).
+ * Hard ceiling on any artifact download, independent of the `size` a possibly
+ * hostile tool-server announces: a body must not be able to fill client memory
+ * or the disk. Also the fallback cap when a handle announces no usable size
+ * (directory bundles use `size: 0`). Well above any real recording (600 s cap
+ * at device-native h264).
  */
-const MAX_DURABLE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 
 /**
  * Read a response body into a Buffer, or null once `cap` bytes are exceeded —
@@ -381,7 +382,7 @@ async function resolveLocalFile(handle: ArtifactHandle): Promise<string | null> 
     const st = await stat(handle.hostPath);
     if (handle.archive) {
       // Directory bundle: size/mtime are meaningless for a dir, so existence as
-      // one is the whole check; a hit skips the tar.gz round-trip.
+      // one is the whole check; a hit skips the archive round-trip.
       return st.isDirectory() ? handle.hostPath : null;
     }
     if (!st.isFile()) return null;
@@ -396,7 +397,7 @@ async function resolveLocalFile(handle: ArtifactHandle): Promise<string | null> 
 }
 
 /**
- * Unpack a downloaded gzipped tar back into a directory under `dir`, returning
+ * Unpack a downloaded compressed tar back into a directory under `dir`, returning
  * the unpacked path. Null when extraction fails, so a bad bundle degrades to a
  * missing-file signal rather than throwing.
  */
@@ -409,7 +410,7 @@ async function downloadAndExtractArchive(
   try {
     await writeFile(tarball, data);
     // Slip-hardened: a `../` member must not write outside the cache.
-    return await safeExtractTarGz(tarball, dir, handle.filename);
+    return await safeExtractArchive(tarball, dir, handle.filename);
   } catch {
     return null;
   } finally {
@@ -481,7 +482,7 @@ export async function materializeArtifacts(
           // size. `size` is unvalidated wire JSON, and an absent/NaN one would
           // make the `readCapped` cap `NaN` and never trip, letting an unbounded
           // body buffer into memory — the exact DoS the cap exists to prevent.
-          if (!Number.isInteger(value.size) || value.size <= 0 || value.size > MAX_DURABLE_BYTES) {
+          if (!Number.isInteger(value.size) || value.size <= 0 || value.size > MAX_ARTIFACT_BYTES) {
             return null;
           }
           const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
@@ -512,11 +513,28 @@ export async function materializeArtifacts(
       }
       try {
         const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
-          headers: authHeaders,
+          headers: value.archive
+            ? {
+                ...authHeaders,
+                Accept: ARCHIVE_FORMATS.map((f) => ARCHIVE_CONTENT_TYPES[f]).join(", "),
+              }
+            : authHeaders,
           signal: ctx.signal,
         });
         if (!res.ok) return null;
-        const data = Buffer.from(await res.arrayBuffer());
+        // Bound the read before it is buffered, as the durable branch does: a
+        // compromised tool-server can answer with a body of any size. A
+        // directory bundle's `size` is the folder's stat entry, not the tar
+        // body's, so archives always get the hard ceiling — capping them at
+        // `size` cut real traces off mid-stream. Single files cap at the
+        // declared size. The length check below still enforces integrity for
+        // every non-archive handle with a known size.
+        const cap =
+          !value.archive && Number.isInteger(value.size) && value.size > 0
+            ? Math.min(value.size, MAX_ARTIFACT_BYTES)
+            : MAX_ARTIFACT_BYTES;
+        const data = await readCapped(res, cap);
+        if (!data) return null;
         await ensureDir();
         // Directory bundle: unpack the tar rather than writing it as a file.
         if (value.archive === "tar.gz") {
