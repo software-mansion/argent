@@ -115,7 +115,7 @@ The conditions stay until the agent changes them or removes them, also in later 
 - Android: the tool-server stops. After a crash of the tool-server, apps cannot connect until the next tool-server removes the conditions.
 - Chromium: the active tab closes outside Argent, or another DevTools client detaches from the page.
 
-On an Android emulator, Argent throttles through a proxy on the host. Apps that do not use the proxy of the system, and traffic that is not HTTP, keep their speed. Offline mode stays after the tool-server stops. Offline mode does not stop requests through `adb reverse`, and it cuts the connection to Metro at `10.0.2.2`. Argent does not set network conditions on a physical device. The [tools reference](/docs/reference/tools#network-conditions) gives the details.
+On an iOS simulator, the app does not use its HTTP cache while Argent shapes or inspects its requests, so offline mode also fails a request that the cache could answer. On an Android emulator, Argent throttles through a proxy on the host. Apps that do not use the proxy of the system, and traffic that is not HTTP, keep their speed. Offline mode stays after the tool-server stops. An Android TV emulator connects over Ethernet, so offline mode fails there. Offline mode does not stop requests through `adb reverse`, and it cuts the connection to Metro at `10.0.2.2`. Argent does not set network conditions on a physical device. The [tools reference](/docs/reference/tools#network-conditions) gives the details.
 
 ## Example instructions
 

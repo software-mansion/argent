@@ -42,11 +42,15 @@ interface TabsManagerDeps {
    * re-prime everything bound to the old page.
    */
   onActivated: () => Promise<void>;
+  /** Whether network conditions are set, so a new tab must wait for them before loading. */
+  networkThrottled: () => boolean;
 }
 
 const isHttpUrl = (url: string | undefined): url is string => /^https?:/i.test(url ?? "");
 
 const isBlank = (url: string) => url === "" || url === "about:blank";
+
+const TYPED_LOAD_TIMEOUT_MS = 120_000;
 
 export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   const { cdp, port } = deps;
@@ -160,8 +164,15 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
     }
   }
 
-  async function replaceLocation(url: string): Promise<void> {
-    await cdp.send("Runtime.evaluate", { expression: `location.replace(${JSON.stringify(url)})` });
+  /**
+   * Loads `url` as a typed address without waiting for the response, then
+   * drops the blank page the tab started on from its history.
+   */
+  function loadAsTyped(url: string): void {
+    cdp
+      .send("Page.navigate", { url, transitionType: "typed" }, TYPED_LOAD_TIMEOUT_MS)
+      .then(() => cdp.send("Page.resetNavigationHistory"))
+      .catch(() => {});
   }
 
   async function open(opts?: {
@@ -171,9 +182,7 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   }): Promise<TabInfo[]> {
     const requestedUrl = opts?.url;
     const activating = opts?.activate !== false;
-    // An active tab loads an http(s) url only after `onActivated` has applied the
-    // network conditions, replacing its blank page so history keeps one entry.
-    const deferLoad = activating && isHttpUrl(requestedUrl);
+    const deferLoad = activating && isHttpUrl(requestedUrl) && deps.networkThrottled();
     const url = deferLoad ? "about:blank" : (requestedUrl ?? "about:blank");
     const created = await withBrowserClient(async (browser) => {
       let out: { targetId?: string };
@@ -214,7 +223,7 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       tabToLabel.set(tabId, opts.label);
     }
     if (activating) await activate(created, await listTargets());
-    if (deferLoad) await replaceLocation(requestedUrl);
+    if (deferLoad) loadAsTyped(requestedUrl);
     const tabs = await list();
     return tabs.map((tab) =>
       tab.targetId === created && requestedUrl && isBlank(tab.url)
@@ -226,6 +235,10 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   async function close(ref?: string): Promise<TabInfo[]> {
     const targets = await listTargets();
     const targetId = ref ? resolveTargetId(ref, targets) : activeTargetId;
+    if (targetId === activeTargetId) {
+      const fallback = targets.find((t) => t.id !== targetId && t.webSocketDebuggerUrl);
+      if (fallback) await activate(fallback.id, targets);
+    }
     await withBrowserClient((browser) => browser.send("Target.closeTarget", { targetId }));
 
     const tabId = targetToTab.get(targetId);
@@ -238,13 +251,6 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       }
     }
 
-    // Falling back to another live page keeps the page-scoped tools working.
-    if (targetId === activeTargetId) {
-      const remaining = (await listTargets()).filter((t) => t.id !== targetId);
-      if (remaining.length > 0) {
-        await activate(remaining[0]!.id, remaining);
-      }
-    }
     return list();
   }
 

@@ -151,6 +151,75 @@ describe("native devtools network conditions", () => {
     await expect(api.setNetworkConditions(BUNDLE, SLOW)).rejects.toThrow(/timed out/);
   }, 10_000);
 
+  it("keeps the previous conditions for the next launch when the app refuses new ones", async () => {
+    const { api } = await setup((msg) =>
+      msg.payload.params?.latency === 900 ? { error: { message: "rejected" } } : { result: {} }
+    );
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    const refused = { ...SLOW, conditions: { ...SLOW_CONDITIONS, latency: 900 } };
+
+    await expect(api.setNetworkConditions(BUNDLE, refused)).rejects.toThrow("rejected");
+    const relaunched = await connectAgent();
+    agents.push(relaunched);
+
+    await vi.waitFor(() => expect(relaunched.received).toEqual([BYPASS_METRO, EMULATE_SLOW]));
+  });
+
+  it("does not apply a first throttle the app refused on the next launch", async () => {
+    const { api } = await setup((msg) =>
+      msg.payload.method === "Network.emulateNetworkConditions"
+        ? { error: { message: "rejected" } }
+        : { result: {} }
+    );
+
+    await expect(api.setNetworkConditions(BUNDLE, SLOW)).rejects.toThrow("rejected");
+    const relaunched = await connectAgent();
+    agents.push(relaunched);
+    api.activateNetworkInspection(BUNDLE);
+
+    await vi.waitFor(() => expect(relaunched.received).toEqual([ACTIVATE]));
+  });
+
+  it("keeps conditions a later call set while an earlier call was failing", async () => {
+    const { api } = await setup((msg) =>
+      msg.payload.params?.latency === 900 ? undefined : { result: {} }
+    );
+    const unanswered = { ...SLOW, conditions: { ...SLOW_CONDITIONS, latency: 900 } };
+
+    const first = api.setNetworkConditions(BUNDLE, unanswered);
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    await expect(first).rejects.toThrow(/timed out/);
+    const relaunched = await connectAgent();
+    agents.push(relaunched);
+
+    await vi.waitFor(() => expect(relaunched.received).toEqual([BYPASS_METRO, EMULATE_SLOW]));
+  }, 10_000);
+
+  it("logs when the app refuses the conditions re-sent on reconnect", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const { api } = await setup();
+      await api.setNetworkConditions(BUNDLE, SLOW);
+
+      const relaunched = await connectAgent((msg) =>
+        msg.payload.method === "Network.emulateNetworkConditions"
+          ? { error: { message: "latency must be >= 0" } }
+          : { result: {} }
+      );
+      agents.push(relaunched);
+
+      await vi.waitFor(() =>
+        expect(stderr).toHaveBeenCalledWith(
+          expect.stringContaining(
+            `could not re-apply network conditions to ${BUNDLE}: latency must be >= 0`
+          )
+        )
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
   it("re-sends the conditions after every network inspection activation", async () => {
     const { api, agent } = await setup();
     await api.setNetworkConditions(BUNDLE, SLOW);
