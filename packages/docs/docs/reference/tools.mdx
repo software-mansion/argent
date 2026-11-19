@@ -88,7 +88,7 @@ On an Android emulator:
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
-With the `macos-apps` flag on, `list-devices` shows each native Mac app that Argent started and that still runs, as a `macos` entry. The kind is `catalyst` for a Mac Catalyst app and `app` for other Mac apps. See [Mac apps](#mac-apps).
+With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started and that are still running. See [Mac app IDs and kinds](#start-and-restart-an-app).
 
 ## Inspecting the screen
 
@@ -168,10 +168,10 @@ Call `screenshot` or `describe` to read the screen again.
 On a Mac app, these tools read the app through the Argent library:
 
 - `native-describe-screen` reads the accessibility tree of the app, plus the views with an identifier that the tree does not contain. It does not take `skipClasses` or `skipClassPrefixes`.
-- `native-full-hierarchy`, `native-find-views` and `native-view-at-point` read the AppKit views of the app.
+- `native-full-hierarchy`, `native-find-views`, `native-view-at-point`, and `native-user-interactable-view-at-point` inspect AppKit views.
   - SwiftUI puts the identifier and the label of a control on an accessibility element, not on a view. Thus a `native-find-views` search by `identifier` or `label` does not find SwiftUI controls. `describe` shows them.
   - When a search by `identifier` or `label` finds no view, its result has a `note` that refers to `describe`.
-  - On a Mac Catalyst app, these tools fail. See [Mac Catalyst apps](#mac-catalyst-apps).
+  - For Mac Catalyst, use [`describe`](#mac-catalyst-apps) to inspect UIKit controls.
 - `native-network-logs` reads the requests that the app sends through `NSURLSession`. With `stop: true`, it fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`. The capture stops when the tool-server disconnects from the app.
 
 The [Mac apps](#mac-apps) section contains the details.
@@ -252,7 +252,7 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 
 ## Mac apps
 
-Use these tools for native AppKit, SwiftUI, react-native-macos, and Mac Catalyst apps on macOS 14.4 or later. See [Mac apps](/docs/features/mac-apps) for setup and supported workflows.
+Use these tools for native Mac apps, including [Mac Catalyst](#mac-catalyst-apps). See [Mac apps](/docs/features/mac-apps) for setup and supported workflows.
 
 The `macos-apps` [feature flag](/docs/reference/configuration#feature-flags) is on by default. When disabled, Mac apps disappear from `list-devices`, and tools reject Mac app IDs. The `file-panel` and `menu-bar` tools are available only on a macOS host with the flag enabled.
 
@@ -275,20 +275,22 @@ Argent returns a device ID such as `macos-app-com.example.notes`. Pass that ID a
 | `udid`                  | Device ID instead of a path. Reuses the last app path, or the newest matching build found by Spotlight. |
 | `force`                 | Restart the same build, including a copy started outside Argent. Never replaces a different build.      |
 
-The result contains `platform: "macos"`, `id`, `kind`, `bundleId`, `pid`, `appPath`, `sandboxed`, `logPath`, `args`, and `booted: true`. The `kind` is `catalyst` for a [Mac Catalyst app](#mac-catalyst-apps) and `app` for other Mac apps. A running app returns `alreadyRunning: true` without restarting. Check `appPath` to confirm which build runs and `logPath` for app output.
+The result contains `platform: "macos"`, `id`, `kind`, `bundleId`, `pid`, `appPath`, `sandboxed`, `logPath`, `args`, and `booted: true`. A running app returns `alreadyRunning: true` without restarting. Check `appPath` to confirm which build runs and `logPath` for app output.
+
+`boot-device`, `list-devices`, `launch-app`, and `restart-app` report `kind: "catalyst"` for Mac Catalyst and `kind: "app"` for other native Mac apps. The kind follows the last build Argent started for that bundle identifier and persists across tool-server restarts.
 
 A `note` reports conditions that need attention, such as no open window or arguments that differ from the request. Launch tools wait up to 10 seconds for a window. Use `force` to apply changed arguments to an already running app.
 
 | Tool                                                  | macOS behavior                                                                                      |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `list-devices`                                        | Lists running apps started by Argent, with `platform: "macos"` and `kind` `app` or `catalyst`.      |
+| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                     |
 | `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                           |
 | `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                 |
 | `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                         |
 | `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                         |
 | `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent. The app keeps running; network capture stops and its recorded requests are lost. |
 
-For `launch-app` and `restart-app`, `bundleId` must match the device. Both accept `launchArgs` and otherwise reuse the previous arguments. Their results include `kind`, `appPath`, and `args`.
+For `launch-app` and `restart-app`, `bundleId` must match the device. Both accept `launchArgs` and otherwise reuse the previous arguments. Both report `appPath` and `args`.
 
 `open-url` accepts `http`, `https`, and `file` URLs. Other schemes must appear in the app's `CFBundleURLTypes`.
 
@@ -323,14 +325,7 @@ If the app does not connect within 20 seconds, Argent stops it and includes rece
 
 Argent loads a library into the app at launch. Code signing must permit that library. Use a Debug build; the standard Xcode macOS App and react-native-macos templates work without changes.
 
-For a Mac Catalyst app, the signing of the Debug build decides what to do:
-
-| Debug build signing          | Result                                                                                                                                                                                                      |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sign to Run Locally (ad hoc) | Xcode turns off the hardened runtime for ad hoc signing. Argent starts the app without changes.                                                                                                             |
-| A development team           | The hardened runtime is on, which is the Mac Catalyst default. The first launch fails with a `codesign` command. Use an option from the next table, for example sign the Argent library with the same team. |
-
-Signing the Argent library needs no provisioning profile. A Mac Catalyst Release build has the hardened runtime, so use a Debug build.
+For a Mac Catalyst Debug build, Xcode's **Sign to Run Locally** setting normally works as is. Development-team signing enables the hardened runtime by default. If library validation blocks launch, use one of the options below. Signing the Argent library with your team needs no provisioning profile.
 
 For a Debug build with the hardened runtime, choose one option:
 
@@ -390,7 +385,7 @@ Coordinates use the app window, including its title bar, with the origin at the 
 | `keyboard`                              | Types Unicode text or sends keys and shortcuts, such as `command+a` or `shift+tab`.                                             |
 | `paste`                                 | Inserts text into the focused editable control. Leaves the clipboard unchanged and does not invoke app paste handlers.          |
 | `run-sequence`                          | Runs tap, scroll, drag, keyboard, paste, and await steps.                                                                       |
-| Native view tools                       | Require the device's `bundleId`. Their `x` and `y` use points, rather than fractions of the window. Refused on Mac Catalyst.    |
+| Native view tools                       | Require the device's `bundleId`. Their `x` and `y` use points, rather than fractions of the window.                             |
 | `native-network-logs`                   | Starts capturing `URLSession` requests on the first call. Startup requests can be missed. Each app restart begins a new record. |
 
 #### Screenshots and scrolling
@@ -530,39 +525,17 @@ The menu list stops at 2000 items or eight submenu levels. Check `truncated` and
 
 ### Mac Catalyst apps
 
-A Mac Catalyst app is an iPad app that you build for the Mac. Argent drives UIKit and SwiftUI apps with the Scale Interface to Match iPad or the Optimize Interface for Mac setting. Argent also drives React Native iOS code built for Mac Catalyst. Build the Mac Catalyst target without starting it. For a scheme named `Notes`:
+Use `describe` or `native-describe-screen` to inspect UIKit controls through the accessibility tree. The four [AppKit inspection tools](#native-devtools) return an unsupported-tool error on Mac Catalyst.
 
-```bash
-xcodebuild -scheme Notes -configuration Debug \
-  -destination 'platform=macOS,variant=Mac Catalyst' build
-```
+- **Windows.** `describe` and `screenshot` show the front window. Use the Window menu with [`menu-bar`](#menu-bar) to switch windows. Tap the target field before typing so it has focus.
+- **Text and alerts.** Typed text replaces an active input method composition. Tap fields if SwiftUI's Tab order differs from the visible order. Tap the alert button if Return has no default action or Escape leaves a UIKit text-field alert open.
+- **Toolbar menus.** With **Optimize Interface for Mac**, some UIKit toolbar menu buttons have no identifier. Select them by label.
+- **Drag and drop.** Pan and drag gestures work. UIKit drag and drop between views is unsupported.
+- **File dialogs.** [`file-panel`](#file-panel) works with the UIKit document picker and SwiftUI's `fileImporter` and `fileExporter`.
+- **Web views.** `describe` includes `WKWebView` content. Typing, paste, scrolling, and text selection work in it. `native-network-logs` captures the app's `URLSession` requests only. It does not capture `WKWebView` traffic.
+- **Password fields.** Focusing an empty password field can show the macOS Passwords AutoFill pop-up. Input still works.
 
-The app has the same `macos-app-<bundle id>` ID and `platform: "macos"` as other Mac apps, with `kind: "catalyst"`. AppKit apps, SwiftUI apps for macOS, and react-native-macos apps have `kind: "app"`. The kind comes from the build that Argent last started for the bundle identifier. The kind stays the same after a tool-server restart.
-
-`native-full-hierarchy`, `native-find-views` and `native-view-at-point` fail on a Mac Catalyst app. The agent gets an error that names the tool. For `native-find-views`, the error is `Tool 'native-find-views' is not supported on macos catalyst (a Mac Catalyst app's UIKit views are not in its AppKit view tree: use describe, which lists them with their identifiers and frames).` The tool-server sends this error with HTTP status `400` and only an `error` field. `native-describe-screen` works.
-
-Most other tools work as in other Mac apps. These tools work differently:
-
-| Tool                     | Mac Catalyst behavior                                                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `describe`, `screenshot` | Show the front window. To work in another window, choose it in the Window menu with [`menu-bar`](#menu-bar).                                     |
-| `keyboard`               | Types into the field that has keyboard focus, which can be in another window. When the app has more than one window, tap the target field first. |
-| `file-panel`             | Answers `UIDocumentPickerViewController` and the SwiftUI `fileImporter` and `fileExporter` dialogs.                                              |
-| `native-network-logs`    | Reads the `URLSession` requests of the app. A `WKWebView` sends its own requests, which Argent does not capture, as on iOS.                      |
-
-`describe` includes the content of a `WKWebView`. Typing, paste, scrolling and text selection work in it.
-
-| Area              | Limitation or workaround                                                                                                                                                 |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Drag and drop     | Drag and drop between UIKit drag and drop interactions fails with an error. Drags inside the app and pan gestures work.                                                  |
-| Input methods     | When a field has an input method composition (marked text), typed text replaces the composition. Argent does not commit it.                                              |
-| Alerts            | Return does nothing on an alert with no preferred action. Escape does nothing on a UIKit alert with a text field. UIKit behaves the same way for a user. Tap the button. |
-| Password fields   | When an empty password field gets focus, macOS can show its Passwords AutoFill popup on your screen. The popup does not block input.                                     |
-| SwiftUI Tab order | The Tab key can move focus in an order that differs from the order a user sees. Tap the target field instead.                                                            |
-| Toolbar menus     | With the Optimize Interface for Mac setting, a UIKit bar button item that has a menu shows in the toolbar without its identifier. Select it by its label.                |
-| React Native      | The Metro debugger and the React profiler tools do not support React Native apps on Mac Catalyst yet.                                                                    |
-
-An iPad or iPhone app that runs on the Mac without changes ("Designed for iPad") is not a Mac Catalyst app. `boot-device` refuses it, because macOS does not let Argent load its library into such an app. Build the Mac Catalyst target of the app, or test the app on an iOS simulator.
+If typing, paste, or scrolling reports success without changing the app, check that your Argent build includes the native library with Mac Catalyst input support.
 
 ### Additional limitations
 
@@ -576,7 +549,7 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 | Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                                                                                                                     |
 | Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                                                                                                                |
 | Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                                                                                                                     |
-| Keyboard layout           | Apps that inspect key codes receive US-layout codes regardless of your keyboard layout. A Mac Catalyst app receives the key codes of your current layout for typed characters.                                                                                                                                        |
+| Keyboard layout           | Mac Catalyst uses the current keyboard layout for the key codes of typed characters. Other Mac apps receive US-layout codes.                                                                                                                                                                                          |
 | SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                                                                                                        |
 | SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                                                                                                                   |
 | Protected windows         | Capture protection blocks screenshots, screenshot diffs, and e2e snapshots. Inspection and input still work.                                                                                                                                                                                                          |
