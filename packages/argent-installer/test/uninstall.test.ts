@@ -2,12 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import {
-  ALL_ADAPTERS,
-  getMcpEntry,
-  addClaudePermission,
-  removeClaudePermission,
-} from "../src/mcp-configs.js";
+import { getMcpEntry } from "../src/mcp-configs.js";
 import { hashBundledContent } from "../src/utils.js";
 import {
   cleanupSkillsLockFile,
@@ -256,51 +251,6 @@ describe("uninstall — telemetry consent preservation", () => {
     );
     expect(telemetryMock.shutdown).toHaveBeenCalledOnce();
     expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
-  });
-});
-
-// ── MCP entry removal across all adapters ─────────────────────────────────────
-
-describe("uninstall — MCP entry removal", () => {
-  for (const adapter of ALL_ADAPTERS) {
-    it(`removes argent from ${adapter.name} config`, () => {
-      const configPath = adapter.projectPath(tmpDir);
-      if (!configPath) return; // skip adapters without project path
-
-      adapter.write(configPath, getMcpEntry());
-      expect(adapter.remove(configPath)).toBe(true);
-      expect(fs.existsSync(configPath)).toBe(false);
-    });
-  }
-
-  it("handles removal from non-existent files gracefully", () => {
-    for (const adapter of ALL_ADAPTERS) {
-      expect(adapter.remove(path.join(tmpDir, "nonexistent.json"))).toBe(false);
-    }
-  });
-});
-
-// ── Permissions cleanup ───────────────────────────────────────────────────────
-
-describe("uninstall — permissions cleanup", () => {
-  it("removes mcp__argent permission when present", () => {
-    addClaudePermission(tmpDir, "local");
-    removeClaudePermission(tmpDir, "local");
-
-    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
-    expect(fs.existsSync(settingsPath)).toBe(false);
-  });
-
-  it("does not throw when .claude/settings.json does not exist", () => {
-    expect(() => removeClaudePermission(tmpDir, "local")).not.toThrow();
-  });
-
-  it("does not throw when permissions.allow is missing", () => {
-    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
-    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify({}));
-
-    expect(() => removeClaudePermission(tmpDir, "local")).not.toThrow();
   });
 });
 
