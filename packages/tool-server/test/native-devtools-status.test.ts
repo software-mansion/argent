@@ -124,6 +124,13 @@ describe("native-devtools-status tool", () => {
     expect(nativeDevtoolsStatusTool.hideFromMcp).toBe(true);
   });
 
+  // Agents run the same query with native-view-at-point and hitTest: true; the
+  // SDK still calls the old tool directly.
+  it("hides native-user-interactable-view-at-point from MCP, and keeps native-view-at-point visible", () => {
+    expect(nativeUserInteractableViewAtPointTool.hideFromMcp).toBe(true);
+    expect(nativeViewAtPointTool.hideFromMcp).toBeUndefined();
+  });
+
   it("reports a running uninjected app as needing restart", async () => {
     const { api, ensureEnvReady } = makeNativeApi({ appRunning: true, connected: false });
 

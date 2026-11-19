@@ -64,9 +64,8 @@ export function isInjectableBundleId(bundleId: string): boolean {
  */
 export const NON_INJECTABLE_NATIVE_WARNING =
   "Do not fall back to the native-devtools feature tools (native-find-views, " +
-  "native-full-hierarchy, native-network-logs, native-view-at-point, " +
-  "native-user-interactable-view-at-point): they run the same injection precheck and fail " +
-  "with the same non-injectable error.";
+  "native-full-hierarchy, native-network-logs, native-view-at-point): they run the same " +
+  "injection precheck and fail with the same non-injectable error.";
 
 /**
  * Full recovery guidance for surfaces reached BEFORE `describe` has been tried
