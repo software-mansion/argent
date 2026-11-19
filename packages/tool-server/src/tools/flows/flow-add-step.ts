@@ -29,6 +29,7 @@ import {
   describeSelector,
   foldStepFromArgs,
   isLinkedRecorderCall,
+  isVersion1,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
@@ -61,7 +62,7 @@ import {
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
-import { resolveDevice } from "../../utils/device-info";
+import { isIosSimulator, resolveDevice } from "../../utils/device-info";
 import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import {
@@ -1003,6 +1004,16 @@ export function directiveCommandHint(command: string): string | undefined {
 const RUN_TARGET_COMMAND = "e2e-execute";
 
 /**
+ * Whether a nested `e2e-execute` ran on an iOS simulator, the one target where
+ * the e2e file version picks the runner. Read from the run's `device`, which is
+ * empty for a run without a device and absent from a prerequisite notice.
+ */
+function ranOnIosSimulator(toolResult: unknown): boolean {
+  const device = (toolResult as { device?: unknown } | null)?.device;
+  return typeof device === "string" && device !== "" && isIosSimulator(resolveDevice(device));
+}
+
+/**
  * Rewrite a nested `flow-execute` target from `e2e_test_path` to the equivalent
  * `name`, in place — or reject the call before anything runs.
  *
@@ -1218,11 +1229,16 @@ async function rewriteSiblingFlowPath(
  * `project_root`. Without a link, a replay reads that flow on this host. Over a
  * link, a replay reads it from the files the client sends with the call, and
  * only under the roots that the client sends files from.
+ *
+ * `ranOnIosSimulator` says where the live run went. There, a version 1 e2e
+ * test runs on the version 1 runner, but a `run:` step replays it at the
+ * version of the recording, so the step keeps a warning.
  */
 async function captureRunTarget(
   session: RecordingSession,
   args: Record<string, unknown>,
-  project: ProjectAccess
+  project: ProjectAccess,
+  ranOnIosSimulator: boolean
 ): Promise<{ flow?: string; warning?: string }> {
   const name = typeof args.name === "string" ? args.name : undefined;
   if (name === undefined) {
@@ -1304,7 +1320,7 @@ async function captureRunTarget(
         `no ${name}.yaml beside the recording or in the project's other e2e test directory`
       );
     }
-    parseFlow(text);
+    const target = parseFlow(text);
     // The sibling validated above is the file the runner will replay — but the
     // live sub-invoke that just ran resolved `name` through getFlowPath, the
     // as-written flows dir under the caller's project_root. When the recording
@@ -1330,6 +1346,16 @@ async function captureRunTarget(
           `run: ${name} step would replay a different e2e test than the one that just ran`,
       };
     }
+    const versionWarning =
+      ranOnIosSimulator && isVersion1(target) && !isVersion1(session.flow)
+        ? {
+            warning:
+              `"${name}" is an old e2e test without \`version: 2\`. It ran on the view ` +
+              `hierarchy, but the recorded \`run:\` step replays it on the accessibility tree, ` +
+              `where its selectors can miss. Set \`version: 2\` in ${name}.yaml, replay it and ` +
+              `fix each selector that fails`,
+          }
+        : {};
     // A fragment found only in the project's other e2e test directory is
     // recorded by its path from the recording, not by the bare name the
     // runner's fallback also finds: a runner without that fallback resolves
@@ -1337,9 +1363,9 @@ async function captureRunTarget(
     // silently take its place.
     if (path.resolve(sibling.anchorDir) !== path.resolve(flowsDir)) {
       const dir = path.relative(flowsDir, sibling.anchorDir).split(path.sep).join("/");
-      return { flow: `${dir}/${name}.yaml` };
+      return { flow: `${dir}/${name}.yaml`, ...versionWarning };
     }
-    return { flow: `${name}.yaml` };
+    return { flow: `${name}.yaml`, ...versionWarning };
   } catch (err) {
     return {
       warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw e2e-execute step`,
@@ -1685,7 +1711,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // `run:` composition directive rather than a raw, non-portable tool call.
       const runTarget =
         command === RUN_TARGET_COMMAND && params.delayMs === undefined
-          ? await captureRunTarget(session, args, project)
+          ? await captureRunTarget(session, args, project, ranOnIosSimulator(toolResult))
           : undefined;
 
       // A recorded `restart-app` is captured as the portable `launch` directive
@@ -1768,6 +1794,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = foldStep;
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
+        warning = runTarget.warning;
       } else {
         warning = waitWarning?.warning ?? runTarget?.warning;
         // The step ran live with the full args (incl. the device id), but the

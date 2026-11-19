@@ -74,6 +74,7 @@ On an iOS simulator, local or remote, the version sets how Argent runs the e2e t
 
 - On other platforms and on a physical iPhone, the version has no effect.
 - A `run:` fragment runs at the version of the e2e test that runs it. An e2e test that a `tool: e2e-execute` step runs uses its own version.
+- When you record `e2e-execute` of a version 1 e2e test on an iOS simulator, the recorder writes a `run:` step. That step replays the e2e test at version 2. The message of `e2e-add-step` warns about this difference.
 - A selector from `describe` can miss in a version 1 e2e test. To change a version 1 e2e test, set `version: 2`, replay the e2e test and replace each selector that fails.
 
 An e2e test has one of two shapes:

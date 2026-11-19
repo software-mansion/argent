@@ -92,7 +92,14 @@ vi.mock("../../src/tools/flows/flow-macos-tree", async (importOriginal) => ({
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
-import { serializeFlow, type FlowFile, type FlowSelector } from "../../src/tools/flows/flow-utils";
+import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
+import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
+import {
+  __resetRecordingsForTesting,
+  serializeFlow,
+  type FlowFile,
+  type FlowSelector,
+} from "../../src/tools/flows/flow-utils";
 
 const LOCAL = "00000000-0000-0000-0000-0000000000ab";
 const REMOTE = `remote:${LOCAL}`;
@@ -398,6 +405,42 @@ describe("a file run by another", () => {
     expect(statuses(await run(device(), LOCAL, "old-flow"))).toEqual(["tool:pass", "assert:pass"]);
     expect(runners).toEqual(["version-1", "current", "current", "version-1"]);
     expect(sources).toEqual(["vh", "ax", "ax", "vh"]);
+  });
+});
+
+// The recorder saves a live `e2e-execute` of another e2e test as a `run:` step,
+// which replays at the recording's version 2. On an iOS simulator the live run
+// of an old e2e test used the version 1 runner, so the step says so.
+describe("recording an e2e-execute of another e2e test", () => {
+  const OLD_TEST = "is an old e2e test without `version: 2`";
+
+  it.each([
+    ["warns for an old e2e test on a simulator", undefined, LOCAL, true],
+    ["does not warn for a version 2 e2e test on a simulator", 2, LOCAL, false],
+    ["does not warn for an old e2e test on Android", undefined, ANDROID, false],
+  ])("records `run:` and %s", async (_label, version, deviceId, warns) => {
+    __resetRecordingsForTesting();
+    await writeFlow("other", version, [READY]);
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+    const result = await createFlowAddStepTool(device().registry).execute(
+      {},
+      {
+        name: "rec",
+        project_root: root,
+        command: "e2e-execute",
+        args: JSON.stringify({ name: "other", project_root: root, device: deviceId }),
+      },
+      { signal: new AbortController().signal } as never
+    );
+
+    expect(result.recorded).toBe("1. run: ../flows/other.yaml");
+    expect(statuses(result.toolResult as FlowRunResult)).toEqual(["assert:pass"]);
+    if (warns) {
+      expect(result.message).toContain(`"other" ${OLD_TEST}`);
+      expect(result.message).toContain("Set `version: 2` in other.yaml");
+    } else {
+      expect(result.message).toBe('Step added to "rec" e2e test');
+    }
   });
 });
 
