@@ -1,0 +1,133 @@
+---
+sidebar_position: 10
+sidebar_label: Mac apps
+title: Mac apps
+sidebar_custom_props:
+  icon: monitor
+---
+
+Argent lets your agent test native Mac apps built with AppKit, SwiftUI, or react-native-macos. The agent reads the interface, clicks, types, and takes screenshots while you continue to use your Mac.
+
+**The app runs in the background, and your pointer stays under your control.** Argent requires no Accessibility or Screen Recording permission.
+
+## Start your app
+
+You need macOS 14.4 or later and a built `.app` bundle. Use a Debug build of your own app. Argent supports apps with or without the App Sandbox.
+
+1. Build your app without launching it, for example with `xcodebuild build`.
+2. Give your agent the path to the `.app` bundle and ask it to start the app.
+3. Ask the agent to perform a task:
+
+   > Open the Preferences window, turn on dark mode, and take a screenshot.
+
+Argent must launch the app itself. It cannot control a copy started with Xcode Run or `react-native run-macos`. Save your work and quit that copy first.
+
+For react-native-macos Debug builds, start Metro before the agent launches the app. After code changes, rebuild the app and ask the agent to restart it.
+
+Mac app support is on by default. If you previously disabled it, enable it in the [feature flag settings](/docs/reference/configuration#feature-flags).
+
+## Work with the app in the background
+
+Argent loads a library into your app when it starts. The library lets the agent control the app without taking over your desktop.
+
+The agent can work when other windows cover the app or when the app is on another Space. Screenshots capture the app window. When the agent disconnects, the app continues to run.
+
+Context menus and pop-up menus can temporarily bring the app window to the front. Clicking elsewhere can close a menu before the agent selects an item.
+
+## What the agent can do
+
+- **Inspect the interface:** read controls, labels, and values, and take screenshots.
+- **Interact:** click, double-click, right-click, drag, scroll, type text, and use keyboard shortcuts.
+- **Use menus:** choose commands such as File > Export while the app stays in the background.
+- **Open and save files:** answer file dialogs with a path.
+- **Inspect network traffic:** read requests made through `URLSession`.
+- **Profile performance:** find CPU hotspots, UI hangs, and memory leaks. In react-native-macos apps, you can also find slow React renders. See [Profile your app](#profile-your-app).
+- **Test workflows:** record and replay [e2e tests](/docs/features/e2e), including screenshot comparisons.
+
+Text input supports accented characters and emoji. Argent disables automatic text correction so the app receives the text the agent types.
+
+### Open and save files by path
+
+The agent cannot browse the system file list in an open or save dialog. Give the agent a path instead:
+
+> Export this document to `~/Desktop/report.pdf` using File > Export.
+
+The agent can also change app-specific options in a file dialog, such as the export format, when those controls are visible.
+
+:::caution Saving can replace an existing file
+
+When the agent answers a save dialog, the app can overwrite the destination without a confirmation prompt. Use a new path for files you need to keep.
+
+:::
+
+### Record repeatable tests
+
+Ask the agent to record a workflow and check its result:
+
+> Record an e2e test that creates a note and checks its title in the list.
+
+Start your intended build through Argent before the first test. Tests restart the app by bundle identifier and reuse the build Argent last started for that identifier.
+
+Stable identifiers help tests find controls after layout changes. See the [identifier examples](/docs/reference/tools#describe-on-a-mac-app) and [macOS test reference](/docs/reference/e2e-yaml#launch-a-mac-app).
+
+## Profile your app
+
+Start the app through Argent and ask your agent to profile the interaction you want to investigate. Mac apps, including react-native-macos apps, use Instruments for native profiling and require a full Xcode installation. Use a build signed for development, such as a Debug build from Xcode. Development-signed Release builds also work. The hardened runtime and App Sandbox are supported.
+
+Instruments attaches to the running app by default. Keep the app open until the agent stops the recording. If the app quits, crashes, or restarts during capture, record the interaction again because the trace may be incomplete. Allow about 15 to 25 seconds for a short recording to save and export.
+
+The default template checks for leaks about every 11 seconds. Each check can pause the app for several seconds. The report shows how much of a recorded hang overlapped a pause when that timing is available. To investigate the hang, ask the agent to repeat the recording without leak checks.
+
+Starting a leak recording can freeze a Mac app that uses WebKit, such as an app with an embedded web view. With malloc stack logging off, Argent blocks the default recording if it detects this risk or cannot complete the check. Ask the agent to record CPU and hangs without restarting or checking for leaks. For a leak recording, ask the agent to restart the app with malloc stack logging. Save anything you need from the current session before the restart.
+
+See the [profiling guide](/docs/features/profiling#limits) for leak recording guidance and the [Mac profiling tool reference](/docs/reference/tools#profiling-a-mac-app) for signing and recording options.
+
+### Profile a react-native-macos app
+
+Use a Debug build of react-native-macos 0.76 or later that runs Hermes and loads JavaScript from Metro.
+Argent can profile the Mac app even when it shares Metro with an iOS simulator running the same app.
+
+Ask the agent to record a [React profile](/docs/features/profiling) to find slow renders. The agent can
+record a native profile at the same time to see whether slow React commits coincide with UI hangs.
+
+See the [React profiler tool reference](/docs/reference/tools#react-profiler-on-react-native-macos) for setup and recovery.
+
+<a id="several-builds-at-the-same-time" />
+
+## Test several builds at once
+
+Argent treats each bundle identifier as one device and runs one build per identifier. Different apps can run at the same time.
+
+To test separate git worktrees in parallel, give each build a unique bundle identifier. See [Run builds from separate worktrees](/docs/reference/tools#run-builds-from-separate-worktrees).
+
+<a id="the-hardened-runtime" />
+
+## Resolve signing restrictions
+
+Some builds use the hardened runtime, which can prevent Argent from loading its library. If launch fails, follow the [Debug build signing instructions](/docs/reference/tools#configure-code-signing).
+
+Most distributed or notarized apps do not allow Argent to control them. Use your development build. Keep signing changes limited to builds used for testing.
+
+## Troubleshooting
+
+| Problem                                            | What to do                                                                                                                                       |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The app is missing from the device list            | Ask the agent to start the `.app` bundle. The list shows running apps started by Argent.                                                         |
+| A copy is already running                          | Save your work and quit that copy. To run another build in parallel, give it a different bundle identifier.                                      |
+| The app has no window, or input has no effect      | Open a standard window. Restore a minimized window through the app's Window menu.                                                                |
+| A restart stops at a save prompt                   | Ask the agent to answer the prompt, then retry the restart.                                                                                      |
+| The profiler refuses the app                       | Try an Xcode build signed for development. See the [signing requirements](/docs/reference/tools#profiling-a-mac-app).                            |
+| The React profiler cannot find the app on Metro    | Check that the Debug build is running and has loaded its JavaScript. If Metro uses a different port from 8081, tell the agent which port to use. |
+| A control is missing                               | Scroll it into view. If the control still has no useful label, add a stable accessibility identifier.                                            |
+| The tree reports that the Mac is locked            | Unlock the Mac and retry.                                                                                                                        |
+| A tool times out while the debugger pauses the app | Resume the app in the debugger and retry.                                                                                                        |
+
+## Limits
+
+- **App types:** Apple apps and Mac Catalyst apps are unsupported. Test Catalyst apps on an iOS simulator. Use [Chromium support](/docs/fundamentals/supported-platforms#desktop-and-web-targets) for Electron apps and browsers.
+- **Windows:** the app needs a standard window. Apps with only a menu bar icon, panels, or borderless windows are unsupported.
+- **System dialogs:** the agent cannot control macOS permission prompts or content shown by another process, such as share sheets.
+- **Input:** hover, pinch, and rotate gestures are unavailable. Drag and drop works only within the app.
+- **Developer tools:** screen recording and the JavaScript debugger tools are unavailable.
+
+See the [Mac app tools reference](/docs/reference/tools#mac-apps) for tool parameters and additional limitations.

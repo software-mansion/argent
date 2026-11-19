@@ -16,17 +16,23 @@ import {
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
+import { readXctraceSessionMetadata } from "../../../utils/ios-profiler/session-metadata";
 import {
   isCaptureInFlight,
   inFlightGuardMessage,
 } from "../../../utils/profiler-shared/capture-guard";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
+import {
+  parseRenderSummary,
+  formatRenderTime,
+  type RenderSummary,
+} from "../../../utils/react-profiler/render-summary";
 
 // session_id is interpolated into on-disk file paths, so restrict it to a token
 // that cannot traverse out of the debug dir.
@@ -216,12 +222,14 @@ async function loadReactSession(
   let deviceName: string | null = null;
   let projectRoot: string | null = null;
   let commitCount = 0;
+  let renderSummary: RenderSummary | null = null;
   let sampleInfo = "not available";
 
   if (hasCommits) {
     try {
       const onDisk = await readCommitTree(commitsPath);
-      commitCount = onDisk.commits.length;
+      // The file holds one entry per fiber, not per commit.
+      commitCount = new Set(onDisk.commits.map((c) => c.commitIndex)).size;
       if (onDisk.meta) {
         detectedArchitecture = onDisk.meta.detectedArchitecture ?? null;
         anyCompilerOptimized = onDisk.meta.anyCompilerOptimized ?? null;
@@ -230,6 +238,7 @@ async function loadReactSession(
         appName = onDisk.meta.appName ?? null;
         deviceName = onDisk.meta.deviceName ?? null;
         projectRoot = onDisk.meta.projectRoot ?? null;
+        renderSummary = parseRenderSummary(onDisk.meta.renderSummary);
       }
     } catch {
       // non-fatal — file may be corrupted
@@ -256,6 +265,7 @@ async function loadReactSession(
     anyCompilerOptimized,
     hotCommitIndices,
     totalReactCommits,
+    loadedFromDisk: true,
   };
 
   cacheProfilerPaths(port, sessionPaths, deviceId);
@@ -269,6 +279,10 @@ async function loadReactSession(
     `- CPU profile: ${sampleInfo}`,
     `- Commits persisted (hot ±1 margin, ≥16ms): ${commitCount}`,
     `- Total React commits: ${totalReactCommits ?? "unknown"}`,
+    // Older sessions lack the summary; say so here, before render_counts does.
+    renderSummary
+      ? `- React render time (all commits): ${formatRenderTime(renderSummary)}`
+      : `- Render counts over all commits: not available for this session`,
     `- Architecture: ${detectedArchitecture ?? "unknown"}`,
     "",
     "Query tools (`profiler-cpu-query`, `profiler-commit-query`) are now ready to use against this data.",
@@ -388,7 +402,15 @@ async function loadNativeSession(
     );
   }
 
-  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
+  // A Mac app session's own fields, saved by native-profiler-stop: without them a
+  // reloaded short recording reads "All clear" and its hangs lose the suspended part.
+  const metadata = await readXctraceSessionMetadata(
+    path.join(debugDir, `native-profiler-${sessionId}.trace`)
+  );
+  const appSuspensions = metadata?.appSuspensions ?? null;
+  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files, {
+    appSuspensions,
+  });
 
   // raw_*.xml carry no start time, so the frozen anchor is null and the combined
   // report reports a missing native anchor rather than mis-anchoring to residue.
@@ -406,9 +428,13 @@ async function loadNativeSession(
   // Clear every per-capture field an earlier live capture left behind, or analyze
   // attributes them to the loaded trace: mislabeled capture mode, samples dropped
   // by a stale CPU filter PID, a stale-trace note, and the report .md written over
-  // the old trace's.
+  // the old trace's. A Mac app session's own fields come from its metadata file.
   api.mallocStackLogging = null;
   api.cpuFilterPid = null;
+  api.appEndedDuringCapture = metadata?.appEndedDuringCapture ?? false;
+  api.exportSkipReason = null;
+  api.recordedMs = metadata?.recordedMs ?? null;
+  api.appSuspensions = appSuspensions;
   api.wallClockStartMs = null;
   api.traceFile = null;
 
@@ -481,7 +507,7 @@ Use when you need to revisit past session data without capturing a new recording
 Modes:
 - list: Show all available profiling sessions in the project's debug directory.
 - load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
-- load_native: Load a native profiler session (xctrace XML on iOS, .pftrace on Android). Requires session_id.
+- load_native: Restore native trace data (xctrace XML on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, .pftrace on Android). Requires session_id.
 Loading replaces the session in memory for this device_id (and Metro port, for React): the one the query tools and react-profiler-analyze read. The replaced session stays on disk; load it again by its session_id.
 Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or the session's trace files are missing from disk.`,
@@ -494,7 +520,7 @@ Fails if the session_id is not found or the session's trace files are missing fr
   },
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  capability: REACT_PROFILER_TOOL_CAPABILITY,
   // load_native re-parses the whole export, which can outlast the 30s MCP fetch
   // timeout; an aborted call is replayed, not cancelled.
   longRunning: true,

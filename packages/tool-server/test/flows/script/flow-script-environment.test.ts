@@ -268,7 +268,8 @@ describe("flow script executor — execArgv", () => {
       expect(execArgv[0]).toBe("--max-old-space-size=512");
       expect(execArgv[1]).toBe("--import");
       expect(execArgv[2]).toMatch(/^file:\/\/.*flow-script-runner\.mjs$/);
-      expect(execArgv).toHaveLength(3);
+      expect(execArgv[3]).toBe("--disable-warning=MODULE_TYPELESS_PACKAGE_JSON");
+      expect(execArgv).toHaveLength(4);
     } finally {
       process.execArgv = before;
     }

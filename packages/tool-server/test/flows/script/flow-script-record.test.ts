@@ -139,6 +139,21 @@ describe("recording a script step", () => {
     expect(await steps("checkout")).toEqual([{ kind: "script", path: "../../scripts/seed.mjs" }]);
   });
 
+  it("records a plain .js script under the extension it was given", async () => {
+    await write(
+      "scripts/seed.js",
+      `const os = require("node:os");\noutput.kind = typeof os.platform();`
+    );
+    await start("plainjs");
+
+    const result = await addScript("plainjs", "../../scripts/seed.js");
+
+    expect(result.status).toBe("pass");
+    expect(result.outputJson).toBe('{"kind":"string"}');
+    expect(result.recorded).toBe("1. script: ../../scripts/seed.js");
+    expect(await steps("plainjs")).toEqual([{ kind: "script", path: "../../scripts/seed.js" }]);
+  });
+
   it("does not add output details to the success message", async () => {
     await write("scripts/seed.mjs", `output.user = { id: "u_1" };`);
     await start("checkout");
@@ -710,7 +725,7 @@ describe("the paths flow-add-script accepts", () => {
     ["an absolute path", "/tmp/seed.mjs", 'path: "/tmp/seed.mjs"'],
     ["a drive-relative prefix", "C:seed.mjs", 'path: "C:seed.mjs"'],
     ["an uppercase extension", "scripts/SEED.MJS", 'path: "scripts/SEED.MJS"'],
-    ["a wrong extension", "scripts/seed.js", 'path: "scripts/seed.js"'],
+    ["a wrong extension", "scripts/seed.cjs", 'path: "scripts/seed.cjs"'],
     ["a basename outside the charset", "scripts/seed order.mjs", 'path: "scripts/seed order.mjs"'],
     ["an empty path", "", 'path: ""'],
   ];

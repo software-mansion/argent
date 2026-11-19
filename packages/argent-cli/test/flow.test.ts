@@ -35,6 +35,17 @@ vi.mock("@argent/tools-client", async (importOriginal) => ({
   materializeArtifacts: materializeArtifactsMock,
 }));
 
+// The help lists `macos` from this flag, the host and the link, and reads the
+// link only with the flag on, off macOS. Off here, so no test depends on the
+// host or on the developer's flags files: test/e2e-help-platform.test.ts covers
+// that line. Every other flag reads as it does in production.
+vi.mock("@argent/configuration-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/configuration-core")>();
+  const isFeatureEnabled: typeof actual.isFeatureEnabled = (name, ...rest) =>
+    name === "macos-apps" ? false : actual.isFeatureEnabled(name, ...rest);
+  return { ...actual, isFeatureEnabled };
+});
+
 interface StepFixture {
   index: number;
   kind: string;
@@ -132,6 +143,20 @@ function report(overrides: Record<string, unknown> = {}): Record<string, unknown
     steps,
     ...overrides,
   };
+}
+
+const SKIPPED_DIRS = ["__baselines__", ".cache", "node_modules"];
+
+/** Writes top.yaml and suite/nested.yaml, plus a sneaky.yaml in each skipped folder at both levels. */
+async function writeSkippedDirsTree(root: string): Promise<void> {
+  for (const dir of SKIPPED_DIRS) {
+    for (const parent of [root, path.join(root, "suite")]) {
+      await fsp.mkdir(path.join(parent, dir), { recursive: true });
+      await fsp.writeFile(path.join(parent, dir, "sneaky.yaml"), "steps: []\n");
+    }
+  }
+  await fsp.writeFile(path.join(root, "top.yaml"), "steps: []\n");
+  await fsp.writeFile(path.join(root, "suite", "nested.yaml"), "steps: []\n");
 }
 
 describe("parseRunArgs", () => {
@@ -1250,10 +1275,13 @@ describe("argent e2e run", () => {
     const listRoot = path.join(tempRoot, "list-nested-project");
     const flowsDir = path.join(listRoot, ".argent", "e2e");
     await fsp.mkdir(path.join(flowsDir, "suite", "deep"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, "x"));
     await Promise.all([
       fsp.writeFile(path.join(flowsDir, "top.yaml"), "steps: []\n"),
       fsp.writeFile(path.join(flowsDir, "suite", "checkout.yaml"), "steps: []\n"),
       fsp.writeFile(path.join(flowsDir, "suite", "deep", "login.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "x-y.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "x", "z.yaml"), "steps: []\n"),
     ]);
     const previousCwd = process.cwd();
     try {
@@ -1266,6 +1294,8 @@ describe("argent e2e run", () => {
           ".argent/e2e/suite/checkout.yaml",
           ".argent/e2e/suite/deep/login.yaml",
           ".argent/e2e/top.yaml",
+          ".argent/e2e/x-y.yaml",
+          ".argent/e2e/x/z.yaml",
         ].join("\n")
       );
 
@@ -1307,6 +1337,43 @@ describe("argent e2e run", () => {
     expect(logs.join("\n")).toBe(
       [".argent/e2e/checkout.yaml", ".argent/e2e/suite/login.yaml"].join("\n")
     );
+  });
+
+  it("never lists the inside of __baselines__, a dot-directory or node_modules, at any depth", async () => {
+    const listRoot = path.join(tempRoot, "list-skipped-project");
+    await writeSkippedDirsTree(path.join(listRoot, ".argent", "e2e"));
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toBe(
+      [".argent/e2e/suite/nested.yaml", ".argent/e2e/top.yaml"].join("\n")
+    );
+  });
+
+  it.each([
+    { command: "run <dir>", flags: [], count: 1 },
+    { command: "run <dir> --recursive", flags: ["--recursive"], count: 5 },
+  ])("lists the same tests that `$command` runs", async ({ flags, count }) => {
+    const root = path.join(tempRoot, "list-run-agreement");
+    await writeSkippedDirsTree(root);
+    await writeSkippedDirsTree(path.join(root, ".argent", "e2e"));
+    await fsp.mkdir(path.join(root, "suite", "deep"), { recursive: true });
+    await fsp.writeFile(path.join(root, "suite", "deep", "deeper.yaml"), "steps: []\n");
+
+    await flow(["list", root, ...flags], opts);
+    const listed = logs.join("\n").split("\n");
+    await expect(flow(["run", root, ...flags], opts)).rejects.toThrow("process.exit:0");
+
+    const ran = toolsClientMock.callTool.mock.calls.map(
+      (c) => (c[1] as { e2e_test_path: string }).e2e_test_path
+    );
+    expect(ran).toHaveLength(count);
+    expect(listed).toEqual(ran);
   });
 
   it("omits .yaml files whose names `flow run` would reject — and `run` does reject them", async () => {
@@ -1416,7 +1483,8 @@ describe("argent e2e run", () => {
       process.chdir(previousCwd);
     }
 
-    expect(logs.join("\n")).toBe("No e2e tests found in .argent/e2e or .argent/flows");
+    expect(logs).toEqual([]);
+    expect(errs).toEqual(["No e2e tests found in .argent/e2e or .argent/flows"]);
   });
 
   it("lists both e2e test directories as bare paths, with legacy and shadow notes on stderr", async () => {
@@ -1474,20 +1542,361 @@ describe("argent e2e run", () => {
     ]);
   });
 
-  it("says neither e2e test directory exists", async () => {
-    const listRoot = path.join(tempRoot, "list-no-dirs-project");
-    await fsp.mkdir(listRoot, { recursive: true });
+  it("prints the list as JSON with --json, in the plain order and with no stderr notes", async () => {
+    const listRoot = path.join(tempRoot, "list-json-project");
+    const e2eDir = path.join(listRoot, ".argent", "e2e");
+    const legacyDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(path.join(e2eDir, "suite"), { recursive: true });
+    await fsp.mkdir(legacyDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(e2eDir, "login.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(e2eDir, "suite", "pay.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(legacyDir, "login.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(legacyDir, "signup.yaml"), "steps: []\n"),
+    ]);
     const previousCwd = process.cwd();
     try {
       process.chdir(listRoot);
       await flow(["list"], opts);
+      const plainPaths = [...logs];
+      logs.length = 0;
+      errs.length = 0;
+      await flow(["list", "--json"], opts);
+
+      expect(errs).toEqual([]);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toBe(JSON.stringify(JSON.parse(logs[0]!), null, 2));
+      const { e2eTests } = JSON.parse(logs[0]!);
+      expect(e2eTests).toEqual([
+        { path: ".argent/e2e/login.yaml", name: "login", legacy: false },
+        { path: ".argent/e2e/suite/pay.yaml", legacy: false },
+        {
+          path: ".argent/flows/login.yaml",
+          name: "login",
+          legacy: true,
+          shadowedBy: ".argent/e2e/login.yaml",
+        },
+        { path: ".argent/flows/signup.yaml", name: "signup", legacy: true },
+      ]);
+      expect(e2eTests.map((t: { path: string }) => t.path).join("\n")).toBe(plainPaths.join("\n"));
     } finally {
       process.chdir(previousCwd);
     }
+  });
 
-    expect(logs.join("\n")).toBe(
-      "No .argent/e2e or .argent/flows directory in the current working directory."
+  it.each([
+    {
+      label: "neither e2e test directory exists",
+      dirs: [],
+      stdout: [],
+      stderr: [
+        "warning: no .argent/e2e or .argent/flows directory in the current working directory",
+      ],
+      doc: { e2eTests: [], warning: "no-e2e-directory" },
+    },
+    {
+      label: "only .argent/flows exists",
+      dirs: [".argent/flows"],
+      test: ".argent/flows/a.yaml",
+      stdout: [".argent/flows/a.yaml"],
+      stderr: ["note: 1 test listed from .argent/flows (legacy); move it to .argent/e2e"],
+      doc: { e2eTests: [{ path: ".argent/flows/a.yaml", name: "a", legacy: true }] },
+    },
+    {
+      label: "the e2e test directories are empty",
+      dirs: [".argent/e2e", ".argent/flows"],
+      stdout: [],
+      stderr: ["No e2e tests found in .argent/e2e or .argent/flows"],
+      doc: { e2eTests: [] },
+    },
+  ])(
+    "prints list and list --json when $label",
+    async ({ label, dirs, test, stdout, stderr, doc }) => {
+      const listRoot = path.join(tempRoot, `list-${label.replaceAll(" ", "-")}`);
+      await fsp.mkdir(listRoot, { recursive: true });
+      for (const dir of dirs) await fsp.mkdir(path.join(listRoot, dir), { recursive: true });
+      if (test) await fsp.writeFile(path.join(listRoot, test), "steps: []\n");
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(listRoot);
+        await flow(["list"], opts);
+        expect(logs).toEqual(stdout);
+        expect(errs).toEqual(stderr);
+        logs.length = 0;
+        errs.length = 0;
+        await flow(["list", "--json"], opts);
+      } finally {
+        process.chdir(previousCwd);
+      }
+
+      expect(errs).toEqual([]);
+      expect(logs).toEqual([JSON.stringify(doc, null, 2)]);
+    }
+  );
+
+  it.skipIf(!canDenyRead)(
+    "fails list and list --json with exit 2 when .argent/e2e cannot be read",
+    async () => {
+      const listRoot = path.join(tempRoot, "list-locked-e2e-dir");
+      const locked = path.join(listRoot, ".argent", "e2e");
+      await fsp.mkdir(locked, { recursive: true });
+      await fsp.chmod(locked, 0o000);
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(listRoot);
+        await expect(flow(["list"], opts)).rejects.toThrow("process.exit:2");
+        expect(logs).toEqual([]);
+        expect(errs).toEqual(["Could not read e2e test directory: .argent/e2e"]);
+        errs.length = 0;
+        await expect(flow(["list", "--json"], opts)).rejects.toThrow("process.exit:2");
+      } finally {
+        process.chdir(previousCwd);
+        await fsp.chmod(locked, 0o755);
+      }
+
+      expect(logs).toEqual([]);
+      expect(errs.map((line) => JSON.parse(line))).toEqual([
+        { event: "error", error: "Could not read e2e test directory: .argent/e2e" },
+      ]);
+    }
+  );
+
+  it.each([
+    [["--frobnicate"], "Unknown flag: --frobnicate"],
+    [["one", "two"], 'unexpected argument "two"; e2e list takes at most one directory path'],
+    [[""], "e2e list requires a non-empty directory path"],
+    [["-r"], "e2e list --recursive requires a directory path"],
+    [["--recursive"], "e2e list --recursive requires a directory path"],
+  ])("rejects `list %s` as a usage error with exit 2", async (args, message) => {
+    await expect(flow(["list", ...args], opts)).rejects.toThrow("process.exit:2");
+    expect(logs).toEqual([]);
+    expect(errs.join("\n")).toBe(`Error: ${message}\nRun \`argent e2e --help\`.`);
+
+    for (const jsonArgs of [
+      ["--json", ...args],
+      [...args, "--json"],
+    ]) {
+      errs.length = 0;
+      await expect(flow(["list", ...jsonArgs], opts)).rejects.toThrow("process.exit:2");
+      expect(logs).toEqual([]);
+      expect(errs).toHaveLength(1);
+      expect(JSON.parse(errs[0]!)).toEqual({ event: "error", error: message });
+    }
+  });
+
+  it.each([[["--json", "--help"]], [["-h"]]])("prints the help for `list %s`", async (args) => {
+    await flow(["list", ...args], opts);
+
+    expect(logs.join("\n")).toContain("Usage: argent e2e");
+    expect(logs.join("\n")).toContain("list [dir] [-r] [--json]");
+  });
+
+  describe("list <dir>", () => {
+    let listRoot: string;
+    let previousCwd: string;
+    beforeEach(async () => {
+      listRoot = path.join(tempRoot, "list-dir-project");
+      const testsDir = path.join(listRoot, "tests", "e2e");
+      await fsp.mkdir(path.join(testsDir, "suite"), { recursive: true });
+      await fsp.mkdir(path.join(testsDir, "__baselines__"), { recursive: true });
+      await fsp.mkdir(path.join(listRoot, ".argent", "e2e"), { recursive: true });
+      await fsp.mkdir(path.join(listRoot, ".argent", "flows"), { recursive: true });
+      await fsp.mkdir(path.join(listRoot, "empty"), { recursive: true });
+      await fsp.mkdir(path.join(listRoot, "nested-only", "sub"), { recursive: true });
+      await Promise.all([
+        fsp.writeFile(path.join(testsDir, "login.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(testsDir, "suite", "pay.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(testsDir, "notes.yml"), "steps: []\n"),
+        fsp.writeFile(path.join(testsDir, "__baselines__", "old.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(listRoot, ".argent", "e2e", "saved.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(listRoot, ".argent", "flows", "login.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(listRoot, "file.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(listRoot, "nested-only", "sub", "a.yaml"), "steps: []\n"),
+      ]);
+      previousCwd = process.cwd();
+      process.chdir(listRoot);
+    });
+    afterEach(() => {
+      process.chdir(previousCwd);
+    });
+
+    it("lists only the tests in the directory, relative to the current directory or absolute", async () => {
+      await flow(["list", "-r", "tests/e2e"], opts);
+
+      expect(logs.join("\n")).toBe(["tests/e2e/login.yaml", "tests/e2e/suite/pay.yaml"].join("\n"));
+      expect(errs).toEqual([]);
+
+      logs.length = 0;
+      await flow(["list", "-r", "./tests/e2e"], opts);
+
+      expect(logs.join("\n")).toBe(["tests/e2e/login.yaml", "tests/e2e/suite/pay.yaml"].join("\n"));
+
+      logs.length = 0;
+      const absolute = path.join(listRoot, "tests", "e2e");
+      await flow(["list", "-r", "--", absolute], opts);
+
+      expect(logs.join("\n")).toBe(
+        [path.join(absolute, "login.yaml"), path.join(absolute, "suite", "pay.yaml")].join("\n")
+      );
+    });
+
+    it("lists only the tests directly in the directory without -r", async () => {
+      await flow(["list", "tests/e2e"], opts);
+
+      expect(logs).toEqual(["tests/e2e/login.yaml"]);
+      expect(errs).toEqual([]);
+
+      logs.length = 0;
+      await flow(["list", "tests/e2e", "--json"], opts);
+
+      expect(JSON.parse(logs.join("\n"))).toEqual({ e2eTests: [{ path: "tests/e2e/login.yaml" }] });
+    });
+
+    it.each([
+      [["-r", "tests/e2e"]],
+      [["tests/e2e", "-r"]],
+      [["--recursive", "tests/e2e"]],
+      [["tests/e2e", "--recursive"]],
+    ])("lists the tests in subdirectories too for `list %s`", async (args) => {
+      await flow(["list", ...args], opts);
+
+      expect(logs.join("\n")).toBe(["tests/e2e/login.yaml", "tests/e2e/suite/pay.yaml"].join("\n"));
+      expect(errs).toEqual([]);
+    });
+
+    it("skips __baselines__, dot-directories and node_modules below the directory, at any depth", async () => {
+      await writeSkippedDirsTree(path.join(listRoot, "skips"));
+
+      await flow(["list", "skips", "-r"], opts);
+
+      expect(logs.join("\n")).toBe(["skips/suite/nested.yaml", "skips/top.yaml"].join("\n"));
+    });
+
+    it("enters .argent but no other dot-directory, so `list . -r` reaches .argent/e2e and .argent/flows", async () => {
+      const root = path.join(tempRoot, "list-dot-project");
+      const e2eDir = path.join(root, ".argent", "e2e");
+      await fsp.mkdir(path.join(e2eDir, ".cache"), { recursive: true });
+      await fsp.mkdir(path.join(e2eDir, "__baselines__"), { recursive: true });
+      await fsp.mkdir(path.join(root, ".argent", "flows"), { recursive: true });
+      await fsp.mkdir(path.join(root, ".github", "workflows"), { recursive: true });
+      await Promise.all([
+        fsp.writeFile(path.join(e2eDir, "saved.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(e2eDir, ".cache", "t.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(e2eDir, "__baselines__", "b.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(root, ".argent", "flows", "login.yaml"), "steps: []\n"),
+        fsp.writeFile(path.join(root, ".github", "workflows", "ci.yaml"), "steps: []\n"),
+      ]);
+      process.chdir(root);
+
+      await flow(["list", ".", "-r"], opts);
+
+      expect(logs.join("\n")).toBe(
+        [".argent/e2e/saved.yaml", ".argent/flows/login.yaml"].join("\n")
+      );
+    });
+
+    it("lists the tests in a nested .argent/e2e", async () => {
+      const nested = path.join(listRoot, "packages", "app", ".argent", "e2e");
+      await fsp.mkdir(nested, { recursive: true });
+      await fsp.writeFile(path.join(nested, "smoke.yaml"), "steps: []\n");
+
+      await flow(["list", "packages", "-r"], opts);
+
+      expect(logs).toEqual(["packages/app/.argent/e2e/smoke.yaml"]);
+    });
+
+    it.each(SKIPPED_DIRS)("lists a directory named %s when it is the one passed", async (dir) => {
+      await writeSkippedDirsTree(path.join(listRoot, "skips"));
+
+      await flow(["list", path.join("skips", dir)], opts);
+
+      expect(logs).toEqual([path.join("skips", dir, "sneaky.yaml")]);
+    });
+
+    it.each([[["./-dash"]], [["--", "-dash"]]])(
+      "prints a path that starts with a dash as ./ for `list %s`",
+      async (args) => {
+        await fsp.mkdir(path.join(listRoot, "-dash"), { recursive: true });
+        await fsp.writeFile(path.join(listRoot, "-dash", "d.yaml"), "steps: []\n");
+
+        await flow(["list", ...args], opts);
+
+        expect(logs).toEqual(["./-dash/d.yaml"]);
+      }
     );
+
+    it.skipIf(!canDenyRead)("rejects an unreadable directory with exit 2", async () => {
+      const locked = path.join(listRoot, "locked");
+      await fsp.mkdir(locked, { recursive: true });
+      await fsp.chmod(locked, 0o000);
+      try {
+        await expect(flow(["list", "locked"], opts)).rejects.toThrow("process.exit:2");
+      } finally {
+        await fsp.chmod(locked, 0o755);
+      }
+      expect(logs).toEqual([]);
+      expect(errs).toEqual(["Could not read e2e test directory: locked"]);
+    });
+
+    it.each([[["--json", "-r", "tests/e2e"]], [["tests/e2e", "--json", "--recursive"]]])(
+      "prints only the path of each entry for `list %s`",
+      async (args) => {
+        await flow(["list", ...args], opts);
+
+        expect(errs).toEqual([]);
+        expect(JSON.parse(logs.join("\n"))).toEqual({
+          e2eTests: [{ path: "tests/e2e/login.yaml" }, { path: "tests/e2e/suite/pay.yaml" }],
+        });
+      }
+    );
+
+    it("reports an empty directory on stderr, keeps stdout empty and exits 0", async () => {
+      await flow(["list", "empty", "-r"], opts);
+      expect(logs).toEqual([]);
+      expect(errs).toEqual(["No e2e tests found in empty"]);
+
+      errs.length = 0;
+      await flow(["list", "empty", "-r", "--json"], opts);
+      expect(JSON.parse(logs.join("\n"))).toEqual({ e2eTests: [] });
+      expect(errs).toEqual([]);
+    });
+
+    it("suggests -r when the directory holds tests only in subdirectories", async () => {
+      await flow(["list", "nested-only"], opts);
+      expect(logs).toEqual([]);
+      expect(errs).toEqual([
+        "No e2e tests found in nested-only\nPass -r/--recursive to include subdirectories.",
+      ]);
+
+      errs.length = 0;
+      await flow(["list", "nested-only", "--json"], opts);
+      expect(JSON.parse(logs.join("\n"))).toEqual({ e2eTests: [] });
+      expect(errs).toEqual([]);
+
+      logs.length = 0;
+      await flow(["list", "nested-only", "-r"], opts);
+      expect(logs).toEqual(["nested-only/sub/a.yaml"]);
+      expect(errs).toEqual([]);
+    });
+
+    it.each([
+      ["missing", "E2E test directory not found: missing"],
+      ["file.yaml", "E2E test path is not a directory: file.yaml"],
+      [
+        "tests/../tests/e2e",
+        'E2E test directory must not contain ".." segments - they are collapsed without following symlinks, so the path can name a different directory than the one your shell opens: tests/../tests/e2e\nPass the fully resolved path to the directory.',
+      ],
+    ])("rejects `list %s` with exit 2", async (dir, message) => {
+      await expect(flow(["list", dir], opts)).rejects.toThrow("process.exit:2");
+      expect(logs).toEqual([]);
+      expect(errs).toEqual([message]);
+
+      errs.length = 0;
+      await expect(flow(["list", "--json", dir], opts)).rejects.toThrow("process.exit:2");
+      expect(logs).toEqual([]);
+      expect(errs).toHaveLength(1);
+      expect(JSON.parse(errs[0]!)).toEqual({ event: "error", error: message });
+    });
   });
 
   it("renders the report — echo lines unnumbered, real steps numbered, reasons and fragment tags shown — and exits 1 on failure", async () => {
@@ -2314,6 +2723,8 @@ describe("argent e2e run <dir>", () => {
     await fsp.mkdir(path.join(flowsDir, "sub"), { recursive: true });
     await fsp.mkdir(path.join(flowsDir, ".hidden"), { recursive: true });
     await fsp.mkdir(path.join(flowsDir, "node_modules"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, "__baselines__"), { recursive: true });
+    await fsp.mkdir(path.join(flowsDir, "sub", "__baselines__"), { recursive: true });
     await fsp.mkdir(path.join(flowsDir, "bundle.yaml"), { recursive: true });
     await Promise.all([
       fsp.writeFile(path.join(flowsDir, "a-login.yaml"), "steps: []\n"),
@@ -2323,6 +2734,8 @@ describe("argent e2e run <dir>", () => {
       fsp.writeFile(path.join(flowsDir, "sub", "c-search.yaml"), "steps: []\n"),
       fsp.writeFile(path.join(flowsDir, ".hidden", "hidden.yaml"), "steps: []\n"),
       fsp.writeFile(path.join(flowsDir, "node_modules", "dep.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "__baselines__", "base.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "sub", "__baselines__", "base.yaml"), "steps: []\n"),
     ]);
   });
 
@@ -3119,7 +3532,7 @@ describe("argent e2e run <dir>", () => {
     ]);
   });
 
-  it("finds nested flows with --recursive, skipping dot-directories and node_modules", async () => {
+  it("finds nested flows with --recursive, skipping __baselines__, dot-directories and node_modules", async () => {
     await expect(flow(["run", flowsDir, "--recursive"], opts)).rejects.toThrow("process.exit:0");
 
     const flowPaths = toolsClientMock.callTool.mock.calls.map(
@@ -3132,6 +3545,55 @@ describe("argent e2e run <dir>", () => {
     ]);
     expect(logs.join("\n")).toContain(`[3/3] ${path.join("sub", "c-search.yaml")}`);
   });
+
+  it("runs the tests in a nested .argent/e2e with --recursive, skipping other dot-directories", async () => {
+    const root = path.join(tempRoot, "argent-mono");
+    const nested = path.join(root, "app", ".argent", "e2e");
+    await fsp.mkdir(nested, { recursive: true });
+    await fsp.mkdir(path.join(root, ".github", "workflows"), { recursive: true });
+    await fsp.writeFile(path.join(nested, "smoke.yaml"), "steps: []\n");
+    await fsp.writeFile(path.join(root, ".github", "workflows", "ci.yaml"), "steps: []\n");
+
+    await expect(flow(["run", root, "-r"], opts)).rejects.toThrow("process.exit:0");
+
+    const flowPaths = toolsClientMock.callTool.mock.calls.map(
+      (c) => (c[1] as { e2e_test_path: string }).e2e_test_path
+    );
+    expect(flowPaths).toEqual([path.join(nested, "smoke.yaml")]);
+  });
+
+  it("enters a folder named exactly .argent, and only with --recursive", async () => {
+    const root = path.join(tempRoot, "argent-exact");
+    await fsp.mkdir(path.join(root, ".argent"), { recursive: true });
+    await fsp.mkdir(path.join(root, ".argent-old"), { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(root, "top.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(root, ".argent", "x.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(root, ".argent-old", "y.yaml"), "steps: []\n"),
+    ]);
+    const ranPaths = () =>
+      toolsClientMock.callTool.mock.calls.map(
+        (c) => (c[1] as { e2e_test_path: string }).e2e_test_path
+      );
+
+    await expect(flow(["run", root], opts)).rejects.toThrow("process.exit:0");
+    expect(ranPaths()).toEqual([path.join(root, "top.yaml")]);
+
+    toolsClientMock.callTool.mockClear();
+    await expect(flow(["run", root, "-r"], opts)).rejects.toThrow("process.exit:0");
+    expect(ranPaths()).toEqual([path.join(root, ".argent", "x.yaml"), path.join(root, "top.yaml")]);
+  });
+
+  it.each(["__baselines__", ".hidden", "node_modules"])(
+    "runs the tests in a directory named %s when it is the one passed",
+    async (dir) => {
+      await expect(flow(["run", path.join(flowsDir, dir), "-r"], opts)).rejects.toThrow(
+        "process.exit:0"
+      );
+
+      expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("treats a directory named like a flow file as a directory", async () => {
     const dirYaml = path.join(tempRoot, "suite.yaml");

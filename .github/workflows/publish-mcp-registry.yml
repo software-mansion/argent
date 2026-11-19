@@ -1,0 +1,212 @@
+name: Publish to MCP Registry
+
+# Publishes server.json to the official MCP Registry
+# (registry.modelcontextprotocol.io) for every stable release.
+#
+# The registry accepts a version only once npm serves it: it fetches
+# @swmansion/argent@<version> from registry.npmjs.org and requires that
+# package's mcpName to match the server name. A release reaches npm last. The
+# tag push creates the GitHub release (release.yml), and a maintainer then
+# dispatches publish-npm.yml. So this follows that publish, not the tag or the
+# release event. A release created with GITHUB_TOKEN would not trigger a
+# workflow anyway.
+#
+# Triggers:
+#
+#   workflow_run       → after a successful "Publish npm package" dispatch that
+#                        really published. Only such a run uploads the
+#                        npm-tarball artifact, and the version is read from the
+#                        package.json inside it. Canary pushes, dry runs and
+#                        prereleases are skipped.
+#   workflow_dispatch  → publishes a version already on npm, e.g. to backfill a
+#                        release or to retry after a fix to this file (a job
+#                        re-run reuses the workflow file of the original run).
+#
+# server.json is read from the release tag, v<version>. Re-running is safe: a
+# version the registry already lists is skipped, because the registry rejects
+# publishing the same version twice.
+#
+# Auth is GitHub OIDC. The registry gives a workflow in the software-mansion
+# org the io.github.software-mansion/* namespace, so no secret is involved.
+
+on:
+  workflow_run:
+    workflows:
+      - "Publish npm package"
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Stable version already on npm (e.g. 0.33.0); server.json is read from tag v<version>"
+        required: true
+        type: string
+
+concurrency:
+  group: publish-mcp-registry
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    # Canary publishes (push to main) and failed runs have nothing to list.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'workflow_dispatch' &&
+       github.event.workflow_run.conclusion == 'success')
+    outputs:
+      # Empty when there is nothing to publish.
+      version: ${{ steps.version.outputs.version }}
+    permissions:
+      actions: read # list and download the publish run's artifacts
+
+    steps:
+      # The version reaches the script through env and is checked against a
+      # strict pattern before any later step uses it as a git ref.
+      - name: Resolve version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            COUNT=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+              --jq '[.artifacts[] | select(.name == "npm-tarball")] | length')
+            if [ "$COUNT" = "0" ]; then
+              echo "Run ${RUN_ID} uploaded no npm-tarball (a dry run): nothing was published to npm."
+              exit 0
+            fi
+            gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name npm-tarball --dir tarball
+            VERSION=$(tar -xzOf tarball/*.tgz package/package.json | jq -r .version)
+          fi
+
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]] && [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            echo "${VERSION} is a prerelease: only stable versions go to the MCP Registry."
+            exit 0
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'${VERSION}' is not a stable version (X.Y.Z): only stable versions go to the MCP Registry."
+            exit 1
+          fi
+          echo "Resolved version: ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: resolve
+    runs-on: ubuntu-latest
+    if: needs.resolve.outputs.version != ''
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC login to the MCP Registry
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      # Pinned on purpose: the cosign check below verifies the binary against
+      # this tag. Bump it when the registry requires a newer publisher (an
+      # "invalid audience" error from the login step says so).
+      MCP_PUBLISHER_VERSION: v1.8.9
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: v${{ needs.resolve.outputs.version }}
+
+      # repo-hygiene.yml keeps server.json in step with packages/argent on main.
+      # This guards the tag itself, so a mismatch fails here and not halfway
+      # through a registry publish.
+      - name: Check server.json and the registry
+        id: check
+        run: |
+          set -euo pipefail
+          SERVER_NAME=$(jq -r .name server.json)
+          IDENTIFIER=$(jq -r '.packages[0].identifier' server.json)
+          for field in .version '.packages[0].version'; do
+            got=$(jq -r "$field" server.json)
+            if [ "$got" != "$VERSION" ]; then
+              echo "::error::server.json ${field} at v${VERSION} is ${got}, not ${VERSION}"
+              exit 1
+            fi
+          done
+          echo "server_name=${SERVER_NAME}" >> "$GITHUB_OUTPUT"
+          echo "identifier=${IDENTIFIER}" >> "$GITHUB_OUTPUT"
+
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME//\//%2F}/versions/${VERSION}")
+          case "$status" in
+            200)
+              echo "${SERVER_NAME} ${VERSION} is already on the MCP Registry: nothing to do."
+              echo "Already listed: \`${SERVER_NAME}\` ${VERSION} on the MCP Registry" >> "$GITHUB_STEP_SUMMARY"
+              echo "listed=true" >> "$GITHUB_OUTPUT"
+              ;;
+            404)
+              echo "listed=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::MCP Registry lookup for ${SERVER_NAME} ${VERSION} returned HTTP ${status}"
+              exit 1
+              ;;
+          esac
+
+      # The registry fetches the npm version document and fails the publish if
+      # it is not there yet. npm can take minutes to serve a version it just
+      # accepted (see publish-npm.yml), so wait for the same document here.
+      - name: Wait for npm to serve the version
+        if: steps.check.outputs.listed == 'false'
+        env:
+          SERVER_NAME: ${{ steps.check.outputs.server_name }}
+          IDENTIFIER: ${{ steps.check.outputs.identifier }}
+        run: |
+          set -euo pipefail
+          url="https://registry.npmjs.org/${IDENTIFIER//\//%2F}/${VERSION}"
+          for attempt in $(seq 1 45); do
+            if doc=$(curl --silent --fail "$url"); then
+              mcp_name=$(jq -r '.mcpName // empty' <<<"$doc")
+              if [ "$mcp_name" = "$SERVER_NAME" ]; then
+                echo "npm serves ${IDENTIFIER}@${VERSION} with mcpName ${mcp_name}"
+                exit 0
+              fi
+              echo "::error::${IDENTIFIER}@${VERSION} has mcpName '${mcp_name:-<none>}', but server.json names '${SERVER_NAME}'"
+              exit 1
+            fi
+            echo "Attempt ${attempt}: npm does not serve ${IDENTIFIER}@${VERSION} yet"
+            sleep 20
+          done
+          echo "::error::npm still does not serve ${IDENTIFIER}@${VERSION} after 15 minutes. Is it published?"
+          exit 1
+
+      - name: Install cosign
+        if: steps.check.outputs.listed == 'false'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Download and verify mcp-publisher
+        if: steps.check.outputs.listed == 'false'
+        run: |
+          set -euo pipefail
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+          archive="mcp-publisher_${os}_${arch}.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl --fail --location --silent --show-error --output "$archive" "$base_url/$archive"
+          curl --fail --location --silent --show-error --output "$archive.sigstore.json" "$base_url/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+          tar xzf "$archive" mcp-publisher
+          rm -f "$archive" "$archive.sigstore.json"
+
+      - name: Log in to the MCP Registry
+        if: steps.check.outputs.listed == 'false'
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json
+        if: steps.check.outputs.listed == 'false'
+        env:
+          SERVER_NAME: ${{ steps.check.outputs.server_name }}
+        run: |
+          ./mcp-publisher publish
+          echo "Published \`${SERVER_NAME}\` ${VERSION} to the [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME//\//%2F}/versions/${VERSION})" >> "$GITHUB_STEP_SUMMARY"
