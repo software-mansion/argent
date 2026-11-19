@@ -44,10 +44,14 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Mac Ca
 - Find toolbar menu buttons by label if **Optimize Interface for Mac** leaves them without identifiers.
 - If typing, paste, or scrolling reports success without changing the app, check whether the installed native library supports Mac Catalyst input.
 
+## Profiling
+
+Use `argent-native-profiler` for native profiling or `argent-react-native-profiler` to capture React performance on a react-native-macos app. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
+
 ## E2E tests
 
 Read `references/e2e.md` before recording or writing a test for a Mac app.
 
 ## React Native
 
-For React Native Debug builds on macOS, including Mac Catalyst, start Metro before `boot-device` (see `argent-react-native-app-workflow`). Inspect the UI with `describe`. The JavaScript debugger and React profiler are unavailable for Mac apps.
+For React Native Debug builds on macOS, including Mac Catalyst, start Metro before `boot-device` (see `argent-react-native-app-workflow`). Inspect the UI with `describe`. The JavaScript debugger tools are unavailable for Mac apps.

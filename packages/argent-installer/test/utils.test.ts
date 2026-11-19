@@ -39,6 +39,7 @@ import {
   hashBundledContent,
   removeRetiredFiles,
   RETIRED_BUNDLED_PATHS,
+  RETIRED_GLOBAL_RULES,
   dirExists,
   detectPackageManager,
   globalInstallCommand,
@@ -385,6 +386,20 @@ describe("RETIRED_BUNDLED_PATHS", () => {
         const content = fs.readFileSync(file, "utf8");
         expect(shipped, relativePath).toContain(hashBundledContent(content));
       }
+    }
+  });
+});
+
+describe("RETIRED_GLOBAL_RULES", () => {
+  // The project rule a local init at the home dir copies into ~/.claude/rules
+  // must not read as a retired global one.
+  it("does not list the rule the bundle ships now", () => {
+    for (const { path: relativePath, shipped } of RETIRED_GLOBAL_RULES) {
+      const file = path.join(RULES_DIR, ...relativePath.split("/"));
+      if (!fs.existsSync(file)) continue;
+      expect(shipped, relativePath).not.toContain(
+        hashBundledContent(fs.readFileSync(file, "utf8"))
+      );
     }
   });
 });
