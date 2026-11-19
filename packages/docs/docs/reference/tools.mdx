@@ -95,23 +95,23 @@ With the `macos-apps` flag on, `list-devices` shows each native Mac app that Arg
 
 `network-conditions` sets the network conditions of an iOS simulator app, an Android emulator or a Chromium tab. Each call replaces the conditions of the previous call.
 
-| Parameter      | Description                                                                                               |
-| -------------- | --------------------------------------------------------------------------------------------------------- |
-| `udid`         | The device                                                                                                |
-| `bundleId`     | iOS only, and required on iOS: the app to throttle                                                        |
-| `port`         | iOS only: the Metro port that Argent does not throttle. The default is the Metro port of the device.      |
-| `latencyMs`    | The minimum time from a request to its response, in milliseconds, from 0 to 60000                         |
-| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.                                              |
-| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.                                                |
-| `offline`      | `true` makes requests fail as if no network is available. On Android, `adb reverse` ports stay reachable. |
+| Parameter      | Description                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `udid`         | The device                                                                                                  |
+| `bundleId`     | iOS only, and required on iOS: the app to throttle                                                          |
+| `port`         | iOS and Android: the Metro port that Argent does not throttle. The default is the Metro port of the device. |
+| `latencyMs`    | The minimum time from a request to its response, in milliseconds, from 0 to 60000                           |
+| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.                                                |
+| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.                                                  |
+| `offline`      | `true` makes requests fail as if no network is available. On Android, `adb reverse` ports stay reachable.   |
 
 A call without `latencyMs`, `downloadKbps`, `uploadKbps` and `offline` removes the throttle, also when it has `port`. An unknown parameter fails the call. The result contains `scope` and `conditions`. `conditions` is `null` after a removal. `scope` tells which traffic Argent changes:
 
-| `scope`  | Target             | Traffic                                                                                  |
-| -------- | ------------------ | ---------------------------------------------------------------------------------------- |
-| `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`) |
-| `device` | Android emulator   | The traffic of the emulator network. Only `offline` is available.                        |
-| `tab`    | Chromium, Electron | The requests of the page in the active tab                                               |
+| `scope`  | Target             | Traffic                                                                                                              |
+| -------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`)                             |
+| `device` | Android emulator   | The HTTP, HTTPS and WebSocket traffic of all apps that use the proxy of the system. `offline` turns off the network. |
+| `tab`    | Chromium, Electron | The requests of the page in the active tab                                                                           |
 
 `latencyMs` sets a minimum. A response that takes longer than `latencyMs` gets no extra delay.
 
@@ -123,13 +123,32 @@ On iOS:
 - After a restart of the app, Argent applies the conditions again when the native devtools connect. Requests before that time have no throttle.
 - On a simulator from a [device provider](./device-providers.mdx), a removal leaves the network capture of the provider as it was. A restart of the app removes the conditions there. Call `network-conditions` again after it.
 - When the tool-server stops or `stop-all-simulator-servers` stops the native devtools, the app removes the conditions.
+- On a simulator from a device provider, the conditions stay in the app when the tool-server stops without a clean shutdown, for example after a crash. A removal from the next tool-server removes them and keeps the network capture of the provider on. It also removes conditions that the provider set.
 
-On Android, the emulator console cannot shape the Wi-Fi network of current system images. Thus `latencyMs`, `downloadKbps` and `uploadKbps` fail on an Android emulator. `offline: true` turns off Wi-Fi and mobile data with `svc`. A call without conditions turns on Wi-Fi and mobile data, and waits up to 15 seconds for a network. The emulator stays offline after the tool-server stops.
+On Android, Argent sends the traffic of the emulator through a proxy on the host. Argent sets the global HTTP proxy of the emulator (`settings put global http_proxy`) to this proxy at `10.0.2.2`. The proxy delays and limits all data between the emulator and the proxy:
 
-While the Android emulator is offline:
+- The proxy adds half of `latencyMs` in each direction. Each round trip between the emulator and the proxy gets `latencyMs`, on new and kept-alive connections, on Wi-Fi and on mobile data.
+- A new HTTPS connection waits for `latencyMs` more than one time before its first response: once for the proxy tunnel, once or more for the TLS handshake, and once for the request.
+- `downloadKbps` and `uploadKbps` limit the total speed of all connections together.
+- The proxy holds at most 64 MB per connection and direction. Thus a high speed limit at a long latency runs below the limit: 100000 kbps at 60000 ms gives about 16 Mbit/s.
+- The emulator and the host hold about 2 MB of an upload before the proxy. The app finishes writing a smaller upload at once, and the server gets it at `uploadKbps`.
+- WebSocket connections (`ws://` and `wss://`) go through the proxy and get the same conditions.
+- A call with conditions turns on Wi-Fi and mobile data first, and waits up to 15 seconds for a network.
 
-- Requests through `adb reverse` still work, because adb carries them.
-- The emulator cannot reach the host at `10.0.2.2`. A React Native app that loads from Metro at `10.0.2.2` loses its connection to Metro. The debugger tools then cannot reach the app until the network comes back.
+The proxy does not change this traffic:
+
+- Requests to the Metro port at `10.0.2.2` or at `localhost`. Set `port` when Metro does not use the default port of the device.
+- Traffic that is not HTTP or HTTPS through the proxy, for example raw TCP sockets, UDP, QUIC and DNS.
+- Apps that do not use the proxy of the system, for example Flutter apps that use `dart:io`.
+- Connections that an app opened before the call. They keep their speed until they close. Restart the app to throttle all its requests.
+
+Requests from an app to `localhost` go to the proxy too. The proxy sends a request to a port of `adb reverse` to the host port behind it. A request to another `localhost` port fails with HTTP 502 while the throttle is on. Chromium and WebView send `localhost` requests directly.
+
+Argent does not throttle an emulator that already has an HTTP proxy that Argent did not set. The call fails, and the proxy stays. Argent does not throttle an emulator from a device provider.
+
+A removal sets the proxy of the emulator back to none. When the tool-server stops, Argent also removes its proxy from the emulator. After a crash of the tool-server, the emulator keeps the proxy, and apps that use it cannot connect. A removal from the next tool-server removes it. Argent keeps a record of its proxy on the emulator, so the removal does not change a proxy that the user set.
+
+`offline: true` removes the proxy and turns off Wi-Fi and mobile data with `svc`. A call without conditions turns on Wi-Fi and mobile data, and waits up to 15 seconds for a network. The emulator stays offline after the tool-server stops.
 
 On Chromium, Argent applies the conditions to the page of the active tab. Argent applies them again after a tab switch with `chromium-tabs`, and before a tab that `chromium-tabs` opens loads its URL. Service workers, web workers and cross-site iframes keep the full speed. When the active tab closes outside Argent, or when another DevTools client detaches from the page, the conditions can go away. Call `network-conditions` again.
 

@@ -7,6 +7,11 @@ vi.mock("../src/utils/adb", async (importOriginal) => ({
   adbShell: vi.fn(async () => "Active default network: 101\n"),
 }));
 
+vi.mock("../src/utils/external-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/external-devices")>()),
+  externalClaimForAnyId: vi.fn(() => undefined),
+}));
+
 vi.mock("../src/utils/check-deps", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/check-deps")>()),
   ensureDep: vi.fn(async () => {}),
@@ -18,6 +23,7 @@ import { networkConditionsZodSchema } from "../src/tools/network-conditions/sche
 import type { NativeDevtoolsAppState } from "../src/blueprints/native-devtools";
 import { createNetworkManager } from "../src/chromium-server/network";
 import { adbShell, runAdb } from "../src/utils/adb";
+import { externalClaimForAnyId } from "../src/utils/external-devices";
 
 const chromiumUdid = "chromium-cdp-9222";
 const androidEmulator = "emulator-5554";
@@ -53,8 +59,21 @@ function fakeNativeDevtools(state: NativeDevtoolsAppState = "connected") {
   return { api, services: { nativeDevtools: api } as never };
 }
 
-function adbArgs(): string[][] {
-  return vi.mocked(runAdb).mock.calls.map(([args]) => args as string[]);
+function fakeNetworkShaper() {
+  const calls: string[] = [];
+  const api = {
+    throttle: vi.fn(async () => {
+      calls.push("throttle");
+    }),
+    clear: vi.fn(async () => {
+      calls.push("clear");
+    }),
+  };
+  vi.mocked(runAdb).mockImplementation(async (args) => {
+    calls.push((args as string[]).slice(3).join(" "));
+    return { stdout: "", stderr: "" };
+  });
+  return { api, calls, services: { networkShaper: api } as never };
 }
 
 beforeEach(() => {
@@ -74,7 +93,10 @@ describe("network-conditions parameters", () => {
     expect(Object.keys(networkConditionsTool.services!({ udid: iosUdid, bundleId }))).toEqual([
       "nativeDevtools",
     ]);
-    expect(networkConditionsTool.services!({ udid: androidEmulator })).toEqual({});
+    expect(networkConditionsTool.services!({ udid: androidEmulator })).toEqual({
+      networkShaper: `AndroidNetworkShaper:${androidEmulator}`,
+    });
+    expect(networkConditionsTool.services!({ udid: "R5CT80ZABCD" })).toEqual({});
   });
 });
 
@@ -146,55 +168,79 @@ describe("network-conditions on Chromium, when the tab refuses the conditions", 
 });
 
 describe("network-conditions on an Android emulator", () => {
-  it.each([
-    { latencyMs: 400 },
-    { downloadKbps: 1600 },
-    { uploadKbps: 750 },
-    { offline: true, latencyMs: 1 },
-  ])(
-    "fails for %j, which the emulator console cannot shape, before any adb traffic",
+  it.each([{ latencyMs: 400 }, { downloadKbps: 1600 }, { uploadKbps: 750 }])(
+    "turns the radios on, then shapes %j through the proxy",
     async (conditions) => {
+      const { api, calls, services } = fakeNetworkShaper();
+
       await expect(
-        networkConditionsTool.execute({} as never, { udid: androidEmulator, ...conditions })
-      ).rejects.toThrow(/supports only `offline`/);
-      expect(runAdb).not.toHaveBeenCalled();
+        networkConditionsTool.execute(services, { udid: androidEmulator, ...conditions })
+      ).resolves.toEqual({ scope: "device", conditions });
+
+      expect(calls).toEqual(["svc wifi enable", "svc data enable", "throttle"]);
+      expect(api.throttle).toHaveBeenCalledWith(conditions, 8081);
     }
   );
 
-  it("turns Wi-Fi and mobile data off for offline", async () => {
-    await expect(
-      networkConditionsTool.execute({} as never, { udid: androidEmulator, offline: true })
-    ).resolves.toEqual({ scope: "device", conditions: { offline: true } });
+  it("leaves the Metro port named by port unshaped", async () => {
+    const { api, services } = fakeNetworkShaper();
 
-    expect(adbArgs()).toEqual([
-      ["-s", androidEmulator, "shell", "svc", "wifi", "disable"],
-      ["-s", androidEmulator, "shell", "svc", "data", "disable"],
-    ]);
+    await networkConditionsTool.execute(services, {
+      udid: androidEmulator,
+      latencyMs: 400,
+      port: 8082,
+    });
+
+    expect(api.throttle).toHaveBeenCalledWith({ latencyMs: 400 }, 8082);
   });
 
-  it("turns the radios on at a reset and waits until a network is up", async () => {
+  it("refuses to shape an emulator from a device provider before any adb traffic", async () => {
+    const { api, services } = fakeNetworkShaper();
+    vi.mocked(externalClaimForAnyId).mockReturnValueOnce({} as never);
+
+    await expect(
+      networkConditionsTool.execute(services, { udid: androidEmulator, latencyMs: 400 })
+    ).rejects.toThrow(/device provider/);
+    expect(runAdb).not.toHaveBeenCalled();
+    expect(api.throttle).not.toHaveBeenCalled();
+  });
+
+  it.each([{ offline: true }, { offline: true, latencyMs: 400 }])(
+    "removes the proxy, then turns Wi-Fi and mobile data off for %j",
+    async (conditions) => {
+      const { api, calls, services } = fakeNetworkShaper();
+
+      await expect(
+        networkConditionsTool.execute(services, { udid: androidEmulator, ...conditions })
+      ).resolves.toEqual({ scope: "device", conditions });
+
+      expect(calls).toEqual(["clear", "svc wifi disable", "svc data disable"]);
+      expect(api.throttle).not.toHaveBeenCalled();
+    }
+  );
+
+  it("removes the proxy and turns the radios on at a reset, then waits until a network is up", async () => {
+    const { calls, services } = fakeNetworkShaper();
     vi.mocked(adbShell)
       .mockResolvedValueOnce("Active default network: none\n")
       .mockResolvedValueOnce("Active default network: 102\n");
 
     await expect(
-      networkConditionsTool.execute({} as never, { udid: androidEmulator })
+      networkConditionsTool.execute(services, { udid: androidEmulator })
     ).resolves.toEqual({ scope: "device", conditions: null });
 
-    expect(adbArgs()).toEqual([
-      ["-s", androidEmulator, "shell", "svc", "wifi", "enable"],
-      ["-s", androidEmulator, "shell", "svc", "data", "enable"],
-    ]);
+    expect(calls).toEqual(["clear", "svc wifi enable", "svc data enable"]);
     expect(adbShell).toHaveBeenCalledTimes(2);
   });
 
   it("still turns Wi-Fi on when the telephony service has not started yet", async () => {
+    const { services } = fakeNetworkShaper();
     vi.mocked(runAdb)
       .mockResolvedValueOnce({ stdout: "", stderr: "" } as never)
       .mockRejectedValueOnce(new Error("svc data enable failed: cmd: Can't find service: phone"));
 
     await expect(
-      networkConditionsTool.execute({} as never, { udid: androidEmulator })
+      networkConditionsTool.execute(services, { udid: androidEmulator })
     ).resolves.toEqual({ scope: "device", conditions: null });
   });
 
