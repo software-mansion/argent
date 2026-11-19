@@ -557,11 +557,12 @@ When suspension timing is available, the report keeps the duration Instruments r
 
 A short recording may end before a leak check finishes. Follow the report's warning and [allow time for a leak check](/docs/features/profiling#limits). With `Time Profiler`, the report says that memory leaks were not checked.
 
+<a id="react-profiler-on-react-native-macos" />
+
 #### React profiler on a Mac app
 
 Start a [supported Debug build](/docs/features/mac-apps#profile-a-react-native-app) through Argent.
-This applies to react-native-macos apps and to React Native apps built for Mac Catalyst.
-Pass the Mac app's ID from `list-devices` as `device_id`, even on a shared Metro. The profiler
+Pass `id` from the app's `list-devices` entry as `device_id`, even on a shared Metro. The profiler
 connects directly to Metro. The `debugger-*` tools are unavailable for Mac apps.
 
 Use the same `device_id` and Metro `port` for the React profiler and query tools. The default port
@@ -575,7 +576,9 @@ return `DEBUGGER_METRO_NO_TARGETS`. In either case, `react-profiler-status` retu
 `session_status: "no_react_runtime"` with the reason in `note`. Check that the app is running,
 wait for it to load its JavaScript, and verify the Metro port before retrying.
 
-React Native puts the app's `identifierForVendor` into the ID of a Mac Catalyst app's runtime. Argent reads that value when it starts the app. If the error says that Argent does not know the value, run `restart-app` and retry.
+If a Mac Catalyst error mentions a missing `identifierForVendor`, run `restart-app` and retry. If
+the error persists, update Argent. The profiler needs this value to identify the app on a shared
+Metro server.
 
 For `react-profiler-analyze` on a react-native-macos app, pass `platform: "macos"` if the recording
 lacks platform information. The report prefers `.macos.*` source files, then `.native.*` files, then
