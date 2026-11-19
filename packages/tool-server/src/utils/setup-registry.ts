@@ -104,6 +104,7 @@ import { menuBarTool } from "../tools/menu-bar";
 import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
 import { resolveDevice } from "./device-info";
 import { setLivePanelSourceProvider } from "./foldable";
+import { warmAxServiceOnSimulatorStart } from "./warm-ax-service";
 
 export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
@@ -118,6 +119,7 @@ export function createRegistry(): Registry {
     const ref = axServiceRef(resolveDevice(udid));
     return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
   });
+  warmAxServiceOnSimulatorStart(registry);
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(iosDeviceRunnerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
