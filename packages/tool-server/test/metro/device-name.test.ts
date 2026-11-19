@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { deviceNameMatcher } from "../../src/utils/debugger/device-name";
 
-const findIosSimulator = vi.fn();
-const adbShell = vi.fn();
+const { findIosSimulator, adbShell } = vi.hoisted(() => ({
+  findIosSimulator: vi.fn(),
+  adbShell: vi.fn(),
+}));
 
 vi.mock("../../src/utils/ios-devices", () => ({ findIosSimulator }));
 vi.mock("../../src/utils/adb", () => ({ adbShell }));
-
-const { deviceNameMatcher } = await import("../../src/utils/debugger/device-name");
 
 const SIM_UDID = "B7D5711C-0000-4000-8000-000000000000";
 
