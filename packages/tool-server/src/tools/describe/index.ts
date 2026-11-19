@@ -21,12 +21,16 @@ import { resolveDevice, harmonyConnectKey } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { formatDescribeTree } from "./format-tree";
+import { findUnderExpoToolsButton } from "./expo-tools-button";
 
 // Renders the adapter-internal `tree` to text and drops it, so the caller (LLM)
 // never pays for the JSON tree. Pruning stays in the per-platform adapters.
 function withDescription(data: DescribeTreeData): DescribeResult {
   const out: DescribeResult = {
-    description: formatDescribeTree(data.tree, { source: data.source }),
+    description: formatDescribeTree(data.tree, {
+      source: data.source,
+      underExpoToolsButton: findUnderExpoToolsButton(data.tree, data.source),
+    }),
     source: data.source,
   };
   if (data.should_restart) out.should_restart = data.should_restart;
@@ -170,7 +174,7 @@ On HarmonyOS it runs the device's \`uitest dumpLayout\` (\`source: "harmony-uite
 On a Mac app it reads the app's accessibility tree with web view content and React Native testIDs merged in; frames are fractions of the app window, grown to include sheets and menus past it.</flag:macos-apps>
 On a TV target (Apple TV / Android TV: a \`list-devices\` entry with runtimeKind 'tv') it returns the FOCUSED element and the FOCUSABLE elements instead, since a TV UI has no tap coordinates. Move the highlight with \`tv-remote\`, then call describe again to confirm where focus landed.
 
-Returns \`{ description, source }\`: \`description\` renders the tree one line per element, with its role, label/value/id, VoiceOver hint (iOS simulator), interactivity flags and frame. Frames are normalized [0,1] fractions of the screen / window width and height (not pixels); tap an element at the centre of its frame. The tree has no z-order or occlusion information: an element may be covered by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
+Returns \`{ description, source }\`: \`description\` renders the tree one line per element, with its role, label/value/id, VoiceOver hint (iOS simulator), interactivity flags and frame. Frames are normalized [0,1] fractions of the screen / window width and height (not pixels); tap an element at the centre of its frame. The tree has no z-order or occlusion information: an element may be covered by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly. In an Expo development build or Expo Go (iOS simulator, Android), an element whose centre is under Expo's floating dev Tools button carries a note saying so.
 Fails if the tree cannot be read, e.g. on a physical iOS device before launch-app has started an app.
 
 For UIKit properties of a view (class name, accessibilityIdentifier), use native-find-views (iOS simulator only).

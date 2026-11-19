@@ -1,4 +1,5 @@
 import type { DescribeFrame, DescribeNode, DescribeSource } from "./contract";
+import { EXPO_TOOLS_BUTTON_NOTE } from "./expo-tools-button";
 
 // Token-efficient text rendering of an already-pruned DescribeNode tree: the
 // per-platform adapters (and the Android v2 trimmer in uiautomator-parser) do
@@ -111,7 +112,12 @@ function hasIosState(n: DescribeNode): boolean {
   return Boolean(n.hint || n.disabled || n.selected);
 }
 
-function formatLine(n: DescribeNode, indent: number, source: DescribeSource): string {
+function formatLine(
+  n: DescribeNode,
+  indent: number,
+  source: DescribeSource,
+  covered: ReadonlySet<DescribeNode>
+): string {
   const pad = "  ".repeat(indent);
   // iOS reports a text input's placeholder as both label and value; printing
   // it twice costs bytes for no signal.
@@ -123,7 +129,8 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
   const idPart = formatAttr("id", n.identifier);
   const hintPart = formatAttr("hint", dedupedHint);
   const flagPart = formatFlags(n, source);
-  const annotations = `${labelPart}${valuePart}${idPart}${hintPart}${flagPart}`.trim();
+  const notePart = covered.has(n) ? ` [${EXPO_TOOLS_BUTTON_NOTE}]` : "";
+  const annotations = `${labelPart}${valuePart}${idPart}${hintPart}${flagPart}${notePart}`.trim();
   const annotated = annotations ? ` ${annotations}` : "";
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
@@ -131,19 +138,21 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
 function renderFlat(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
-  source: DescribeSource
+  source: DescribeSource,
+  covered: ReadonlySet<DescribeNode>
 ): string[] {
   return root.children
     .filter((n) => shouldEmit(n, contentRoles) || hasIosState(n))
     .slice()
     .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
-    .map((n) => formatLine(n, 1, source));
+    .map((n) => formatLine(n, 1, source, covered));
 }
 
 function renderNested(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
-  source: DescribeSource
+  source: DescribeSource,
+  covered: ReadonlySet<DescribeNode>
 ): string[] {
   const lines: string[] = [];
   // Iterative DFS so very deep Compose / RN trees can't overflow the stack.
@@ -156,7 +165,7 @@ function renderNested(
   while (stack.length > 0) {
     const { node, depth } = stack.pop()!;
     if (shouldEmit(node, contentRoles) || node.children.length > 0) {
-      lines.push(formatLine(node, depth, source));
+      lines.push(formatLine(node, depth, source, covered));
     }
     for (let i = node.children.length - 1; i >= 0; i--) {
       stack.push({ node: node.children[i]!, depth: depth + 1 });
@@ -167,6 +176,7 @@ function renderNested(
 
 interface FormatDescribeOptions {
   source: DescribeSource;
+  underExpoToolsButton?: ReadonlySet<DescribeNode>;
 }
 
 export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
@@ -221,9 +231,10 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
 
   // Vega's lowercase toolkit roles count as content only for its own source.
   const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
+  const covered = opts.underExpoToolsButton ?? new Set<DescribeNode>();
   const body =
     mode === "flat"
-      ? renderFlat(root, contentRoles, opts.source)
-      : renderNested(root, contentRoles, opts.source);
+      ? renderFlat(root, contentRoles, opts.source, covered)
+      : renderNested(root, contentRoles, opts.source, covered);
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
 }

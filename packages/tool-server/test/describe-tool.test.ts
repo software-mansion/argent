@@ -137,6 +137,31 @@ describe("describe tool", () => {
     expect(result.description).toMatch(/AXButton\s+"General"/);
   });
 
+  it("notes an element under Expo's floating dev Tools button", async () => {
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 402, height: 874 },
+      elements: [
+        {
+          label: "Gear Shape, Filled",
+          identifier: "gearshape.fill",
+          frame: { x: 353 / 402, y: 75 / 874, width: 26 / 402, height: 26 / 874 },
+          traits: ["image"],
+        },
+        {
+          label: "Skip intro",
+          frame: { x: 340 / 402, y: 108 / 874, width: 60 / 402, height: 24 / 874 },
+          traits: ["button"],
+        },
+      ],
+    });
+
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.description).toMatch(/AXButton "Skip intro" \[under Expo's dev Tools button/);
+  });
+
   it("returns dialog elements when alertVisible is true", async () => {
     const axApi = makeAXServiceApi({
       alertVisible: true,
