@@ -11,7 +11,7 @@ import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/met
 import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
-import { selectTarget } from "../utils/debugger/target-selection";
+import { selectTarget, simulatorNameOnSharedMetro } from "../utils/debugger/target-selection";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
@@ -236,6 +236,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const selected = selectTarget(metro.targets, port, {
       ...options,
       deviceId,
+      simulatorName: await simulatorNameOnSharedMetro(deviceId, metro.targets),
     });
 
     /**

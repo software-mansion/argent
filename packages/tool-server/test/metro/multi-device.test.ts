@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
@@ -12,6 +12,15 @@ import {
 } from "../../src/blueprints/react-profiler-session";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { scopeTempHome } from "../helpers/temp-home";
+
+const SIM_UDID = "5C1B6E9A-0D2F-4A47-9E3B-7A1D2C3E4F50";
+
+vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/ios-devices")>()),
+  listIosSimulators: async () => [
+    { udid: SIM_UDID, name: "iPhone 16 Pro Max", state: "Booted", runtime: "iOS-26-4" },
+  ],
+}));
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
@@ -163,5 +172,14 @@ describe("multi-device debugger routing (mock Metro, two devices)", () => {
     expect(ios.runtimeApp).toEqual({ appId: APP_ID, platform: "ios" });
     // The React profiler reads it from its session.
     expect(android.runtimeApp).toEqual({ appId: APP_ID, platform: "android" });
+  });
+
+  it("routes a simulator UDID to the Metro device with the simulator's name", async () => {
+    const connected = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: SIM_UDID,
+    })) as Record<string, unknown>;
+
+    expect(connected.logicalDeviceId).toBe("logical-aaa");
   });
 });

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { MACOS_APP_ID_PREFIX } from "../device-info";
+import { MACOS_APP_ID_PREFIX, resolveDevice } from "../device-info";
+import { listIosSimulators } from "../ios-devices";
 import type { CDPTarget } from "./discovery";
 
 interface SelectedTarget {
@@ -68,6 +69,46 @@ function describeDevice(target: CDPTarget): string {
     : `${target.deviceName ?? "unknown"} (legacy inspector — no logicalDeviceId)`;
 }
 
+/** Each device Metro lists, keyed by {@link deviceKey}, as it reads for the agent. */
+function metroDevices(pool: CDPTarget[]): Map<string, string> {
+  const devices = new Map<string, string>();
+  for (const t of pool) {
+    const key = deviceKey(t);
+    if (key && !devices.has(key)) devices.set(key, describeDevice(t));
+  }
+  return devices;
+}
+
+/** The targets of the one Metro device that reports `name`; undefined when none or several do. */
+function targetsOfOnlyDeviceNamed(
+  pool: CDPTarget[],
+  name: string | undefined
+): CDPTarget[] | undefined {
+  if (name === undefined) return undefined;
+  const named = pool.filter((t) => t.deviceName === name);
+  return new Set(named.map(deviceKey)).size === 1 ? named : undefined;
+}
+
+/**
+ * The name of the booted local iOS simulator `deviceId` names, for a Metro that
+ * lists several devices. Metro never sees a UDID, only the name the app
+ * reports, so {@link selectTarget} matches on that name. Undefined when another
+ * booted simulator has the same name.
+ */
+export async function simulatorNameOnSharedMetro(
+  deviceId: string,
+  targets: CDPTarget[]
+): Promise<string | undefined> {
+  const device = resolveDevice(deviceId);
+  if (device.platform !== "ios" || device.kind !== "simulator") return undefined;
+  if (metroDevices(targets).size < 2) return undefined;
+  const simulators = await listIosSimulators().catch(() => []);
+  const booted = simulators.filter((sim) => sim.state === "Booted");
+  const name = booted.find((sim) => sim.udid === deviceId)?.name;
+  if (name === undefined) return undefined;
+  return booted.filter((sim) => sim.name === name).length === 1 ? name : undefined;
+}
+
 /**
  * The runtime of the Mac app a `macos-app-<bundle id>` names. A Mac app's
  * inspector id follows from its bundle id (see `macosAppBundleIdOf`), so the
@@ -78,11 +119,7 @@ function macosAppTargets(pool: CDPTarget[], bundleId: string, port: number): CDP
   // Launch Services treats bundle ids as case-insensitive.
   const own = pool.filter((t) => macosAppBundleIdOf(t)?.toLowerCase() === bundleId.toLowerCase());
   if (own.length) return own;
-  const devices = new Map<string, string>();
-  for (const t of pool) {
-    const key = deviceKey(t);
-    if (key && !devices.has(key)) devices.set(key, describeDevice(t));
-  }
+  const devices = metroDevices(pool);
   throw new FailureError(
     `No JS runtime of the Mac app ${bundleId} is connected to Metro on port ${port}. ` +
       `Metro lists: ${[...devices.values()].join(", ")}. ` +
@@ -127,8 +164,13 @@ export function selectTarget(
   } else if (typeof options?.deviceId === "string" && options.deviceId) {
     const deviceId = options.deviceId;
     const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === deviceId);
+    const simulatorName =
+      typeof options.simulatorName === "string" ? options.simulatorName : undefined;
+    const sameName = targetsOfOnlyDeviceNamed(pool, simulatorName);
     if (filtered.length) {
       candidates = filtered;
+    } else if (sameName) {
+      candidates = sameName;
     } else {
       // Falling back to the priority target would route every unmatched
       // device_id to whichever device Metro lists first, so only fall back when
@@ -137,11 +179,7 @@ export function selectTarget(
       // Count via deviceKey, not logicalDeviceId alone: a legacy device has
       // none, so a Vega device_id would count zero devices, look like "nothing
       // to disambiguate" and fall through into another device's runtime.
-      const distinctDevices = new Map<string, string>();
-      for (const t of pool) {
-        const key = deviceKey(t);
-        if (key && !distinctDevices.has(key)) distinctDevices.set(key, describeDevice(t));
-      }
+      const distinctDevices = metroDevices(pool);
       if (distinctDevices.size > 1) {
         // Only a logicalDeviceId is a usable device_id; a legacy device's
         // internal key would read like one without being one.
