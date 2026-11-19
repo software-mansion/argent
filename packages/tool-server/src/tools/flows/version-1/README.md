@@ -13,5 +13,11 @@ git show 34696ae7a:packages/tool-server/src/tools/flows/flow-run.ts |
 - Do not change these files. Fixes go to the current runner in `..`.
 - These files also import code outside this folder. Before you change how such code behaves,
   copy main's version of it into this folder, so that old e2e tests do not change.
-- To remove version 1: delete this folder and `test/flows/version-1/`, and remove the check
-  in `../flow-run.ts`.
+- To remove version 1, delete this folder and `test/flows/version-1/`. Then remove what
+  refers to version 1:
+  - the check in `../flow-run.ts`;
+  - the old e2e test warning in `../flow-add-step.ts`;
+  - the version 1 cases in `test/flows/flow-file-version-run.test.ts`;
+  - the skipped folder in `scripts/extract-tools.mjs` and its test;
+  - the entry for this folder in `knip.jsonc`;
+  - the version 1 row of "File version" in `packages/docs/docs/reference/e2e-yaml.mdx`.
