@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { Registry } from "@argent/registry";
 import {
   DEBUGGER_TOOL_CAPABILITY,
   RN_ONLY_TOOL_CAPABILITY,
@@ -104,7 +103,7 @@ describe("RN-only tool registry — every locked tool actually rejects Chromium"
   // Source of truth for what must stay locked. If a tool is added/removed
   // here, the maintainer is making an explicit Chromium-support decision.
   const LOCKED_TOOLS = [
-    createDebuggerComponentTreeTool(new Registry()),
+    createDebuggerComponentTreeTool(),
     debuggerReloadMetroTool,
     debuggerInspectElementTool,
     reactProfilerAnalyzeTool,
