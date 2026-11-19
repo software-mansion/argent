@@ -37,10 +37,15 @@ export interface NetworkManager {
   reattach(): Promise<void>;
   /** Conditions are per target, so `reattach` applies them again to the new tab. */
   setConditions(conditions: CdpNetworkConditions): Promise<void>;
+  /** True while the stored conditions shape traffic, false after a reset. */
+  throttled(): boolean;
   dispose(): void;
 }
 
 const MAX_RECORDS = 1000;
+
+const shapesTraffic = (c: CdpNetworkConditions): boolean =>
+  c.offline || c.latency > 0 || c.downloadThroughput >= 0 || c.uploadThroughput >= 0;
 
 export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
   const { cdp } = deps;
@@ -156,6 +161,7 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
       await cdp.send("Network.emulateNetworkConditions", next);
       conditions = next;
     },
+    throttled: () => conditions !== null && shapesTraffic(conditions),
     dispose: () => {
       cdp.events.off("event", onEvent);
       cdp.send("Network.disable").catch(() => {});
