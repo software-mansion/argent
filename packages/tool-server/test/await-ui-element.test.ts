@@ -360,7 +360,7 @@ describe("await-ui-element tool", () => {
           role: "textbox",
           identifier: "token",
           label: "Token",
-          value: "Tok-REVIEW-4242",
+          value: "tok-REVIEW-4242",
           frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 },
           children: [],
         },

@@ -1,31 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { DescribeNode } from "../src/tools/describe/contract";
+import type { DescribeNode, DescribeTreeData } from "../src/tools/describe/contract";
+import { nodeText } from "../src/utils/ui-tree-match";
 import {
   __resetTypedSecretsForTesting,
-  forgetSecretFields,
-  noteSecretField,
-  noteShownSecret,
   noteTypedSecrets,
+  quotedText,
   redactTypedSecrets,
+  secretTypedOn,
+  WITHHELD_INPUT_TEXT,
 } from "../src/utils/typed-secrets";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB";
 const TOKEN = { name: "TOKEN", value: "tok-REVIEW-4242" };
-const WITHHELD = "[withheld: a step typed {{secret:TOKEN}} into this field]";
-
-function field(identifier: string, texts: { label?: string; value?: string }): DescribeNode {
-  return {
-    role: "AXTextField",
-    identifier,
-    frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
-    children: [],
-    ...texts,
-  };
-}
-
-function screen(...children: DescribeNode[]): DescribeNode {
-  return { role: "AXGroup", frame: { x: 0, y: 0, width: 1, height: 1 }, children };
-}
 
 beforeEach(() => {
   __resetTypedSecretsForTesting();
@@ -35,17 +21,37 @@ describe("redactTypedSecrets", () => {
   it("returns text as it is for a device that no secret was typed on", () => {
     noteTypedSecrets("other-device", [TOKEN]);
 
+    expect(secretTypedOn(DEVICE)).toBe(false);
     expect(redactTypedSecrets(DEVICE, `Token ${TOKEN.value}`)).toBe(`Token ${TOKEN.value}`);
   });
 
-  it("puts the placeholder in place of a value, whatever its case and the case of the device id", () => {
+  it("puts the placeholder in place of a value, for a device id in either case", () => {
     noteTypedSecrets(DEVICE, [TOKEN]);
 
-    expect(redactTypedSecrets(DEVICE.toLowerCase(), "Token TOK-review-4242 saved")).toBe(
+    expect(secretTypedOn(DEVICE.toLowerCase())).toBe(true);
+    expect(redactTypedSecrets(DEVICE.toLowerCase(), "Token tok-REVIEW-4242 saved")).toBe(
       "Token {{secret:TOKEN}} saved"
     );
     expect(redactTypedSecrets(DEVICE, "nothing here")).toBe("nothing here");
     expect(redactTypedSecrets(DEVICE, "")).toBe("");
+  });
+
+  it("finds a value only as it was typed, letter for letter", () => {
+    noteTypedSecrets(DEVICE, [TOKEN]);
+
+    // What a field made of the value is not looked for: see WITHHELD_INPUT_TEXT.
+    for (const shown of ["Tok-REVIEW-4242", "TOK-REVIEW-4242", "tok-REVIEW-4243"]) {
+      expect(redactTypedSecrets(DEVICE, shown)).toBe(shown);
+    }
+  });
+
+  it("leaves every other character where it was, whatever its lowercase form", () => {
+    noteTypedSecrets(DEVICE, [TOKEN, { name: "GREEK", value: "Σ-κλειδί-İ9" }]);
+
+    expect(redactTypedSecrets(DEVICE, "İsim tok-REVIEW-4242 ΟΔΌΣ 😀")).toBe(
+      "İsim {{secret:TOKEN}} ΟΔΌΣ 😀"
+    );
+    expect(redactTypedSecrets(DEVICE, "İ Σ-κλειδί-İ9 ς")).toBe("İ {{secret:GREEK}} ς");
   });
 
   it("keeps both values of a name that resolved to a second one", () => {
@@ -69,106 +75,87 @@ describe("redactTypedSecrets", () => {
       "at {{secret:URL}} ({{secret:HOST}})"
     );
     expect(redactTypedSecrets(DEVICE, "a secret")).toBe("a {{secret:WORD}}");
+    // Two values that start alike: the short one would leave the rest of the long one.
+    noteTypedSecrets(DEVICE, [
+      { name: "PREFIX", value: "sk-" },
+      { name: "KEY", value: "sk-live-9d3f" },
+    ]);
+    expect(redactTypedSecrets(DEVICE, "key sk-live-9d3f, prefix sk-")).toBe(
+      "key {{secret:KEY}}, prefix {{secret:PREFIX}}"
+    );
   });
 
-  it("ignores an empty value", () => {
-    noteTypedSecrets(DEVICE, [{ name: "EMPTY", value: "" }]);
+  it("notes nothing for a call that typed no secret, and ignores an empty value", () => {
+    noteTypedSecrets(DEVICE, []);
+    expect(secretTypedOn(DEVICE)).toBe(false);
 
+    noteTypedSecrets(DEVICE, [{ name: "EMPTY", value: "" }]);
     expect(redactTypedSecrets(DEVICE, "boom")).toBe("boom");
   });
 
-  it("puts the step's text in place of the text a field showed for it", () => {
-    noteShownSecret(DEVICE, "Too-REVIEW-4242@example.com", "{{secret:TOKEN}}@example.com");
-    noteShownSecret(DEVICE, "   ", "{{secret:TOKEN}}");
-
-    expect(redactTypedSecrets(DEVICE, "Email too-review-4242@example.com")).toBe(
-      "Email {{secret:TOKEN}}@example.com"
-    );
-    expect(redactTypedSecrets(DEVICE, "a   b")).toBe("a   b");
-  });
-
-  it("forgets the oldest value once a device has more than it keeps", () => {
+  it("forgets the oldest value past its limit, and never that a secret was typed", () => {
     noteTypedSecrets(DEVICE, [TOKEN]);
-    for (let i = 0; i < 256; i++)
+    for (let i = 0; i < 256; i++) {
       noteTypedSecrets(DEVICE, [{ name: `N${i}`, value: `value-${i}-x` }]);
+    }
 
     expect(redactTypedSecrets(DEVICE, TOKEN.value)).toBe(TOKEN.value);
     expect(redactTypedSecrets(DEVICE, "value-255-x")).toBe("{{secret:N255}}");
+    expect(secretTypedOn(DEVICE)).toBe(true);
   });
 });
 
-describe("the text of a field that took a secret", () => {
-  // An empty iOS field: its accessibility label, and its placeholder as its value.
-  const before = { label: "Token", value: "Search" };
+// The runner's one quote of the screen. The iOS simulator tree comes with a
+// projection to quote from (flow-ios-tree.test.ts); every other tree is quoted
+// as it was read, with the values named.
+describe("quotedText", () => {
+  const field: DescribeNode = {
+    role: "EditText",
+    identifier: "token",
+    label: "Token",
+    value: "tok-REVIEW-4242",
+    frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.05 },
+    children: [],
+  };
+  const screen = (...children: DescribeNode[]): DescribeNode => ({
+    role: "Screen",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children,
+  });
 
-  beforeEach(() => {
+  it("names a typed value in a tree without a projection, and withholds nothing there", () => {
     noteTypedSecrets(DEVICE, [TOKEN]);
-    noteSecretField(DEVICE, "token", { before, typed: "{{secret:TOKEN}}" });
+    const corrected = { ...field, value: "Too-REVIEW-4242" };
+    const data: DescribeTreeData = { tree: screen(field, corrected), source: "android-devtools" };
+
+    expect(quotedText(data, DEVICE, field, nodeText)).toBe("Token {{secret:TOKEN}}");
+    expect(quotedText(data, DEVICE, corrected, nodeText)).toBe("Token Too-REVIEW-4242");
   });
 
-  it("is withheld when it is no known form of the secret", () => {
-    const tree = screen(field("token", { label: "Token", value: "Too-REVIEW-4243" }));
-
-    // In the field's own text, and in the text of a view around it.
-    expect(redactTypedSecrets(DEVICE, "Token Too-REVIEW-4243", tree)).toBe(`Token ${WITHHELD}`);
-    expect(redactTypedSecrets(DEVICE, "Form Token Too-REVIEW-4243 Save", tree)).toBe(
-      `Form Token ${WITHHELD} Save`
+  it("reads the node at the same place in the projection, and nothing from the tree itself", () => {
+    const other = { ...field, identifier: "other", value: "linda" };
+    const quotable = screen(
+      { ...other, value: "projected other" },
+      { ...field, value: "projected" }
     );
-    // Not without the tree it was read from: nothing says which text is the field's.
-    expect(redactTypedSecrets(DEVICE, "Token Too-REVIEW-4243")).toBe("Token Too-REVIEW-4243");
+    const data: DescribeTreeData = {
+      tree: screen(other, field),
+      quotableTree: quotable,
+      source: "native-devtools",
+    };
+
+    expect(quotedText(data, DEVICE, field, nodeText)).toBe("Token projected");
+    expect(quotedText(data, DEVICE, other, nodeText)).toBe("Token projected other");
   });
 
-  it("is withheld whole when a known form is only part of it", () => {
-    const tree = screen(field("token", { value: "tok-REVIEW-4242-and-more" }));
+  it("quotes only the note for a node the projection has no place for", () => {
+    const data: DescribeTreeData = {
+      tree: screen(field),
+      quotableTree: screen(),
+      source: "native-devtools",
+    };
 
-    expect(redactTypedSecrets(DEVICE, "tok-REVIEW-4242-and-more", tree)).toBe(WITHHELD);
-  });
-
-  it("shows the placeholder when it is a known form", () => {
-    const tree = screen(field("token", { value: "TOK-REVIEW-4242" }));
-
-    expect(redactTypedSecrets(DEVICE, "TOK-REVIEW-4242", tree)).toBe("{{secret:TOKEN}}");
-  });
-
-  it("is quoted when it is what the field held before the secret", () => {
-    const tree = screen(field("token", { label: "Token", value: "Search" }));
-
-    expect(redactTypedSecrets(DEVICE, "Token Search", tree)).toBe("Token Search");
-  });
-
-  it("is withheld from the label too, where a field's text is its label", () => {
-    // An Android EditText without a content description.
-    noteSecretField(DEVICE, "android", { before: { label: "Hint" }, typed: "{{secret:TOKEN}}" });
-    const tree = screen(field("android", { label: "Too-REVIEW-4243" }));
-
-    expect(redactTypedSecrets(DEVICE, "Too-REVIEW-4243", tree)).toBe(WITHHELD);
-    expect(redactTypedSecrets(DEVICE, "Hint", screen(field("android", { label: "Hint" })))).toBe(
-      "Hint"
-    );
-  });
-
-  it("is quoted for a field with a different identifier", () => {
-    const tree = screen(field("other", { value: "Too-REVIEW-4243" }));
-
-    expect(redactTypedSecrets(DEVICE, "Too-REVIEW-4243", tree)).toBe("Too-REVIEW-4243");
-  });
-
-  it("keeps the first note of a field, whose earlier text is not a secret", () => {
-    // A second secret step finds the first one's text in the field.
-    noteSecretField(DEVICE, "token", {
-      before: { value: "Too-REVIEW-4243" },
-      typed: "{{secret:OTHER}}",
-    });
-    const tree = screen(field("token", { value: "Too-REVIEW-4243" }));
-
-    expect(redactTypedSecrets(DEVICE, "Too-REVIEW-4243", tree)).toBe(WITHHELD);
-  });
-
-  it("is quoted again once the fields of the device are forgotten, and a value is not", () => {
-    forgetSecretFields(DEVICE);
-    const tree = screen(field("token", { value: "linda" }), field("b", { value: TOKEN.value }));
-
-    expect(redactTypedSecrets(DEVICE, "linda", tree)).toBe("linda");
-    expect(redactTypedSecrets(DEVICE, TOKEN.value, tree)).toBe("{{secret:TOKEN}}");
+    expect(quotedText(data, DEVICE, field, nodeText)).toBe(WITHHELD_INPUT_TEXT);
+    expect(quotedText(data, DEVICE, { ...field }, nodeText)).toBe(WITHHELD_INPUT_TEXT);
   });
 });

@@ -11,6 +11,7 @@ import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils
 import { stripRemotePrefix } from "../../utils/device-info";
 import { simctlTargetForUdid } from "../../utils/ios-device-sets";
 import { nodeText } from "../../utils/ui-tree-match";
+import { redactTypedSecrets, secretTypedOn, WITHHELD_INPUT_TEXT } from "../../utils/typed-secrets";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import type { FlowTreeTarget } from "./flow-actions";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
@@ -174,15 +175,24 @@ function normalizeFrame(rect: RawRect, screenW: number, screenH: number): Descri
  * field reports its placeholder there, and a secure field reports nothing.
  * Every other view's value stays out: a switch's "1" would hoist into the text
  * of the row around it and break an `equals` check on what that row shows.
+ *
+ * With `quotedLabel` the node is projected as a result may quote it, on a
+ * device a secret was typed on: a text input's value is the note that it is
+ * withheld, and a label is what `quotedLabel` makes of it. Which views become
+ * leaves does not depend on either text, so the two projections of one payload
+ * give the same nodes in the same order.
  */
 function projectIosNode(
   node: RawViewNode,
   screenW: number,
-  screenH: number
+  screenH: number,
+  quotedLabel?: (label: string) => string
 ): FlatNode<RawViewNode> {
   const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
   const role = roleFromClassName(node.className);
-  const value = role === IOS_TEXT_INPUT_ROLE && node.value !== node.label ? node.value : undefined;
+  const held = role === IOS_TEXT_INPUT_ROLE && node.value !== node.label ? node.value : undefined;
+  const value = quotedLabel && held !== undefined ? WITHHELD_INPUT_TEXT : held;
+  const label = quotedLabel && node.label !== undefined ? quotedLabel(node.label) : node.label;
 
   // Scroll-clip inputs (see `flattenHoisting`). Screen (or window) space only:
   // `frame` is parent-local, so falling back to it (as the leaf frame does)
@@ -201,7 +211,7 @@ function projectIosNode(
         role,
         frame,
         children: [],
-        label: node.label,
+        label,
         value,
         identifier: node.identifier,
         focused: node.firstResponder || undefined,
@@ -209,9 +219,7 @@ function projectIosNode(
     }
   }
 
-  const ownTextParts = frame
-    ? [node.label, value].filter((text): text is string => Boolean(text))
-    : [];
+  const ownTextParts = frame ? [label, value].filter((text): text is string => Boolean(text)) : [];
 
   return {
     skip,
@@ -257,7 +265,10 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
  * framework that predates `screenFrame` reports neither, and its frames are in
  * the window's space, where a direction needs no turning.
  */
-function adaptFullHierarchy(raw: unknown): {
+function adaptFullHierarchy(
+  raw: unknown,
+  quotedLabel?: (label: string) => string
+): {
   tree: DescribeNode;
   screen?: { width: number; height: number };
   uiOrientation?: UiOrientation;
@@ -295,7 +306,7 @@ function adaptFullHierarchy(raw: unknown): {
   const children: DescribeNode[] = [];
   if (screenW > 0 && screenH > 0) {
     for (const win of windows) {
-      flattenHoisting(win, (n) => projectIosNode(n, screenW, screenH), children);
+      flattenHoisting(win, (n) => projectIosNode(n, screenW, screenH, quotedLabel), children);
     }
   }
 
@@ -627,8 +638,16 @@ export async function queryFullHierarchyTree(
   }
 
   const { tree, screen, uiOrientation } = adaptFullHierarchy(rawResult);
+  // This tree reads the text of text inputs, and a field can hold a typed
+  // secret in a form no value matches (capitalized, corrected, formatted). So
+  // once a secret was typed on the device, a quote reads a second projection,
+  // in which that text is never present.
+  const quotableTree = secretTypedOn(device.id)
+    ? adaptFullHierarchy(rawResult, (label) => redactTypedSecrets(device.id, label)).tree
+    : undefined;
   return {
     tree,
+    ...(quotableTree ? { quotableTree } : {}),
     source: "native-devtools",
     ...(screen ? { screen } : {}),
     ...(uiOrientation ? { uiOrientation } : {}),

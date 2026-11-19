@@ -266,11 +266,7 @@ function timeoutNote(
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
       // The text comes off the screen, where a field shows a typed secret.
       const shown = first
-        ? redactTypedSecrets(
-            params.udid,
-            macFieldText(first, isMacos(params)) ?? assertText(first),
-            lastTree ?? undefined
-          )
+        ? redactTypedSecrets(params.udid, macFieldText(first, isMacos(params)) ?? assertText(first))
         : undefined;
       base =
         shown !== undefined

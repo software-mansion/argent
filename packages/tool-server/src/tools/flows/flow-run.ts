@@ -126,8 +126,6 @@ import { getTrackedMacosApp, otherWorktreeOfBuild } from "../../utils/macos-apps
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import type { ArtifactHandle } from "../../artifacts";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
-import { forgetSecretFields } from "../../utils/typed-secrets";
-import { noteSecretShown, secretFieldsBefore, SECRET_TYPING_TOOLS } from "./flow-secret-fields";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -725,8 +723,6 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // A FRESH object every time, never a mutation of the previous target: the
   // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
   state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
-  // Its fields started again too, without the secrets typed into them.
-  forgetSecretFields(device.id);
   // A Mac app's note: argent force-quit its own copy, or the new process
   // showed no window in time. The launch worked either way.
   const warnings = [
@@ -2558,42 +2554,6 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
   }
 }
 
-/** The tools that terminate the app before they start it. `launch-app` only brings a running one forward. */
-const RESTARTING_TOOLS: ReadonlySet<string> = new Set(["restart-app", "reinstall-app"]);
-
-/**
- * The text a `tool:` step asks a text-entry tool to type, as its author wrote
- * it, when it names a secret: every string argument that holds a placeholder,
- * the steps of a `run-sequence` included.
- */
-function typedSecretText(step: Extract<FlowStep, { kind: "tool" }>): string | undefined {
-  if (!SECRET_TYPING_TOOLS.has(canonicalToolId(step.name))) return undefined;
-  const texts: string[] = [];
-  const collect = (value: unknown): void => {
-    if (typeof value === "string") {
-      if (value.includes(SECRET_PLACEHOLDER_MARKER)) texts.push(value);
-    } else if (typeof value === "object" && value !== null) {
-      for (const inner of Object.values(value)) collect(inner);
-    }
-  };
-  collect(step.args);
-  return texts.length > 0 ? texts.join(" ") : undefined;
-}
-
-/**
- * Run a step that types a secret into whatever has focus, and read what the
- * field shows for it (see `flow-secret-fields`). Also after a failure: a tool
- * that stops partway leaves part of the text typed.
- */
-async function typingSecret<T>(env: ActionEnv, typed: string, run: () => Promise<T>): Promise<T> {
-  const fields = await secretFieldsBefore(env, typed);
-  try {
-    return await run();
-  } finally {
-    await noteSecretShown(env, fields, typed);
-  }
-}
-
 /**
  * Screenshot of the device at a failed step, so the report shows what was on
  * screen. Best-effort: no device, a cancelled run, a typed secret, or a
@@ -3202,25 +3162,14 @@ async function execLeafStep(
           step.name,
           nestedRunArgs(state, step.name, args)
         );
-        const toolArgs = prepared.args;
-        const invoke = (): Promise<unknown> =>
-          invokeSubTool(registry, ctx, step.name, toolArgs, {
-            ...(prepared?.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
-            // The two tools that can start a nested run continue this run's
-            // stack, so a flow that runs itself stops at the cycle guard.
-            ...(FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))
-              ? { flowStack: scope.runStack }
-              : {}),
-          });
-        const typed = state.device ? typedSecretText(step) : undefined;
-        const result =
-          typed === undefined
-            ? await invoke()
-            : await typingSecret(deviceEnv(state), typed, invoke);
-        // The app these two start again has its fields as it first shows them.
-        if (device && RESTARTING_TOOLS.has(canonicalToolId(step.name))) {
-          forgetSecretFields(device.id);
-        }
+        const result = await invokeSubTool(registry, ctx, step.name, prepared.args, {
+          ...(prepared.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
+          // The two tools that can start a nested run continue this run's
+          // stack, so a flow that runs itself stops at the cycle guard.
+          ...(FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))
+            ? { flowStack: scope.runStack }
+            : {}),
+        });
         // A tool that reports its failure in a result it returns instead of
         // throwing would otherwise count as a passing step (#606).
         const verdict = toolResultVerdict(step.name, result);

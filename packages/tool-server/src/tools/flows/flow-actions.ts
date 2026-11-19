@@ -31,9 +31,7 @@ import { renderFlagGated } from "../../utils/flag-gated-text";
 import { isFlagOffered } from "../../utils/capability";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
-import { noteSecretShown, secretFieldsBefore } from "./flow-secret-fields";
-import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
-import { redactTypedSecrets } from "../../utils/typed-secrets";
+import { quotedText } from "../../utils/typed-secrets";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -1697,12 +1695,7 @@ async function runType(
   // its own), so a cancelled run can never type into whatever the app has
   // focused after the caller gave up.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
-  // A field that is not secure shows the secret, and not always as it was
-  // sent: read what the field makes of it (see `flow-secret-fields`).
-  const secret = step.text.includes(SECRET_PLACEHOLDER_MARKER);
-  const fields = secret ? await secretFieldsBefore(env, step.text, frame) : [];
   await invokeOnDevice(env, "keyboard", { text: step.text });
-  if (secret) await noteSecretShown(env, fields, step.text);
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     // Enter goes in its own keyboard call because the tool rejects a combined
@@ -1713,10 +1706,6 @@ async function runType(
     // above, whose `gesture-tap` resolves simulator-server, which rejects a tvOS
     // UDID.)
     await invokeOnDevice(env, "keyboard", { key: "enter" });
-    // A field can accept a correction of its last word on return. Only a field
-    // with an identifier is read again: focus can have moved to the next one.
-    const identified = fields.filter((field) => field.identifier);
-    if (identified.length > 0) await noteSecretShown(env, identified, step.text);
   }
   return { ok: true, ...warnedBy(toolWarning(focusTap)) };
 }
@@ -1754,8 +1743,8 @@ async function waitForCondition(
   const deadline = Date.now() + timeoutMs;
 
   let lastMatches: ReturnType<typeof findAll> = [];
-  // The tree `lastMatches` came from, for the reason that quotes its text.
-  let lastTree: DescribeNode | undefined;
+  // The read `lastMatches` came from, for the reason that quotes its text.
+  let lastData: DescribeTreeData | undefined;
   let fetchError: string | undefined;
   let everMatched = false;
   // Date.now() of the most recent TRUSTED read — undefined until one lands.
@@ -1775,7 +1764,7 @@ async function waitForCondition(
     try {
       const data = await readFlowTree(env);
       lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
-      lastTree = data.tree;
+      lastData = data;
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
       const blind = isBlindRead(data, everMatched, step.condition);
@@ -1894,9 +1883,9 @@ async function waitForCondition(
         // only a read that answers writes the orientation.
         readingOrientation(env),
         env.device.platform === "macos",
-        // The only text in a reason that comes off the screen, and so the only
-        // text a typed secret can be in.
-        (text) => redactTypedSecrets(env.device.id, text, lastTree)
+        // The text of an element is the only part of a reason that comes off
+        // the screen, where a field shows a typed secret.
+        (node, read) => (lastData ? quotedText(lastData, env.device.id, node, read) : read(node))
       ) + blipNote,
   };
 }
@@ -2480,7 +2469,7 @@ function assertReason(
   matches: ReturnType<typeof findAll>,
   orientation: UiOrientation | undefined,
   macos: boolean,
-  quoted: (screenText: string) => string
+  quoted: (node: DescribeNode, read: (node: DescribeNode) => string) => string
 ): string {
   const sel = describeSelector(selector);
   switch (condition) {
@@ -2504,11 +2493,10 @@ function assertReason(
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted
       // subtree text (see evaluateCondition), so quote both when they differ.
-      const field = macFieldText(first, macos);
-      const shown = field ?? assertText(first);
-      const own = field ?? nodeText(first);
-      const ownNote = own && own !== shown ? ` (own text "${quoted(own)}")` : "";
-      return `element matched ${sel} but its text was "${quoted(shown)}"${ownNote} (wanted to ${wanted})`;
+      const shown = quoted(first, (node) => macFieldText(node, macos) ?? assertText(node));
+      const own = quoted(first, (node) => macFieldText(node, macos) ?? nodeText(node));
+      const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
+      return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;
     }
     default:
       return `assertion failed for selector ${sel}`;
