@@ -1,6 +1,7 @@
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
+import { noteTypedSecrets } from "../../utils/typed-secrets";
 import { pasteZodSchema } from "./schema";
 import type { PasteDispatchParams, PasteParams, PasteResult, PasteServices } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
@@ -87,6 +88,7 @@ Tap the field first so it has focus. Returns { pasted: true }, plus via: "keyboa
       });
       return serializedPerDevice(params.udid, async () => {
         if (secrets.length === 0) return dispatch(services, params, options);
+        noteTypedSecrets(params.udid, secrets);
         try {
           return await dispatch(services, { ...params, text, hasSecrets: true }, options);
         } catch (err) {
