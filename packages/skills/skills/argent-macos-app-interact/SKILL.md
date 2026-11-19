@@ -37,7 +37,7 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Mac Ca
 
 ## Mac Catalyst (kind `catalyst`)
 
-- Build with `xcodebuild -destination 'platform=macOS,variant=Mac Catalyst' build` and pass the resulting `.app` to `boot-device`. If it reports "Designed for iPad", ask for the Mac Catalyst build or suggest testing on an iOS simulator.
+- Build with `xcodebuild -scheme <scheme> -destination 'platform=macOS,variant=Mac Catalyst' build`. Add `-workspace <name>.xcworkspace` for a workspace (React Native, CocoaPods), or `-project <name>.xcodeproj` to select a project. Without `-scheme`, xcodebuild ignores the destination and builds for iOS. A Debug build is in DerivedData under `Build/Products/Debug-maccatalyst/`, not `Debug-iphonesimulator/`. Pass that `.app` to `boot-device`. If it reports "Designed for iPad", ask for the Mac Catalyst build or suggest testing on an iOS simulator.
 - Use `describe` to find UIKit controls and their frames. AppKit view-tree tools are unavailable.
 - Switch to the intended window with `menu-bar` and the Window menu. Tap the target field before typing, since keyboard focus can be in another window and SwiftUI Tab order can differ from the visible order.
 - Tap alert buttons directly. Return depends on a default action, and Escape can leave a UIKit text-field alert open.
