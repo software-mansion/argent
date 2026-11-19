@@ -166,9 +166,7 @@ const zodSchema = z.object({
     .max(MACOS_MODIFIERS.length)
     .optional()
     .describe(
-      "Modifier keys held down through the click, Mac app only: for example " +
-        '["command"] to add a row to a selection, ["shift"] to extend it, ["control"] for a ' +
-        "Control-click. Any other device refuses them. Default none."
+      "Keys held throughout a click or multi-click gesture. Mac apps only. An empty list leaves the click unmodified."
     )
     .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
 });
@@ -177,7 +175,8 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureTapTool: ToolDefinition<Params, Result> = {
   id: "gesture-tap",
-  description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app) at a point given as fractions of the screen width and height (not pixels): a Down event followed by an Up event at the same spot.<flag:macos-apps> On a Mac app it is a click, and x/y are fractions of the area describe reports, not of the window.</flag:macos-apps>
+  description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app) at a point given as fractions of the screen width and height (not pixels): a Down event followed by an Up event at the same spot.<flag:macos-apps> On a Mac app it is a click, and x/y are fractions of the area describe reports, not of the window.
+If a modifier click returns \`MACOS_APP_LIBRARY_OUTDATED\`, the tool stopped before clicking. Run \`restart-app\` to reload the library, then retry. If the error persists, use an Argent build with modifier-click support.</flag:macos-apps>
 Use when tapping a button, link, or any tappable element on the screen.
 Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the device backend (simulator-server / emulator / Chromium CDP<flag:harmonyos> / \`hdc\`</flag:harmonyos>) is unreachable.
 Before tapping, take the coordinates from \`describe\` on every platform (on Chromium it walks the DOM<flag:harmonyos>, on HarmonyOS it reads the \`uitest\` layout dump</flag:harmonyos>). More information in \`argent-device-interact\` skill`,
@@ -245,7 +244,6 @@ Before tapping, take the coordinates from \`describe\` on every platform (on Chr
         )
       );
     }
-    // The other backends have no keyboard to hold the keys on and would tap without them.
     if (params.modifiers?.length) {
       const refusal =
         device.platform === "chromium"

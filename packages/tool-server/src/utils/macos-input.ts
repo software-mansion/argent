@@ -96,8 +96,8 @@ export async function macosMouse(app: MacosAppApi, event: MacosMouseEvent): Prom
 
 /**
  * Move, then `clickCount` down/up pairs with an escalating click count (a
- * double-click is counts 1 then 2), then the settle wait. `modifiers` are held
- * through the whole click, the move included, as a hand holds them.
+ * double-click is counts 1 then 2), then the settle wait. Apply `modifiers` to
+ * the move and every press and release.
  */
 export async function macosClick(
   app: MacosAppApi,
@@ -106,8 +106,7 @@ export async function macosClick(
   opts: { clickCount?: number; button?: "left" | "right"; modifiers?: MacosModifier[] } = {}
 ): Promise<void> {
   const modifiers = opts.modifiers?.length ? [...new Set(opts.modifiers)] : undefined;
-  // A library from before modifier keys drops the parameter and would make a
-  // plain click. It answers the move without them, before any button goes down.
+  // Older libraries ignore modifiers. Check the move reply before pressing a button.
   const moved = await app.call<{ modifiers?: unknown } | undefined>(
     "Input.mouse",
     insideMaxEdges({ type: "move", x, y, modifiers })

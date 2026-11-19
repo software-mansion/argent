@@ -375,7 +375,7 @@ export const FAILURE_CODES = {
   MACOS_APP_BUNDLE_ID_MISMATCH: "MACOS_APP_BUNDLE_ID_MISMATCH",
   MACOS_APP_OPEN_URL_FAILED: "MACOS_APP_OPEN_URL_FAILED",
   MACOS_APP_FILE_ACCESS_FAILED: "MACOS_APP_FILE_ACCESS_FAILED",
-  /** The app runs an argent library from an older argent, which lacks what the call needs. */
+  /** The app's loaded Argent library lacks support for the requested operation. */
   MACOS_APP_LIBRARY_OUTDATED: "MACOS_APP_LIBRARY_OUTDATED",
 
   KEYBOARD_KEY_UNSUPPORTED: "KEYBOARD_KEY_UNSUPPORTED",

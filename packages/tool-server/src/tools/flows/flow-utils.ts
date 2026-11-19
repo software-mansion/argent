@@ -757,8 +757,7 @@ export type FlowStep =
       // Only the non-default right button is ever stored: absent is the left
       // one, so parse/serialize stay exact inverses (as `times: 1` is absent).
       button?: "right";
-      // Modifier keys held through the click, Mac app only. Stored non-empty,
-      // without repeats and in MACOS_MODIFIERS order, for the same reason.
+      // Nonempty, unique modifier keys in MACOS_MODIFIERS order.
       modifiers?: MacosModifier[];
     }
   | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
@@ -1596,10 +1595,7 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { when, steps: step.steps.map(toYamlStep) };
     }
     case "tap": {
-      // The options form appears only when an option is present (`times` is
-      // never stored as 1, `button` never as left, `modifiers` never empty -
-      // see parseTapTimes, parseTapButton and parseTapModifiers), so a plain
-      // tap round-trips to the plain selector/point body.
+      // Parsing strips default options, so a plain tap serializes as just its target.
       const target = targetToYaml(step);
       if (step.times === undefined && step.button === undefined && step.modifiers === undefined) {
         return { tap: target };
@@ -2664,12 +2660,6 @@ function parseTapButton(raw: unknown, entry: unknown): "right" | undefined {
   return "right";
 }
 
-/**
- * Parse `modifiers` on a tap body: the keys held through the click, which the
- * runner sends only to a Mac app. An empty list normalizes to absent, and the
- * keys to MACOS_MODIFIERS order without repeats, keeping parse/serialize exact
- * inverses.
- */
 function parseTapModifiers(raw: unknown, entry: unknown): MacosModifier[] | undefined {
   if (raw === undefined) return undefined;
   const names: readonly string[] = MACOS_MODIFIERS;
@@ -3381,9 +3371,8 @@ function* argFields(
  * and `long-press` take both, and the parsed step keeps no record of which was
  * written — `duration` is optional in long-press's options form and `times: 1`
  * normalizes to `undefined`, so a step carrying neither could have been spelled
- * either way (`button: left` and `modifiers: []` normalize away too). Naming one spelling there
- * would name a path that is not in the author's file, so `alt` carries the
- * other and the refusal offers both.
+ * either way (`button: left` and `modifiers: []` normalize away too). The
+ * refusal uses `alt` to offer both paths when the original spelling is unknown.
  */
 function gestureTargetPath(
   step: Extract<FlowStep, { kind: "tap" | "long-press" | "pinch" | "rotate" }>

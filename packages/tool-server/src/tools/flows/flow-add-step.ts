@@ -1782,7 +1782,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A right-click must survive it as `button`, or replay would left-click.
       // Left is the default (absent).
       const tapButton = isTap && args.button === "right" ? { button: "right" as const } : {};
-      // Modifier keys too, or replay would make a plain click (gesture-tap validated them).
       const heldKeys = Array.isArray(args.modifiers)
         ? MACOS_MODIFIERS.filter((m) => (args.modifiers as unknown[]).includes(m))
         : [];
