@@ -90,21 +90,26 @@ extension ArgentRunnerSession {
 
     /// Flattens the snapshot tree into an ordered node list. Keeps elements an
     /// agent can name or act on, assigns indices and parent links in emission
-    /// order, and dedupes mirror elements.
+    /// order, and dedupes mirror elements. Every node emitted from a window
+    /// that holds the on-screen keyboard is marked `keyboard`.
     static func flatten(_ root: XCUIElementSnapshot) -> [SnapshotNodePayload] {
         struct WorkItem {
             let snapshot: XCUIElementSnapshot
             let rawDepth: Int
             let emittedDepth: Int
             let parentIndex: Int
+            let keyboard: Bool
         }
 
         let viewport = root.frame
-        var nodes = [makeNode(root, index: 0, depth: 0, parentIndex: nil)]
+        var nodes = [makeNode(root, index: 0, depth: 0, parentIndex: nil, keyboard: false)]
         var seen: Set<String> = [identity(root)]
 
         var stack = root.children.reversed().map {
-            WorkItem(snapshot: $0, rawDepth: 1, emittedDepth: 1, parentIndex: 0)
+            WorkItem(
+                snapshot: $0, rawDepth: 1, emittedDepth: 1, parentIndex: 0,
+                keyboard: holdsKeyboard($0)
+            )
         }
 
         while let item = stack.popLast() {
@@ -135,7 +140,8 @@ extension ArgentRunnerSession {
                         snapshot,
                         index: index,
                         depth: item.emittedDepth,
-                        parentIndex: item.parentIndex
+                        parentIndex: item.parentIndex,
+                        keyboard: item.keyboard
                     )
                 )
 
@@ -149,13 +155,34 @@ extension ArgentRunnerSession {
                         snapshot: child,
                         rawDepth: item.rawDepth + 1,
                         emittedDepth: childEmittedDepth,
-                        parentIndex: childParentIndex
+                        parentIndex: childParentIndex,
+                        keyboard: item.keyboard
                     )
                 )
             }
         }
 
         return nodes
+    }
+
+    /// Whether a window of the app (a child of its root) is the on-screen
+    /// keyboard: it holds an element of type keyboard. The whole window is
+    /// keyboard, not only that element: the prediction bar and the globe and
+    /// dictation keys sit beside it. The keyboard element itself has no label,
+    /// so the flatten drops it and its window, and this is the only place the
+    /// boundary survives. A keyboard element that is a child of the root holds
+    /// itself.
+    static func holdsKeyboard(_ window: XCUIElementSnapshot) -> Bool {
+        var stack: [(snapshot: XCUIElementSnapshot, depth: Int)] = [(window, 1)]
+        while let item = stack.popLast() {
+            if item.snapshot.elementType == .keyboard { return true }
+            if item.depth < rawDepthLimit {
+                for child in item.snapshot.children {
+                    stack.append((child, item.depth + 1))
+                }
+            }
+        }
+        return false
     }
 
     /// Whether an element earns a node: interactive, a scroll container, or
@@ -173,7 +200,8 @@ extension ArgentRunnerSession {
         _ snapshot: XCUIElementSnapshot,
         index: Int,
         depth: Int,
-        parentIndex: Int?
+        parentIndex: Int?,
+        keyboard: Bool
     ) -> SnapshotNodePayload {
         let frame = snapshot.frame
 
@@ -196,7 +224,8 @@ extension ArgentRunnerSession {
             focused: snapshot.hasFocus ? true : nil,
             selected: snapshot.isSelected ? true : nil,
             depth: depth,
-            parentIndex: parentIndex
+            parentIndex: parentIndex,
+            keyboard: keyboard ? true : nil
         )
     }
 

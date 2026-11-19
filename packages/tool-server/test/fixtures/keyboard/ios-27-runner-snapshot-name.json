@@ -1,0 +1,545 @@
+{
+  "ok": true,
+  "data": {
+    "quality": { "state": "healthy", "backend": "xctest" },
+    "nodes": [
+      {
+        "depth": 0,
+        "index": 0,
+        "type": "Application",
+        "enabled": true,
+        "rect": { "height": 874, "y": 0, "width": 402, "x": 0 },
+        "label": "KbRank"
+      },
+      {
+        "identifier": "status",
+        "parentIndex": 0,
+        "type": "StaticText",
+        "enabled": true,
+        "rect": { "x": 20, "y": 70, "width": 362, "height": 20.33333333333333 },
+        "index": 1,
+        "depth": 1,
+        "label": "status: none"
+      },
+      {
+        "identifier": "name",
+        "parentIndex": 0,
+        "type": "TextField",
+        "rect": { "x": 20, "y": 98.33333333333333, "width": 362, "height": 33.999999999999986 },
+        "enabled": true,
+        "index": 2,
+        "depth": 1
+      },
+      {
+        "parentIndex": 0,
+        "type": "Button",
+        "enabled": true,
+        "rect": { "x": 20, "y": 140.33333333333334, "width": 362, "height": 44 },
+        "index": 3,
+        "depth": 1,
+        "label": "Done"
+      },
+      {
+        "identifier": "amount",
+        "parentIndex": 0,
+        "type": "TextField",
+        "rect": { "x": 20, "y": 192.33333333333334, "width": 362, "height": 34 },
+        "enabled": true,
+        "index": 4,
+        "depth": 1
+      },
+      {
+        "identifier": "website",
+        "parentIndex": 0,
+        "type": "TextField",
+        "rect": { "x": 20, "y": 234.33333333333334, "width": 362, "height": 34.00000000000003 },
+        "enabled": true,
+        "index": 5,
+        "depth": 1
+      },
+      {
+        "parentIndex": 0,
+        "type": "StaticText",
+        "enabled": true,
+        "rect": { "x": 20, "y": 276.3333333333333, "width": 362, "height": 20.333333333333314 },
+        "index": 6,
+        "depth": 1,
+        "label": "Google"
+      },
+      {
+        "parentIndex": 0,
+        "type": "Button",
+        "enabled": true,
+        "rect": { "x": 20, "y": 304.6666666666667, "width": 362, "height": 30 },
+        "index": 7,
+        "depth": 1,
+        "label": "Delete"
+      },
+      {
+        "parentIndex": 7,
+        "type": "StaticText",
+        "enabled": true,
+        "rect": { "x": 178.66666666666666, "y": 310.6666666666667, "width": 45, "height": 18 },
+        "index": 8,
+        "depth": 2,
+        "label": "Delete"
+      },
+      {
+        "parentIndex": 0,
+        "type": "Button",
+        "enabled": true,
+        "rect": { "x": 20, "y": 700, "width": 362, "height": 120 },
+        "index": 9,
+        "depth": 1,
+        "label": "Delete"
+      },
+      {
+        "rect": { "x": 0, "y": 546, "width": 402, "height": 328 },
+        "enabled": true,
+        "parentIndex": 0,
+        "identifier": "inputView",
+        "type": "Other",
+        "index": 10,
+        "depth": 1
+      },
+      {
+        "rect": { "x": 0, "y": 546, "width": 402, "height": 44 },
+        "enabled": true,
+        "keyboard": true,
+        "parentIndex": 0,
+        "identifier": "SystemInputAssistantView",
+        "type": "Other",
+        "index": 11,
+        "depth": 1
+      },
+      {
+        "rect": { "x": 0, "y": 546, "width": 402, "height": 44 },
+        "enabled": true,
+        "keyboard": true,
+        "parentIndex": 11,
+        "identifier": "CenterPageView",
+        "type": "Other",
+        "index": 12,
+        "depth": 2
+      },
+      {
+        "enabled": true,
+        "rect": { "x": 0, "y": 546, "width": 402, "height": 44 },
+        "keyboard": true,
+        "parentIndex": 12,
+        "type": "ScrollView",
+        "index": 13,
+        "depth": 3
+      },
+      {
+        "label": "Typing Predictions",
+        "enabled": true,
+        "rect": { "x": 0, "y": 546, "width": 402, "height": 44 },
+        "keyboard": true,
+        "parentIndex": 12,
+        "type": "Other",
+        "index": 14,
+        "depth": 3
+      },
+      {
+        "label": "I",
+        "enabled": true,
+        "rect": { "x": 0, "y": 546, "width": 134, "height": 44 },
+        "keyboard": true,
+        "parentIndex": 14,
+        "type": "Button",
+        "index": 15,
+        "depth": 4
+      },
+      {
+        "label": "The",
+        "enabled": true,
+        "rect": { "x": 134, "y": 546, "width": 134, "height": 44 },
+        "keyboard": true,
+        "parentIndex": 14,
+        "type": "Button",
+        "index": 16,
+        "depth": 4
+      },
+      {
+        "label": "I’m",
+        "enabled": true,
+        "rect": { "x": 268, "y": 546, "width": 134, "height": 44 },
+        "keyboard": true,
+        "parentIndex": 14,
+        "type": "Button",
+        "index": 17,
+        "depth": 4
+      },
+      {
+        "rect": { "x": 0, "y": 590, "width": 402, "height": 226 },
+        "enabled": true,
+        "keyboard": true,
+        "parentIndex": 0,
+        "identifier": "UIKeyboardLayoutStar Preview",
+        "type": "Other",
+        "index": 18,
+        "depth": 1
+      },
+      {
+        "label": "Q",
+        "enabled": true,
+        "rect": { "x": 4.666666666666657, "y": 597, "width": 39.333333333333336, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 19,
+        "depth": 2
+      },
+      {
+        "label": "W",
+        "enabled": true,
+        "rect": { "x": 44, "y": 597, "width": 39.66666666666666, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 20,
+        "depth": 2
+      },
+      {
+        "label": "E",
+        "enabled": true,
+        "rect": { "x": 83.66666666666666, "y": 597, "width": 39.33333333333334, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 21,
+        "depth": 2
+      },
+      {
+        "label": "R",
+        "enabled": true,
+        "rect": { "x": 122.99999999999999, "y": 597, "width": 39.66666666666667, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 22,
+        "depth": 2
+      },
+      {
+        "label": "T",
+        "enabled": true,
+        "rect": { "x": 162.66666666666666, "y": 597, "width": 39.33333333333334, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 23,
+        "depth": 2
+      },
+      {
+        "label": "Y",
+        "enabled": true,
+        "rect": { "x": 202, "y": 597, "width": 39.66666666666666, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 24,
+        "depth": 2
+      },
+      {
+        "label": "U",
+        "enabled": true,
+        "rect": { "height": 54, "x": 241.66666666666669, "width": 39.333333333333314, "y": 597 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 25,
+        "depth": 2
+      },
+      {
+        "label": "I",
+        "rect": { "width": 39.666666666666686, "height": 54, "x": 281, "y": 597 },
+        "enabled": true,
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 26,
+        "depth": 2
+      },
+      {
+        "label": "O",
+        "enabled": true,
+        "rect": { "x": 320.66666666666663, "y": 597, "width": 39.333333333333314, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 27,
+        "depth": 2
+      },
+      {
+        "label": "P",
+        "enabled": true,
+        "rect": { "x": 360, "y": 597, "width": 39.666666666666686, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 28,
+        "depth": 2
+      },
+      {
+        "label": "A",
+        "enabled": true,
+        "rect": { "x": 24.333333333333318, "y": 651, "width": 39.33333333333334, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 29,
+        "depth": 2
+      },
+      {
+        "label": "S",
+        "enabled": true,
+        "rect": { "x": 63.66666666666666, "y": 651, "width": 39.66666666666666, "height": 54 },
+        "keyboard": true,
+        "parentIndex": 18,
+        "type": "Key",
+        "index": 30,
+        "depth": 2
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 103.33333333333331, "y": 651, "width": 39.33333333333334, "height": 54 },
+        "label": "D",
+        "type": "Key",
+        "index": 31
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 142.66666666666666, "y": 651, "width": 39.66666666666666, "height": 54 },
+        "label": "F",
+        "type": "Key",
+        "index": 32
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 182.33333333333334, "y": 651, "width": 39.33333333333334, "height": 54 },
+        "label": "G",
+        "type": "Key",
+        "index": 33
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 221.66666666666666, "y": 651, "width": 39.66666666666666, "height": 54 },
+        "label": "H",
+        "type": "Key",
+        "index": 34
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 261.33333333333326, "y": 651, "width": 39.333333333333314, "height": 54 },
+        "label": "J",
+        "type": "Key",
+        "index": 35
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 300.66666666666663, "y": 651, "width": 39.666666666666686, "height": 54 },
+        "label": "K",
+        "type": "Key",
+        "index": 36
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 340.33333333333326, "y": 651, "width": 39.333333333333314, "height": 54 },
+        "label": "L",
+        "type": "Key",
+        "index": 37
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "identifier": "shift",
+        "parentIndex": 18,
+        "rect": { "x": 4.666666666666657, "y": 705, "width": 51.333333333333336, "height": 54 },
+        "label": "shift",
+        "selected": true,
+        "type": "Button",
+        "index": 38
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 63.66666666666666, "y": 705, "width": 39.66666666666666, "height": 54 },
+        "label": "Z",
+        "type": "Key",
+        "index": 39
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 103.33333333333331, "y": 705, "width": 39.33333333333334, "height": 54 },
+        "label": "X",
+        "type": "Key",
+        "index": 40
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 142.66666666666666, "y": 705, "width": 39.66666666666666, "height": 54 },
+        "label": "C",
+        "type": "Key",
+        "index": 41
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 182.33333333333334, "y": 705, "width": 39.33333333333334, "height": 54 },
+        "label": "V",
+        "type": "Key",
+        "index": 42
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 221.66666666666666, "y": 705, "width": 39.66666666666666, "height": 54 },
+        "label": "B",
+        "type": "Key",
+        "index": 43
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 261.33333333333326, "y": 705, "width": 39.333333333333314, "height": 54 },
+        "label": "N",
+        "type": "Key",
+        "index": 44
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "parentIndex": 18,
+        "rect": { "x": 300.66666666666663, "y": 705, "width": 39.666666666666686, "height": 54 },
+        "label": "M",
+        "type": "Key",
+        "index": 45
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "identifier": "delete",
+        "parentIndex": 18,
+        "rect": { "x": 348, "y": 705, "width": 51.666666666666686, "height": 54 },
+        "label": "delete",
+        "type": "Key",
+        "index": 46
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "identifier": "more",
+        "parentIndex": 18,
+        "rect": { "x": 4.666666666666657, "y": 759, "width": 49.333333333333336, "height": 54 },
+        "label": "numbers",
+        "type": "Key",
+        "index": 47
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "identifier": "emoji",
+        "parentIndex": 18,
+        "rect": { "x": 53.999999999999986, "y": 759, "width": 49.33333333333333, "height": 54 },
+        "label": "Emoji",
+        "type": "Button",
+        "index": 48
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "identifier": "space",
+        "parentIndex": 18,
+        "rect": { "x": 103.3333333333333, "y": 759, "width": 197.33333333333331, "height": 54 },
+        "label": "space",
+        "type": "Key",
+        "index": 49
+      },
+      {
+        "keyboard": true,
+        "depth": 2,
+        "enabled": true,
+        "identifier": "Done",
+        "parentIndex": 18,
+        "rect": { "x": 300.66666666666663, "y": 759, "width": 99, "height": 54 },
+        "label": "done",
+        "type": "Button",
+        "index": 50
+      },
+      {
+        "keyboard": true,
+        "depth": 1,
+        "enabled": true,
+        "parentIndex": 0,
+        "value": "Polski",
+        "label": "Next keyboard",
+        "rect": {
+          "x": 8.47726568115926,
+          "y": 805.6989567998571,
+          "width": 68.0852958475086,
+          "height": 68.73516393505099
+        },
+        "type": "Button",
+        "index": 51
+      },
+      {
+        "label": "Dictate",
+        "type": "Button",
+        "parentIndex": 0,
+        "rect": {
+          "x": 325.43743847133214,
+          "y": 805.3656234665239,
+          "width": 68.08529584750863,
+          "height": 68.73516393505099
+        },
+        "depth": 1,
+        "enabled": true,
+        "keyboard": true,
+        "index": 52,
+        "identifier": "dictation"
+      }
+    ]
+  }
+}

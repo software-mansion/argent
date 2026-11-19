@@ -265,6 +265,14 @@ const SCREEN_MAY_HAVE_MOVED =
   "that out first.";
 
 /**
+ * Where the runner's tree marks the on-screen keyboard (iOS, Android), its
+ * conditions do not see it, while the live wait does.
+ */
+const KEYBOARD_CLAUSE =
+  " The runner's conditions do not see the on-screen keyboard: a wait on a key holds only as " +
+  "the raw `tool:` step.";
+
+/**
  * WHY the two trees can disagree. The story differs per platform, and it must
  * not name the side that lost the element: on Chromium either side can.
  */
@@ -276,6 +284,7 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "view and what a system alert covers, and keeps unlabelled scrolling containers " +
       "`describe` does not print. On an iOS simulator, a runner selector does not match a text " +
       "field by the text in the field: check that text with a `text` condition on the field." +
+      KEYBOARD_CLAUSE +
       SCREEN_MAY_HAVE_MOVED
     );
   }
@@ -336,6 +345,7 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "text into an unlabelled clickable's own label — where the runner adapter keeps every view " +
       "with a `resource-id` or a label, and asks for 12000 nodes against the helper's 5000 " +
       "default. So each holds elements the other drops." +
+      KEYBOARD_CLAUSE +
       SCREEN_MAY_HAVE_MOVED
     );
   }

@@ -1,0 +1,906 @@
+{
+  "alertVisible": false,
+  "screenFrame": { "width": 402, "height": 874 },
+  "nodes": [
+    {
+      "elementType": 1,
+      "label": "KbRank",
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "bundleId": "com.example.kbrank",
+      "index": 0
+    },
+    {
+      "elementType": 2,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 0,
+      "index": 1
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 1,
+      "index": 2
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 2,
+      "index": 3
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 3,
+      "index": 4
+    },
+    {
+      "elementType": 0,
+      "frame": {
+        "y": 0.08009153318077801,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.24332570556826846
+      },
+      "parentIndex": 4,
+      "index": 5
+    },
+    {
+      "traits": ["staticText"],
+      "accessible": true,
+      "frame": {
+        "y": 0.08009153318077801,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.023264683447749804
+      },
+      "elementType": 48,
+      "identifier": "status",
+      "label": "saved",
+      "parentIndex": 5,
+      "index": 6
+    },
+    {
+      "traits": ["textEntry", "isEditing"],
+      "placeholder": "Name",
+      "accessible": true,
+      "frame": {
+        "y": 0.11250953470633103,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.038901601830663615
+      },
+      "hintShowing": true,
+      "elementType": 49,
+      "identifier": "name",
+      "value": "Name",
+      "parentIndex": 5,
+      "index": 7
+    },
+    {
+      "traits": ["textEntry"],
+      "placeholder": "Amount",
+      "accessible": true,
+      "frame": {
+        "y": 0.16056445461479785,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.03890160183066365
+      },
+      "hintShowing": true,
+      "elementType": 49,
+      "identifier": "amount",
+      "value": "Amount",
+      "parentIndex": 5,
+      "index": 8
+    },
+    {
+      "traits": ["textEntry"],
+      "placeholder": "Website",
+      "accessible": true,
+      "frame": {
+        "y": 0.2086193745232647,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.038901601830663615
+      },
+      "hintShowing": true,
+      "elementType": 49,
+      "identifier": "website",
+      "value": "Website",
+      "parentIndex": 5,
+      "index": 9
+    },
+    {
+      "traits": ["staticText"],
+      "accessible": true,
+      "elementType": 48,
+      "frame": {
+        "y": 0.2566742944317315,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.023264683447749786
+      },
+      "label": "Google",
+      "parentIndex": 5,
+      "index": 10
+    },
+    {
+      "traits": ["button"],
+      "accessible": true,
+      "elementType": 9,
+      "frame": {
+        "y": 0.2890922959572845,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.034324942791762014
+      },
+      "label": "Delete",
+      "parentIndex": 5,
+      "index": 11
+    },
+    {
+      "elementType": 48,
+      "label": "Delete",
+      "frame": {
+        "y": 0.29595728451563685,
+        "x": 0.4444444444444444,
+        "width": 0.11194029850746269,
+        "height": 0.020594965675057208
+      },
+      "parentIndex": 11,
+      "traits": ["staticText"],
+      "index": 12
+    },
+    {
+      "traits": ["button"],
+      "accessible": true,
+      "elementType": 9,
+      "frame": {
+        "y": 0.8009153318077803,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.13729977116704806
+      },
+      "label": "Delete",
+      "parentIndex": 4,
+      "index": 13
+    },
+    {
+      "elementType": 2,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 0,
+      "index": 14
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 14,
+      "index": 15
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 15,
+      "index": 16
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.37528604118993136 },
+      "parentIndex": 15,
+      "index": 17
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.37528604118993136 },
+      "parentIndex": 17,
+      "identifier": "inputView",
+      "index": 18
+    },
+    {
+      "elementType": 2,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 0,
+      "index": 19
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 19,
+      "index": 20
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.37528604118993136 },
+      "parentIndex": 20,
+      "index": 21
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.05034324942791762 },
+      "parentIndex": 21,
+      "identifier": "SystemInputAssistantView",
+      "index": 22
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.05034324942791762 },
+      "parentIndex": 22,
+      "index": 23
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.05034324942791762 },
+      "parentIndex": 23,
+      "identifier": "CenterPageView",
+      "index": 24
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": -0.06178489702517163, "x": 0, "width": 1, "height": 1.4233409610983982 },
+      "parentIndex": 24,
+      "index": 25
+    },
+    {
+      "roleDescription": "Group",
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.05034324942791762 },
+      "elementType": 46,
+      "parentIndex": 25,
+      "index": 26
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.05034324942791762 },
+      "parentIndex": 24,
+      "index": 27
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.05034324942791762 },
+      "parentIndex": 27,
+      "index": 28
+    },
+    {
+      "elementType": 0,
+      "label": "Typing Predictions",
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.05034324942791762 },
+      "parentIndex": 28,
+      "index": 29
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.05034324942791762 },
+      "parentIndex": 29,
+      "index": 30
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.05034324942791762 },
+      "parentIndex": 30,
+      "index": 31
+    },
+    {
+      "traits": ["button"],
+      "accessible": true,
+      "elementType": 9,
+      "frame": {
+        "y": 0.6247139588100686,
+        "x": 0,
+        "width": 0.3333333333333333,
+        "height": 0.05034324942791762
+      },
+      "label": "I",
+      "parentIndex": 31,
+      "index": 32
+    },
+    {
+      "traits": ["button"],
+      "accessible": true,
+      "elementType": 9,
+      "frame": {
+        "y": 0.6247139588100686,
+        "x": 0.3333333333333333,
+        "width": 0.3333333333333333,
+        "height": 0.05034324942791762
+      },
+      "label": "The",
+      "parentIndex": 31,
+      "index": 33
+    },
+    {
+      "traits": ["button"],
+      "accessible": true,
+      "elementType": 9,
+      "frame": {
+        "y": 0.6247139588100686,
+        "x": 0.6666666666666666,
+        "width": 0.3333333333333333,
+        "height": 0.05034324942791762
+      },
+      "label": "I’m",
+      "parentIndex": 31,
+      "index": 34
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.37643020594965676 },
+      "parentIndex": 21,
+      "index": 35
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.37643020594965676 },
+      "parentIndex": 35,
+      "index": 36
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6247139588100686, "x": 0, "width": 1, "height": 0.37643020594965676 },
+      "parentIndex": 36,
+      "index": 37
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6750572082379863, "x": 0, "width": 1, "height": 0.2585812356979405 },
+      "parentIndex": 21,
+      "index": 38
+    },
+    {
+      "elementType": 19,
+      "frame": { "y": 0.6750572082379863, "x": 0, "width": 1, "height": 0.2585812356979405 },
+      "parentIndex": 38,
+      "index": 39
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6750572082379863, "x": 0, "width": 1, "height": 0.2585812356979405 },
+      "parentIndex": 39,
+      "index": 40
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6750572082379863, "x": 0, "width": 1, "height": 0.2585812356979405 },
+      "parentIndex": 40,
+      "identifier": "UIKeyboardLayoutStar Preview",
+      "index": 41
+    },
+    {
+      "elementType": 20,
+      "label": "Padding-Left",
+      "parentIndex": 41,
+      "traits": ["keyboardKey"],
+      "index": 42
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.011608623548922033,
+        "width": 0.09784411276948592,
+        "height": 0.06178489702517163
+      },
+      "label": "Q",
+      "parentIndex": 41,
+      "index": 43
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.10945273631840796,
+        "width": 0.09867330016583746,
+        "height": 0.06178489702517163
+      },
+      "label": "W",
+      "parentIndex": 41,
+      "index": 44
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.2081260364842454,
+        "width": 0.09784411276948593,
+        "height": 0.06178489702517163
+      },
+      "label": "E",
+      "parentIndex": 41,
+      "index": 45
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.3059701492537313,
+        "width": 0.09867330016583749,
+        "height": 0.06178489702517163
+      },
+      "label": "R",
+      "parentIndex": 41,
+      "index": 46
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.4046434494195688,
+        "width": 0.09784411276948593,
+        "height": 0.06178489702517163
+      },
+      "label": "T",
+      "parentIndex": 41,
+      "index": 47
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.5024875621890548,
+        "width": 0.09867330016583746,
+        "height": 0.06178489702517163
+      },
+      "label": "Y",
+      "parentIndex": 41,
+      "index": 48
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.6011608623548922,
+        "width": 0.09784411276948593,
+        "height": 0.06178489702517163
+      },
+      "label": "U",
+      "parentIndex": 41,
+      "index": 49
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.6990049751243781,
+        "width": 0.09867330016583753,
+        "height": 0.06178489702517163
+      },
+      "label": "I",
+      "parentIndex": 41,
+      "index": 50
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.7976782752902155,
+        "width": 0.09784411276948586,
+        "height": 0.06178489702517163
+      },
+      "label": "O",
+      "parentIndex": 41,
+      "index": 51
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.683066361556064,
+        "x": 0.8955223880597015,
+        "width": 0.09867330016583753,
+        "height": 0.06178489702517163
+      },
+      "label": "P",
+      "parentIndex": 41,
+      "index": 52
+    },
+    {
+      "elementType": 20,
+      "label": "Padding-Right",
+      "parentIndex": 41,
+      "traits": ["keyboardKey"],
+      "index": 53
+    },
+    {
+      "elementType": 20,
+      "label": "Padding-Left",
+      "parentIndex": 41,
+      "traits": ["keyboardKey"],
+      "index": 54
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.7448512585812357,
+        "x": 0.06053067993366497,
+        "width": 0.09784411276948593,
+        "height": 0.06178489702517163
+      },
+      "label": "A",
+      "parentIndex": 41,
+      "index": 55
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.7448512585812357,
+        "x": 0.15837479270315089,
+        "width": 0.09867330016583746,
+        "height": 0.06178489702517163
+      },
+      "label": "S",
+      "parentIndex": 41,
+      "index": 56
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.7448512585812357,
+        "x": 0.25704809286898833,
+        "width": 0.09784411276948593,
+        "height": 0.06178489702517163
+      },
+      "label": "D",
+      "parentIndex": 41,
+      "index": 57
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.7448512585812357,
+        "x": 0.3548922056384743,
+        "width": 0.09867330016583753,
+        "height": 0.06178489702517163
+      },
+      "label": "F",
+      "parentIndex": 41,
+      "index": 58
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.7448512585812357,
+        "x": 0.4535655058043118,
+        "width": 0.09784411276948586,
+        "height": 0.06178489702517163
+      },
+      "label": "G",
+      "parentIndex": 41,
+      "index": 59
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.7448512585812357,
+        "x": 0.5514096185737977,
+        "width": 0.09867330016583746,
+        "height": 0.06178489702517163
+      },
+      "label": "H",
+      "parentIndex": 41,
+      "index": 60
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.7448512585812357,
+        "x": 0.650082918739635,
+        "width": 0.09784411276948586,
+        "height": 0.06178489702517163
+      },
+      "label": "J",
+      "parentIndex": 41,
+      "index": 61
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.7448512585812357,
+        "x": 0.747927031509121,
+        "width": 0.09867330016583753,
+        "height": 0.06178489702517163
+      },
+      "label": "K",
+      "parentIndex": 41,
+      "index": 62
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.7448512585812357,
+        "x": 0.8466003316749584,
+        "width": 0.09784411276948586,
+        "height": 0.06178489702517163
+      },
+      "label": "L",
+      "parentIndex": 41,
+      "index": 63
+    },
+    {
+      "elementType": 20,
+      "label": "Padding-Right",
+      "parentIndex": 41,
+      "traits": ["keyboardKey"],
+      "index": 64
+    },
+    {
+      "traits": ["button", "selected", "keyboardKey"],
+      "accessible": true,
+      "frame": {
+        "y": 0.8066361556064073,
+        "x": 0.011608623548922033,
+        "width": 0.12769485903814262,
+        "height": 0.06178489702517163
+      },
+      "elementType": 20,
+      "identifier": "shift",
+      "label": "shift",
+      "parentIndex": 41,
+      "index": 65
+    },
+    {
+      "elementType": 20,
+      "label": "Padding-Left",
+      "parentIndex": 41,
+      "traits": ["keyboardKey"],
+      "index": 66
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.8066361556064073,
+        "x": 0.15837479270315089,
+        "width": 0.09867330016583746,
+        "height": 0.06178489702517163
+      },
+      "label": "Z",
+      "parentIndex": 41,
+      "index": 67
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.8066361556064073,
+        "x": 0.25704809286898833,
+        "width": 0.09784411276948593,
+        "height": 0.06178489702517163
+      },
+      "label": "X",
+      "parentIndex": 41,
+      "index": 68
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.8066361556064073,
+        "x": 0.3548922056384743,
+        "width": 0.09867330016583753,
+        "height": 0.06178489702517163
+      },
+      "label": "C",
+      "parentIndex": 41,
+      "index": 69
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.8066361556064073,
+        "x": 0.4535655058043118,
+        "width": 0.09784411276948586,
+        "height": 0.06178489702517163
+      },
+      "label": "V",
+      "parentIndex": 41,
+      "index": 70
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.8066361556064073,
+        "x": 0.5514096185737977,
+        "width": 0.09867330016583746,
+        "height": 0.06178489702517163
+      },
+      "label": "B",
+      "parentIndex": 41,
+      "index": 71
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.8066361556064073,
+        "x": 0.650082918739635,
+        "width": 0.09784411276948586,
+        "height": 0.06178489702517163
+      },
+      "label": "N",
+      "parentIndex": 41,
+      "index": 72
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "elementType": 20,
+      "frame": {
+        "y": 0.8066361556064073,
+        "x": 0.747927031509121,
+        "width": 0.09867330016583753,
+        "height": 0.06178489702517163
+      },
+      "label": "M",
+      "parentIndex": 41,
+      "index": 73
+    },
+    {
+      "elementType": 20,
+      "label": "Padding-Right",
+      "parentIndex": 41,
+      "traits": ["keyboardKey"],
+      "index": 74
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "frame": {
+        "y": 0.8066361556064073,
+        "x": 0.8656716417910447,
+        "width": 0.12852404643449425,
+        "height": 0.06178489702517163
+      },
+      "elementType": 20,
+      "identifier": "delete",
+      "label": "delete",
+      "parentIndex": 41,
+      "index": 75
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "frame": {
+        "y": 0.868421052631579,
+        "x": 0.011608623548922033,
+        "width": 0.24543946932006636,
+        "height": 0.06178489702517163
+      },
+      "elementType": 20,
+      "identifier": "more",
+      "label": "numbers",
+      "parentIndex": 41,
+      "index": 76
+    },
+    {
+      "traits": ["keyboardKey"],
+      "accessible": true,
+      "frame": {
+        "y": 0.868421052631579,
+        "x": 0.25704809286898833,
+        "width": 0.4908789386401326,
+        "height": 0.06178489702517163
+      },
+      "elementType": 20,
+      "identifier": "space",
+      "label": "space",
+      "parentIndex": 41,
+      "index": 77
+    },
+    {
+      "traits": ["button", "keyboardKey"],
+      "accessible": true,
+      "frame": {
+        "y": 0.868421052631579,
+        "x": 0.747927031509121,
+        "width": 0.24626865671641804,
+        "height": 0.06178489702517163
+      },
+      "elementType": 20,
+      "identifier": "Done",
+      "label": "done",
+      "parentIndex": 41,
+      "index": 78
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0.6750572082379863, "x": 0, "width": 1, "height": 0.32494279176201374 },
+      "accessible": true,
+      "parentIndex": 21,
+      "index": 79
+    },
+    {
+      "traits": ["button", "keyboardKey"],
+      "accessible": true,
+      "elementType": 9,
+      "frame": {
+        "y": 0.9218523533179143,
+        "x": 0.021087725575023034,
+        "width": 0.16936640758086718,
+        "height": 0.07864435232843363
+      },
+      "label": "Emoji",
+      "parentIndex": 79,
+      "index": 80
+    },
+    { "elementType": 48, "parentIndex": 80, "traits": ["staticText"], "index": 81 },
+    {
+      "traits": ["button", "keyboardKey"],
+      "accessible": true,
+      "frame": {
+        "y": 0.9214709650646725,
+        "x": 0.8095458668441098,
+        "width": 0.16936640758086724,
+        "height": 0.07864435232843375
+      },
+      "elementType": 9,
+      "identifier": "dictation",
+      "label": "Dictate",
+      "parentIndex": 79,
+      "index": 82
+    },
+    { "elementType": 48, "parentIndex": 82, "traits": ["staticText"], "index": 83 },
+    {
+      "traits": ["button", "keyboardKey"],
+      "accessible": true,
+      "frame": {
+        "y": 0.9214709650646725,
+        "x": 0.8095458668441098,
+        "width": 0.16936640758086724,
+        "height": 0.07864435232843375
+      },
+      "elementType": 9,
+      "identifier": "dictation",
+      "label": "Dictate",
+      "parentIndex": 79,
+      "index": 84
+    },
+    { "elementType": 48, "parentIndex": 84, "traits": ["staticText"], "index": 85 }
+  ],
+  "truncated": false,
+  "foregroundApp": "com.example.kbrank",
+  "interfaceOrientation": "portrait",
+  "treeVersion": 3
+}

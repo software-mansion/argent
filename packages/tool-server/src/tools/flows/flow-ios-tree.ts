@@ -147,16 +147,35 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
 }
 
 /**
+ * Whether a window of an app (a child of its root) is the on-screen keyboard:
+ * it holds an element of type Keyboard. The whole window is keyboard, not only
+ * that element's subtree: the prediction bar, the globe and dictation keys,
+ * the iPad's undo/redo/Paste bar and the emoji search field sit beside it.
+ * A Keyboard element that is itself the root's child holds itself. The
+ * window with the app's input accessory and edit menu holds none.
+ */
+export function holdsKeyboard(node: UiTreeNode): boolean {
+  return node.type === "Keyboard" || node.children.some(holdsKeyboard);
+}
+
+/**
  * Flatten the accessibility tree into the flow contract: flat leaves under one
  * synthetic root, descendant text hoisted onto container leaves. Each app root
  * (the daemon lists the system app first while an alert shows) contributes its
- * children; the Application nodes themselves are not leaves.
+ * children; the Application nodes themselves are not leaves. Every leaf of a
+ * keyboard window ({@link holdsKeyboard}) is marked `keyboard`.
  */
 export function adaptIosUiTreeForFlows(tree: UiTree): DescribeNode {
   const children: DescribeNode[] = [];
   for (const root of tree.roots) {
     if (root.covered) continue;
-    for (const child of root.children) flattenHoisting(child, projectAxNode, children);
+    for (const window of root.children) {
+      const first = children.length;
+      flattenHoisting(window, projectAxNode, children);
+      if (holdsKeyboard(window)) {
+        for (let i = first; i < children.length; i++) children[i]!.keyboard = true;
+      }
+    }
   }
   return parseDescribeResult({
     role: "AXGroup",
@@ -317,14 +336,16 @@ function adaptIosDeviceTreeForFlows(tree: DescribeNode): DescribeNode {
 }
 
 /**
- * Physical-device flow tree from the XCUITest runner snapshot.
+ * Physical-device flow tree from the XCUITest runner snapshot, with the nodes
+ * of the keyboard's window marked `keyboard` (the runner keeps that boundary;
+ * see `holdsKeyboard` in its snapshot code).
  * Throws on a blind read: an empty tree must not settle or satisfy hidden.
  */
 export async function queryIosDeviceFlowTree(
   registry: Registry,
   device: DeviceInfo
 ): Promise<DescribeTreeData> {
-  const data = await describeIosDevice(registry, device);
+  const data = await describeIosDevice(registry, device, { markKeyboard: true });
   // Empty children plus a hint is the describe blind-read shape. A quality
   // hint on a non-empty tree still has nodes.
   if (data.tree.children.length === 0 && data.hint) {

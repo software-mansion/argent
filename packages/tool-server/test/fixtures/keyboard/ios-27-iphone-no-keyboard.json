@@ -1,0 +1,187 @@
+{
+  "alertVisible": false,
+  "screenFrame": { "width": 402, "height": 874 },
+  "nodes": [
+    {
+      "elementType": 1,
+      "label": "KbRank",
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "bundleId": "com.example.kbrank",
+      "index": 0
+    },
+    {
+      "elementType": 2,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 0,
+      "index": 1
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 1,
+      "index": 2
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 2,
+      "index": 3
+    },
+    {
+      "elementType": 0,
+      "frame": { "y": 0, "x": 0, "width": 1, "height": 1 },
+      "parentIndex": 3,
+      "index": 4
+    },
+    {
+      "elementType": 0,
+      "frame": {
+        "y": 0.08009153318077804,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.30282227307398935
+      },
+      "parentIndex": 4,
+      "index": 5
+    },
+    {
+      "traits": ["staticText"],
+      "accessible": true,
+      "frame": {
+        "y": 0.08009153318077804,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.023264683447749804
+      },
+      "elementType": 48,
+      "identifier": "status",
+      "label": "status: none",
+      "parentIndex": 5,
+      "index": 6
+    },
+    {
+      "traits": ["textEntry"],
+      "placeholder": "Name",
+      "accessible": true,
+      "frame": {
+        "y": 0.11250953470633104,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.0389016018306636
+      },
+      "hintShowing": true,
+      "elementType": 49,
+      "identifier": "name",
+      "value": "Name",
+      "parentIndex": 5,
+      "index": 7
+    },
+    {
+      "traits": ["button"],
+      "accessible": true,
+      "elementType": 9,
+      "frame": {
+        "y": 0.16056445461479787,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.05034324942791762
+      },
+      "label": "Done",
+      "parentIndex": 5,
+      "index": 8
+    },
+    {
+      "traits": ["textEntry"],
+      "placeholder": "Amount",
+      "accessible": true,
+      "frame": {
+        "y": 0.2200610221205187,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.038901601830663615
+      },
+      "hintShowing": true,
+      "elementType": 49,
+      "identifier": "amount",
+      "value": "Amount",
+      "parentIndex": 5,
+      "index": 9
+    },
+    {
+      "traits": ["textEntry"],
+      "placeholder": "Website",
+      "accessible": true,
+      "frame": {
+        "y": 0.26811594202898553,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.03890160183066365
+      },
+      "hintShowing": true,
+      "elementType": 49,
+      "identifier": "website",
+      "value": "Website",
+      "parentIndex": 5,
+      "index": 10
+    },
+    {
+      "traits": ["staticText"],
+      "accessible": true,
+      "elementType": 48,
+      "frame": {
+        "y": 0.3161708619374523,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.023264683447749786
+      },
+      "label": "Google",
+      "parentIndex": 5,
+      "index": 11
+    },
+    {
+      "traits": ["button"],
+      "accessible": true,
+      "elementType": 9,
+      "frame": {
+        "y": 0.3485888634630054,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.034324942791762014
+      },
+      "label": "Delete",
+      "parentIndex": 5,
+      "index": 12
+    },
+    {
+      "elementType": 48,
+      "label": "Delete",
+      "frame": {
+        "y": 0.35545385202135776,
+        "x": 0.4444444444444444,
+        "width": 0.11194029850746269,
+        "height": 0.020594965675057208
+      },
+      "parentIndex": 12,
+      "traits": ["staticText"],
+      "index": 13
+    },
+    {
+      "traits": ["button"],
+      "accessible": true,
+      "elementType": 9,
+      "frame": {
+        "y": 0.8009153318077803,
+        "x": 0.04975124378109453,
+        "width": 0.900497512437811,
+        "height": 0.13729977116704806
+      },
+      "label": "Delete",
+      "parentIndex": 4,
+      "index": 14
+    }
+  ],
+  "truncated": false,
+  "foregroundApp": "com.example.kbrank",
+  "interfaceOrientation": "portrait",
+  "treeVersion": 3
+}
