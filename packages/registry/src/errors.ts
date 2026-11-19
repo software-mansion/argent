@@ -42,6 +42,9 @@ export const FAILURE_COMMANDS = [
   "unknown",
   "devicectl",
   "xcodebuild",
+  "swiftc",
+  // The host-side helper that captures a cabled iPhone's screen.
+  "ios_screen_stream",
 ] as const;
 
 export type FailureCommand = (typeof FAILURE_COMMANDS)[number];

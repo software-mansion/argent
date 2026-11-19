@@ -18,6 +18,8 @@ const ASSETS = [
   "tools/flows/script/flow-script-runner.mjs",
   "tools/flows/script/flow-script-watchdog-lifeline.mjs",
   "tools/flows/script/flow-script-watchdog-deadline.mjs",
+  "tools/screen-recording/ios-device-stream/ios-screen-stream.swift",
+  "tools/screen-recording/ios-device-stream/Info.plist",
 ];
 
 const temporary: string[] = [];
