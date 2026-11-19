@@ -242,10 +242,18 @@ async function writeTest(name: string, steps: Steps): Promise<void> {
   );
 }
 
+/** Longest a run may take in real time. Far more than one needs: they take milliseconds. */
+const RUN_BUDGET_MS = 4_000;
+
 /**
  * Run an e2e test on a clock the test turns: a `type` step waits for focus to
  * settle and a failing `assert` for its grace period, and neither wait is what
  * these tests are about.
+ *
+ * The clock is turned until the run settles, however long that takes in real
+ * time. A run also does work that no timer drives, such as reading its file,
+ * and a count of turns would give up while a slow read is still out: the run
+ * then parks on a timer that nobody advances, and the test times out.
  */
 async function execute(
   server: ReturnType<typeof toolServer>,
@@ -262,9 +270,13 @@ async function execute(
       () => (settled = true),
       () => (settled = true)
     );
-    for (let i = 0; i < 400 && !settled; i++) {
+    const giveUp = performance.now() + RUN_BUDGET_MS;
+    while (!settled) {
+      if (performance.now() > giveUp) throw new Error(`the run of "${name}" did not settle`);
+      // Let work that is not a timer make progress, then move the timers on,
+      // if the run waits on one: its deadlines must not pass during a read.
       await new Promise((resolve) => setImmediate(resolve));
-      await vi.advanceTimersByTimeAsync(250);
+      if (vi.getTimerCount() > 0) await vi.advanceTimersByTimeAsync(250);
     }
     const result = await pending;
     if (!("steps" in result)) throw new Error(`expected a run result, got: ${result.notice}`);
