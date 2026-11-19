@@ -46,7 +46,7 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Mac Ca
 
 ## Profiling
 
-Use `argent-native-profiler` for native profiling or `argent-react-native-profiler` to capture React performance on a react-native-macos app. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
+Use `argent-native-profiler` for native profiling or `argent-react-native-profiler` to capture React performance on a react-native-macos or Mac Catalyst React Native app. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
 
 ## E2E tests
 

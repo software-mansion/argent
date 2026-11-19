@@ -15,14 +15,46 @@ export function trackedMacosAppsFile(): string {
   return path.join(os.homedir(), ".argent", "macos-apps.json");
 }
 
-/** The file as last parsed, and the bundle ids it records as Mac Catalyst apps. */
+/**
+ * The file as last parsed, the bundle ids it records as Mac Catalyst apps, and
+ * the identifierForVendor of each Mac Catalyst app whose library reported one.
+ */
 let parsed: {
   file: string;
   ino: number;
   mtimeMs: number;
   size: number;
   catalyst: ReadonlySet<string>;
+  vendorIds: ReadonlyMap<string, string>;
 } | null = null;
+
+/** The file as {@link parsed} holds it, parsed again only after it changed. Throws when unreadable. */
+function trackedRecords(): NonNullable<typeof parsed> {
+  const file = trackedMacosAppsFile();
+  const { ino, mtimeMs, size } = fs.statSync(file);
+  if (
+    parsed?.file !== file ||
+    parsed.ino !== ino ||
+    parsed.mtimeMs !== mtimeMs ||
+    parsed.size !== size
+  ) {
+    const records: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    const catalyst = new Set<string>();
+    const vendorIds = new Map<string, string>();
+    for (const record of Array.isArray(records) ? records : []) {
+      const {
+        bundleId: id,
+        catalyst: isCatalyst,
+        identifierForVendor,
+      } = (record ?? {}) as Record<string, unknown>;
+      if (typeof id !== "string" || isCatalyst !== true) continue;
+      catalyst.add(id);
+      if (typeof identifierForVendor === "string") vendorIds.set(id, identifierForVendor);
+    }
+    parsed = { file, ino, mtimeMs, size, catalyst, vendorIds };
+  }
+  return parsed;
+}
 
 /**
  * The kind of the build argent last started under `bundleId`, read from its
@@ -37,24 +69,22 @@ let parsed: {
  */
 export function trackedMacosAppKind(bundleId: string): MacosAppKind {
   try {
-    const file = trackedMacosAppsFile();
-    const { ino, mtimeMs, size } = fs.statSync(file);
-    if (
-      parsed?.file !== file ||
-      parsed.ino !== ino ||
-      parsed.mtimeMs !== mtimeMs ||
-      parsed.size !== size
-    ) {
-      const records: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-      const catalyst = new Set<string>();
-      for (const record of Array.isArray(records) ? records : []) {
-        const { bundleId: id, catalyst: isCatalyst } = (record ?? {}) as Record<string, unknown>;
-        if (typeof id === "string" && isCatalyst === true) catalyst.add(id);
-      }
-      parsed = { file, ino, mtimeMs, size, catalyst };
-    }
-    return parsed.catalyst.has(bundleId) ? "catalyst" : "app";
+    return trackedRecords().catalyst.has(bundleId) ? "catalyst" : "app";
   } catch {
     return "app";
+  }
+}
+
+/**
+ * The identifierForVendor that the library of the Mac Catalyst app argent
+ * last started under `bundleId` reported, from the same record as
+ * {@link trackedMacosAppKind}. Undefined for an AppKit app, a library that
+ * predates the report, and an unreadable file.
+ */
+export function trackedMacosAppVendorId(bundleId: string): string | undefined {
+  try {
+    return trackedRecords().vendorIds.get(bundleId);
+  } catch {
+    return undefined;
   }
 }

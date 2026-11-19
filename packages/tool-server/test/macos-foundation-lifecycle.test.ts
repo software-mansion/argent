@@ -758,6 +758,38 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(resolveDevice(DEVICE_ID).kind).toBe("catalyst");
   }, 20_000);
 
+  it("keeps the identifierForVendor that a Mac Catalyst app's library reports, which the React profiler matches", async () => {
+    const catalyst = writeBundle(path.join(root, `catalyst-ifv-${Date.now()}`), BUNDLE_ID);
+    fs.writeFileSync(
+      path.join(catalyst, "Contents", "MacOS", "FakeApp"),
+      machO(PLATFORM_MACCATALYST)
+    );
+    const vendorId = "3F3B75E2-A9D2-585E-9ADF-8A1405F6525A";
+
+    await run("boot-device", {
+      macosAppPath: catalyst,
+      macosAppArgs: [`--identifier-for-vendor=${vendorId}`],
+    });
+    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({
+      catalyst: true,
+      identifierForVendor: vendorId,
+    });
+    // A new tool-server reads it from ~/.argent/macos-apps.json alone.
+    vi.resetModules();
+    const fresh = await import("../src/utils/macos-app-kind");
+    expect(fresh.trackedMacosAppVendorId(BUNDLE_ID)).toBe(vendorId);
+
+    // Only an NSUUID string is kept; each start writes the record anew.
+    await run("restart-app", {
+      udid: DEVICE_ID,
+      bundleId: BUNDLE_ID,
+      launchArgs: ["--identifier-for-vendor=not-a-uuid"],
+    });
+    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({ catalyst: true });
+    expect(getTrackedMacosApp(BUNDLE_ID)!.identifierForVendor).toBeUndefined();
+    expect(fresh.trackedMacosAppVendorId(BUNDLE_ID)).toBeUndefined();
+  }, 20_000);
+
   it("reads a record without the catalyst field, which an older argent wrote, as an AppKit app", async () => {
     const { pid } = await run("boot-device", { macosAppPath: appPath });
     const file = path.join(process.env.HOME!, ".argent", "macos-apps.json");

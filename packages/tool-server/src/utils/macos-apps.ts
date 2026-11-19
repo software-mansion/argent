@@ -392,6 +392,11 @@ interface TrackedMacosApp {
    * a record of an argent that refused Catalyst apps: an AppKit app.
    */
   catalyst?: boolean;
+  /**
+   * A Mac Catalyst app's `UIDevice.identifierForVendor`, from the library's
+   * handshake. The React profiler finds the app's JS runtime in Metro by it.
+   */
+  identifierForVendor?: string;
 }
 
 /** The kind of a tracked app, as `resolveDevice` reports it. */
@@ -418,7 +423,8 @@ function isTrackedMacosApp(value: unknown): value is TrackedMacosApp {
     Array.isArray(v.args) &&
     v.args.every((a) => typeof a === "string") &&
     typeof v.startedAt === "number" &&
-    (v.catalyst === undefined || typeof v.catalyst === "boolean")
+    (v.catalyst === undefined || typeof v.catalyst === "boolean") &&
+    (v.identifierForVendor === undefined || typeof v.identifierForVendor === "string")
   );
 }
 
