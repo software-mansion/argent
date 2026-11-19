@@ -28,6 +28,7 @@ import { renderFlagGated } from "../../utils/flag-gated-text";
 import { isFlagOffered } from "../../utils/capability";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { quotedText } from "../../utils/typed-secrets";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -1663,6 +1664,8 @@ async function waitForCondition(
   const deadline = Date.now() + timeoutMs;
 
   let lastMatches: ReturnType<typeof findAll> = [];
+  // The read `lastMatches` came from, for the reason that quotes its text.
+  let lastData: DescribeTreeData | undefined;
   let fetchError: string | undefined;
   let everMatched = false;
   // Date.now() of the most recent TRUSTED read — undefined until one lands.
@@ -1682,6 +1685,7 @@ async function waitForCondition(
     try {
       const data = await readFlowTree(env);
       lastMatches = flowFindAll(data.tree, step.selector);
+      lastData = data;
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
       const blind = isBlindRead(data, everMatched, step.condition);
@@ -1795,7 +1799,10 @@ async function waitForCondition(
         step.expectedText,
         step.textMatch,
         lastMatches,
-        env.device.platform === "macos"
+        env.device.platform === "macos",
+        // The text of an element is the only part of a reason that comes off
+        // the screen, where a field shows a typed secret.
+        (node, read) => (lastData ? quotedText(lastData, env.device.id, node, read) : read(node))
       ) + blipNote,
   };
 }
@@ -2377,7 +2384,8 @@ function assertReason(
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
   matches: ReturnType<typeof findAll>,
-  macos: boolean
+  macos: boolean,
+  quoted: (node: DescribeNode, read: (node: DescribeNode) => string) => string
 ): string {
   const sel = describeSelector(selector);
   switch (condition) {
@@ -2401,9 +2409,8 @@ function assertReason(
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted
       // subtree text (see evaluateCondition), so quote both when they differ.
-      const field = macFieldText(first, macos);
-      const shown = field ?? assertText(first);
-      const own = field ?? nodeText(first);
+      const shown = quoted(first, (node) => macFieldText(node, macos) ?? assertText(node));
+      const own = quoted(first, (node) => macFieldText(node, macos) ?? nodeText(node));
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
       return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;
     }

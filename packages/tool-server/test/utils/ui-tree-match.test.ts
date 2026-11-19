@@ -235,7 +235,8 @@ describe("ui-tree-match", () => {
   });
 
   it("a regex text condition does not read an iOS text field with no text as empty", () => {
-    // The simulator's view tree has no typed text: a field holding "Rex" reads "".
+    // The text of a secure field is never read: one that holds "Rex" reads "",
+    // as an empty field without a placeholder does.
     const field = node({
       role: "AXTextField",
       identifier: "name",

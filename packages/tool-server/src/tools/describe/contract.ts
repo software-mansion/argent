@@ -112,6 +112,11 @@ export interface DescribeTreeData {
   // which is what the rotate directive's circle geometry reads it for. Set
   // only by the flow tree adapters that know it.
   screen?: { width: number; height: number };
+  // `tree` as a result may quote it, node for node, from the iOS simulator
+  // adapter once a secret was typed on the device: the text of each text input
+  // withheld, each typed value in a label named by its placeholder (see
+  // `utils/typed-secrets`). Checks read `tree`; only a quote reads this.
+  quotableTree?: DescribeNode;
 }
 
 /** Interface orientation as UIKit names it, relative to the portrait-native screen. */

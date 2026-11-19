@@ -13,8 +13,9 @@ import {
   MAX_TARGETING_REASON_CHARS,
   queryFullHierarchyTree,
 } from "../../src/tools/flows/flow-ios-tree";
-import { evaluateCondition, selectorToFrame } from "../../src/utils/ui-tree-match";
+import { evaluateCondition, findAll, selectorToFrame } from "../../src/utils/ui-tree-match";
 import { resolveNativeTargetApp } from "../../src/utils/native-target-app";
+import { __resetTypedSecretsForTesting, noteTypedSecrets } from "../../src/utils/typed-secrets";
 import {
   __resetDeviceSetCacheForTesting,
   rememberDeviceSet,
@@ -241,6 +242,136 @@ describe("flow iOS full-hierarchy source", () => {
     await queryFullHierarchyTree(registryFor(api), DEVICE).catch(() => undefined);
     const params = vi.mocked(api.queryViewHierarchy).mock.calls[0]![2] as { fields: string[] };
     expect(params.fields).toEqual(expect.arrayContaining(["screenFrame", "windowFrame"]));
+  });
+
+  it("asks the framework for a view's value and reads a filled text field by it", async () => {
+    const raw = {
+      screen: { width: 400, height: 800 },
+      windows: [
+        {
+          className: "UIWindow",
+          screenFrame: { x: 0, y: 0, width: 400, height: 800 },
+          children: [
+            {
+              className: "UITextField",
+              identifier: "search-input",
+              value: "linda",
+              screenFrame: { x: 20, y: 100, width: 300, height: 44 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const api = apiServing(raw);
+    const { tree } = await queryFullHierarchyTree(registryFor(api), DEVICE);
+
+    const params = vi.mocked(api.queryViewHierarchy).mock.calls[0]![2] as { fields: string[] };
+    expect(params.fields).toContain("value");
+    const field = findAll(tree, { identifier: "search-input" });
+    expect(evaluateCondition("text", "linda", field, "equals")).toBe(true);
+  });
+
+  describe("the projection a result quotes from", () => {
+    const raw = {
+      screen: { width: 400, height: 800 },
+      windows: [
+        {
+          className: "UIWindow",
+          screenFrame: { x: 0, y: 0, width: 400, height: 800 },
+          children: [
+            {
+              className: "UIView",
+              identifier: "form",
+              screenFrame: { x: 0, y: 90, width: 400, height: 200 },
+              children: [
+                {
+                  className: "UILabel",
+                  label: "Signed in with tok-REVIEW-4242",
+                  screenFrame: { x: 20, y: 100, width: 300, height: 24 },
+                  children: [],
+                },
+                {
+                  className: "UITextField",
+                  label: "Token",
+                  value: "Too-REVIEW-4242",
+                  screenFrame: { x: 20, y: 140, width: 300, height: 44 },
+                  children: [],
+                },
+                {
+                  className: "UITextField",
+                  identifier: "secure",
+                  screenFrame: { x: 20, y: 200, width: 300, height: 44 },
+                  children: [],
+                },
+                {
+                  className: "UISwitch",
+                  value: "1",
+                  screenFrame: { x: 330, y: 250, width: 51, height: 31 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const NOTE = "[text withheld: a secret was typed on this device]";
+
+    afterEach(() => {
+      __resetTypedSecretsForTesting();
+    });
+
+    it("is absent for a device that no secret was typed on", async () => {
+      noteTypedSecrets("some-other-device", [{ name: "TOKEN", value: "tok-REVIEW-4242" }]);
+
+      const data = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+
+      expect(data.quotableTree).toBeUndefined();
+      expect(findAll(data.tree, { identifier: "form" })[0]!.subtreeText).toBe(
+        "Signed in with tok-REVIEW-4242 Token Too-REVIEW-4242"
+      );
+    });
+
+    it("holds the note for the value of each text input, and each typed value named in a label", async () => {
+      noteTypedSecrets(DEVICE.id, [{ name: "TOKEN", value: "tok-REVIEW-4242" }]);
+
+      const { tree, quotableTree } = await queryFullHierarchyTree(
+        registryFor(apiServing(raw)),
+        DEVICE
+      );
+
+      // The tree a check reads is as it was.
+      expect(findAll(tree, { identifier: "form" })[0]!.subtreeText).toBe(
+        "Signed in with tok-REVIEW-4242 Token Too-REVIEW-4242"
+      );
+      expect(findAll(quotableTree!, { identifier: "form" })[0]!.subtreeText).toBe(
+        `Signed in with {{secret:TOKEN}} Token ${NOTE}`
+      );
+      expect(JSON.stringify(quotableTree)).not.toContain("REVIEW-4242");
+      // A field with no value to read has none to withhold, and a value that is
+      // no text input's was never in either tree.
+      expect(findAll(quotableTree!, { identifier: "secure" })[0]!.value).toBeUndefined();
+      expect(findAll(quotableTree!, { text: NOTE })).toHaveLength(1);
+    });
+
+    it("has the nodes of the tree, one for one and in the same order", async () => {
+      noteTypedSecrets(DEVICE.id, [{ name: "TOKEN", value: "tok-REVIEW-4242" }]);
+
+      const { tree, quotableTree } = await queryFullHierarchyTree(
+        registryFor(apiServing(raw)),
+        DEVICE
+      );
+
+      const shape = (node: DescribeNode): unknown => [
+        node.role,
+        node.identifier,
+        node.frame,
+        node.children.map(shape),
+      ];
+      expect(tree.children.length).toBeGreaterThan(3);
+      expect(shape(quotableTree!)).toEqual(shape(tree));
+    });
   });
 
   it("adapts and resolves a view buried deeper than the old 40-level cap", async () => {

@@ -9,6 +9,7 @@ import {
   unmetUiWaitCause,
 } from "../src/tools/await-ui-element";
 import { findAll } from "../src/utils/ui-tree-match";
+import { __resetTypedSecretsForTesting, noteTypedSecrets } from "../src/utils/typed-secrets";
 import type { DescribeNode } from "../src/tools/describe/contract";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
@@ -347,6 +348,44 @@ describe("await-ui-element tool", () => {
 
     expect(result.success).toBe(false);
     expect(result.note).toMatch(/Loading/);
+  });
+
+  it("names the placeholder in the timeout note, not a secret typed on the device", async () => {
+    __resetTypedSecretsForTesting();
+    noteTypedSecrets(CHROMIUM_ID, [{ name: "TOKEN", value: "tok-REVIEW-4242" }]);
+    const tree = {
+      role: "html",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "textbox",
+          identifier: "token",
+          label: "Token",
+          value: "tok-REVIEW-4242",
+          frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 },
+          children: [],
+        },
+      ],
+    };
+    const tool = createAwaitUiElementTool(makeMockRegistry({}));
+
+    const unmet = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      {
+        udid: CHROMIUM_ID,
+        condition: "text",
+        selector: { identifier: "token" },
+        expectedText: "Saved token",
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+
+    // The text off the screen only: the expected text stays as the caller wrote it.
+    expect(unmet.note).toBe(
+      'element matched but its text was "Token {{secret:TOKEN}}" (wanted to contain "Saved token")'
+    );
+    __resetTypedSecretsForTesting();
   });
 
   it("`text` check and timeout note both read the visible match, not a zero-area shadow", async () => {
