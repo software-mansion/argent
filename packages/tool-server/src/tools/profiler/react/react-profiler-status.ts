@@ -29,7 +29,7 @@ import {
   type LostRunInfo,
   type SavedSessionInfo,
 } from "../../../utils/react-profiler/last-run";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
@@ -74,16 +74,30 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device ID of the app to inspect<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>. During a recording, use the ID passed to react-profiler-start."
     ),
 });
+
+/**
+ * The message of the error that started a failure. The registry wraps a
+ * service's failure and prefixes the service id, which tells the agent nothing.
+ */
+function innermostMessage(err: unknown): string {
+  let current = err;
+  // Bounded against a cyclic `cause` chain.
+  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
+    if (!(current.cause instanceof Error)) return current.message;
+    current = current.cause;
+  }
+  return current instanceof Error ? current.message : String(current);
+}
 
 export function createReactProfilerStatusTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-status",
-    description: `Check the state of the React profiler session. Use when resuming after an interruption (debugger disconnect, unexpected error, agent pause) to decide whether to continue with react-profiler-stop, start a new session, or reconnect the debugger. Returns { session_status, is_running, current_owner, note, … }: session_status is active, saved, lost, taken_over, not_started or no_react_runtime, and note says what to do next.`,
+    description: `Check whether a React recording is running, saved, lost, or taken over. Use after an interruption to decide whether to collect the recording or start again. If the runtime is unavailable, session_status is no_react_runtime and note gives the reason.`,
     zodSchema,
     readOnly: true,
     interaction: {
@@ -94,7 +108,7 @@ export function createReactProfilerStatusTool(
         `Failed to check React profiler: ${failureSignal.error_code}`,
     },
     // RN-only: companion to react-profiler-start.
-    capability: RN_ONLY_TOOL_CAPABILITY,
+    capability: REACT_PROFILER_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params): Promise<StatusResponse> {
       // Same key as react-profiler-start/stop, so a forwarded logicalDeviceId
@@ -130,9 +144,12 @@ export function createReactProfilerStatusTool(
       let api: ReactProfilerSessionApi;
       try {
         api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
-      } catch {
+      } catch (err) {
+        // The reason says what to do, for example to start the app or to pass
+        // another port. A fixed "reconnect the debugger" is wrong for a Mac
+        // app, which debugger-connect refuses.
         return noRuntime(
-          "Unable to resolve a React profiler session — the Hermes runtime may not be reachable. Reconnect the debugger and retry."
+          `Unable to resolve a React profiler session: the Hermes runtime may not be reachable. ${innermostMessage(err)}`
         );
       }
 

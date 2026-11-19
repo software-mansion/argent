@@ -3,9 +3,11 @@ import { FAILURE_CODES, type ToolDefinition } from "@argent/registry";
 import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
 import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
 
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; view: unknown | null };
+export type ViewAtPointResult =
+  NativeDevtoolsPrecheckBlock | { status: "ok"; view: unknown | null };
 
-const zodSchema = z.object({
+/** The parameters both view-at-point tools take. */
+export const viewAtPointParams = {
   ...nativeAppTarget,
   x: z
     .number()
@@ -46,24 +48,56 @@ const zodSchema = z.object({
     .positive()
     .optional()
     .describe("Maximum depth for returned child/ancestor serialization (default 150)"),
+};
+
+const zodSchema = z.object({
+  ...viewAtPointParams,
+  hitTest: z
+    .boolean()
+    .optional()
+    .describe(
+      "true returns the view that would receive a touch at the point: it respects userInteractionEnabled, close to UIKit hit-testing. Default false: the deepest visible view."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
+type Result = ViewAtPointResult;
+
+/** Send the hit-test query (the view that receives the touch) or the plain one (the view drawn there). */
+export function queryViewAtPoint(
+  services: Record<string, unknown>,
+  params: z.infer<z.ZodObject<typeof viewAtPointParams>>,
+  toolId: string,
+  hitTest: boolean
+): Promise<ViewAtPointResult> {
+  return queryViewHierarchyFor(
+    services,
+    params,
+    toolId,
+    hitTest ? "ViewHierarchy.userInteractableViewAtPoint" : "ViewHierarchy.viewAtPoint",
+    hitTest
+      ? FAILURE_CODES.NATIVE_DEVTOOLS_USER_INTERACTABLE_VIEW_AT_POINT_ERROR
+      : FAILURE_CODES.NATIVE_DEVTOOLS_VIEW_AT_POINT_ERROR,
+    (result: { view?: unknown }) => ({ status: "ok" as const, view: result.view ?? null })
+  );
+}
 
 export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-view-at-point",
-  description: `Inspect the deepest visible UIView at a raw native window point.
+  description: `Inspect the deepest UIView at a raw native window point: the one drawn there, or with hitTest: true the one that would receive a touch.
 
-Unlike native-user-interactable-view-at-point, this ignores userInteractionEnabled,
-so it answers "what is visually here?" rather than "what would receive the touch?".
-
+Without hitTest it ignores userInteractionEnabled and answers "what is visually here?".
 Use when a screenshot shows something the accessibility tree does not name (an
 unlabeled icon, a decorative overlay, a custom-drawn cell) and you need the class,
 identifier or nativeID of whatever draws it.
 
+With hitTest: true it answers "what would receive the touch?". Use when a tap lands
+somewhere unexpected or does nothing, to see which control UIKit would hand the
+touch to: a transparent overlay swallowing it, a parent recognizer, a disabled button.
+
 Returns { status: "ok", view }: the matched view with its class name, frames,
 identifier, label and layer name, plus its ancestors and subviews as requested.
-view is null when nothing is drawn at that point.
+view is null when nothing is drawn at that point, or with hitTest when no touchable view sits under it.
 
 To get x and y from a normalized describe frame, multiply its values by the
 screen size in points, also when the UI is landscape.
@@ -75,10 +109,18 @@ An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
   readOnly: true,
   interaction: {
-    startedMsg: ({ params }) => `Inspecting native view at (${params.x}, ${params.y})`,
-    completedMsg: ({ params }) => `Inspected native view at (${params.x}, ${params.y})`,
+    startedMsg: ({ params }) =>
+      params.hitTest
+        ? `Finding interactive view at (${params.x}, ${params.y})`
+        : `Inspecting native view at (${params.x}, ${params.y})`,
+    completedMsg: ({ params }) =>
+      params.hitTest
+        ? `Found interactive view at (${params.x}, ${params.y})`
+        : `Inspected native view at (${params.x}, ${params.y})`,
     failedMsg: ({ params, failureSignal }) =>
-      `Failed to inspect native view at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
+      params.hitTest
+        ? `Failed to find interactive view at (${params.x}, ${params.y}): ${failureSignal.error_code}`
+        : `Failed to inspect native view at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
   },
   capability: {
     apple: { simulator: true },
@@ -86,13 +128,6 @@ An Apple system app is rejected outright (terminal: never retry it).`,
     macos: { app: true },
   },
   services: nativeAppServices,
-  execute: (services, params) =>
-    queryViewHierarchyFor(
-      services,
-      params,
-      "native-view-at-point",
-      "ViewHierarchy.viewAtPoint",
-      FAILURE_CODES.NATIVE_DEVTOOLS_VIEW_AT_POINT_ERROR,
-      (result: { view?: unknown }) => ({ status: "ok" as const, view: result.view ?? null })
-    ),
+  execute: (services, { hitTest, ...query }) =>
+    queryViewAtPoint(services, query, "native-view-at-point", hitTest === true),
 };
