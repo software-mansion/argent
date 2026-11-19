@@ -112,7 +112,7 @@ On a physical iPhone, `describe` includes a web sign-in sheet or an in-app Safar
 
 | Tool                     | Description                                                                        |
 | ------------------------ | ---------------------------------------------------------------------------------- |
-| `gesture-tap`            | Tap at normalized coordinates. Mac apps also take a right-click                    |
+| `gesture-tap`            | Tap at normalized coordinates. Mac apps also take a right-click and modifier keys  |
 | `gesture-swipe`          | Smooth swipe or drag between two points                                            |
 | `gesture-scroll`         | Scroll a Chromium app (mouse wheel) or the scroll view under a point in a Mac app  |
 | `gesture-drag`           | Press, move, and release the mouse in a Chromium app or a Mac app                  |
@@ -384,7 +384,7 @@ Coordinates use the app window, including its title bar, with the origin at the 
 | `await-ui-element`, `await-screen-idle` | Wait for matching elements or a stable interface using the app tree.                                                            |
 | `screenshot`                            | Captures the app window and attached sheets, popovers, alerts, and menus. Other app windows are excluded.                       |
 | `screenshot-diff`                       | Captures at `scale: 1.0`. Save baselines at the same scale. No top band is masked.                                              |
-| `gesture-tap`                           | Clicks. Use `button: "right"` for a context menu or `clickCount: 2` for a double-click.                                         |
+| `gesture-tap`                           | Clicks. Use `button: "right"` for a context menu, `clickCount: 2` for a double-click, or `modifiers` to hold keys.              |
 | `gesture-drag`                          | Drags with the left button. Equal start and end points produce a long press.                                                    |
 | `gesture-scroll`                        | Scrolls the content under the point, like a mouse wheel. `durationMs` has no effect.                                            |
 | `keyboard`                              | Types Unicode text or sends keys and shortcuts, such as `command+a` or `shift+tab`.                                             |
@@ -392,6 +392,23 @@ Coordinates use the app window, including its title bar, with the origin at the 
 | `run-sequence`                          | Runs tap, scroll, drag, keyboard, paste, and await steps.                                                                       |
 | Native view tools                       | Require the device's `bundleId`. Their `x` and `y` use points, rather than fractions of the window. Refused on Mac Catalyst.    |
 | `native-network-logs`                   | Starts capturing `URLSession` requests on the first call. Startup requests can be missed. Each app restart begins a new record. |
+
+#### Clicks with modifier keys
+
+The `modifiers` of `gesture-tap` are the keys that the click holds: `control`, `option`, `shift` and `command`. Pass them as a list, for example `["command"]` or `["shift", "command"]`.
+
+| `modifiers`   | Typical effect                                                     |
+| ------------- | ------------------------------------------------------------------ |
+| `["command"]` | Adds a row to a selection or removes it.                           |
+| `["shift"]`   | Extends a selection to the row.                                    |
+| `["option"]`  | Runs the alternative action of a control, when the app has one.    |
+| `["control"]` | Opens a context menu, when the view has one, as `button: "right"`. |
+
+The app reads the keys from the mouse events of the click. In an AppKit app, `NSEvent.modifierFlags` also includes the keys during the click. After the click, `NSEvent.modifierFlags` gives only the keys of the keyboard. The keys apply to the move, to each press and to each release of the click. A `clickCount: 2` holds them for both clicks.
+
+Only a Mac app takes `modifiers`. On other devices, `gesture-tap` fails with an error that names the device. An empty list is a plain click.
+
+An app that runs the argent library of an older argent release does not take the keys. `gesture-tap` then fails with `error_code` `MACOS_APP_LIBRARY_OUTDATED` before it presses a button. Start the app again with `restart-app` to load the current library.
 
 #### Screenshots and scrolling
 
@@ -561,6 +578,8 @@ Most other tools work as in other Mac apps. These tools work differently:
 | SwiftUI Tab order | The Tab key can move focus in an order that differs from the order a user sees. Tap the target field instead.                                                            |
 | Toolbar menus     | With the Optimize Interface for Mac setting, a UIKit bar button item that has a menu shows in the toolbar without its identifier. Select it by its label.                |
 | React Native      | The Metro debugger and the React profiler tools do not support React Native apps on Mac Catalyst yet.                                                                    |
+| Modifier keys     | A React Native touch event on iOS has no modifier keys, so a `Pressable` on Mac Catalyst does not get them. In react-native-macos, the `Pressable` event has them.       |
+| SwiftUI `List`    | A Command-click or a Shift-click on a SwiftUI `List` row selects only that row. A UIKit table view extends the selection.                                                |
 
 An iPad or iPhone app that runs on the Mac without changes ("Designed for iPad") is not a Mac Catalyst app. `boot-device` refuses it, because macOS does not let Argent load its library into such an app. Build the Mac Catalyst target of the app, or test the app on an iOS simulator.
 

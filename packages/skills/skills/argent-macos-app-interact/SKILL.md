@@ -23,6 +23,7 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Mac Ca
 - Swipe or drag: `gesture-drag`. Long press: `gesture-drag` with the same start and end point. Scroll: `gesture-scroll`.
 - Zoom or rotate: `gesture-pinch` and `gesture-rotate` fail; use the app's own controls or shortcuts.
 - After a right-click (`gesture-tap` with `button: "right"`), the returned tree lists the menu items; a plain `gesture-tap` on one chooses it (the menu can stay in the tree for a moment while it closes). `keyboard` `escape` closes the menu; `enter` chooses nothing after a right-click, so tap the item.
+- Modifier keys: `gesture-tap` with `modifiers` (`["command"]` adds a row to a selection, `["shift"]` extends it, `["control"]` is a Control-click, which opens a context menu where the app has one). An error that the app's argent library is older than argent: `restart-app`, then tap again.
 - No hover: a tooltip is out of reach.
 - `open-url`: the URL goes to the running app. A custom scheme must be one the app declares; `http` and `https` go to the app, not the browser; a `file:` URL opens that document in the app.
 - A SwiftUI `DisclosureGroup` opens only at its chevron, near the left end of its frame: a tap at the centre passes and does nothing. Tap along the left end in steps of about 0.008 until its `value` changes.
