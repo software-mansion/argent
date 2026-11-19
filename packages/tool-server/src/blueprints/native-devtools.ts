@@ -1,5 +1,6 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
+import { withKeyedLock } from "../utils/keyed-lock";
 import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-socket";
 import {
   TypedEventEmitter,
@@ -697,6 +698,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const networkConditions = new Map<string, NetworkThrottle>();
     /** Attach mode: whether the provider's capture was on before Argent first throttled the app. */
     const providerCapture = new Map<string, boolean>();
+    const conditionCalls = new Map<string, Promise<unknown>>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const noteInitFailure = (err: unknown): void => {
@@ -878,6 +880,23 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       providerCapture.delete(bundleId);
     };
 
+    const isEmulating = (state: Record<string, unknown> | null): boolean =>
+      state?.offline === true ||
+      ["latency", "downloadThroughput", "uploadThroughput"].some((key) => Number(state?.[key]) > 0);
+
+    /**
+     * Attach mode: a tool-server that died without dispose leaves its throttle
+     * in the app, and its record of the provider's capture died with it, so
+     * this keeps capture on.
+     */
+    const clearLeftoverThrottle = async (bundleId: string): Promise<void> => {
+      if (!lentSocketPath) return;
+      const state = await sendCdpRpc(bundleId, "NativeDevtoolsIos.getConditions").catch(() => null);
+      if (!isEmulating(state as Record<string, unknown> | null)) return;
+      providerCapture.set(bundleId, true);
+      await clearThrottle(bundleId);
+    };
+
     /** A provider keeps the app connected after Argent leaves, so the app would stay throttled. */
     const releaseLentThrottles = async (): Promise<void> => {
       const cleared = [...networkConditions.keys()]
@@ -887,6 +906,30 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         Promise.all(cleared),
         new Promise((resolve) => setTimeout(resolve, LENT_RELEASE_TIMEOUT_MS).unref()),
       ]);
+    };
+
+    const updateNetworkConditions = async (
+      bundleId: string,
+      throttle: NetworkThrottle | null
+    ): Promise<void> => {
+      const previous = networkConditions.get(bundleId);
+      if (throttle) networkConditions.set(bundleId, throttle);
+      else networkConditions.delete(bundleId);
+      if (!connections.has(bundleId)) return;
+      if (throttle) {
+        await applyThrottle(bundleId, throttle);
+        return;
+      }
+      if (!previous) {
+        await clearLeftoverThrottle(bundleId);
+        return;
+      }
+      try {
+        await clearThrottle(bundleId);
+      } catch (err) {
+        if (!networkConditions.has(bundleId)) networkConditions.set(bundleId, previous);
+        throw err;
+      }
     };
 
     const settleRpc = (payload: { id: number; result?: unknown; error?: { message: string } }) => {
@@ -1183,23 +1226,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         if (conn) sendNetworkSetup(bundleId, conn.socket);
       },
 
-      async setNetworkConditions(bundleId, throttle) {
-        const previous = networkConditions.get(bundleId);
-        if (throttle) networkConditions.set(bundleId, throttle);
-        else networkConditions.delete(bundleId);
-        if (!connections.has(bundleId)) return;
-        if (throttle) {
-          await applyThrottle(bundleId, throttle);
-          return;
-        }
-        if (!previous) return;
-        try {
-          await clearThrottle(bundleId);
-        } catch (err) {
-          if (!networkConditions.has(bundleId)) networkConditions.set(bundleId, previous);
-          throw err;
-        }
-      },
+      setNetworkConditions: (bundleId, throttle) =>
+        withKeyedLock(conditionCalls, bundleId, () => updateNetworkConditions(bundleId, throttle)),
 
       getNetworkLog: (bundleId) => [...(connections.get(bundleId)?.networkLog ?? [])],
 

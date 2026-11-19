@@ -50,6 +50,8 @@ type LentAgentOptions = {
   captureOn?: boolean;
   /** An older agent that has no `NativeDevtoolsIos.getConditions`. */
   failsGetConditions?: boolean;
+  /** Conditions the app reports, such as a throttle that an earlier tool-server left. */
+  conditions?: Record<string, unknown>;
 };
 
 /** Follows the capture state of the agent in the app: throttling turns capture on. */
@@ -62,17 +64,18 @@ function captureAfter(method: unknown, captureOn: boolean): boolean {
 function cdpReply(id: unknown, method: unknown, options: Required<LentAgentOptions>) {
   if (method !== "NativeDevtoolsIos.getConditions") return { id, result: {} };
   if (options.failsGetConditions) return { id, error: { message: "Unknown method" } };
-  return { id, result: { enabled: options.captureOn } };
+  return { id, result: { enabled: options.captureOn, ...options.conditions } };
 }
 
 async function startLentAgent({
   captureOn = true,
   failsGetConditions = false,
+  conditions = {},
 }: LentAgentOptions = {}): Promise<LentAgent> {
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
-  const state = { captureOn, failsGetConditions };
+  const state = { captureOn, failsGetConditions, conditions };
 
   const server = net.createServer((socket) => {
     sockets.push(socket);
@@ -364,15 +367,44 @@ describe("a provider that lends its native-devtools agent", () => {
       await agent.close();
     });
 
-    it("sends nothing to the provider on a reset with nothing set", async () => {
-      const agent = await startLentAgent({ captureOn: false });
+    it("only reads the provider's state on a reset with nothing set", async () => {
+      const agent = await startLentAgent({
+        captureOn: false,
+        conditions: { offline: false, latency: 0, downloadThroughput: 0, uploadThroughput: 0 },
+      });
       publishDescriptor({ socketPath: agent.socketPath });
       const instance = await instantiate();
       await waitForConnectedBundle(instance.api);
 
       await instance.api.setNetworkConditions(BUNDLE_ID, null);
 
-      expect(cdpMethods(agent)).toEqual([]);
+      expect(cdpMethods(agent)).toEqual(["NativeDevtoolsIos.getConditions"]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it.each([
+      { offline: true },
+      { latency: 400 },
+      { downloadThroughput: 50_000 },
+      { uploadThroughput: 50_000 },
+    ])("clears %o that an earlier tool-server left on a reset with nothing set", async (left) => {
+      const agent = await startLentAgent({ captureOn: true, conditions: left });
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(agent.received.filter((m) => m.type === "CDP").map((m) => m.payload)).toEqual([
+        expect.objectContaining({ method: "NativeDevtoolsIos.getConditions" }),
+        expect.objectContaining({
+          method: "NativeDevtoolsIos.configure",
+          params: { bypassPorts: [] },
+        }),
+        expect.objectContaining({ method: "Network.enable" }),
+      ]);
 
       await instance.dispose();
       await agent.close();
