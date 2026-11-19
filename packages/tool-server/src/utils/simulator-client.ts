@@ -16,6 +16,14 @@ import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
 import { captureOnDemandDropped } from "./profiling-devices";
 import { resolveLivePanel, screenLabel, unresolvedPanelNote, type FoldablePanel } from "./foldable";
+import { isIosSimulator, resolveDevice } from "./device-info";
+import {
+  forgetUiOrientation,
+  readUiOrientation,
+  unknownOrientationNote,
+} from "./ios-ui-orientation";
+import { isTurned, uiPointToNative } from "./ui-orientation";
+import type { UiOrientation } from "../tools/describe/contract";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -273,13 +281,20 @@ export async function sendCommand(
   cmd: Record<string, unknown>
 ): Promise<SendCommandOutcome> {
   const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
+  // The UI turns with the device: what was read of its orientation is stale.
+  if (cmd.cmd === "rotate" && api.deviceId) forgetUiOrientation(api.deviceId);
+  const { cmd: native, warning: turnWarning } = await withNativeTouchSpace(api, cmd);
   // MoQ carries no screen: a remote simulator is driven on its main screen.
   if (api.transport) {
-    await sendViaTransport(api.transport, cmd, cmdName);
-    return {};
+    await sendViaTransport(api.transport, native, cmdName);
+    return turnWarning !== undefined ? { warning: turnWarning } : {};
   }
   const conn = getOrCreateConnection(api);
-  const { cmd: targeted, warning } = await withActiveScreen(api, cmd);
+  const { cmd: targeted, warning: screenWarning } = await withActiveScreen(api, native);
+  const warning =
+    turnWarning !== undefined && screenWarning !== undefined
+      ? `${screenWarning} ${turnWarning}`
+      : (screenWarning ?? turnWarning);
   const id = String(++cmdId);
   const payload = JSON.stringify({ id, ...targeted });
 
@@ -347,6 +362,62 @@ export async function sendCommand(
  */
 export interface SendCommandOutcome {
   warning?: string;
+}
+
+/**
+ * The interface orientation the touch sequence in flight on a server is turned
+ * by, from its Down to its Up, as {@link gestureScreens} keeps its panel: a
+ * UI that turns in the middle of a swipe must not send the swipe's tail
+ * somewhere its head was not.
+ */
+const gestureTurns = new WeakMap<SimulatorServerApi, UiOrientation | undefined>();
+
+/**
+ * A touch in the UI's upright space, turned into the screen's portrait-native
+ * space an iOS simulator takes touches in (`utils/ios-ui-orientation.ts`).
+ * Every touch the tool-server sends is upright: the gesture tools take the
+ * coordinates agents read off upright screenshots and describe frames, and
+ * flows resolve against upright trees. Only the Down reads the orientation;
+ * the Moves and the Up of its sequence reuse it.
+ *
+ * Any other device, and any other command, is sent unchanged. When the
+ * orientation cannot be read the touch goes out unturned, with a note: right
+ * for a portrait UI, which is the common case, and said for the rest.
+ */
+async function withNativeTouchSpace(
+  api: SimulatorServerApi,
+  cmd: Record<string, unknown>
+): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
+  if (cmd.cmd !== "touch" || !api.deviceId || !isIosSimulator(resolveDevice(api.deviceId))) {
+    return { cmd };
+  }
+  let orientation: UiOrientation | undefined;
+  let warning: string | undefined;
+  if (cmd.type !== "Down" && gestureTurns.has(api)) {
+    orientation = gestureTurns.get(api);
+  } else {
+    const read = await readUiOrientation(api.deviceId);
+    orientation = read.orientation;
+    if (read.unknownReason !== undefined) {
+      warning = unknownOrientationNote(read, "this touch was sent in");
+    }
+  }
+  if (cmd.type === "Up") gestureTurns.delete(api);
+  else gestureTurns.set(api, orientation);
+  if (!isTurned(orientation)) return { cmd, ...(warning !== undefined ? { warning } : {}) };
+
+  const turned: Record<string, unknown> = { ...cmd };
+  const first = uiPointToNative({ x: cmd.x as number, y: cmd.y as number }, orientation);
+  turned.x = first.x;
+  turned.y = first.y;
+  const sx = cmd.second_x;
+  const sy = cmd.second_y;
+  if (typeof sx === "number" && typeof sy === "number") {
+    const second = uiPointToNative({ x: sx, y: sy }, orientation);
+    turned.second_x = second.x;
+    turned.second_y = second.y;
+  }
+  return { cmd: turned };
 }
 
 /**
@@ -470,6 +541,8 @@ export async function postHinge(
   request: HingeRequest,
   signal?: AbortSignal
 ): Promise<SimulatorDisplayState> {
+  // Folding hands the UI to another panel, which can lie the other way.
+  if (api.deviceId) forgetUiOrientation(api.deviceId);
   if (api.transport) {
     throw new FailureError(
       "Fold failed: a remote simulator is driven on its main screen and has no hinge control.",

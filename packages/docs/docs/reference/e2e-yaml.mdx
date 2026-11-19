@@ -209,7 +209,7 @@ Each step contains one directive. A failed directive stops the e2e test.
 
 The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a right-click, for example to open a context menu. Argent supports it only on a Mac app. On other platforms, the step fails before the runner reads the tree. To open a context menu on iOS or Android, use `long-press`. A recorded `gesture-tap` with `button: "right"` becomes a `tap` with `button: right`.
 
-A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
+A direction in `swipe` and `scroll-to` is the direction that the user sees. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames, which is the UI as the user sees it. Both are also true for a landscape UI, for example on a rotated device or an unfolded foldable. See [Rotated devices](/docs/reference/tools#rotated-devices).
 
 A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
 

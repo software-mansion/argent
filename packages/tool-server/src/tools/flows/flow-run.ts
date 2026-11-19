@@ -1850,9 +1850,6 @@ Without a link, every step kind runs.`,
         // its own, which is why that step spends this verdict rather than
         // inheriting whatever the sub-run proved.
         treeOutage: {},
-        // Same shape and sharing as `treeOutage`: what the last read said about
-        // the UI's orientation, for the directives that turn a direction.
-        lastRead: {},
         flowsDir,
         viaUpload,
         project,
@@ -2938,18 +2935,13 @@ async function runScriptStep(
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
 
-/** Raw tool steps that can change how the UI lies on the screen. */
-const UI_TURNING_TOOLS = new Set(["rotate", "fold"]);
-
 /**
  * A `fold:` step runs the `fold` tool on the run device. The app survives a
  * fold, so the pinned tree target stays; what changes is the panel and its
  * coordinate space, and the runner caches no screen geometry — every gesture
  * that needs the screen aspect reads it afresh (`fetchScreenAspect`). A proven
  * tree outage is retired the way a relaunch retires it: the screen the verdict
- * was proven on is gone. So is the UI orientation the last read reported: a
- * fold can turn the UI, and until a read reports the new one, a direction must
- * not be turned by the old one.
+ * was proven on is gone.
  */
 async function runFold(
   state: ExecState,
@@ -2959,7 +2951,6 @@ async function runFold(
   const device = deviceEnv(state).device;
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (state.treeOutage) state.treeOutage.proven = undefined;
-  if (state.lastRead) state.lastRead.uiOrientation = undefined;
   const args = bindDeviceArgs(registry, "fold", device.id, {
     ...(step.posture !== undefined ? { posture: step.posture } : {}),
     ...(step.angle !== undefined ? { angle: step.angle } : {}),
@@ -3170,11 +3161,6 @@ async function execLeafStep(
       // later gesture a window it would have skipped.
       if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
         state.treeOutage.proven = undefined;
-      }
-      // A raw `rotate` or `fold` can turn the UI, like the `fold:` directive
-      // (see runFold): the orientation the last read reported no longer holds.
-      if (UI_TURNING_TOOLS.has(step.name) && state.lastRead) {
-        state.lastRead.uiOrientation = undefined;
       }
       // A file argument the client sent becomes a file on this host for the
       // invoke only; the report keeps the client path the flow names. So does

@@ -8,6 +8,7 @@ import { createDescribeTool } from "../src/tools/describe";
 import { describeIos, __resetBootCaveatStateForTests } from "../src/tools/describe/platforms/ios";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
+import { unknownOrientationNote } from "../src/utils/ios-ui-orientation";
 
 // describeIos probes the runtime kind to short-circuit tvOS. Mock it so these
 // unit tests stay hermetic (no real `simctl`) and default to the iOS path; the
@@ -1298,8 +1299,14 @@ describe("describe tool — ax-service daemon crash", () => {
 
     expect(first.source).toBe("native-devtools");
     expect(first.description).toMatch(/AXButton\s+"Go"/);
-    expect(first.hint).toBe(CRASH_HINT);
-    expect(second.hint).toBe(CRASH_HINT);
+    // The native tree's frames could not be turned upright without the
+    // service, which names the UI's orientation, and the hint says so.
+    const unturned = unknownOrientationNote(
+      { unknownReason: "the accessibility service is not running" },
+      "these frames are in"
+    );
+    expect(first.hint).toBe(`${CRASH_HINT} ${unturned}`);
+    expect(second.hint).toBe(first.hint);
   });
 
   describe("and the standing boot caveat", () => {

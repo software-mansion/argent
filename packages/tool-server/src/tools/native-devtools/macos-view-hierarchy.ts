@@ -15,7 +15,13 @@ import {
 } from "../../blueprints/native-devtools";
 import { InvalidToolInputError } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { resolveDevice } from "../../utils/device-info";
+import { isIosSimulator, resolveDevice } from "../../utils/device-info";
+import { readUiOrientation } from "../../utils/ios-ui-orientation";
+import {
+  fixedPointFromUpright,
+  fixedSpaceOf,
+  uprightNativeResult,
+} from "../../utils/native-devtools-upright";
 import { macosAppServices, requireMacosApp } from "../../utils/macos-input";
 
 /** The `udid` and `bundleId` parameters every native-* app tool takes. */
@@ -94,7 +100,20 @@ export async function queryViewHierarchyFor<T, R>(
     const api = services.nativeDevtools as NativeDevtoolsApi;
     const blocked = await precheckNativeDevtools(api, udid, bundleId);
     if (blocked) return blocked;
+    // On an iOS simulator the library's fixed (portrait-native) space is
+    // turned to the UI's upright one, in both directions
+    // (`utils/native-devtools-upright.ts`).
+    const read = isIosSimulator(device) ? await readUiOrientation(device.id) : undefined;
+    const lookupSpace = read ? fixedSpaceOf(undefined, read) : undefined;
+    if (lookupSpace && typeof rpcParams.x === "number" && typeof rpcParams.y === "number") {
+      Object.assign(
+        rpcParams,
+        fixedPointFromUpright({ x: rpcParams.x, y: rpcParams.y }, lookupSpace)
+      );
+    }
     result = (await api.queryViewHierarchy(bundleId, method, rpcParams)) as typeof result;
+    const space = read ? fixedSpaceOf(result, read) : undefined;
+    if (space) result = uprightNativeResult(method, result, space);
   }
   if (errorCode && result.error) {
     throw new FailureError(result.error, {

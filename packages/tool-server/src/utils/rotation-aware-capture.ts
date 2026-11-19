@@ -8,6 +8,9 @@ import {
   type RotationPeek,
 } from "./device-orientation";
 import { httpScreenshot } from "./simulator-client";
+import { isIosSimulator } from "./device-info";
+import { readUiOrientation, unknownOrientationNote } from "./ios-ui-orientation";
+import { uprightCaptureRotation } from "./ui-orientation";
 
 /**
  * Capture a screenshot that is the right way up on a rotated device.
@@ -33,9 +36,16 @@ import { httpScreenshot } from "./simulator-client";
  * adb. Both answer with the same platform value, so the capture comes out
  * upright either way; only the latency depends on whether `describe` ran first.
  *
- * iOS is deliberately untouched. There the whole surface (describe frames,
- * gesture input, capture) is consistently in the portrait-native space, so
- * rotating only the capture would break the agreement rather than restore it.
+ * On an iOS simulator the capture, the frames and the touches are all in the
+ * screen's portrait-native space, so a landscape UI lies sideways in each.
+ * Agents work in the upright space there too: `describe` turns its frames and
+ * `sendCommand` turns touches back (`utils/ios-ui-orientation.ts`), and the
+ * capture is turned here by the interface orientation the ax-service reports.
+ * That orientation follows the app, not the device, so a portrait-only app on
+ * a rotated device is captured unturned, the way it is drawn.
+ *
+ * The result carries a `note` when an iOS simulator's orientation could not be
+ * read, and the capture went out unturned.
  */
 export async function captureScreenshotUpright(
   api: SimulatorServerApi,
@@ -47,12 +57,11 @@ export async function captureScreenshotUpright(
   // Optional cheaper rotation source (the running android-devtools helper).
   // Purely a latency optimisation: with or without it the same rotation is read.
   peek?: RotationPeek
-): Promise<{ url: string; path: string }> {
-  // An explicit rotation from the caller always wins, and no other platform
-  // takes this path, so both cases are byte-identical to the previous behaviour.
-  if (requestedRotation !== undefined || device.platform !== "android") {
-    return capture(api, requestedRotation, signal, scale);
-  }
+): Promise<{ url: string; path: string; note?: string }> {
+  // An explicit rotation from the caller always wins.
+  if (requestedRotation !== undefined) return capture(api, requestedRotation, signal, scale);
+  if (isIosSimulator(device)) return captureIosUpright(api, device, signal, scale, capture);
+  if (device.platform !== "android") return capture(api, undefined, signal, scale);
 
   const surface = await readAndroidSurfaceRotation(device.id, peek);
   const rotation = captureRotationForSurface(surface);
@@ -76,5 +85,35 @@ export async function captureScreenshotUpright(
     return capture(api, undefined, signal, scale);
   }
 
+  return result;
+}
+
+async function captureIosUpright(
+  api: SimulatorServerApi,
+  device: DeviceInfo,
+  signal: AbortSignal | undefined,
+  scale: number | undefined,
+  capture: typeof httpScreenshot
+): Promise<{ url: string; path: string; note?: string }> {
+  const read = await readUiOrientation(device.id);
+  if (read.orientation === undefined) {
+    const result = await capture(api, undefined, signal, scale);
+    return read.unknownReason === undefined
+      ? result
+      : { ...result, note: unknownOrientationNote(read, "this screenshot is in") };
+  }
+  const rotation = uprightCaptureRotation(read.orientation);
+  if (!rotation) return capture(api, undefined, signal, scale);
+  const result = await capture(api, rotation, signal, scale);
+  // As on Android: a capture that comes back with the wrong aspect means the
+  // naming between UIKit and simulator-server has moved, and the image would
+  // disagree with every frame describe hands out. Say so rather than hide it.
+  if (!captureLooksUpright(rotation, await readPngSize(result.path))) {
+    console.warn(
+      `[screenshot] ${device.id}: requested ${rotation} for interface orientation ` +
+        `${read.orientation}, but the capture came back with the opposite aspect. ` +
+        `simulator-server's rotation handling may have changed.`
+    );
+  }
   return result;
 }
