@@ -120,6 +120,11 @@ export interface DescribeTreeData {
   // into the frame space with this. Absent when the source does not report
   // it, which is when its frames are in the UI's own space.
   uiOrientation?: UiOrientation;
+  // `tree` as a result may quote it, node for node, from the iOS simulator
+  // adapter once a secret was typed on the device: the text of each text input
+  // withheld, each typed value in a label named by its placeholder (see
+  // `utils/typed-secrets`). Checks read `tree`; only a quote reads this.
+  quotableTree?: DescribeNode;
 }
 
 /** Interface orientation as UIKit names it, relative to the portrait-native screen. */
