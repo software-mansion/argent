@@ -308,7 +308,7 @@ describe("type on a Mac app", () => {
   );
 
   it("looks once and types on a source outside the focus set (the control)", async () => {
-    const { result, readsAfterTap, focusSeenBeforeKeys } = await typeRun("ax-service");
+    const { result, readsAfterTap, focusSeenBeforeKeys } = await typeRun("vega-automation");
     expect(result.ok).toBe(true);
     expect(readsAfterTap).toBe(1);
     expect(focusSeenBeforeKeys).toBe(false);

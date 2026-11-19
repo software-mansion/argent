@@ -1,4 +1,5 @@
 import type { DescribeNode } from "../describe/contract";
+import { nodeText } from "../../utils/ui-tree-match";
 // Shared with the describe path's scroll-clip prune so the two trees can never
 // drift on what "scrolled out of a container's viewport" means.
 import { rectFullyOutside } from "../describe/platforms/android/uiautomator-parser";
@@ -150,7 +151,9 @@ export function flattenHoisting<T>(
       ? [view.ownText, descendantText].filter(Boolean).join(" ")
       : descendantText || view.ownText;
   if (view.leaf) {
-    if (subtree && subtree !== view.ownText) view.leaf.subtreeText = subtree;
+    // Against the leaf's own text, not `ownText`: a projection may leave part
+    // of it out (a toggle's 0/1), and the text check must then read the rest.
+    if (subtree && subtree !== nodeText(view.leaf)) view.leaf.subtreeText = subtree;
     out.push(view.leaf);
   }
   return view.shield ? "" : subtree;

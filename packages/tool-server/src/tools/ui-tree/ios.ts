@@ -1,19 +1,26 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { axServiceRef, type AXServiceApi, type AXTreeResponse } from "../../blueprints/ax-service";
-import type { DescribeFrame } from "../describe/contract";
+import { asUiOrientation, type DescribeFrame } from "../describe/contract";
 import { mapNativeTraitsToDescribeRole } from "../describe/platforms/ios/ios-native-adapter";
 import type { UiTree, UiTreeNode } from "./index";
 
-// What an ax-service older than `treeVersion` 2 does not send. `hidden`
-// comes from frames, so every version reports it.
-const LEGACY_UNSUPPORTED_FIELDS = [
-  "type",
-  "password",
-  "placeholder",
-  "hintShowing",
-  "bundleId",
-  "foregroundApp",
-];
+// The `treeVersion` that added each field: an older ax-service does not send
+// it. `hidden` comes from frames, so every version reports it.
+const FIELD_SINCE_TREE_VERSION: Record<string, number> = {
+  type: 2,
+  password: 2,
+  placeholder: 2,
+  hintShowing: 2,
+  bundleId: 2,
+  foregroundApp: 2,
+  interfaceOrientation: 3,
+};
+
+function unsupportedFields(treeVersion = 1): string[] {
+  return Object.keys(FIELD_SINCE_TREE_VERSION).filter(
+    (field) => treeVersion < FIELD_SINCE_TREE_VERSION[field]!
+  );
+}
 
 // XCUIElementType, by value, as XCTest names it.
 const ELEMENT_TYPES = [
@@ -180,7 +187,8 @@ export function adaptAxTree(response: AXTreeResponse): UiTree {
     // A truncated walk may have cut the keyboard, so absence is unknown there.
     keyboardVisible: keyboardVisible || (response.truncated ? undefined : false),
     foregroundApp: response.foregroundApp,
-    unsupportedFields: (response.treeVersion ?? 1) >= 2 ? [] : LEGACY_UNSUPPORTED_FIELDS,
+    interfaceOrientation: asUiOrientation(response.interfaceOrientation),
+    unsupportedFields: unsupportedFields(response.treeVersion),
   };
 }
 
