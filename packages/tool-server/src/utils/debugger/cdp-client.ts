@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { FAILURE_CODES, FailureError, TypedEventEmitter, getFailureSignal } from "@argent/registry";
 import * as crypto from "node:crypto";
+import { expoManifestOrigin, metroOriginCandidates } from "./metro-origin";
 
 export interface ScriptInfo {
   scriptId: string;
@@ -114,6 +115,16 @@ interface PendingBinding {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/**
+ * How long a Metro socket must stay open before argent trusts its Origin. Expo
+ * terminates a socket it rejects as soon as the upgrade completes, which on
+ * loopback lands within a few milliseconds.
+ */
+const ORIGIN_SETTLE_MS = 100;
+
+/** The Origin each Metro (by `host:port`) last kept a socket open for. */
+const acceptedOrigins = new Map<string, string>();
+
 export class CDPClient {
   readonly events = new TypedEventEmitter<CDPClientEvents>();
 
@@ -142,26 +153,91 @@ export class CDPClient {
     this.sendOrigin = options?.sendOrigin !== false;
   }
 
-  connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      // RN >= 0.85 Metro requires an Origin header; Expo matches it exactly
-      // against its serverBaseUrl (127.0.0.1), hence the localhost rewrite.
-      let headers: Record<string, string> | undefined;
-      if (this.sendOrigin) {
-        const { protocol, host } = new URL(this.wsUrl);
-        const origin =
-          (protocol === "wss:" ? "https://" : "http://") + host.replace("localhost", "127.0.0.1");
-        headers = { Origin: origin };
+  async connect(): Promise<void> {
+    if (!this.sendOrigin) {
+      await this.open(undefined);
+      return;
+    }
+
+    // RN >= 0.85 Metro requires an Origin header, and Expo accepts only the one
+    // naming its own server URL. See metroOriginCandidates for why that takes
+    // trying.
+    const metro = new URL(this.wsUrl).host;
+    const tried: string[] = [];
+    const attempt = async (origin: string) => {
+      if (tried.includes(origin)) return false;
+      tried.push(origin);
+      if ((await this.open(origin)) === "rejected") return false;
+      acceptedOrigins.set(metro, origin);
+      return true;
+    };
+
+    for (const origin of metroOriginCandidates(this.wsUrl, acceptedOrigins.get(metro))) {
+      if (await attempt(origin)) return;
+    }
+    const fromManifest = await expoManifestOrigin(this.wsUrl);
+    if (fromManifest && (await attempt(fromManifest))) return;
+
+    acceptedOrigins.delete(metro);
+    throw new FailureError(
+      `Metro at ${metro} refused the debugger connection for every Origin argent tried ` +
+        `(${tried.join(", ")}), refusing the upgrade or closing the socket before any CDP ` +
+        `traffic. Expo's dev server closes it when the Origin does not match its server URL, ` +
+        `which REACT_NATIVE_PACKAGER_HOSTNAME moves to another host. Restart Metro with ` +
+        `REACT_NATIVE_PACKAGER_HOSTNAME unset, or set to 127.0.0.1, then retry.`,
+      {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_ORIGIN_REJECTED,
+        failure_stage: "debugger_cdp_connect",
+        failure_area: "tool_server",
+        error_kind: "network",
       }
-      const ws = new WebSocket(this.wsUrl, headers ? { headers } : undefined);
+    );
+  }
+
+  /**
+   * Open one socket. With an Origin, it must then stay open for
+   * {@linkcode ORIGIN_SETTLE_MS} (or carry a message) before it counts, since a
+   * Metro that dislikes the Origin can still complete the upgrade and only then
+   * drop it. `rejected` is that drop, or a 401/403 for the upgrade; the socket
+   * is discarded without emitting `connected` or `disconnected`.
+   */
+  private open(origin: string | undefined): Promise<"open" | "rejected"> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(this.wsUrl, origin ? { headers: { Origin: origin } } : undefined);
       this.ws = ws;
 
-      const onOpen = () => {
+      let settle: ReturnType<typeof setTimeout> | undefined;
+      const accept = () => {
         cleanup();
+        ws.on("close", () => {
+          this.cleanup();
+          this.events.emit("disconnected");
+        });
+        ws.on("error", (err) => {
+          this.cleanup();
+          this.events.emit("disconnected", err as Error);
+        });
         this.events.emit("connected");
-        resolve();
+        resolve("open");
+      };
+      const drop = () => {
+        cleanup();
+        ws.removeAllListeners();
+        ws.on("error", () => {});
+        ws.terminate();
+        if (this.ws === ws) this.ws = null;
+        resolve("rejected");
+      };
+
+      const onOpen = () => {
+        clearTimeout(timer);
+        if (!origin) return accept();
+        settle = setTimeout(accept, ORIGIN_SETTLE_MS);
+        ws.once("message", accept);
       };
       const onError = (err: Error) => {
+        if (settle) return drop();
+        if (origin && /Unexpected server response: 40[13]\b/.test(err.message)) return drop();
         cleanup();
         reject(
           new FailureError(
@@ -177,6 +253,7 @@ export class CDPClient {
         );
       };
       const onClose = () => {
+        if (settle) return drop();
         cleanup();
         reject(
           new FailureError("WebSocket closed before open", {
@@ -191,7 +268,10 @@ export class CDPClient {
       // but never answers the upgrade would leave this pending indefinitely.
       const timer = setTimeout(() => {
         cleanup();
+        ws.removeAllListeners();
+        ws.on("error", () => {});
         ws.terminate();
+        if (this.ws === ws) this.ws = null;
         reject(
           new FailureError(
             `CDP WebSocket handshake with ${this.wsUrl} did not complete within ` +
@@ -209,24 +289,17 @@ export class CDPClient {
       }, DEFAULT_TIMEOUT_MS);
       const cleanup = () => {
         clearTimeout(timer);
+        clearTimeout(settle);
         ws.removeListener("open", onOpen);
         ws.removeListener("error", onError);
         ws.removeListener("close", onClose);
+        ws.removeListener("message", accept);
       };
 
       ws.on("open", onOpen);
       ws.on("error", onError);
       ws.on("close", onClose);
-
       ws.on("message", (raw: WebSocket.RawData) => this.handleMessage(raw));
-      ws.on("close", () => {
-        this.cleanup();
-        this.events.emit("disconnected");
-      });
-      ws.on("error", (err) => {
-        this.cleanup();
-        this.events.emit("disconnected", err as Error);
-      });
     });
   }
 
