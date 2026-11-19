@@ -598,19 +598,24 @@ describe("selectTarget on a Mac app id", () => {
   });
 
   it("does not take a react-native-macos runtime for a Mac Catalyst app of the same bundle id", () => {
-    // A known vendor id adds a match; it never removes the one of an empty vendor id.
-    trackedCatalystApps.set("com.example.app", REAL_CATALYST_VENDOR_ID);
+    // The record says argent started the Mac Catalyst build: a runtime of an empty
+    // vendor id is another process, with or without the Catalyst app's vendor id.
     const mac = macTarget("com.example.app");
     const ios = iosTarget("com.example.app");
 
-    expect(
-      selectTarget([ios, mac], 8081, { deviceId: "macos-app-com.example.app" }).target.id
-    ).toBe(mac.id);
+    trackedCatalystApps.set("com.example.app", REAL_CATALYST_VENDOR_ID);
     const err = thrownBy(() =>
-      selectTarget([ios], 8081, { deviceId: "macos-app-com.example.app" })
+      selectTarget([ios, mac], 8081, { deviceId: "macos-app-com.example.app" })
     );
     expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
     expect(err.message).not.toContain("argent does not know the identifierForVendor");
+
+    trackedCatalystApps.set("com.example.app", null);
+    const noVendorId = thrownBy(() =>
+      selectTarget([mac], 8081, { deviceId: "macos-app-com.example.app" })
+    );
+    expect(getFailureSignal(noVendorId)).toMatchObject(MISMATCH_SIGNAL);
+    expect(noVendorId.message).toContain("argent does not know the identifierForVendor");
   });
 
   it("picks a real react-native-macos 0.83 runtime, whose inspector id hashes the bundle id alone", () => {

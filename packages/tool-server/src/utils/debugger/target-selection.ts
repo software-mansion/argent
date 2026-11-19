@@ -47,16 +47,23 @@ function deviceKey(target: CDPTarget): string | undefined {
  * A Mac has no identifierForVendor, and react-native-macos 0.76 and later
  * leave it empty, so a react-native-macos app's id follows from its bundle id
  * alone. A Mac Catalyst app runs UIKit, which gives it a real one: argent's
- * library reports it, and the app's record keeps it. An iOS app's id holds a
- * vendor id argent cannot know, so it never matches.
+ * library reports it, and the app's record keeps it. The record's kind picks
+ * the one vendor id: when argent last started a Mac Catalyst build, a runtime
+ * of an empty vendor id is another process (a react-native-macos build of the
+ * same bundle id). An iOS app's id holds a vendor id argent cannot know, so it
+ * never matches.
  */
 function macosAppBundleIdOf(target: CDPTarget): string | undefined {
   const logicalId = target.reactNative?.logicalDeviceId;
   const bundleId = target.appId ?? target.description;
   if (!logicalId || !bundleId) return undefined;
-  const vendorIds = [""];
   const catalystVendorId = trackedMacosAppVendorId(bundleId);
-  if (catalystVendorId) vendorIds.push(catalystVendorId);
+  const vendorIds =
+    trackedMacosAppKind(bundleId) === "catalyst"
+      ? catalystVendorId
+        ? [catalystVendorId]
+        : []
+      : [""];
   for (const vendorId of vendorIds) {
     for (const mode of ["fusebox", "legacy"]) {
       const id = createHash("sha256")

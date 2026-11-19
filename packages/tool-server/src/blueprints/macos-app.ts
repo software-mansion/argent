@@ -991,6 +991,21 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
             err
           );
         }
+        // The start's write of the vendor id is missing when that tool-server
+        // died before the handshake, or the write failed. This handshake has it.
+        const vendorId = ch.handshake?.identifierForVendor;
+        if (
+          own.catalyst &&
+          vendorId &&
+          ch.handshake?.pid === own.pid &&
+          own.identifierForVendor !== vendorId
+        ) {
+          try {
+            recordTrackedMacosApp({ ...own, identifierForVendor: vendorId });
+          } catch {
+            // Only the React profiler's lookup needs it; the next reconnect tries again.
+          }
+        }
         const { appPath, sandboxed, logPath, args } = own;
         const asked = opts.args && JSON.stringify(opts.args);
         const note = [

@@ -790,6 +790,34 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(fresh.trackedMacosAppVendorId(BUNDLE_ID)).toBeUndefined();
   }, 20_000);
 
+  it("writes the identifierForVendor of a running Mac Catalyst app that its record lacks when argent connects again", async () => {
+    const catalyst = writeBundle(path.join(root, `catalyst-ifv-again-${Date.now()}`), BUNDLE_ID);
+    fs.writeFileSync(
+      path.join(catalyst, "Contents", "MacOS", "FakeApp"),
+      machO(PLATFORM_MACCATALYST)
+    );
+    const vendorId = "3F3B75E2-A9D2-585E-9ADF-8A1405F6525A";
+    const { pid } = await run("boot-device", {
+      macosAppPath: catalyst,
+      macosAppArgs: [`--identifier-for-vendor=${vendorId}`],
+    });
+    // The record of a tool-server that died before the handshake, which writes the vendor id.
+    const file = path.join(process.env.HOME!, ".argent", "macos-apps.json");
+    const [record] = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>[];
+    delete record!.identifierForVendor;
+    fs.writeFileSync(file, JSON.stringify([record]));
+    expect(getTrackedMacosApp(BUNDLE_ID)!.identifierForVendor).toBeUndefined();
+
+    expect(await run("launch-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
+      kind: "catalyst",
+    });
+    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({
+      pid,
+      catalyst: true,
+      identifierForVendor: vendorId,
+    });
+  }, 20_000);
+
   it("reads a record without the catalyst field, which an older argent wrote, as an AppKit app", async () => {
     const { pid } = await run("boot-device", { macosAppPath: appPath });
     const file = path.join(process.env.HOME!, ".argent", "macos-apps.json");
