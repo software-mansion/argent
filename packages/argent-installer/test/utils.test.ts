@@ -39,6 +39,7 @@ import {
   hashBundledContent,
   removeRetiredFiles,
   RETIRED_BUNDLED_PATHS,
+  RETIRED_GLOBAL_RULES,
   dirExists,
   detectPackageManager,
   globalInstallCommand,
@@ -385,6 +386,20 @@ describe("RETIRED_BUNDLED_PATHS", () => {
         const content = fs.readFileSync(file, "utf8");
         expect(shipped, relativePath).toContain(hashBundledContent(content));
       }
+    }
+  });
+});
+
+describe("RETIRED_GLOBAL_RULES", () => {
+  // The project rule a local init at the home dir copies into ~/.claude/rules
+  // must not read as a retired global one.
+  it("does not list the rule the bundle ships now", () => {
+    for (const { path: relativePath, shipped } of RETIRED_GLOBAL_RULES) {
+      const file = path.join(RULES_DIR, ...relativePath.split("/"));
+      if (!fs.existsSync(file)) continue;
+      expect(shipped, relativePath).not.toContain(
+        hashBundledContent(fs.readFileSync(file, "utf8"))
+      );
     }
   });
 });
@@ -1104,8 +1119,12 @@ describe("localInstallCommand", () => {
       args: ["add", "--dev", "pkg"],
     });
   });
-  it("uses add -D for pnpm", () => {
-    expect(localInstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["add", "-D", "pkg"] });
+  it("uses add -D for pnpm, skipping the workspace-root check", () => {
+    // A bare `pnpm add` at a workspace root fails with ERR_PNPM_ADDING_TO_ROOT.
+    expect(localInstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["add", "-D", "--ignore-workspace-root-check", "pkg"],
+    });
   });
   it("uses add -d for bun", () => {
     expect(localInstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["add", "-d", "pkg"] });

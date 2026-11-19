@@ -294,12 +294,24 @@ export function liveAndroidNetworkCaptures(deviceId: string): string[] {
 }
 
 /**
+ * Adb serials with live native network capture for any app, or whose agent has
+ * not acknowledged the stop.
+ */
+export function liveAndroidNetworkCaptureSerials(): string[] {
+  return liveCaptureSerials(() => true);
+}
+
+/**
  * Adb serials of the devices with live native network capture for the app, or
  * whose agent has not acknowledged the stop.
  */
 export function liveAndroidNetworkCaptureDevices(packageName: string): string[] {
+  return liveCaptureSerials((handle) => handle.packageName === packageName);
+}
+
+function liveCaptureSerials(matches: (handle: InspectorHandle) => boolean): string[] {
   const serials = allHandles()
-    .filter((handle) => handle.packageName === packageName && handle.mayIntercept())
+    .filter((handle) => matches(handle) && handle.mayIntercept())
     .map((handle) => handle.serial);
   return [...new Set(serials)].sort();
 }
