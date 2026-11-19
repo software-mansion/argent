@@ -356,12 +356,45 @@ async function toolchainSection(ctx: DoctorContext): Promise<DoctorSection> {
   return { title: "Device toolchains", checks };
 }
 
+function isGlobalConfigPath(entry: ConfiguredAdapterScope): boolean {
+  const globalPath = entry.adapter.globalPath();
+  return globalPath !== null && path.resolve(globalPath) === path.resolve(entry.configPath);
+}
+
+export function findConfigured(projectRoot: string): ConfiguredAdapterScope[] {
+  return findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot).filter(
+    (entry) => entry.scope === "global" || !isGlobalConfigPath(entry)
+  );
+}
+
+function hasProjectConfig(dir: string): boolean {
+  return findConfigured(dir).some((entry) => entry.scope === "project");
+}
+
+function ancestorsBelowHome(dir: string, homeDir: string): string[] {
+  const ancestors: string[] = [];
+  let current = path.dirname(dir);
+  while (current !== homeDir && current !== path.dirname(current)) {
+    ancestors.push(current);
+    current = path.dirname(current);
+  }
+  return ancestors;
+}
+
+export function resolveDoctorRoot(cwd: string, homeDir: string = homedir()): string {
+  const projectRoot = resolveProjectRoot(cwd, homeDir);
+  if (projectRoot === path.resolve(homeDir) || hasProjectConfig(projectRoot)) return projectRoot;
+  return (
+    ancestorsBelowHome(projectRoot, path.resolve(homeDir)).find(hasProjectConfig) ?? projectRoot
+  );
+}
+
 function buildContext(paths: ToolsServerPaths, cwd: string): DoctorContext {
-  const projectRoot = resolveProjectRoot(cwd);
+  const projectRoot = resolveDoctorRoot(cwd);
   const globalOnPath = isGloballyInstalled();
   return {
     projectRoot,
-    configured: findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot),
+    configured: findConfigured(projectRoot),
     running: paths.version ?? getInstalledVersion() ?? "unknown",
     paths,
     globalOnPath,

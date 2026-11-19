@@ -5,7 +5,9 @@ import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import {
   classifyMcpEntry,
+  findConfigured,
   renderDoctorReport,
+  resolveDoctorRoot,
   stripPackageBinDirs,
   toolchainChecks,
   type DoctorCheck,
@@ -116,6 +118,43 @@ describe("stripPackageBinDirs", () => {
   it("drops node_modules/.bin so a project copy does not pass for a global install", () => {
     const value = ["/proj/node_modules/.bin", "/usr/local/bin", "/usr/bin"].join(path.delimiter);
     expect(stripPackageBinDirs(value)).toBe(["/usr/local/bin", "/usr/bin"].join(path.delimiter));
+  });
+});
+
+function writeArgentEntry(configPath: string): void {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const config = { mcpServers: { argent: { command: "argent", args: ["mcp"] } } };
+  fs.writeFileSync(configPath, JSON.stringify(config));
+}
+
+describe("resolveDoctorRoot", () => {
+  it("finds a config written to a parent directory with init's custom install directory", () => {
+    const repo = path.join(projectRoot, "ws", "repo-a");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(repo, "src"));
+    writeArgentEntry(path.join(projectRoot, "ws", ".mcp.json"));
+    const homeDir = path.join(projectRoot, "home");
+    expect(resolveDoctorRoot(path.join(repo, "src"), homeDir)).toBe(path.join(projectRoot, "ws"));
+  });
+
+  it("keeps the git root when no parent has a config", () => {
+    const repo = path.join(projectRoot, "repo-a");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    expect(resolveDoctorRoot(repo, path.join(projectRoot, "home"))).toBe(repo);
+  });
+});
+
+describe("findConfigured", () => {
+  const realHome = process.env.HOME;
+  afterEach(() => {
+    process.env.HOME = realHome;
+  });
+
+  it("lists a global config once when run from the home directory", () => {
+    process.env.HOME = projectRoot;
+    writeArgentEntry(path.join(projectRoot, ".cursor", "mcp.json"));
+    const cursor = findConfigured(projectRoot).filter((c) => c.adapter.name === "Cursor");
+    expect(cursor.map((c) => c.scope)).toEqual(["global"]);
   });
 });
 
