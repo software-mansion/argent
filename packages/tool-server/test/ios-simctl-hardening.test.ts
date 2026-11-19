@@ -15,6 +15,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // up to `--timeout 3600` serving RPC, so a 10s exec `timeout` would SIGKILL it
 // mid-session. Its hang is bounded elsewhere — `waitForDaemonConnection(…, 10s)`
 // in ax-service — not by an exec deadline. So these tests never invoke it.
+const ACCESSIBILITY_PLIST_WITH_AUTOMATION =
+  '<plist version="1.0"><dict><key>AutomationEnabled</key><true/></dict></plist>';
+
+function stdoutFor(args: readonly string[]): string {
+  if (args.includes("list") && args.includes("--json")) return '{"devices":{}}';
+  if (args.includes("export")) return ACCESSIBILITY_PLIST_WITH_AUTOMATION;
+  return "";
+}
+
 type ExecOptions = { timeout?: number; killSignal?: string } | undefined;
 const calls: Array<{ cmd: string; args: readonly string[]; options: ExecOptions }> = [];
 
@@ -31,9 +40,7 @@ vi.mock("node:child_process", async () => {
       const callback = typeof opts === "function" ? opts : cb!;
       const options = (typeof opts === "function" ? undefined : opts) as ExecOptions;
       calls.push({ cmd, args, options });
-      // `simctl list devices --json` must parse; everything else can be empty.
-      const isListJson = args.includes("list") && args.includes("--json");
-      callback(null, { stdout: isListJson ? '{"devices":{}}' : "", stderr: "" });
+      callback(null, { stdout: stdoutFor(args), stderr: "" });
     },
   };
 });

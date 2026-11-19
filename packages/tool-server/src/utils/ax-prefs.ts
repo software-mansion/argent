@@ -10,11 +10,10 @@ const execFileAsync = promisify(execFile);
 
 async function accessibilityDefaults(
   udid: string,
-  verb: "write" | "delete",
-  key: string,
-  ...value: string[]
-): Promise<void> {
-  await execFileAsync(
+  verb: "write" | "delete" | "export",
+  ...args: string[]
+): Promise<string> {
+  const { stdout } = await execFileAsync(
     "xcrun",
     /**
      * On an external device this is only reached from ax-service contexts,
@@ -22,20 +21,21 @@ async function accessibilityDefaults(
      */
     await simctlArgsForUdid(
       udid,
-      ["spawn", udid, "defaults", verb, "com.apple.Accessibility", key, ...value],
+      ["spawn", udid, "defaults", verb, "com.apple.Accessibility", ...args],
       { granted: "ax-service" }
     ),
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   );
+  return stdout;
 }
 
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await accessibilityDefaults(udid, "write", "AutomationEnabled", "-bool", "true");
 }
 
-function isMissingDefault(err: unknown): boolean {
-  const stderr = (err as { stderr?: unknown } | null)?.stderr;
-  return typeof stderr === "string" && /not found/.test(stderr);
+async function hasAutomationEnabled(udid: string): Promise<boolean> {
+  const plist = await accessibilityDefaults(udid, "export", "-");
+  return plist.includes("<key>AutomationEnabled</key>");
 }
 
 /**
@@ -43,13 +43,16 @@ function isMissingDefault(err: unknown): boolean {
  * unable to move focus, even across reboots. Local iPhone and iPad sims trade it
  * away (Apple TV sims still need it): the ax-service connects without it, though
  * UIKit then reports a text field's placeholder only as its value, with no
- * label. Removes it from sims an older argent wrote it to as well. A missing key
- * or domain is the wanted state, so that failure is ignored.
+ * label. Removes it from sims an older argent wrote it to as well.
+ *
+ * `defaults delete` words a missing key differently per runtime, so presence is
+ * checked through `defaults export`, which prints the domain as an XML plist
+ * (an empty one for a missing domain) on every runtime.
  */
 export async function clearAutomationEnabled(udid: string): Promise<void> {
-  await accessibilityDefaults(udid, "delete", "AutomationEnabled").catch((err) => {
-    if (!isMissingDefault(err)) throw err;
-  });
+  if (await hasAutomationEnabled(udid)) {
+    await accessibilityDefaults(udid, "delete", "AutomationEnabled");
+  }
 }
 
 export async function clearAutomationEnabledOrWarn(udid: string): Promise<void> {
