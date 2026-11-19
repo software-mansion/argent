@@ -98,12 +98,16 @@ jobs:
         env:
           REF: ${{ inputs.ref }}
           CHANNEL: ${{ inputs.channel }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
-            # argent-main is the floating main build of the signed binaries.
+            # The newest argent-private main build of the signed binaries
+            # (argent-main-<sha>). Resolved once here, so both downloads below
+            # read the same release even if a newer build lands mid-run.
+            BINARIES_TAG="$(bash scripts/resolve-main-binaries-tag.sh)"
             echo "mode=canary" >> "$GITHUB_OUTPUT"
             echo "dist_tag=next" >> "$GITHUB_OUTPUT"
-            echo "binaries_tag=argent-main" >> "$GITHUB_OUTPUT"
+            echo "binaries_tag=${BINARIES_TAG}" >> "$GITHUB_OUTPUT"
           else
             VERSION=$(node -p "require('./packages/argent/package.json').version")
             case "$VERSION" in

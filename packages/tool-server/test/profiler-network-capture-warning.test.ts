@@ -28,7 +28,6 @@ vi.mock("../src/tools/profiler/native-profiler/platforms/ios", () => ({
     pid: 1,
     traceFile: "/ios.trace",
   })),
-  handleXctraceExit: vi.fn(),
 }));
 
 import { nativeNetworkCaptureWarning } from "../src/utils/profiler-shared/network-capture-warning";

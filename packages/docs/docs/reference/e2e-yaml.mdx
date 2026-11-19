@@ -598,9 +598,27 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 | `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                                                 |
 | `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                                              |
 | `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                                          |
+| `argent e2e list <dir>`      | List the e2e tests that `argent e2e run <dir>` runs. The path must not contain `..`                                   |
+| `argent e2e list <dir> -r`   | List the e2e tests that `argent e2e run <dir> -r` runs                                                                |
 | `argent e2e list --json`     | Print the same list as a JSON document. See [The `argent e2e list` JSON document](#the-argent-e2e-list-json-document) |
 
+`argent e2e list` skips the same subdirectories as `argent e2e run <dir> --recursive`: `__baselines__`, `node_modules` and dot-directories other than `.argent`, at any depth. Argent always reads the directory that you name, also when it is one of these directories.
+
 When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes `warning: no .argent/e2e or .argent/flows directory in the current working directory` on stderr. When the directories hold no e2e test, `argent e2e list` writes `No e2e tests found in .argent/e2e or .argent/flows` on stderr. In both cases, stdout is empty and the exit code is 0. When one of the directories exists but Argent cannot read it, `argent e2e list` writes `Could not read e2e test directory: <dir>` on stderr and gives exit code 2. The list skips a subdirectory that Argent cannot read.
+
+`argent e2e list <dir>` prints paths relative to the current directory for a relative `<dir>`, and absolute paths for an absolute `<dir>`. `argent e2e run` accepts each printed path. Argent puts `./` in front of a printed path that starts with `-`, so that `argent e2e run` does not read the path as an option.
+
+Argent writes an error on stderr and gives exit code 2 when `<dir>`:
+
+- does not exist
+- is not a directory
+- cannot be read
+- is empty text
+- has a `..` segment
+
+When you give `-r` without `<dir>`, Argent writes `e2e list --recursive requires a directory path` on stderr and gives exit code 2.
+
+When Argent finds no e2e test in `<dir>`, Argent writes `No e2e tests found in <dir>` on stderr, prints nothing on stdout and gives exit code 0. Without `-r`, Argent writes `Pass -r/--recursive to include subdirectories.` on the next line. With `--json`, Argent prints `{ "e2eTests": [] }`.
 
 | Option               | Description                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -608,7 +626,7 @@ When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes 
 | `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either    |
 | `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines` |
 | `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                           |
-| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Dot-directories and `node_modules` are skipped                                                                    |
+| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                             |
 | `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                 |
 | `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                               |
 | `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                     |
@@ -696,7 +714,7 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 
 | Field        | Description                                                                                                                      |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `path`       | The path that the plain output prints, relative to the current directory                                                         |
+| `path`       | The path that the plain output prints                                                                                            |
 | `name`       | The name that `argent e2e run <name>` accepts. Only for a file directly in `.argent/e2e` or `.argent/flows`                      |
 | `legacy`     | `true` for an e2e test in `.argent/flows`                                                                                        |
 | `shadowedBy` | The path of an earlier entry with the same name. `argent e2e run <name>` runs that entry instead. Only when such an entry exists |
@@ -717,6 +735,8 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 ```
 
 When Argent finds no e2e test, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
+
+`argent e2e list <dir> --json` gives each entry only the `path` field. With `--json`, Argent writes each `<dir>` error as the JSON error object on stderr.
 
 <a id="flows-over-a-link" />
 
