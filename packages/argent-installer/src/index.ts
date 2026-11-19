@@ -7,6 +7,7 @@ export {
   getInstalledVersion,
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,
+  isGloballyInstalled,
   probeLocalInstall,
   resolveInstallMode,
   resolveProjectRoot,

@@ -12,12 +12,12 @@ import {
   detectProjectPackageManager,
   findConfiguredAdapterScopes,
   formatShellCommand,
-  getGloballyInstalledPackageRoot,
   getGloballyInstalledVersion,
   getInstalledVersion,
   getManagedContentTargets,
   globalInstallCommand,
   hasCustomizingEnv,
+  isGloballyInstalled,
   listBundledSkills,
   probeLocalInstall,
   projectInstallCommand,
@@ -105,7 +105,8 @@ function installSection(ctx: DoctorContext): DoctorSection {
   const mode = resolveInstallMode(ctx.projectRoot);
 
   if (ctx.globalOnPath) {
-    checks.push(check("ok", `\`argent\` v${getGloballyInstalledVersion() ?? "?"} is on PATH`));
+    const version = getGloballyInstalledVersion();
+    checks.push(check("ok", `\`argent\`${version ? ` v${version}` : ""} is on PATH`));
   } else if (mode === "global") {
     checks.push(
       check("error", "`argent` is not on PATH", {
@@ -357,7 +358,7 @@ async function toolchainSection(ctx: DoctorContext): Promise<DoctorSection> {
 
 function buildContext(paths: ToolsServerPaths, cwd: string): DoctorContext {
   const projectRoot = resolveProjectRoot(cwd);
-  const globalOnPath = getGloballyInstalledPackageRoot() !== null;
+  const globalOnPath = isGloballyInstalled();
   return {
     projectRoot,
     configured: findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot),
