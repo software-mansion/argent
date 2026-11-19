@@ -163,6 +163,14 @@ Call `screenshot` or `describe` to read the screen again.
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
 
+`view-network-request-details` replaces the values of secret fields in the request body with `[REDACTED]`:
+
+- Argent reads a body as JSON when it starts with `{` or `[`. Argent reads another body as form data when its `Content-Type` is `application/x-www-form-urlencoded`.
+- These field names are secret: `password`, `passwd`, `pwd`, `new_password`, `old_password`, `current_password`, `confirm_password`, `password_confirm`, `password_confirmation`, `client_secret`, `access_token`, `refresh_token`, `id_token`, `api_key`, `otp`, `passphrase`, `private_key`, `secret_key`, `auth_token` and `session_token`. Argent ignores the case and the `_` and `-` characters, so `newPassword` is secret too. In form data, Argent also reads the last part of a name after `[` or `.`, for example `user[password]` and `Input.Password`.
+- Argent replaces only a non-empty text value. An empty value, a number, an array and an object stay as the app sent them.
+- Argent does not change the other text of the body. Large numbers and the spacing stay as the app sent them.
+- Argent does not replace values in the URL query, in multipart bodies, in text inside a JSON string, or in the response body. On iOS, `native-network-logs` shows request bodies without these replacements.
+
 ## Native devtools
 
 On a Mac app, these tools read the app through the Argent library:

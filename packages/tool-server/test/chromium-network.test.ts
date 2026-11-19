@@ -322,6 +322,30 @@ describe("view-network-request-details (chromium branch)", () => {
     }
   });
 
+  it("masks the password in a form request body before it cuts the body", async () => {
+    const record = rec({
+      requestId: "r4",
+      method: "POST",
+      url: "https://x.test/login",
+      requestHeaders: { "Content-Type": "application/x-www-form-urlencoded" },
+      postData: "email=a&password=hunter2&pad=" + "x".repeat(1100),
+    });
+    const services = {
+      chromium: { cdp: { send: vi.fn() }, server: { network: { get: () => record } } },
+    } as never;
+
+    const details = (await networkRequestTool.execute(services, {
+      device_id: "chromium-cdp-9222",
+      port: 8081,
+      requestId: "r4",
+      includeBody: true,
+    })) as { request: { postData?: string } };
+
+    expect(details.request.postData).toMatch(
+      /^\[TRUNCATED: .*\nemail=a&password=\[REDACTED\]&pad=x/
+    );
+  });
+
   it("returns an error string when the requestId is unknown", async () => {
     const services = {
       chromium: { cdp: { send: vi.fn() }, server: { network: { get: () => undefined } } },

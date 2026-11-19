@@ -93,6 +93,8 @@ Then the agent reads the details of one record by its ID. The native `NSURLProto
 
 For the JS runtime layer, native network capture and the Chrome DevTools Protocol layer, Argent replaces the values of secret headers with `[REDACTED]`. A header is secret if its name contains `authorization`, `cookie`, `token`, `api-key` or a related word. The native `NSURLProtocol` layer does not replace these values. See the Limits section.
 
+In the details of a request, Argent also replaces the values of secret fields in a JSON request body or in form data, for example `password` and `access_token`.
+
 Argent also shortens a body that is longer than 1000 characters. A message before the shortened body gives the size of the full body. The JS runtime layer can keep only the start of a large body. For such a body, the message gives the full size in bytes, the full length in characters or a minimum length. Native network capture can also keep only the start of a large body. For such a body, the message gives the full size in bytes if Argent knows it, and the number of bytes that the in-app agent kept.
 
 Argent removes the bundle traffic and the HMR traffic of Metro from the network log. Thus the network log contains the requests of your app only. This removal applies only when the app connects to Metro on a local address. If a physical Android device connects to Metro on a network address, for example `192.168.1.20:8081`, the network log also contains the requests to Metro.
@@ -154,7 +156,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - The in-app agent stays in the app process until the process ends. The in-app agent tries to connect again every few seconds until then. After 60 seconds, it turns off the capture in the app, but it continues to try to connect. Thus a new tool-server gets the capture of this process back without a restart of the app.
   - The session file and the files of the in-app agent stay in the app until the capture starts and stops again, or until you install the app again.
   - The `adb reverse` stays until you remove it with `adb reverse --remove`, until the adb server or the device restarts, or until the USB connection of the device stops. A restart of the adb server also removes the other reverses, for example the reverse of Metro. Each `adb reverse` that stays holds one device port from 20000 to 29999.
-- Argent does not replace the data in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
+- Argent replaces only the values of a short list of secret fields in a request body. Argent does not replace data in the URL query or in the response body. On iOS, `native-network-logs` shows request bodies without these replacements. Protect a network log as you protect other data of the app.
 - On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a network log of this layer as you protect other data of the app.
 
 Argent does this with these three tools: `view-network-logs`, `view-network-request-details` and `native-network-logs`. The [tools reference](/docs/reference/tools) contains all tools.

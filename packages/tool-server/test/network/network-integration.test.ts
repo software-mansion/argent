@@ -545,6 +545,37 @@ describe("NetworkInspector integration (mock server)", () => {
     expect(resp.body).toContain("Bob");
   });
 
+  it("view-network-request-details masks the password in a form-encoded request body", async () => {
+    networkLog.push({
+      id: networkLog.length,
+      requestId: "rn-net-form",
+      state: "finished",
+      request: {
+        url: "https://api.example.com/login",
+        method: "POST",
+        headers: { "content-type": "Application/X-WWW-Form-URLencoded" },
+        postData: "user=a&password=hunter2&pad=" + "x".repeat(1100),
+      },
+      resourceType: "Fetch",
+      timestamp: Date.now() / 1000,
+    });
+    try {
+      const result = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-form",
+      })) as { request: { postData?: string } };
+      expect(result.request.postData).toMatch(
+        /^\[TRUNCATED: .*\nuser=a&password=\[REDACTED\]&pad=x/
+      );
+    } finally {
+      networkLog.splice(
+        networkLog.findIndex((e) => e.requestId === "rn-net-form"),
+        1
+      );
+    }
+  });
+
   it("view-network-request-details returns error for unknown requestId", async () => {
     const result = (await registry.invokeTool("view-network-request-details", {
       port: mockPort,
