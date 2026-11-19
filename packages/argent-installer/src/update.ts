@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import semver from "semver";
 import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
@@ -10,6 +11,8 @@ import {
   findConfiguredAdapterScopes,
   getMcpEntryForScope,
   isArgentManagedEntry,
+  isPinnedGlobalEntry,
+  resolveGlobalCommandMode,
   resolveLocalCommandMode,
   copyRulesAndAgents,
   findRetiredRulesAndAgents,
@@ -136,6 +139,15 @@ export function resolveUpdatePackageAction(
 ): UpdatePackageAction {
   if (trigger === "mcp_update") return "mcp_update";
   return installed ? "standalone_update" : "standalone_install";
+}
+
+function isLivePinnedEntry(entry: McpServerEntry | null): boolean {
+  return (
+    entry !== null &&
+    isPinnedGlobalEntry(entry) &&
+    fs.existsSync(entry.command) &&
+    fs.existsSync(entry.args[0])
+  );
 }
 
 export async function update(args: string[]): Promise<void> {
@@ -676,8 +688,9 @@ export async function update(args: string[]): Promise<void> {
       const results: string[] = [];
 
       // Project-scope entries in local mode run the repo-local copy (the bin
-      // path may move across versions); global scopes keep the bare `argent`.
+      // path may move across versions); global scopes run the global install.
       const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
+      const globalCmdMode = resolveGlobalCommandMode();
       // Never REWRITE existing entries to the degraded npx fallback: local-npx
       // only means the repo-local bin can't be resolved right now (fresh clone,
       // pruned pnpm store), and the committed node-path command is right again
@@ -685,7 +698,7 @@ export async function update(args: string[]): Promise<void> {
       // scratch, with its own warning.)
       const skipEntryRewrite = localCmdMode?.kind === "local-npx";
       const entryFor = (scope: "local" | "global"): McpServerEntry =>
-        getMcpEntryForScope(installMode, scope, localCmdMode);
+        getMcpEntryForScope(installMode, scope, localCmdMode, globalCmdMode);
 
       // Only scopes that already contain an argent entry: a present editor dir
       // (`.gemini`, `.cursor`, ...) is not consent — issue #195.
@@ -722,8 +735,20 @@ export async function update(args: string[]): Promise<void> {
           );
           continue;
         }
+        const entry = entryFor(normScope);
+        // A run without the user's PATH (the update-argent tool in a
+        // Dock-launched editor) cannot resolve a pin, and bare `argent` fails
+        // with ENOENT in that editor.
+        if (isLivePinnedEntry(existing) && !isPinnedGlobalEntry(entry)) {
+          if (normScope === "local") continue;
+          results.push(
+            `${pc.yellow("!")} ${adapter.name} kept its absolute-path entry (no global install ` +
+              `with its own node found on PATH) ${pc.dim(configPath)}`
+          );
+          continue;
+        }
         try {
-          adapter.write(configPath, entryFor(normScope));
+          adapter.write(configPath, entry);
           results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
         } catch {
           // Skip paths that can't be written.

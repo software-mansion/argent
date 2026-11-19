@@ -59,6 +59,10 @@ const vscode = getAdapterByName("VS Code")!;
 const windsurf = getAdapterByName("Devin Desktop")!;
 
 const ARGENT_GLOBAL_ENTRY = { type: "stdio", command: "argent", args: ["mcp"] };
+const PINNED_GLOBAL_ENTRY = {
+  command: "/opt/homebrew/bin/node",
+  args: ["/opt/homebrew/lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+};
 
 function claudeJsonPath(): string {
   return path.join(home, ".claude.json");
@@ -577,6 +581,39 @@ describe("cleanupStaleMcpConfigs", () => {
       detectedAdapters: [cursor],
       installMode: "global",
       scope: "global",
+      effectiveRoot: root,
+    });
+
+    expect(result.lines).toHaveLength(0);
+  });
+
+  it("stays silent about the pinned global entry when the project path is the global path", async () => {
+    // Global `init` run from $HOME: Cursor's project file is ~/.cursor/mcp.json.
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    writeJsonFile(cursorGlobal, { mcpServers: { argent: PINNED_GLOBAL_ENTRY } });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "global",
+      scope: "global",
+      effectiveRoot: home,
+    });
+
+    expect(result.lines).toHaveLength(0);
+  });
+
+  it("stays silent about a pinned global entry on a local install", async () => {
+    globallyInstalled = true;
+    writeJsonFile(path.join(home, ".cursor", "mcp.json"), {
+      mcpServers: { argent: PINNED_GLOBAL_ENTRY },
+    });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
       effectiveRoot: root,
     });
 
