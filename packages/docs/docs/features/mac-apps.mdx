@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: monitor
 ---
 
-Argent lets your agent test native Mac apps built with AppKit, SwiftUI, react-native-macos, or Mac Catalyst. The agent reads the interface, clicks, types, and takes screenshots while you continue to use your Mac.
+Argent lets your agent test native Mac apps, including Mac Catalyst builds of iPad apps. The agent reads the interface, clicks, types, and takes screenshots while you continue to use your Mac.
 
 **The app runs in the background, and your pointer stays under your control.** Argent requires no Accessibility or Screen Recording permission.
 
@@ -22,7 +22,7 @@ You need macOS 14.4 or later and a built `.app` bundle. Use a Debug build of you
 
 Argent must launch the app itself. It cannot control a copy started with Xcode Run or `react-native run-macos`. Save your work and quit that copy first.
 
-For React Native Debug builds, start Metro before the agent launches the app. This applies to react-native-macos and to React Native apps built for Mac Catalyst. After code changes, rebuild the app and ask the agent to restart it.
+For React Native Debug builds, start Metro before the agent launches the app. This applies to both react-native-macos and Mac Catalyst. After code changes, rebuild the app and ask the agent to restart it.
 
 Mac app support is on by default. If you previously disabled it, enable it in the [feature flag settings](/docs/reference/configuration#feature-flags).
 
@@ -41,6 +41,7 @@ Context menus and pop-up menus can temporarily bring the app window to the front
 - **Use menus:** choose commands such as File > Export while the app stays in the background.
 - **Open and save files:** answer file dialogs with a path.
 - **Inspect network traffic:** read requests made through `URLSession`.
+- **Profile performance:** find CPU hotspots, UI hangs, and memory leaks. In React Native apps, you can also find slow React renders. See [Profile your app](#profile-your-app).
 - **Test workflows:** record and replay [e2e tests](/docs/features/e2e), including screenshot comparisons.
 
 Text input supports accented characters and emoji. Argent disables automatic text correction so the app receives the text the agent types.
@@ -71,22 +72,37 @@ Stable identifiers help tests find controls after layout changes. See the [ident
 
 ## Test Mac Catalyst apps
 
-The agent also tests iPad apps that you build for the Mac with Mac Catalyst:
+Build the Mac Catalyst target in Xcode without launching it. Give the agent the path to the built `.app` bundle. Argent supports UIKit, SwiftUI, and React Native apps built for Mac Catalyst. Both **Scale Interface to Match iPad** and **Optimize Interface for Mac** work.
 
-- UIKit and SwiftUI apps, with the Scale Interface to Match iPad or the Optimize Interface for Mac setting.
-- React Native apps for iOS that you build for Mac Catalyst.
+The agent reads the front window through the accessibility tree. To test another window, ask the agent to switch to it from the Window menu. See the [Mac Catalyst tool reference](/docs/reference/tools#mac-catalyst-apps) for input and inspection limits.
 
-Build the Mac Catalyst target of your app, then give the agent the path to the `.app` bundle. The agent does the same tasks as in other Mac apps. The agent also works with alerts, sheets, multiple windows, file dialogs, the URL scheme of the app, and the content of web views.
+Argent cannot control iPhone and iPad apps that run unchanged on the Mac ("Designed for iPad"). Build the Mac Catalyst target or test the app on an iOS simulator.
 
-A Mac Catalyst app differs from other Mac apps in these ways:
+## Profile your app
 
-- The agent reads the UIKit views from the accessibility tree only. The tools that read the AppKit view tree fail in a Mac Catalyst app.
-- The agent reads the interface of the front window. The agent switches windows with the Window menu.
-- When the app has more than one window, the agent clicks a text field before it types.
+Start the app through Argent and ask your agent to profile the interaction you want to investigate. Mac apps, including react-native-macos and Mac Catalyst apps, use Instruments for native profiling and require a full Xcode installation. Use a build signed for development, such as a Debug build from Xcode. Development-signed Release builds also work. The hardened runtime and App Sandbox are supported.
 
-Give controls a stable accessibility identifier, or a `testID` in React Native, so that the agent and your tests find them.
+Instruments attaches to the running app by default. Keep the app open until the agent stops the recording. If the app quits, crashes, or restarts during capture, record the interaction again because the trace may be incomplete. Allow about 15 to 25 seconds for a short recording to save and export.
 
-An iPad or iPhone app that runs on the Mac without changes ("Designed for iPad") is not a Mac Catalyst app. macOS does not let Argent load its library into such an app. Build the Mac Catalyst target of the app, or test the app on an iOS simulator.
+The default template checks for leaks about every 11 seconds. Each check can pause the app for several seconds. The report shows how much of a recorded hang overlapped a pause when that timing is available. To investigate the hang, ask the agent to repeat the recording without leak checks.
+
+Starting a leak recording can freeze a Mac app that uses WebKit, such as an app with an embedded web view. With malloc stack logging off, Argent blocks the default recording if it detects this risk or cannot complete the check. Ask the agent to record CPU and hangs without restarting or checking for leaks. For a leak recording, ask the agent to restart the app with malloc stack logging. Save anything you need from the current session before the restart.
+
+See the [profiling guide](/docs/features/profiling#limits) for leak recording guidance and the [Mac profiling tool reference](/docs/reference/tools#profiling-a-mac-app) for signing and recording options.
+
+### Profile a React Native app
+
+Use a Debug build that runs Hermes and loads JavaScript from Metro:
+
+- react-native-macos 0.76 or later.
+- React Native built for Mac Catalyst.
+
+Argent can profile the Mac app even when it shares Metro with an iOS simulator running the same app.
+
+Ask the agent to record a [React profile](/docs/features/profiling) to find slow renders. The agent can
+record a native profile at the same time to see whether slow React commits coincide with UI hangs.
+
+See the [React profiler tool reference](/docs/reference/tools#react-profiler-on-a-mac-app) for setup and recovery.
 
 <a id="several-builds-at-the-same-time" />
 
@@ -102,29 +118,28 @@ To test separate git worktrees in parallel, give each build a unique bundle iden
 
 Some builds use the hardened runtime, which can prevent Argent from loading its library. If launch fails, follow the [Debug build signing instructions](/docs/reference/tools#configure-code-signing).
 
-A Mac Catalyst Debug build that you sign to run locally has no hardened runtime. Argent controls it without changes. A Mac Catalyst Debug build that you sign with your development team uses the hardened runtime by default. The first launch then fails with a `codesign` command for the Argent library. Run that command with your team's identity, then ask the agent to start the app again.
-
 Most distributed or notarized apps do not allow Argent to control them. Use your development build. Keep signing changes limited to builds used for testing.
 
 ## Troubleshooting
 
-| Problem                                            | What to do                                                                                                  |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| The app is missing from the device list            | Ask the agent to start the `.app` bundle. The list shows running apps started by Argent.                    |
-| A copy is already running                          | Save your work and quit that copy. To run another build in parallel, give it a different bundle identifier. |
-| The app has no window, or input has no effect      | Open a standard window. Restore a minimized window through the app's Window menu.                           |
-| A restart stops at a save prompt                   | Ask the agent to answer the prompt, then retry the restart.                                                 |
-| A control is missing                               | Scroll it into view. If the control still has no useful label, add a stable accessibility identifier.       |
-| The tree reports that the Mac is locked            | Unlock the Mac and retry.                                                                                   |
-| A tool times out while the debugger pauses the app | Resume the app in the debugger and retry.                                                                   |
+| Problem                                            | What to do                                                                                                                                       |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The app is missing from the device list            | Ask the agent to start the `.app` bundle. The list shows running apps started by Argent.                                                         |
+| A copy is already running                          | Save your work and quit that copy. To run another build in parallel, give it a different bundle identifier.                                      |
+| The app has no window, or input has no effect      | Open a standard window. Restore a minimized window through the app's Window menu.                                                                |
+| A restart stops at a save prompt                   | Ask the agent to answer the prompt, then retry the restart.                                                                                      |
+| The profiler refuses the app                       | Try an Xcode build signed for development. See the [signing requirements](/docs/reference/tools#profiling-a-mac-app).                            |
+| The React profiler cannot find the app on Metro    | Check that the Debug build is running and has loaded its JavaScript. If Metro uses a different port from 8081, tell the agent which port to use. |
+| A control is missing                               | Scroll it into view. If the control still has no useful label, add a stable accessibility identifier.                                            |
+| The tree reports that the Mac is locked            | Unlock the Mac and retry.                                                                                                                        |
+| A tool times out while the debugger pauses the app | Resume the app in the debugger and retry.                                                                                                        |
 
 ## Limits
 
-- **App types:** Apple apps and iPad or iPhone apps that run unchanged on the Mac ("Designed for iPad") are unsupported. Build the Mac Catalyst target of such an app. Use [Chromium support](/docs/fundamentals/supported-platforms#desktop-and-web-targets) for Electron apps and browsers.
+- **App types:** Apple apps and ["Designed for iPad" apps](#test-mac-catalyst-apps) are unsupported. Use [Chromium support](/docs/fundamentals/supported-platforms#desktop-and-web-targets) for Electron apps and browsers.
 - **Windows:** the app needs a standard window. Apps with only a menu bar icon, panels, or borderless windows are unsupported.
 - **System dialogs:** the agent cannot control macOS permission prompts or content shown by another process, such as share sheets.
-- **Input:** hover, pinch, and rotate gestures are unavailable. Drag and drop works only within the app. In a Mac Catalyst app, UIKit drag and drop from one view to another fails. Pan and drag gestures in the app work.
-- **Mac Catalyst keyboard behavior:** some UIKit alerts ignore Return and Escape, and typed text can replace an input method composition. See the [Mac Catalyst details](/docs/reference/tools#mac-catalyst-apps).
-- **Developer tools:** screen recording, profiling, and JavaScript debugger tools are unavailable for native Mac apps. This includes React Native apps built for Mac Catalyst.
+- **Input:** hover, pinch, and rotate gestures are unavailable. Drag and drop works only within the app.
+- **Developer tools:** screen recording and the JavaScript debugger tools are unavailable.
 
 See the [Mac app tools reference](/docs/reference/tools#mac-apps) for tool parameters and additional limitations.

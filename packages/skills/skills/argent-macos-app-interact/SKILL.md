@@ -32,17 +32,22 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Mac Ca
 
 ## Tree
 
-- Identifiers: AppKit accessibility identifier, UIKit `accessibilityIdentifier` (Mac Catalyst), SwiftUI `.accessibilityIdentifier()`, web `data-testid` (else `id`), React Native `testID` (also on a plain `View` or `Text` in react-native-macos).
+- Identifiers: AppKit and UIKit `accessibilityIdentifier`, SwiftUI `.accessibilityIdentifier()`, web `data-testid` (else `id`), React Native `testID` (also on a plain `View` or `Text` in react-native-macos).
 - Hint `The Mac is locked` or `fallback walk`: clicks and typing still work, elements can be missing (an open context menu among them), and a `hidden` check cannot pass. Ask the user to unlock when a target is missing.
 - An action that fails or has no effect: a minimized window takes no input. Restore it by choosing it in the Window menu with `menu-bar`; without such an item, ask the user.
 
 ## Mac Catalyst (kind `catalyst`)
 
-- `native-find-views`, `native-full-hierarchy` and `native-view-at-point` fail: use `describe`, which lists the UIKit views with their identifiers and frames.
-- More than one window: tap the target text field before `keyboard`, or the text goes to the focused field of another window. `describe` and `screenshot` show the front window; switch windows with `menu-bar` (Window menu).
-- Alerts: tap the button. `enter` does nothing when no button is the default; `escape` does nothing on a UIKit alert with a text field.
-- SwiftUI: tap each field instead of moving with `tab`; the Tab order can differ from the order a user sees.
-- `boot-device` refuses a "Designed for iPad" app (an unchanged iOS app): report it to the user, do not retry.
+- Build with `xcodebuild -destination 'platform=macOS,variant=Mac Catalyst' build` and pass the resulting `.app` to `boot-device`. If it reports "Designed for iPad", ask for the Mac Catalyst build or suggest testing on an iOS simulator.
+- Use `describe` to find UIKit controls and their frames. AppKit view-tree tools are unavailable.
+- Switch to the intended window with `menu-bar` and the Window menu. Tap the target field before typing, since keyboard focus can be in another window and SwiftUI Tab order can differ from the visible order.
+- Tap alert buttons directly. Return depends on a default action, and Escape can leave a UIKit text-field alert open.
+- Find toolbar menu buttons by label if **Optimize Interface for Mac** leaves them without identifiers.
+- If typing, paste, or scrolling reports success without changing the app, check whether the installed native library supports Mac Catalyst input.
+
+## Profiling
+
+Use `argent-native-profiler` for native profiling or `argent-react-native-profiler` to capture React performance on a react-native-macos or Mac Catalyst React Native app. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
 
 ## E2E tests
 
@@ -50,4 +55,4 @@ Read `references/e2e.md` before recording or writing a test for a Mac app.
 
 ## React Native
 
-A Debug build (react-native-macos, or React Native built for Mac Catalyst) loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). `debugger-*` and the React profiler do not take a Mac app id: read the screen with `describe`.
+For React Native Debug builds on macOS, including Mac Catalyst, start Metro before `boot-device` (see `argent-react-native-app-workflow`). Inspect the UI with `describe`. The JavaScript debugger tools are unavailable for Mac apps.

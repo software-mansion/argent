@@ -2,6 +2,7 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
+import { parse as parseYaml } from "yaml";
 import {
   E2E_DIR,
   E2E_DIRS,
@@ -165,11 +166,13 @@ A directory run prints only the steps that need attention (each failure, each
 warning, and each script step's output), then its outcome. After the last test
 it lists every failed test with its reason and a command that re-runs that test
 alone, then a final summary; --recursive walks subdirectories too
-(dot-directories and node_modules are skipped). A test that fails its steps
-keeps the batch running, as does one the server rejects up front — an invalid
-file, or a device it cannot resolve. A transport failure, a rejection the server
-does not mark as validation, or a reply that is not a report stops the batch and
-counts the remaining tests skipped.
+(__baselines__, node_modules and dot-directories other than .argent are
+skipped). A directory run and list skip a YAML file that is not an e2e test.
+A test that fails its steps keeps the batch running, as does one the
+server rejects up front — an invalid file, or a device it cannot resolve. A
+transport failure, a rejection the server does not mark as validation, or a
+reply that is not a report stops the batch and counts the remaining tests
+skipped.
 
 A test can declare a \`requires:\` block (platform, runtimeKind) that names the
 targets it supports. A directory run skips each test whose requirements the
@@ -201,8 +204,12 @@ Subcommands:
   run <test|test.yaml|dir>   Run a saved e2e test by name, a YAML file by path,
                              or every test in a directory, and report pass/fail
                              (exit reflects result)
-  list                       List runnable YAML paths in .argent/e2e and
-                             .argent/flows (legacy); notes go to stderr
+  list [dir] [-r] [--json]   List runnable YAML paths in dir (-r: also in its
+                             subdirectories), or in .argent/e2e and
+                             .argent/flows (legacy) with notes on stderr.
+                             --json prints { "e2eTests": [...] } instead, with
+                             path and an optional warning per entry, plus name,
+                             legacy and shadowedBy when no dir is given
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
@@ -245,6 +252,11 @@ const RUN_OPTIONS = {
   "device": { kind: "value" },
   "platform": { kind: "value" },
   "output": { kind: "value" },
+} as const satisfies OptionSpecs;
+
+const LIST_OPTIONS = {
+  json: { kind: "boolean" },
+  recursive: { kind: "boolean", alias: "r" },
 } as const satisfies OptionSpecs;
 
 export function parseRunArgs(argv: string[]): {
@@ -537,6 +549,10 @@ function shellQuoteArg(arg: string): string {
   return `'${arg.replaceAll("'", "'\\''")}'`;
 }
 
+function optionSafePath(p: string): string {
+  return p.startsWith("-") ? `.${path.sep}${p}` : p;
+}
+
 /**
  * The command that runs one flow of a directory run alone, from the same
  * working directory, with the same --device, --platform and --update-baselines,
@@ -551,7 +567,7 @@ function rerunCommand(
   projectRoot: string,
   args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform" | "output" | "updateBaselines">
 ): string {
-  const pathArg = (p: string) => shellQuoteArg(p.startsWith("-") ? `.${path.sep}${p}` : p);
+  const pathArg = (p: string) => shellQuoteArg(optionSafePath(p));
   const fromCwd = path.relative(projectRoot, flowPath);
   const shown =
     path.isAbsolute(fromCwd) || fromCwd.split(/[\\/]+/).includes("..") ? flowPath : fromCwd;
@@ -976,43 +992,38 @@ async function isRunnableFlowFile(filePath: string): Promise<boolean> {
   }
 }
 
+type E2eFileWarning = "syntax-error" | "empty";
+
+const E2E_FILE_WARNING_TEXT: Record<E2eFileWarning, string> = {
+  "syntax-error": "has a YAML syntax error",
+  "empty": "is empty",
+};
+
 /**
- * Every runnable flow path under `dir`, relative to it. `flow run` binds its
- * name contract to the filename alone — intermediate directory names are
- * unconstrained — so a YAML at any depth is runnable and a non-recursive
- * listing would hide paths `run` accepts. Two deliberate exclusions:
- *
- * - `__baselines__` directories at any depth are machine-managed snapshot
- *   storage, not a place flows live. `run` would technically execute a YAML
- *   dropped in one, but advertising the inside of an output directory invites
- *   keying baselines of baselines.
- * - Symlinked directories are not entered: a link cycle would walk forever. A
- *   symlinked flow FILE is still listed — the runnability probe stats through
- *   it, exactly as `flow run` does.
- *
- * An unreadable subdirectory omits its subtree; only the top-level readdir's
- * error propagates, so a missing `.argent/flows` still gets its own message.
+ * "ok" for an object with a top-level `steps` key or a newer integer `version`, and
+ * for an unreadable file.
+ * An empty file and a syntax error in a file with `steps` or a top-level `version:`
+ * are kept with a warning. Everything else is "skip".
  */
-async function collectRunnableFlowPaths(dir: string, relDir = ""): Promise<string[]> {
-  const found: string[] = [];
-  const entries = await fsp.readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const rel = relDir ? path.join(relDir, entry.name) : entry.name;
-    if (entry.isDirectory()) {
-      if (entry.name === "__baselines__") continue;
-      found.push(
-        ...(await collectRunnableFlowPaths(path.join(dir, entry.name), rel).catch(() => []))
-      );
-      continue;
-    }
-    // Same name gates as `run`: exact lowercase .yaml, stem in the safe
-    // charset. readdir returns on-disk names, so what passes here is the
-    // spelling `run`'s exact-basename check accepts.
-    if (!entry.name.endsWith(".yaml")) continue;
-    if (!SAFE_FLOW_NAME.test(path.basename(entry.name, ".yaml"))) continue;
-    if (await isRunnableFlowFile(path.join(dir, entry.name))) found.push(rel);
+async function checkE2eTestShape(filePath: string): Promise<"skip" | "ok" | E2eFileWarning> {
+  let content: string;
+  try {
+    content = (await fsp.readFile(filePath, "utf8")).trim();
+  } catch {
+    return "ok";
   }
-  return found;
+  if (content.length === 0) return "empty";
+  // Avoids parsing large unrelated YAML, such as a lockfile.
+  if (!content.includes("steps") && !/^version:/m.test(content)) return "skip";
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(content, { logLevel: "error" });
+  } catch {
+    return "syntax-error";
+  }
+  if (typeof parsed !== "object" || parsed === null) return "skip";
+  const { version } = parsed as { version?: unknown };
+  return (Number.isInteger(version) && Number(version) > 1) || "steps" in parsed ? "ok" : "skip";
 }
 
 /**
@@ -1115,19 +1126,26 @@ async function savedFlowHint(projectRoot: string, missingPath: string): Promise<
 }
 
 /**
- * Runnable flows under `dir`, as paths relative to it, sorted for a
- * deterministic run order. Same acceptance rules as `flow list`, so `list` and
- * a directory `run` can never disagree. The recursive walk skips
- * dot-directories and node_modules and never follows a directory symlink (its
- * dirent is not a directory, and a `*.yaml` one fails isRunnableFlowFile).
+ * Runnable e2e tests under `dir`, sorted by path relative to it. Used by both
+ * `list` and a directory `run`. The recursive walk skips `__baselines__`,
+ * dot-directories other than `.argent`, node_modules and directory symlinks
+ * below `dir`.
  */
-async function collectFlowFiles(dir: string, recursive: boolean): Promise<string[]> {
-  const found: string[] = [];
+async function collectFlowFiles(
+  dir: string,
+  recursive: boolean
+): Promise<{ path: string; warning?: E2eFileWarning }[]> {
+  const found: { path: string; warning?: E2eFileWarning }[] = [];
   const walk = async (current: string, rel: string): Promise<void> => {
     for (const entry of await fsp.readdir(current, { withFileTypes: true })) {
       const entryRel = rel ? path.join(rel, entry.name) : entry.name;
       if (entry.isDirectory()) {
-        if (recursive && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+        if (
+          recursive &&
+          entry.name !== "__baselines__" &&
+          entry.name !== "node_modules" &&
+          (entry.name === ".argent" || !entry.name.startsWith("."))
+        ) {
           // An unreadable subtree is skipped so the rest of the walk still
           // runs; only the top-level readdir failure aborts discovery.
           await walk(path.join(current, entry.name), entryRel).catch(() => {});
@@ -1136,11 +1154,15 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
       }
       if (!entry.name.endsWith(".yaml")) continue;
       if (!SAFE_FLOW_NAME.test(path.basename(entry.name, ".yaml"))) continue;
-      if (await isRunnableFlowFile(path.join(current, entry.name))) found.push(entryRel);
+      const filePath = path.join(current, entry.name);
+      if (!(await isRunnableFlowFile(filePath))) continue;
+      const shape = await checkE2eTestShape(filePath);
+      if (shape === "skip") continue;
+      found.push({ path: entryRel, ...(shape !== "ok" && { warning: shape }) });
     }
   };
   await walk(dir, "");
-  return found.sort();
+  return found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 /**
@@ -1428,7 +1450,7 @@ async function runFlowDirectory(
   };
   let flows: string[];
   try {
-    flows = await collectFlowFiles(dir, args.recursive);
+    flows = (await collectFlowFiles(dir, args.recursive)).map((file) => file.path);
   } catch {
     return reject(`Could not read e2e test directory: ${dir}`);
   }
@@ -1576,50 +1598,131 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
     return;
   }
 
+  const flagGiven = (flag: string): boolean =>
+    rest.some((tok) => tok === flag || tok.startsWith(`${flag}=`));
+
   if (sub === "list") {
-    // Every e2e test directory in lookup order. Stdout stays bare paths, one
-    // per line, so `list | xargs -n1 run` keeps working; notes on legacy and
-    // shadowed entries go to stderr.
-    const lines: string[] = [];
-    const notes: string[] = [];
-    let legacyCount = 0;
-    const byName = new Map<string, string>();
-    let anyDir = false;
-    for (const dir of E2E_DIRS) {
-      let rels: string[];
-      try {
-        // One final sort over full relative paths, not per-directory: the
-        // ordering must be a pure function of the set of paths, never of the
-        // walk order.
-        rels = (await collectRunnableFlowPaths(path.join(process.cwd(), dir))).sort();
-      } catch {
-        continue;
-      }
-      anyDir = true;
-      for (const rel of rels) {
-        const shown = path.join(dir, rel);
-        // Only a file directly in the directory is reachable by name.
-        const name = path.dirname(rel) === "." ? path.basename(rel, ".yaml") : undefined;
-        const usedByName = name === undefined ? undefined : byName.get(name);
-        if (name !== undefined && usedByName === undefined) byName.set(name, shown);
-        lines.push(shown);
-        if (dir === E2E_DIR) continue;
-        legacyCount++;
-        if (usedByName)
-          notes.push(`warning: ${shown} is shadowed by ${usedByName} when run by name`);
-      }
+    if (rest.includes("--help") || rest.includes("-h")) {
+      await printHelp();
+      return;
     }
-    if (legacyCount > 0) {
-      notes.push(
-        `note: ${legacyCount} test${legacyCount === 1 ? "" : "s"} listed from .argent/flows (legacy); move ${legacyCount === 1 ? "it" : "them"} to .argent/e2e`
+    let json: boolean;
+    let listDir: string | undefined;
+    let recursive: boolean;
+    try {
+      const parsed = parseCommandArgs(rest, LIST_OPTIONS);
+      if (parsed.positionals.length > 1) {
+        throw new UsageError(
+          `unexpected argument ${JSON.stringify(parsed.positionals[1])}; e2e list takes at most one directory path`
+        );
+      }
+      json = parsed.options.json === true;
+      listDir = parsed.positionals[0];
+      if (listDir === "") throw new UsageError("e2e list requires a non-empty directory path");
+      recursive = parsed.options.recursive === true;
+      if (recursive && listDir === undefined) {
+        throw new UsageError("e2e list --recursive requires a directory path");
+      }
+    } catch (err) {
+      if (!(err instanceof UsageError)) throw err;
+      console.error(
+        flagGiven("--json")
+          ? JSON.stringify(errorRecord(err.message))
+          : `Error: ${err.message}\nRun \`argent e2e --help\`.`
+      );
+      return exitAfterFlush(2);
+    }
+    const listFail = (message: string): Promise<never> => {
+      console.error(json ? JSON.stringify(errorRecord(message)) : message);
+      return exitAfterFlush(2);
+    };
+    if (listDir?.split(/[\\/]+/).includes("..")) {
+      return listFail(
+        `E2E test directory must not contain ".." segments - they are collapsed without following symlinks, ` +
+          `so the path can name a different directory than the one your shell opens: ${listDir}\n` +
+          "Pass the fully resolved path to the directory."
       );
     }
+    const entries: {
+      path: string;
+      name?: string;
+      legacy?: boolean;
+      shadowedBy?: string;
+      warning?: E2eFileWarning;
+    }[] = [];
+    const byName = new Map<string, string>();
+    let anyDir = false;
+    const dirs = listDir === undefined ? E2E_DIRS : [listDir];
+    for (const dir of dirs) {
+      let files: Awaited<ReturnType<typeof collectFlowFiles>>;
+      try {
+        files = await collectFlowFiles(path.resolve(dir), listDir === undefined || recursive);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (listDir === undefined && (code === "ENOENT" || code === "ENOTDIR")) continue;
+        return listFail(
+          code === "ENOENT"
+            ? `E2E test directory not found: ${dir}`
+            : code === "ENOTDIR"
+              ? `E2E test path is not a directory: ${dir}`
+              : `Could not read e2e test directory: ${dir}`
+        );
+      }
+      anyDir = true;
+      for (const { path: rel, warning } of files) {
+        const shown = path.join(dir, rel);
+        const warningField = warning !== undefined && { warning };
+        if (listDir !== undefined) {
+          entries.push({ path: optionSafePath(shown), ...warningField });
+          continue;
+        }
+        // Only a file directly in the directory is reachable by name.
+        const name = path.dirname(rel) === "." ? path.basename(rel, ".yaml") : undefined;
+        const shadowedBy = name === undefined ? undefined : byName.get(name);
+        if (name !== undefined && shadowedBy === undefined) byName.set(name, shown);
+        entries.push({
+          path: shown,
+          ...(name !== undefined && { name }),
+          legacy: dir !== E2E_DIR,
+          ...(shadowedBy !== undefined && { shadowedBy }),
+          ...warningField,
+        });
+      }
+    }
+    if (json) {
+      const doc = { e2eTests: entries, ...(!anyDir && { warning: "no-e2e-directory" }) };
+      console.log(JSON.stringify(doc, null, 2));
+      return;
+    }
     if (!anyDir) {
-      console.log(`No ${E2E_DIRS.join(" or ")} directory in the current working directory.`);
-    } else if (lines.length === 0) console.log(`No e2e tests found in ${E2E_DIRS.join(" or ")}`);
-    else {
-      console.log(lines.join("\n"));
-      for (const note of notes) console.error(note);
+      console.error(
+        `warning: no ${E2E_DIRS.join(" or ")} directory in the current working directory`
+      );
+    } else if (entries.length === 0) {
+      // Stdout stays empty so `list | xargs -n1 run` runs nothing.
+      console.error(
+        `No e2e tests found in ${listDir ?? E2E_DIRS.join(" or ")}` +
+          (listDir === undefined || recursive
+            ? ""
+            : "\nPass -r/--recursive to include subdirectories.")
+      );
+    } else {
+      // Bare paths on stdout so `list | xargs -n1 run` works; notes go to stderr.
+      console.log(entries.map((entry) => entry.path).join("\n"));
+      for (const entry of entries) {
+        if (entry.shadowedBy !== undefined)
+          console.error(
+            `warning: ${entry.path} is shadowed by ${entry.shadowedBy} when run by name`
+          );
+        if (entry.warning !== undefined)
+          console.error(`warning: ${entry.path} ${E2E_FILE_WARNING_TEXT[entry.warning]}`);
+      }
+      const legacyCount = entries.filter((entry) => entry.legacy).length;
+      if (legacyCount > 0) {
+        console.error(
+          `note: ${legacyCount} test${legacyCount === 1 ? "" : "s"} listed from .argent/flows (legacy); move ${legacyCount === 1 ? "it" : "them"} to .argent/e2e`
+        );
+      }
     }
     return;
   }
@@ -1633,8 +1736,6 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   // token. Once streaming is requested stdout belongs exclusively to NDJSON,
   // so help goes to stderr as the diagnostic it is. --json reads stderr as
   // records, so a usage error there is the record alone, with no help.
-  const flagGiven = (flag: string): boolean =>
-    rest.some((tok) => tok === flag || tok.startsWith(`${flag}=`));
   const jsonStream = flagGiven("--json-stream");
   const json = !jsonStream && flagGiven("--json");
   // Checked before parseRunArgs so --help wins even when it trails a

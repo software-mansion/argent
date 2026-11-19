@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { MACOS_APP_ID_PREFIX } from "../device-info";
+import { trackedMacosAppKind, trackedMacosAppVendorId } from "../macos-app-kind";
 import type { CDPTarget } from "./discovery";
 
 interface SelectedTarget {
@@ -35,23 +38,92 @@ function deviceKey(target: CDPTarget): string | undefined {
   return target.deviceName;
 }
 
-/** logicalDeviceIds Metro has ever listed in this process. */
-const seenLogicalDeviceIds = new Set<string>();
+/**
+ * The bundle id of the Mac app whose runtime a target is, or undefined for
+ * any other target.
+ *
+ * React Native's Apple inspector registers its device as the first 40 hex
+ * digits of `sha256("apple-<identifierForVendor>-<bundle id>-<fusebox|legacy>")`.
+ * A Mac has no identifierForVendor, and react-native-macos 0.76 and later
+ * leave it empty, so a react-native-macos app's id follows from its bundle id
+ * alone. A Mac Catalyst app runs UIKit, which gives it a real one: argent's
+ * library reports it, and the app's record keeps it. An iOS app's id holds a
+ * vendor id argent cannot know, so it never matches.
+ */
+function macosAppBundleIdOf(target: CDPTarget): string | undefined {
+  const logicalId = target.reactNative?.logicalDeviceId;
+  const bundleId = target.appId ?? target.description;
+  if (!logicalId || !bundleId) return undefined;
+  const vendorIds = [""];
+  const catalystVendorId = trackedMacosAppVendorId(bundleId);
+  if (catalystVendorId) vendorIds.push(catalystVendorId);
+  for (const vendorId of vendorIds) {
+    for (const mode of ["fusebox", "legacy"]) {
+      const id = createHash("sha256")
+        .update(`apple-${vendorId}-${bundleId}-${mode}`)
+        .digest("hex")
+        .slice(0, 40);
+      if (id === logicalId) return bundleId;
+    }
+  }
+  return undefined;
+}
+
+/** How a device reads in a target list for the agent. */
+function describeDevice(target: CDPTarget): string {
+  const macBundleId = macosAppBundleIdOf(target);
+  const logicalId = target.reactNative?.logicalDeviceId;
+  if (macBundleId) return `Mac app ${macBundleId} (${logicalId})`;
+  return logicalId
+    ? `${target.deviceName ?? "unknown"} (${logicalId})`
+    : `${target.deviceName ?? "unknown"} (legacy inspector — no logicalDeviceId)`;
+}
 
 /**
- * Formats devices for an error message. Only a logicalDeviceId is a usable
- * device_id, so a legacy device is labelled instead of showing its internal
- * key, which would read like one without being one.
+ * The runtime of the Mac app a `macos-app-<bundle id>` names. A Mac app's
+ * inspector id follows from its bundle id (see `macosAppBundleIdOf`), so the
+ * match is exact, and with no match there is no runtime to fall back to: the
+ * one device Metro lists is then another app.
  */
-function listDevices(devices: Iterable<{ name?: string; logicalId?: string }>): string {
-  return [...devices]
-    .map((d) =>
-      d.logicalId
-        ? `${d.name ?? "unknown"} (${d.logicalId})`
-        : `${d.name ?? "unknown"} (legacy inspector — no logicalDeviceId)`
-    )
-    .join(", ");
+function macosAppTargets(pool: CDPTarget[], bundleId: string, port: number): CDPTarget[] {
+  // Launch Services treats bundle ids as case-insensitive.
+  const own = pool.filter((t) => macosAppBundleIdOf(t)?.toLowerCase() === bundleId.toLowerCase());
+  if (own.length) return own;
+  const devices = new Map<string, string>();
+  for (const t of pool) {
+    const key = deviceKey(t);
+    if (key && !devices.has(key)) devices.set(key, describeDevice(t));
+  }
+  const catalyst = trackedMacosAppKind(bundleId) === "catalyst";
+  // Without the vendor id argent cannot tell the Mac Catalyst app's runtime
+  // from an iOS device's runtime of the same app.
+  const noVendorId =
+    catalyst && !trackedMacosAppVendorId(bundleId)
+      ? `argent does not know the identifierForVendor of the Mac Catalyst app ${bundleId}, ` +
+        `which React Native puts in the runtime's id: argent's library reports it when argent ` +
+        `starts the app, and the library of this start did not. Run restart-app, then retry; ` +
+        `if this message stays, update argent. `
+      : "";
+  throw new FailureError(
+    `No JS runtime of the Mac app ${bundleId} is connected to Metro on port ${port}. ` +
+      `Metro lists: ${[...devices.values()].join(", ")}. ` +
+      noVendorId +
+      `If the app does not run, start it (launch-app), wait a few seconds for the bundle ` +
+      `to load, then retry. Otherwise the app must be a Debug build that loads its bundle ` +
+      `from this Metro, ${
+        catalyst ? "React Native built for Mac Catalyst" : "react-native-macos 0.76 or later"
+      }; a Release build has no JS debugger. If the app uses another Metro, pass that port.`,
+    {
+      error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
+      failure_stage: "debugger_select_target",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    }
+  );
 }
+
+/** logicalDeviceIds Metro has ever listed in this process. */
+const seenLogicalDeviceIds = new Set<string>();
 
 export function selectTarget(
   targets: CDPTarget[],
@@ -67,7 +139,15 @@ export function selectTarget(
   }
   let candidates = pool;
 
-  if (typeof options?.deviceId === "string" && options.deviceId) {
+  // By the prefix alone, as the capability gate classifies the id, so that a
+  // Mac app id with a bundle id macOS does not accept takes no fallback either.
+  const macosBundleId =
+    typeof options?.deviceId === "string" && options.deviceId.startsWith(MACOS_APP_ID_PREFIX)
+      ? options.deviceId.slice(MACOS_APP_ID_PREFIX.length)
+      : null;
+  if (macosBundleId !== null) {
+    candidates = macosAppTargets(pool, macosBundleId, port);
+  } else if (typeof options?.deviceId === "string" && options.deviceId) {
     const deviceId = options.deviceId;
     const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === deviceId);
     if (filtered.length) {
@@ -80,18 +160,15 @@ export function selectTarget(
       // Count via deviceKey, not logicalDeviceId alone: a legacy device has
       // none, so a Vega device_id would count zero devices, look like "nothing
       // to disambiguate" and fall through into another device's runtime.
-      const distinctDevices = new Map<string, { name?: string; logicalId?: string }>();
+      const distinctDevices = new Map<string, string>();
       for (const t of pool) {
         const key = deviceKey(t);
-        if (key && !distinctDevices.has(key)) {
-          distinctDevices.set(key, {
-            name: t.deviceName,
-            logicalId: t.reactNative?.logicalDeviceId,
-          });
-        }
+        if (key && !distinctDevices.has(key)) distinctDevices.set(key, describeDevice(t));
       }
       if (distinctDevices.size > 1) {
-        const listed = listDevices(distinctDevices.values());
+        // Only a logicalDeviceId is a usable device_id; a legacy device's
+        // internal key would read like one without being one.
+        const listed = [...distinctDevices.values()].join(", ");
         throw new FailureError(
           `No debugger target matches device_id "${deviceId}". ` +
             `${distinctDevices.size} devices are connected to Metro on port ${port}: ` +
@@ -117,7 +194,7 @@ export function selectTarget(
         throw new FailureError(
           `Device with logicalDeviceId "${deviceId}" is no longer attached to Metro on port ${port} — ` +
             `its app likely exited or reloaded onto another Metro. ` +
-            `Not falling back to the remaining device: ${listDevices(distinctDevices.values())}. ` +
+            `Not falling back to the remaining device: ${[...distinctDevices.values()].join(", ")}. ` +
             `If the app exited, relaunch it on the target device (launch-app / restart-app), then ` +
             `retry with the same id: a relaunched app keeps its logicalDeviceId. If it was ` +
             `reinstalled (reinstall-app), iOS can give it a new logicalDeviceId: when the device ` +

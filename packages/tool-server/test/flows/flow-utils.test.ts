@@ -847,6 +847,10 @@ describe("parseFlow", () => {
       "\t\n",
       "  hi  ",
       "plain single line",
+      // Long enough to be written over several lines: a line of one space must
+      // still come back as a space, not a backslash.
+      "x".repeat(78) + "\n \nb",
+      "x".repeat(30) + " " + "y".repeat(60) + "\n \n z",
     ];
     for (const value of values) {
       const flow: FlowFile = {

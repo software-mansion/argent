@@ -392,6 +392,11 @@ interface TrackedMacosApp {
    * a record of an argent that refused Catalyst apps: an AppKit app.
    */
   catalyst?: boolean;
+  /**
+   * A Mac Catalyst app's `UIDevice.identifierForVendor`, from the library's
+   * handshake. The React profiler finds the app's JS runtime in Metro by it.
+   */
+  identifierForVendor?: string;
 }
 
 /** The kind of a tracked app, as `resolveDevice` reports it. */
@@ -418,7 +423,8 @@ function isTrackedMacosApp(value: unknown): value is TrackedMacosApp {
     Array.isArray(v.args) &&
     v.args.every((a) => typeof a === "string") &&
     typeof v.startedAt === "number" &&
-    (v.catalyst === undefined || typeof v.catalyst === "boolean")
+    (v.catalyst === undefined || typeof v.catalyst === "boolean") &&
+    (v.identifierForVendor === undefined || typeof v.identifierForVendor === "string")
   );
 }
 
@@ -490,6 +496,25 @@ export async function processRunsExecutable(pid: number, executable: string): Pr
     return stdout.trim() === executable;
   } catch {
     // `ps` exits 1 for a pid that does not exist.
+    return false;
+  }
+}
+
+/**
+ * True when the process `pid` was started with `assignment` (`NAME=value`) in
+ * its environment. `ps e` shows the environment that a process of the same
+ * user was started with, also of a hardened or a sandboxed app. False when the
+ * process is gone or `ps` fails.
+ */
+export async function processStartedWithEnv(pid: number, assignment: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      PS_BIN,
+      ["eww", "-o", "command=", "-p", String(pid)],
+      psOptions()
+    );
+    return stdout.trim().split(/\s+/).includes(assignment);
+  } catch {
     return false;
   }
 }
@@ -785,6 +810,64 @@ function isIosAppWrapper(dir: string): boolean {
 }
 
 /**
+ * The code signature of a running process (by pid), which can differ from its
+ * bundle's after a rebuild, or of an app bundle (by path). Null when `codesign`
+ * cannot read it, for example because the process has quit.
+ */
+export async function readCodeSignature(
+  target: number | string
+): Promise<ReturnType<typeof parseCodesignDisplay> | null> {
+  // `+<pid>` reads the signature that the kernel holds for the process. A bare
+  // number reads the file that is now at the process's path.
+  const operand = typeof target === "number" ? `+${target}` : target;
+  try {
+    return parseCodesignDisplay(
+      await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", operand], {
+        timeout: 10_000,
+        maxBuffer: 4 * 1024 * 1024,
+      })
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether this process runs in a Background launchd session, for example over
+ * SSH: `launchctl managername` prints "Background" there and "Aqua" in the
+ * user's desktop session. False when it cannot tell.
+ */
+export async function inBackgroundSession(): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("launchctl", ["managername"], { timeout: 5_000 });
+    return stdout.trim() === "Background";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Match JavaScriptCore's `WebKit Malloc` zone and its address suffix in `vmmap`
+ * output. `WebKit Using System Malloc` is a separate zone.
+ */
+export function listsWebKitMallocZone(vmmapOutput: string): boolean {
+  return /^WebKit Malloc_0x[0-9a-f]+\s/m.test(vmmapOutput);
+}
+
+/**
+ * Check for JavaScriptCore's malloc zone. `vmmap` briefly suspends the app
+ * during the check and resumes it on exit, including after a timeout.
+ * Reject if `vmmap` fails or times out so the caller can handle an unknown heap.
+ */
+export async function processHasWebKitMallocZone(pid: number): Promise<boolean> {
+  const { stdout } = await execFileAsync("vmmap", ["-summary", String(pid)], {
+    timeout: 10_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  return listsWebKitMallocZone(stdout);
+}
+
+/**
  * Reads what a launch needs from the bundle: `Info.plist` (bundle id,
  * executable, name) and the code signature. An unsigned app is neither
  * hardened nor sandboxed.
@@ -842,17 +925,9 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
     throw badBundle(`The executable ${executable} named by ${plist} does not exist.`);
   }
 
-  let codesign: { stdout: string; stderr: string } | null;
-  try {
-    codesign = await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", resolved], {
-      timeout: 10_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-  } catch {
-    // Not signed at all, or a signature codesign cannot read: neither carries
-    // the runtime flag nor entitlements that dyld would honour.
-    codesign = null;
-  }
+  // Not signed at all, or a signature codesign cannot read: neither carries the
+  // runtime flag nor entitlements that dyld would honour.
+  const signature = (await readCodeSignature(resolved)) ?? parseCodesignDisplay(null);
 
   const chromium = chromiumKind(resolved);
   return {
@@ -860,7 +935,7 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
     bundleId,
     name: bundleName ?? path.basename(resolved, ".app"),
     executable,
-    ...parseCodesignDisplay(codesign),
+    ...signature,
     ...(chromium ? { chromium } : {}),
     catalyst: isCatalystExecutable(executable),
     uiElement: [uiElement, backgroundOnly].some((v) => v !== null && /^(true|yes|1)$/i.test(v)),
