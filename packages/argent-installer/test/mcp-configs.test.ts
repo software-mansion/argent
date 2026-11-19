@@ -39,6 +39,7 @@ vi.mock("node:os", async (importOriginal) => {
 // in a list that matches their own copies.
 const retiredOverride = vi.hoisted(() => ({
   agents: undefined as RetiredBundledPath[] | undefined,
+  globalRules: undefined as RetiredBundledPath[] | undefined,
 }));
 vi.mock("../src/utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils.js")>();
@@ -48,6 +49,9 @@ vi.mock("../src/utils.js", async (importOriginal) => {
       return retiredOverride.agents
         ? { agents: retiredOverride.agents, rules: [] }
         : actual.RETIRED_BUNDLED_PATHS;
+    },
+    get RETIRED_GLOBAL_RULES() {
+      return retiredOverride.globalRules ?? actual.RETIRED_GLOBAL_RULES;
     },
   };
 });
@@ -121,6 +125,7 @@ afterEach(() => {
   // conversely, tests passing only thanks to the leak).
   homedirOverride = undefined;
   retiredOverride.agents = undefined;
+  retiredOverride.globalRules = undefined;
 });
 
 // ── isArgentManagedEntry ──────────────────────────────────────────────────────
@@ -1892,16 +1897,54 @@ describe("copyRulesAndAgents", () => {
     );
   });
 
-  it("copies rules and agents to ~/.gemini/ for Gemini adapter (global)", () => {
+  it("copies agents but no rule to ~/.gemini/ for Gemini adapter (global)", () => {
     const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
     homedirOverride = path.join(tmpDir, "home");
     const results = copyRulesAndAgents([geminiAdapter], tmpDir, "global", rulesDir, agentsDir);
-    expect(results.some((r) => r.includes("rules"))).toBe(true);
+    expect(results.some((r) => r.includes("rules"))).toBe(false);
     expect(results.some((r) => r.includes("agents"))).toBe(true);
-    expect(fs.existsSync(path.join(homedirOverride, ".gemini", "rules", "argent.md"))).toBe(true);
+    expect(fs.existsSync(path.join(homedirOverride, ".gemini", "rules"))).toBe(false);
     expect(
       fs.existsSync(path.join(homedirOverride, ".gemini", "agents", "environment-inspector.md"))
     ).toBe(true);
+  });
+
+  // The MCP server's instructions carry the usage guidance, so a global rule
+  // would only repeat them in every session of every project.
+  it("writes no global rule for Claude Code or Cursor", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Claude Code" || a.name === "Cursor");
+    homedirOverride = path.join(tmpDir, "home");
+
+    const results = copyRulesAndAgents(adapters, tmpDir, "global", rulesDir, agentsDir);
+
+    expect(results.some((r) => r.includes("rules"))).toBe(false);
+    expect(fs.existsSync(path.join(homedirOverride, ".claude", "rules"))).toBe(false);
+    expect(fs.existsSync(path.join(homedirOverride, ".cursor", "rules"))).toBe(false);
+  });
+
+  it("removes argent's section from the global Codex config and keeps the user's", () => {
+    const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'developer_instructions = "Always use TypeScript."\n');
+    injectCodexRules(configPath, rulesDir);
+
+    const results = copyRulesAndAgents([codexAdapter], tmpDir, "global", rulesDir, agentsDir);
+
+    expect(results).toEqual([`  Removed argent rules from ${configPath} (developer_instructions)`]);
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("Always use TypeScript.");
+    expect(content).not.toContain("argent rules");
+  });
+
+  it("still injects the rule into a project Codex config", () => {
+    const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+
+    copyRulesAndAgents([codexAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    const content = fs.readFileSync(path.join(tmpDir, ".codex", "config.toml"), "utf8");
+    expect(content).toContain("# Rule");
   });
 
   // Issue #701: a `.claude/agents -> ../.agents/agents` layout keeps one
@@ -2141,6 +2184,55 @@ describe("findRetiredRulesAndAgents", () => {
       ]);
     }
   );
+
+  describe("global rules", () => {
+    const OLD_RULE = "---\nalwaysApply: true\n---\n\nArgent - general rules:\n";
+    const cursorAdapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+
+    beforeEach(() => {
+      homedirOverride = path.join(tmpDir, "home");
+      retiredOverride.globalRules = [
+        { path: "argent.md", shipped: [hashBundledContent(OLD_RULE)] },
+      ];
+    });
+
+    function stageRule(dir: string, content = OLD_RULE): void {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "argent.md"), content);
+    }
+
+    it("finds a shipped rule in every global rule dir, though the bundle still ships argent.md", () => {
+      for (const base of [".claude", ".cursor", ".gemini"]) {
+        stageRule(path.join(homedirOverride!, base, "rules"));
+      }
+
+      const found = find([claudeAdapter, cursorAdapter, geminiAdapter], ["global"]);
+
+      expect(found.map((f) => [f.kind, f.location, f.files.map((x) => x.relativePath)])).toEqual([
+        ["rules", path.join("~", ".claude", "rules"), ["argent.md"]],
+        ["rules", path.join("~", ".cursor", "rules"), ["argent.md"]],
+        ["rules", path.join("~", ".gemini", "rules"), ["argent.md"]],
+      ]);
+    });
+
+    it("keeps the project rule", () => {
+      stageRule(path.join(tmpDir, ".claude", "rules"));
+
+      expect(find([claudeAdapter], ["local"])).toEqual([]);
+    });
+
+    it("keeps a global rule the user edited", () => {
+      stageRule(path.join(homedirOverride!, ".claude", "rules"), OLD_RULE + "My note.\n");
+
+      expect(find([claudeAdapter], ["global"])).toEqual([]);
+    });
+
+    it("keeps the current rule a project at the home dir copied there", () => {
+      stageRule(path.join(homedirOverride!, ".claude", "rules"), "# Rule");
+
+      expect(find([claudeAdapter], ["global", "local"], homedirOverride)).toEqual([]);
+    });
+  });
 });
 
 // ── Codex developer_instructions injection ──────────────────────────────────

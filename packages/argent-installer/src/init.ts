@@ -309,7 +309,8 @@ export async function init(args: string[]): Promise<void> {
       scope,
       allowlistEnabled: allowlist.enabled,
       skills,
-      copiedRules: copyResults.length > 0,
+      // A global install writes no rule, only removes old ones.
+      copiedRules: normalizedScope === "local" && copyResults.length > 0,
       wroteProjectTelemetryOptOut,
     });
 
