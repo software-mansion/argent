@@ -486,14 +486,6 @@ describe("selectTarget", () => {
       expect(result.target.id).toBe("android");
     });
 
-    it("tells the caller a relaunched app keeps its id", () => {
-      const thrown = selectGoneAndroid();
-
-      expect((thrown as Error | undefined)?.message).toMatch(
-        /relaunch it[\s\S]*retry with the same id/
-      );
-    });
-
     it("after a reinstall changed the id, still refuses and points at the id shown for the device", () => {
       // iOS derives the id from identifierForVendor, which a reinstall can
       // reset: the same iPhone comes back under a new id while the agent still

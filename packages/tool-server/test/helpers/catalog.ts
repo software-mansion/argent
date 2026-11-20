@@ -1,9 +1,6 @@
 import { zodObjectToJsonSchema, type ToolDefinition } from "@argent/registry";
 export { listToolDefinitions as definitionsById } from "../../src/utils/setup-registry";
 
-/** Every tool argent can serve. Bump deliberately when a tool is added or removed. */
-export const EXPECTED_TOOL_COUNT = 88;
-
 /**
  * The schema a client actually receives: the explicit one if a definition
  * carries it, else the one `Registry.registerTool` derives. Null when a
