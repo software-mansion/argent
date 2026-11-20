@@ -6,7 +6,6 @@ export { PACKAGE_NAME, MCP_BINARY_NAME, MCP_SERVER_KEY } from "./constants.js";
 export {
   getInstalledVersion,
   getGloballyInstalledVersion,
-  getGloballyInstalledPackageRoot,
   isGloballyInstalled,
   probeLocalInstall,
   resolveInstallMode,
