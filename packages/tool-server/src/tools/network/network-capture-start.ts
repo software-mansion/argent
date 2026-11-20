@@ -38,12 +38,13 @@ import { xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
+import { classifyNotConnected } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
   captureSchema,
   errorMessage,
   jsNotReached,
+  resolveJsRuntime,
   otherPortHint,
   runLayers,
   setIosUnavailable,
@@ -101,7 +102,7 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
                   `${params.bundleId} is an Apple system app, which runs no React Native JS`
                 )
               )
-            : startJsLayer(registry, params.logicalDeviceId ?? params.udid, params.bundleId, port),
+            : startJsLayer(registry, params.udid, params.logicalDeviceId, params.bundleId, port),
           device.platform === "android"
             ? startAndroidLayer(registry, device, params.bundleId, port)
             : startIosLayer(registry, device, params.bundleId, port),
@@ -157,11 +158,13 @@ async function refuseWhileXcodeInstalls(
  */
 async function startJsLayer(
   registry: Registry,
-  /** The device as Metro's runtimes name it: its udid, or its logicalDeviceId on a shared Metro. */
-  jsDeviceId: string,
+  udid: string,
+  /** The device's id on a Metro that several devices share. */
+  logicalDeviceId: string | undefined,
   bundleId: string,
   port: number
 ): Promise<StartedLayer> {
+  const jsDeviceId = logicalDeviceId ?? udid;
   const device = canonicalDeviceId(jsDeviceId) ?? jsDeviceId;
   const payload = jsCapturePayload(port, device);
   const found = findJsCapture(device, bundleId);
@@ -175,7 +178,7 @@ async function startJsLayer(
   const recording = installedHere && found.paused !== true;
   let dbg: JsRuntimeDebuggerApi;
   try {
-    dbg = await resolveDebuggerService(registry, { port, device_id: jsDeviceId });
+    dbg = await resolveJsRuntime(registry, udid, logicalDeviceId, port);
   } catch (err) {
     const reason = classifyNotConnected(err);
     const code = getFailureSignal(err)?.error_code;

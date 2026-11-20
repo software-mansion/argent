@@ -27,13 +27,14 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { localIosHost, remoteIosHost } from "../../utils/ios-host";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../utils/simctl-config";
-import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
+import { classifyNotConnected } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
   captureSchema,
   errorMessage,
   isLiveService,
   jsNotReached,
+  resolveJsRuntime,
   otherPortHint,
   runLayers,
   withCaptureLock,
@@ -150,7 +151,7 @@ async function stopJsLayer(
 
   let dbg: JsRuntimeDebuggerApi;
   try {
-    dbg = await resolveDebuggerService(registry, { port, device_id: jsDeviceId });
+    dbg = await resolveJsRuntime(registry, udid, logicalDeviceId, port);
   } catch (err) {
     const notReached = jsNotReached(classifyNotConnected(err), port, err);
     if (other) {
