@@ -30,6 +30,24 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, native network capture                                |
 | `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                        |
 
+`list-devices` returns `devices` and, when one applies, `notes`. Each device has a `platform`, a `kind` and a `state`:
+
+- An Android AVD that does not run is an entry with kind `avd`, state `stopped` and no serial. `boot-device` starts it by its `avdName`.
+- An AVD that runs is listed once, as its emulator with kind `emulator` and a serial.
+- A Chromium app has kind `app`. An iOS simulator, local or remote, has kind `simulator`.
+
+`notes` is a list of short texts for the agent. Each note applies only to this call:
+
+| Note                                                                       | When                                                                              |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| iOS simulators cannot run on this machine, with Argent Cloud as the option | The host is not a Mac, or the Mac has no Xcode, and `sim-remote` is not installed |
+| `sim-remote` is installed but not logged in                                | `sim-remote` reports no session                                                   |
+| No Android SDK found                                                       | Argent finds neither `adb` nor `emulator`                                         |
+| The iOS list can be incomplete                                             | `simctl list` does not answer within 10 seconds                                   |
+| Xcode must install its components                                          | Xcode waits for its first launch                                                  |
+| The rules for a device of another application                              | The list has an `external` device                                                 |
+| The prefix for `adb` commands                                              | Argent uses an adb server that is not the default one                             |
+
 Through the MCP server, `list-devices` returns a shorter text than the SDK and `argent run`:
 
 - Each device is one line of compact JSON.
@@ -58,7 +76,7 @@ On a local iOS simulator, the tool fails and does not install the `.app` if the 
 
 On a local iOS simulator, `boot-device`, `launch-app`, `restart-app`, `reinstall-app` and `open-url` give `error_kind: "timeout"` when a `simctl` step does not finish within its time limit. The message names the step and the limit. On a remote simulator, `launch-app` and `restart-app` do the same for a `sim-remote` step that does not finish within 30 seconds.
 
-On a local iOS simulator, `boot-device` fails if `simctl list` does not answer within 10 seconds, because Argent cannot read the state of the simulator. In that case, `list-devices` returns a `hint` that says that the list can be incomplete.
+On a local iOS simulator, `boot-device` fails if `simctl list` does not answer within 10 seconds, because Argent cannot read the state of the simulator. In that case, `list-devices` returns a note that says that the list can be incomplete.
 
 On Chromium, `open-url` fails when the URL does not load a page, start a download or run as a `javascript:` URL. Examples are a URL with no scheme, an unknown scheme, `tel:`, `mailto:`, a host that does not resolve, a response with no content and a navigation that a `beforeunload` handler on the current page cancels. An HTTP error status, for example 404, does not make the tool fail, also when Chromium shows its own error page for it. In headless Chrome, a 401 that asks for credentials makes the tool fail.
 
