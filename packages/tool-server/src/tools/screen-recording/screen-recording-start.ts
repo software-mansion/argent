@@ -15,6 +15,7 @@ import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "../..
 import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import { startRemoteCapture } from "./capture-remote";
 import type { StartRecordingResult } from "./session-guards";
+import { startIosDeviceCapture } from "./ios-device-stream/start-device-capture";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
 const MAX_TIME_LIMIT_SECONDS = 600;
@@ -24,7 +25,9 @@ const POINTER_TRAIL_LENGTH = 8;
 const POINTER_REQUEST_TIMEOUT_MS = 2_000;
 
 const capability = {
-  apple: { simulator: true },
+  // A cabled iPhone records through a host-side CoreMediaIO helper, not
+  // simulator-server (see ios-device-stream/).
+  apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
@@ -32,7 +35,9 @@ const capability = {
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
+    .describe(
+      "Target device id from `list-devices` (iOS Simulator UDID, cabled iPhone UDID, or Android serial)."
+    ),
   timeLimitSeconds: z
     .number()
     .int()
@@ -69,6 +74,7 @@ export function createScreenRecordingStartTool(
     description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
+A physical iPhone must be on a USB cable (list-devices transportType "wired"). Its first recording on this host compiles a capture helper and the OS asks the user to allow camera access for "ios-screen-stream"; tell them to click Allow. No touch markers are drawn on a phone.
 Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
 Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed (local devices only), or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
     zodSchema,
@@ -99,7 +105,9 @@ Fails if a recording is already running on the device, the device is not booted,
       const isTvOs =
         device.platform === "ios-remote"
           ? await isRemoteTvOsSimulator(params.udid)
-          : device.platform === "ios" && (await isTvOsSimulator(params.udid));
+          : device.platform === "ios" &&
+            device.kind !== "device" &&
+            (await isTvOsSimulator(params.udid));
       if (isTvOs) {
         throw new FailureError(
           `Screen recording is not supported on tvOS simulators (device ${params.udid}).`,
@@ -128,6 +136,15 @@ Fails if a recording is already running on the device, the device is not booted,
           watermark,
           trimStatic: params.trimStatic ?? true,
           showTouches,
+        });
+      }
+
+      if (device.platform === "ios" && device.kind === "device") {
+        return startIosDeviceCapture(api, device.id, {
+          timeLimitSeconds,
+          watermark,
+          trimStatic: params.trimStatic ?? true,
+          showTouches: params.showTouches,
         });
       }
 
