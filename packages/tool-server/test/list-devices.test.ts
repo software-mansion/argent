@@ -285,6 +285,39 @@ describe("list-devices", () => {
     ]);
   });
 
+  it("marks a remote iPhone Duo foldable, on a machine whose Xcode does not know the device type", async () => {
+    const devices = {
+      "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [
+        {
+          udid: "DUO-1",
+          name: "iPhone Duo",
+          state: "Booted",
+          deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-Duo",
+        },
+        {
+          udid: "PHONE-1",
+          name: "iPhone 18",
+          state: "Booted",
+          deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-18",
+        },
+      ],
+    };
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl") {
+        return { stderr: "", stdout: JSON.stringify({ devices }) };
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const remote = result.devices.filter((d) => d.platform === "ios-remote");
+    expect(remote.map((d) => [d.name, "foldable" in d ? d.foldable : "missing"])).toEqual([
+      ["iPhone Duo", true],
+      ["iPhone 18", "missing"],
+    ]);
+  });
+
   /**
    * The common case, which the suite-wide setup already models. No provider
    * registered, so the result must not carry a word about them.

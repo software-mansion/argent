@@ -10,6 +10,7 @@ import {
 import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import {
+  isFoldableDeviceType,
   scanIosSimulators,
   simctlListTimeoutAdvice,
   simulatorRuntimeKind,
@@ -67,6 +68,8 @@ type IosRemoteDevice = {
   state: string;
   runtime: string;
   runtimeKind?: "mobile" | "tv";
+  /** Present, and true, for a foldable simulator. */
+  foldable?: true;
 };
 
 type AndroidDevice = {
@@ -225,6 +228,19 @@ function readinessRank(d: ListedDevice): number {
 }
 
 /**
+ * The device types known to be foldable, for a remote simulator. Its profile
+ * is on the runner, and the runner's listing does not say whether the type is
+ * foldable. This machine's Xcode is asked first, and may not know the type or
+ * not be there at all.
+ */
+const REMOTE_FOLDABLE_DEVICE_TYPES = new Set(["com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"]);
+
+async function isRemoteFoldable(deviceType: string | undefined): Promise<boolean> {
+  if (deviceType === undefined) return false;
+  return (await isFoldableDeviceType(deviceType)) || REMOTE_FOLDABLE_DEVICE_TYPES.has(deviceType);
+}
+
+/**
  * Remote iOS simulators via `sim-remote`. Returns [] when the CLI is missing or
  * logged out — list-devices reports an unavailable platform as absent, not as an error.
  */
@@ -244,6 +260,9 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
           state: d.state,
           runtime,
           runtimeKind,
+          ...(runtimeKind === "mobile" && (await isRemoteFoldable(d.deviceTypeIdentifier))
+            ? { foldable: true as const }
+            : {}),
         });
       }
     }
@@ -377,7 +396,7 @@ Returns { devices, avds } where each device carries a 'platform' discriminator (
 Physical iPhones appear as iOS entries with kind 'device' (no iPads); no boot-device. State 'connected' = cabled and usable; 'paired' = not reachable over USB, never auto-bound.
 TV targets are tagged with runtimeKind 'tv' (Apple TV simulators, Android TV / leanback devices). They are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses, and \`keyboard\` to type, rather than the coordinate/gesture tools.
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are tagged with their 'deviceSet' path; the same tools drive them by udid, but they run headless (no Simulator.app window).
-A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'; use the \`fold\` tool to fold or unfold it.
+A foldable iOS simulator (the iPhone Duo), local or remote, or Android emulator (and its AVD) has 'foldable: true'; use the \`fold\` tool to fold or unfold it.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
 <flag:macos-apps>Mac apps that argent started (boot-device with macosAppPath) are listed while they run, as platform 'macos' with the 'id' macos-app-<bundle id>.
 </flag:macos-apps>Booted/ready devices are listed first, but use a physical phone (kind 'device') only when the user asks for one. A platform is silently omitted when its CLI is not found; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,

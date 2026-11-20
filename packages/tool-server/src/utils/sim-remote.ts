@@ -364,6 +364,32 @@ export async function screenRecordFetch(
   );
 }
 
+/** What `sim-remote fold --json` prints. */
+export interface RemoteFold {
+  /** The angle the hinge was moved to, in degrees. */
+  hinge_angle: number;
+  /** Screen id of the panel the device renders to; null when the runner could not tell. */
+  live_screen: number | null;
+  warning?: string;
+}
+
+// The first sweep after a simulator-server starts can take it 30 s to begin,
+// and the runner then waits for the device to hand over to the other panel.
+const FOLD_TIMEOUT_MS = 60_000;
+
+/** Fold a remote foldable to `target`: a posture, or an angle in degrees. */
+export async function fold(udid: string, target: string): Promise<RemoteFold> {
+  const args = ["fold", stripRemotePrefix(udid), target, "--json"];
+  const { stdout } = await run(args, { timeoutMs: FOLD_TIMEOUT_MS });
+  try {
+    return JSON.parse(stdout) as RemoteFold;
+  } catch (err) {
+    throw new Error(`sim-remote fold returned non-JSON output: ${(err as Error).message}`, {
+      cause: err,
+    });
+  }
+}
+
 export interface MoqInfo {
   url: string;
   fingerprint: string;

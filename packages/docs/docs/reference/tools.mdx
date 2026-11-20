@@ -78,6 +78,12 @@ On an iOS simulator:
 - Unfolded, the UI is landscape. `rotate` sets the orientation of the device, not of the UI. `Portrait` gives a landscape UI.
 - If Argent cannot find the active panel, it uses the cover panel. The tool result then has a warning.
 
+On a remote iOS simulator:
+
+- The machine that hosts the simulator folds it and moves the input, the stream and a recording to the active panel.
+- The `fold` result does not give the size of the panel.
+- A fold made outside Argent must go through `sim-remote fold`.
+
 On an Android emulator:
 
 - The result gives `deviceState` (`CLOSED`, `HALF_OPENED` or `OPENED`) and the matching `posture`.
