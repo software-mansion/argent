@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { DescribeFrame, DescribeNode, UiOrientation } from "../tools/describe/contract";
+import {
+  getDescribeTapPoint,
+  type DescribeFrame,
+  type DescribeNode,
+  type UiOrientation,
+} from "../tools/describe/contract";
 import { nativeFrameToUi } from "../tools/flows/flow-orientation";
 
 /**
@@ -725,27 +730,124 @@ function frameArea(frame: DescribeFrame): number {
  * Reverse lookup for recording: the smallest visible node of the frontmost
  * layer whose frame contains the tapped point: the most specific element (a
  * button over its container). Skips the synthetic root.
+ *
+ * The on-screen keyboard lies over the app, so a point where the keyboard
+ * draws (see {@link keyboardDrawsAt}) is a tap on the keyboard, also where an
+ * app element behind it (a list row's icon under a key) is smaller than the
+ * key: only the keyboard's own elements take part there, not the tall
+ * containers of its window. In a gap between them nothing is hit.
  */
 export function nodeAtPoint(
   root: DescribeNode,
-  point: { x: number; y: number }
+  point: { x: number; y: number },
+  orientation?: UiOrientation
 ): DescribeNode | undefined {
-  let best: DescribeNode | undefined;
+  const hits: DescribeNode[] = [];
   const walk = (node: DescribeNode): void => {
-    if (isVisible(node) && frameContains(node.frame, point.x, point.y)) {
-      const layerDelta = (node.layer ?? 0) - (best?.layer ?? 0);
-      if (
-        best === undefined ||
-        layerDelta > 0 ||
-        (layerDelta === 0 && frameArea(node.frame) < frameArea(best.frame))
-      ) {
-        best = node;
-      }
-    }
+    if (isVisible(node) && frameContains(node.frame, point.x, point.y)) hits.push(node);
     for (const child of node.children) walk(child);
   };
   for (const child of root.children) walk(child);
+  const drawn = drawnKeyboard(root);
+  const onKeyboard = drawsAt(drawn, point, orientation);
+  let best: DescribeNode | undefined;
+  for (const node of hits) {
+    if (onKeyboard && !drawn.includes(node)) continue;
+    const layerDelta = (node.layer ?? 0) - (best?.layer ?? 0);
+    if (
+      best === undefined ||
+      layerDelta > 0 ||
+      (layerDelta === 0 && frameArea(node.frame) < frameArea(best.frame))
+    ) {
+      best = node;
+    }
+  }
   return best;
+}
+
+/**
+ * The elements the on-screen keyboard draws: its visible ones, other than one
+ * whose frame holds every other. The input method's window on Android has
+ * containers as tall as the window (`android:id/parentPanel`), which pass a
+ * tap above the keys to the app.
+ */
+function drawnKeyboard(root: DescribeNode): DescribeNode[] {
+  const keyboard: DescribeNode[] = [];
+  const walk = (node: DescribeNode): void => {
+    if (node.keyboard === true && isVisible(node)) keyboard.push(node);
+    for (const child of node.children) walk(child);
+  };
+  for (const child of root.children) walk(child);
+  const span = boundingFrame(keyboard.map((n) => n.frame));
+  return span === undefined ? [] : keyboard.filter((n) => !frameWithin(span, n.frame));
+}
+
+/**
+ * Whether the keyboard whose elements are `drawn` draws at `point`. The
+ * keyboard is docked at the bottom of the UI, and below its top edge it covers
+ * the screen also between its elements: the gaps between the keys and the free
+ * strip of the bottom row have no element of their own, and do not pass a
+ * touch to the app either. So a point counts when it lies in the smallest
+ * frame holding the elements, below the top of one of them in its column. A
+ * tip that pops up above the keys covers its own column, not the strip beside
+ * it. The test runs in the UI's orientation, where the keyboard's top is up.
+ */
+function drawsAt(
+  drawn: readonly DescribeNode[],
+  point: { x: number; y: number },
+  orientation: UiOrientation | undefined
+): boolean {
+  const frames = drawn.map((n) => nativeFrameToUi(n.frame, orientation));
+  const area = boundingFrame(frames);
+  if (area === undefined) return false;
+  const p = nativeFrameToUi({ ...point, width: 0, height: 0 }, orientation);
+  return (
+    frameContains(area, p.x, p.y) &&
+    frames.some((f) => f.x <= p.x && p.x <= f.x + f.width && f.y <= p.y)
+  );
+}
+
+/**
+ * Whether the on-screen keyboard draws at `point` (see {@link drawsAt}).
+ * `orientation` is the UI's, as the tree was read.
+ */
+export function keyboardDrawsAt(
+  root: DescribeNode,
+  point: { x: number; y: number },
+  orientation?: UiOrientation
+): boolean {
+  return drawsAt(drawnKeyboard(root), point, orientation);
+}
+
+/**
+ * Whether the on-screen keyboard covers an app element where an action touches
+ * it, the centre of its frame: a tap there presses a key, not the element. An
+ * element of the keyboard is never covered.
+ */
+export function underKeyboard(
+  root: DescribeNode,
+  node: DescribeNode,
+  orientation?: UiOrientation
+): boolean {
+  return (
+    node.keyboard !== true && keyboardDrawsAt(root, getDescribeTapPoint(node.frame), orientation)
+  );
+}
+
+/** The smallest frame holding every given frame; undefined for none. */
+function boundingFrame(frames: readonly DescribeFrame[]): DescribeFrame | undefined {
+  if (frames.length === 0) return undefined;
+  let x1 = 1;
+  let y1 = 1;
+  let x2 = 0;
+  let y2 = 0;
+  for (const f of frames) {
+    x1 = Math.min(x1, f.x);
+    y1 = Math.min(y1, f.y);
+    x2 = Math.max(x2, f.x + f.width);
+    y2 = Math.max(y2, f.y + f.height);
+  }
+  return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
 }
 
 // Does the regex consume the WHOLE non-empty string? The regex analog of an
@@ -784,31 +886,106 @@ function exactFieldCount(
   return count;
 }
 
+/** A visible match of a selector, as the target ranking compares it. */
+interface TargetCandidate {
+  node: DescribeNode;
+  /** How many of the selector's fields it matches exactly (see {@link exactFieldCount}). */
+  exact: number;
+  /** Its frame as reading order sees it (see the module comment). */
+  reading: DescribeFrame;
+}
+
 /**
- * The on-screen frame of a selector's best visible match — what a `tap`/`type`
- * action targets. An accessible container (e.g. a Touchable on iOS) aggregates
+ * One rule of the target ranking: negative when `a` ranks before `b`, positive
+ * after, 0 when this rule ties them and the next one decides. `byFields` is
+ * false for the universal selector (see {@link selectorToNode}).
+ */
+type TieBreak = (a: TargetCandidate, b: TargetCandidate, byFields: boolean) => number;
+
+/**
+ * The tie-breaks that pick an action's target among a selector's visible
+ * matches, in order: each one decides only between matches every earlier one
+ * left tied.
+ */
+const TARGET_TIE_BREAKS: readonly TieBreak[] = [
+  // A Mac app's front layer: a match in an open menu, sheet or alert beats a
+  // same-named control behind it.
+  (a, b) => (b.node.layer ?? 0) - (a.node.layer ?? 0),
+  // The most fields matched exactly, not as a substring: the leaf carrying the
+  // text beats the container whose aggregated label contains it, and the
+  // return key "Go" beats a row "Google".
+  (a, b) => b.exact - a.exact,
+  // An app element before a key of the on-screen keyboard that matches as
+  // exactly: the app's "Done" button, not the return key "done".
+  (a, b) => Number(a.node.keyboard === true) - Number(b.node.keyboard === true),
+  // The smallest frame: a labelled container and the leaf inside it match the
+  // same text, and the leaf is the one meant. Not for a field-less selector,
+  // where it would degenerate to a hairline spacer.
+  (a, b, byFields) => (byFields ? frameArea(a.node.frame) - frameArea(b.node.frame) : 0),
+  // Reading order. For a field-less selector, an exact positional tie goes on
+  // to the most specific frame (two different extents are two different tap
+  // centres), not to adapter emission order.
+  (a, b, byFields) =>
+    byFields
+      ? a.reading.y - b.reading.y || a.reading.x - b.reading.x
+      : compareBelowPick(a.reading, b.reading),
+];
+
+function compareTargets(a: TargetCandidate, b: TargetCandidate, byFields: boolean): number {
+  for (const tieBreak of TARGET_TIE_BREAKS) {
+    const order = tieBreak(a, b, byFields);
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
+/**
+ * A selector's best visible match — what a `tap`/`type` action targets —
+ * ranked by {@link TARGET_TIE_BREAKS}; matches every rule ties go to the first
+ * in tree order. An accessible container (e.g. a Touchable on iOS) aggregates
  * its descendants' labels, so a substring text selector matches the container
  * as well as the leaf carrying the text, and the container's centre can sit
- * over a different child entirely. Matches are therefore ranked: exact field
- * matches beat substring hits, then the smallest frame (mirroring
- * {@link nodeAtPoint}), with reading order as the final tiebreak. Only the
- * matches of the frontmost layer take part.
+ * over a different child entirely: hence exact before smallest (mirroring
+ * {@link nodeAtPoint}) before reading order.
  *
- * The universal selector (flow YAML's `any: true`) is the case ranking cannot
- * serve: with no field to be exact about, "smallest" degenerates to whatever
- * hairline spacer the scope contains. A field-less selector names a REGION, so
- * its matches are read the way conditions read a match set — first in reading
- * order — keeping an action's target the element an `assert` would quote.
- *
- * {@link compareBelowPick} rather than {@link firstInReadingOrder}: both order
- * by (y, x), but a bare reading order leaves an exact positional tie to adapter
- * emission order, and two frames with different extents are two different tap
- * centres, so the tie continues into "most specific" instead.
+ * The universal selector (flow YAML's `any: true`) is the case the field rules
+ * cannot serve: with no field to be exact about, "smallest" degenerates to
+ * whatever hairline spacer the scope contains. A field-less selector names a
+ * REGION, so its matches are read the way conditions read a match set — first
+ * in reading order — keeping an action's target the element an `assert` would
+ * quote. It still takes an app element before a key of the on-screen keyboard:
+ * a region that reaches under the keyboard names the app's elements there.
  *
  * Reading order, here and in the relations `findAll` resolves, is the UI's
  * when `orientation` says how the UI lies on the frame space (see the module
- * comment). The frame returned is the node's own, in the frame space: the one
- * to act on. `matchFieldValues` is as in {@link findAll}.
+ * comment). `matchFieldValues` is as in {@link findAll}.
+ */
+export function selectorToNode(
+  root: DescribeNode,
+  selector: Selector,
+  orientation?: UiOrientation,
+  matchFieldValues = false
+): DescribeNode | undefined {
+  const reading = readingFrames(orientation);
+  const byFields = hasOwnConstraint(selector);
+  const matches = findAll(root, selector, orientation, matchFieldValues);
+  const fullTextRegex = fullConsumptionRegex(selector);
+  let best: TargetCandidate | undefined;
+  for (const node of matches) {
+    if (!isVisible(node)) continue;
+    const candidate = {
+      node,
+      exact: byFields ? exactFieldCount(node, selector, fullTextRegex) : 0,
+      reading: reading(node),
+    };
+    if (best === undefined || compareTargets(candidate, best, byFields) < 0) best = candidate;
+  }
+  return best?.node;
+}
+
+/**
+ * The frame of {@link selectorToNode}'s pick: the node's own, in the frame
+ * space, the one to act on.
  */
 export function selectorToFrame(
   root: DescribeNode,
@@ -816,38 +993,7 @@ export function selectorToFrame(
   orientation?: UiOrientation,
   matchFieldValues = false
 ): DescribeFrame | undefined {
-  const visible = frontmost(
-    findAll(root, selector, orientation, matchFieldValues).filter(isVisible)
-  );
-  if (visible.length === 0) return undefined;
-  const reading = readingFrames(orientation);
-  if (!hasOwnConstraint(selector)) {
-    let first: DescribeNode | undefined;
-    for (const n of visible) {
-      if (first === undefined || compareBelowPick(reading(n), reading(first)) < 0) first = n;
-    }
-    return first?.frame;
-  }
-  const fullTextRegex = fullConsumptionRegex(selector);
-  let best: DescribeNode | undefined;
-  let bestExact = -1;
-  for (const n of visible) {
-    const exact = exactFieldCount(n, selector, fullTextRegex);
-    if (best === undefined || exact !== bestExact) {
-      if (exact > bestExact) {
-        best = n;
-        bestExact = exact;
-      }
-      continue;
-    }
-    const areaDelta = frameArea(n.frame) - frameArea(best.frame);
-    const nf = reading(n);
-    const bf = reading(best);
-    if (areaDelta < 0 || (areaDelta === 0 && (nf.y < bf.y || (nf.y === bf.y && nf.x < bf.x)))) {
-      best = n;
-    }
-  }
-  return best?.frame;
+  return selectorToNode(root, selector, orientation, matchFieldValues)?.frame;
 }
 
 const GENERIC_ROLES = new Set([
@@ -903,13 +1049,16 @@ function ownSelectors(node: DescribeNode): Selector[] {
 }
 
 /**
- * The tapped node is a visible match of `selector`, and every visible match
- * sits over `point`: the matches are one nested stack around the tapped
- * element (a labelled container and the leaf inside it rendering the same
- * text), so whichever of them `selectorToFrame` ranks first at replay, the tap
- * lands on the element recorded. A match elsewhere on the screen — the same
- * label on another row — fails it, and so does a scope that keeps only a
- * larger element overlapping the tap.
+ * Does `selector` replay on the tapped node? The ranking replay uses
+ * ({@link selectorToNode}) must pick the node on this screen: an app element
+ * with a key's text, behind the keyboard under the tapped key, would win that
+ * tie at replay. And every other visible match must sit over `point`: the
+ * matches are one nested stack around the tapped element (a labelled container
+ * and the leaf inside it rendering the same text), not the same label on
+ * another row, which a slightly different screen at replay could rank first.
+ * A key elsewhere does not count against an app element: the node matches its
+ * own field exactly, and replay takes an app element before a key that matches
+ * no more exactly.
  */
 function resolvesAt(
   root: DescribeNode,
@@ -918,8 +1067,13 @@ function resolvesAt(
   point: { x: number; y: number },
   orientation: UiOrientation | undefined
 ): boolean {
-  const visible = findAll(root, selector, orientation).filter(isVisible);
-  return visible.includes(node) && visible.every((n) => frameContains(n.frame, point.x, point.y));
+  if (selectorToNode(root, selector, orientation) !== node) return false;
+  return findAll(root, selector, orientation).every(
+    (n) =>
+      !isVisible(n) ||
+      frameContains(n.frame, point.x, point.y) ||
+      (n.keyboard === true && node.keyboard !== true)
+  );
 }
 
 // Roles of an editable text field on any platform: iOS AXTextField /

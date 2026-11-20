@@ -21,9 +21,9 @@ const LEGACY_UNSUPPORTED_FIELDS = [
   "interfaceOrientation",
 ];
 
-// AccessibilityWindowInfo types.
+// AccessibilityWindowInfo types, as the helper writes them in `window-type`.
 const TYPE_APPLICATION = 1;
-const TYPE_INPUT_METHOD = 2;
+export const TYPE_INPUT_METHOD = 2;
 const TYPE_SYSTEM = 3;
 
 // System apps whose dialogs are application windows above the app: runtime

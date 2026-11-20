@@ -10,7 +10,7 @@ import {
 import { isBlindRead } from "../describe/blind-read";
 import { nativeDirection, uiPointToNative, uiVectorToNative } from "./flow-orientation";
 import {
-  selectorToFrame,
+  selectorToNode,
   findAll,
   evaluateCondition,
   textCheckTarget,
@@ -21,6 +21,8 @@ import {
   macFieldText,
   nodeText,
   treeFingerprint,
+  keyboardDrawsAt,
+  underKeyboard,
   type Selector,
   type WaitCondition,
   type TextMatchMode,
@@ -32,7 +34,7 @@ import { renderFlagGated } from "../../utils/flag-gated-text";
 import { isFlagOffered } from "../../utils/capability";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
-import { readIosSimulatorUiTree } from "./flow-ios-tree";
+import { holdsKeyboard, readIosSimulatorUiTree } from "./flow-ios-tree";
 import { NATIVE_DESCRIBE_ROLES } from "../describe/platforms/ios/ios-native-adapter";
 import type { UiTreeNode } from "../ui-tree";
 import {
@@ -419,12 +421,27 @@ function selectorAlternatives(sel: FlowSelector): Selector[] {
 }
 
 /**
- * Resolve a selector's matches honoring the bare-string `loose` fallback. A pass
- * wins outright only when it has a *visible* match — the same criterion
- * {@link flowSelectorToFrame} falls through on, so `await`/`assert` and
- * `tap`/`type` resolve a bare string to the same element. An all-zero-area pass
- * is kept only as a last resort, so `exists` still sees those nodes without
- * blocking the text pass from finding the visible element.
+ * The tree as the conditions (`await`, `assert`, `when:`) and `scroll-to`'s
+ * target check read it: without the on-screen keyboard. A key that says
+ * "done" would keep `visible` true and `hidden` false after the app's "Done"
+ * left, and stop a scroll before its target showed. Actions still target keys
+ * (see {@link flowSelectorToNode}). A flow tree is flat, leaves under one root,
+ * so dropping the root's keyboard children drops every key.
+ */
+function withoutKeyboard(tree: DescribeNode): DescribeNode {
+  if (!tree.children.some((n) => n.keyboard === true)) return tree;
+  return { ...tree, children: tree.children.filter((n) => n.keyboard !== true) };
+}
+
+/**
+ * Resolve a selector's matches honoring the bare-string `loose` fallback, for
+ * the conditions: on the tree {@link withoutKeyboard}, so a lookup that finds
+ * only a key finds nothing and the next one runs. A pass wins outright only
+ * when it has a *visible* match — the criterion {@link flowSelectorToNode}
+ * falls through on too, so `await`/`assert` and `tap`/`type` resolve a bare
+ * string to the same app element. An all-zero-area pass is kept only as a last
+ * resort, so `exists` still sees those nodes without blocking the text pass
+ * from finding the visible element.
  */
 function flowFindAll(
   tree: DescribeNode,
@@ -432,9 +449,10 @@ function flowFindAll(
   orientation: UiOrientation | undefined,
   matchFieldValues = false
 ): DescribeNode[] {
+  const app = withoutKeyboard(tree);
   let fallback: DescribeNode[] = [];
   for (const s of selectorAlternatives(sel)) {
-    const matches = findAll(tree, s, orientation, matchFieldValues);
+    const matches = findAll(app, s, orientation, matchFieldValues);
     if (matches.some(isVisible)) return matches;
     if (fallback.length === 0) fallback = matches;
   }
@@ -442,21 +460,28 @@ function flowFindAll(
 }
 
 /**
- * Identifier-first-then-text frame resolution for a (possibly loose) selector.
+ * Identifier-first-then-text resolution of a (possibly loose) selector to the
+ * element an action targets ({@link selectorToNode}). A lookup whose pick is a
+ * key of the on-screen keyboard does not end the search: a later one may find
+ * an app element, which wins (a bare `tap: Delete` means the app's "Delete",
+ * not the iOS delete key with the id "delete"). The first key picked is the
+ * target only when no lookup picks an app element.
  * `matchFieldValues`: a `type` step's `into`, which may name a text field by
  * the text it holds (see `findAll`).
  */
-function flowSelectorToFrame(
+function flowSelectorToNode(
   tree: DescribeNode,
   sel: FlowSelector,
   orientation: UiOrientation | undefined,
   matchFieldValues = false
-): DescribeFrame | undefined {
+): DescribeNode | undefined {
+  let key: DescribeNode | undefined;
   for (const s of selectorAlternatives(sel)) {
-    const frame = selectorToFrame(tree, s, orientation, matchFieldValues);
-    if (frame) return frame;
+    const node = selectorToNode(tree, s, orientation, matchFieldValues);
+    if (node !== undefined && node.keyboard !== true) return node;
+    key ??= node;
   }
-  return undefined;
+  return key;
 }
 
 /**
@@ -600,31 +625,44 @@ export async function settleTree(
  * or the first still-unresolved selector in argument order once the deadline
  * passes — the two must stay distinguishable, or a cancelled step reads as a
  * genuine "element not found".
+ *
+ * A selector flagged in `touched` is one the action presses at the centre of
+ * its element. While the on-screen keyboard covers that centre, the press
+ * would land on a key, so the selector stays unresolved and the timeout result
+ * says `covered`. The step waits for the keyboard to leave that element and
+ * never takes another match in its place.
  */
 async function waitForFrames(
   env: ActionEnv,
   selectors: readonly (FlowSelector | undefined)[],
-  matchFieldValues = false
-): Promise<(DescribeFrame | undefined)[] | "aborted" | { unresolved: FlowSelector }> {
+  matchFieldValues = false,
+  touched: readonly boolean[] = []
+): Promise<
+  (DescribeFrame | undefined)[] | "aborted" | { unresolved: FlowSelector; covered: boolean }
+> {
   const pending = selectors.flatMap((selector, i) => (selector ? [{ i, selector }] : []));
   if (pending.length === 0) return selectors.map(() => undefined);
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
   let unresolved = pending[0].selector;
+  let covered = false;
   for (;;) {
     if (env.signal?.aborted) return "aborted";
     const tree = await settleTree(env);
     if (tree) {
       const orientation = readingOrientation(env);
-      const frames = selectors.map((s) =>
-        s ? flowSelectorToFrame(tree, s, orientation, matchFieldValues) : undefined
+      const nodes = selectors.map((s) =>
+        s ? flowSelectorToNode(tree, s, orientation, matchFieldValues) : undefined
       );
-      const missing = pending.find(({ i }) => frames[i] === undefined);
-      if (!missing) return frames;
+      const isCovered = (i: number): boolean =>
+        touched[i] === true && nodes[i] !== undefined && underKeyboard(tree, nodes[i], orientation);
+      const missing = pending.find(({ i }) => nodes[i] === undefined || isCovered(i));
+      if (!missing) return nodes.map((node) => node?.frame);
       unresolved = missing.selector;
+      covered = isCovered(missing.i);
     } else if (env.signal?.aborted) {
       return "aborted"; // settleTree bailed on the abort, not on a blank read
     }
-    if (Date.now() >= deadline) return { unresolved };
+    if (Date.now() >= deadline) return { unresolved, covered };
     const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
   }
@@ -648,6 +686,23 @@ export async function waitForFrame(
   const frames = await waitForFrames(env, [selector], matchFieldValues);
   if (frames === "aborted") return "aborted";
   return Array.isArray(frames) ? frames[0] : undefined;
+}
+
+/**
+ * {@link waitForFrame} for the element an action presses at its centre (a tap,
+ * a long-press, the focus tap of `type`, a pinch or rotate): a match the
+ * on-screen keyboard covers does not resolve. Returns the frame or the step's
+ * failure.
+ */
+async function waitForTouchFrame(
+  env: ActionEnv,
+  selector: FlowSelector,
+  matchFieldValues = false
+): Promise<{ frame: DescribeFrame } | { fail: DirectiveOutcome }> {
+  const frames = await waitForFrames(env, [selector], matchFieldValues, [true]);
+  if (frames === "aborted") return { fail: ABORTED_OUTCOME };
+  if (Array.isArray(frames)) return { frame: frames[0]! };
+  return { fail: await targetMissReason(env, frames) };
 }
 
 function framesOverlap(a: DescribeFrame, b: DescribeFrame): boolean {
@@ -721,7 +776,7 @@ async function waitForFocus(
     try {
       const { tree, source, uiOrientation } = await readFlowTree(env);
       if (!FOCUS_REPORTING_SOURCES.has(source)) return;
-      const target = flowSelectorToFrame(tree, into, uiOrientation, true) ?? tappedFrame;
+      const target = flowSelectorToNode(tree, into, uiOrientation, true)?.frame ?? tappedFrame;
       if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
     } catch {
       // transient describe failure — retry until the deadline
@@ -741,6 +796,11 @@ interface ScrollResolve {
   aborted?: boolean;
   /** What the scroll gestures had to say (see {@link toolWarning}). */
   warning?: string;
+}
+
+/** Where a scroll increment goes down: the centre of `region`, on the screen. */
+function scrollAnchor(region: DescribeFrame): { x: number; y: number } {
+  return { x: clamp01(region.x + region.width / 2), y: clamp01(region.y + region.height / 2) };
 }
 
 // gesture-scroll's refusal on a Mac app at a point where nothing scrolls.
@@ -764,8 +824,7 @@ async function scrollIncrement(
   direction: ScrollDirection,
   region: DescribeFrame
 ): Promise<string | undefined> {
-  const cx = clamp01(region.x + region.width / 2);
-  const cy = clamp01(region.y + region.height / 2);
+  const { x: cx, y: cy } = scrollAnchor(region);
   const extent = direction === "up" || direction === "down" ? region.height : region.width;
   const dist = Math.min(SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
 
@@ -829,7 +888,8 @@ async function scrollIncrement(
  * nothing) and the target is accepted wherever it landed: the LAST item sits
  * flush against the far edge and can never clear it, and a genuinely stuck
  * partial can't be improved either. A target already fully on screen returns
- * immediately.
+ * immediately. A target the on-screen keyboard covers is not in view yet, so
+ * the scroll goes on until it clears the keyboard or the end.
  */
 async function scrollToVisible(
   env: ActionEnv,
@@ -839,9 +899,20 @@ async function scrollToVisible(
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
   let warning: string | undefined;
+  // The target showed under the keyboard and the scroll did not move it out.
+  let seenCovered = false;
   // The target never showed: say so when it looks stale.
   const missed = async (reason: string): Promise<ScrollResolve> => {
-    const stale = await staleSelectorReason(env, target, reason);
+    if (seenCovered) {
+      return {
+        reason:
+          `the element matching ${describeSelector(target)} was under the on-screen keyboard, ` +
+          `and scrolling ${direction} did not bring it above the keyboard. Close the keyboard ` +
+          `before this step`,
+        ...warnedBy(warning),
+      };
+    }
+    const stale = await staleSelectorReason(env, target, reason, true);
     if (stale === "aborted") return { aborted: true };
     return { reason: stale ?? reason, ...warnedBy(warning) };
   };
@@ -862,14 +933,19 @@ async function scrollToVisible(
     // Anchor the gesture inside the container (so the right nested scroller
     // moves), or over the whole screen when none is named. Its frame is also the
     // clip window the axis check measures the target against.
-    const region = within ? flowSelectorToFrame(tree, within, orientation) : FULL_SCREEN;
+    const region = within ? flowSelectorToNode(tree, within, orientation)?.frame : FULL_SCREEN;
     if (!region) {
       return { reason: `scroll container ${describeSelector(within!)} is not visible` };
     }
 
-    const frame = flowSelectorToFrame(tree, target, orientation);
-    if (frame && axisFullyInside(frame, axisDirection, region)) {
-      return { frame, ...warnedBy(warning) };
+    // Not a key: one that matches would end the scroll before the target shows.
+    // Nor in view while the keyboard covers it: a tap there would press a key.
+    const node = flowSelectorToNode(withoutKeyboard(tree), target, orientation);
+    const frame = node?.frame;
+    const covered = node !== undefined && underKeyboard(tree, node, orientation);
+    seenCovered ||= covered;
+    if (node && axisFullyInside(node.frame, axisDirection, region) && !covered) {
+      return { frame: node.frame, ...warnedBy(warning) };
     }
 
     // Fingerprint only the scrolled content: a continuously-animating node
@@ -894,6 +970,19 @@ async function scrollToVisible(
       return missed(`reached the end of the scroll without finding ${describeSelector(target)}`);
     }
     prevFp = fp;
+
+    // The finger goes down at the scroll anchor: on the keyboard it would
+    // press or slide over the keys, not scroll.
+    if (keyboardDrawsAt(tree, scrollAnchor(region), orientation)) {
+      return {
+        reason:
+          `scroll-to swipes at the centre of ${within ? describeSelector(within) : "the screen"}, ` +
+          `which the on-screen keyboard covers, so the swipe would land on the keyboard. Close ` +
+          `the keyboard before this step, or name in within: a scroll container whose centre ` +
+          `is above the keyboard`,
+        ...warnedBy(warning),
+      };
+    }
 
     try {
       warning ??= await scrollIncrement(env, axisDirection, region);
@@ -985,11 +1074,17 @@ function unknownRoleReason(
  * element that already left and a flow recorded on the injected view
  * hierarchy, so the reason names both. The read only words the reason, never
  * decides a match, and any failure of it gives undefined.
+ *
+ * `ignoresKeys`: the miss is a verdict that does not see the on-screen
+ * keyboard (a condition, `scroll-to`'s target), so a key that carries the id
+ * is not cited. A key that alone carries it gives undefined: the id is not
+ * nowhere, and it is not stale either.
  */
 async function staleSelectorReason(
   env: ActionEnv,
   sel: FlowSelector,
-  missed = `no visible element matched selector ${describeSelector(sel)}`
+  missed = `no visible element matched selector ${describeSelector(sel)}`,
+  ignoresKeys = false
 ): Promise<string | "aborted" | undefined> {
   if (!isIosSimulatorEnv(env)) return undefined;
   const role = unknownRoleReason(env, sel, missed);
@@ -1011,17 +1106,28 @@ async function staleSelectorReason(
   if (read.type !== "value" || read.value.truncated) return undefined;
   const carriers: UiTreeNode[] = [];
   let uncovered = false;
-  const collect = (nodes: UiTreeNode[], covered: boolean): void => {
+  let keyCarrier = false;
+  const collect = (nodes: UiTreeNode[], covered: boolean, keyboard: boolean): void => {
     for (const n of nodes) {
       const under = covered || n.covered === true;
       if (ids.some((id) => identifierMatches(n.identifier, id))) {
-        carriers.push(n);
-        if (!under) uncovered = true;
+        if (ignoresKeys && keyboard) {
+          keyCarrier = true;
+        } else {
+          carriers.push(n);
+          if (!under) uncovered = true;
+        }
       }
-      collect(n.children, under);
+      collect(n.children, under, keyboard);
     }
   };
-  collect(read.value.roots, false);
+  for (const root of read.value.roots) {
+    collect([{ ...root, children: [] }], false, false);
+    for (const window of root.children) {
+      collect([window], root.covered === true, holdsKeyboard(window));
+    }
+  }
+  if (carriers.length === 0 && keyCarrier) return undefined;
   if (carriers.length === 0) {
     return (
       `${missed}, and no element with this id is in the accessibility tree right now, on ` +
@@ -1064,7 +1170,11 @@ function fieldTextReason(env: ActionEnv, sel: FlowSelector, missed: string): str
   );
 }
 
-/** Why a selector step found no element: the stale reason when one shows, else the scroll-to hint. */
+/**
+ * Why a selector step found no element: the stale reason when one shows, else
+ * the scroll-to hint. An action targets keys, so a key that carries the id
+ * counts here.
+ */
 export async function selectorMissReason(
   env: ActionEnv,
   sel: FlowSelector
@@ -1072,6 +1182,24 @@ export async function selectorMissReason(
   const stale = await staleSelectorReason(env, sel);
   if (stale === "aborted") return ABORTED_OUTCOME;
   return { ok: false, reason: stale ?? offscreenHint(sel) };
+}
+
+/**
+ * Why an action's target did not resolve: the on-screen keyboard covered it
+ * (see {@link waitForFrames}), or {@link selectorMissReason}.
+ */
+async function targetMissReason(
+  env: ActionEnv,
+  miss: { unresolved: FlowSelector; covered: boolean }
+): Promise<DirectiveOutcome> {
+  if (!miss.covered) return await selectorMissReason(env, miss.unresolved);
+  return {
+    ok: false,
+    reason:
+      `the element matching ${describeSelector(miss.unresolved)} is under the on-screen ` +
+      `keyboard, so pressing it would press a key. Close the keyboard before this step, ` +
+      `or bring the element above it with a scroll-to step`,
+  };
 }
 
 /**
@@ -1292,12 +1420,9 @@ async function resolveTargetPoint(
   target: { selector?: FlowSelector; x?: number; y?: number }
 ): Promise<{ point: { x: number; y: number }; warning?: string } | { fail: DirectiveOutcome }> {
   if (target.selector) {
-    const frame = await waitForFrame(env, target.selector);
-    if (frame === "aborted") return { fail: ABORTED_OUTCOME };
-    if (!frame) {
-      return { fail: await selectorMissReason(env, target.selector) };
-    }
-    return { point: getDescribeTapPoint(frame) };
+    const resolved = await waitForTouchFrame(env, target.selector);
+    if ("fail" in resolved) return resolved;
+    return { point: getDescribeTapPoint(resolved.frame) };
   }
   const point = targetPointFromFrame(target, undefined);
   if ("fail" in point) return point;
@@ -1414,11 +1539,10 @@ async function runPinch(
   let frame: DescribeFrame | undefined;
   let settle: GestureSettle = {};
   if (step.selector) {
-    const resolved = await waitForFrame(env, step.selector);
-    if (resolved === "aborted") return ABORTED_OUTCOME;
-    if (!resolved) return await selectorMissReason(env, step.selector);
-    frame = resolved;
-    center = getDescribeTapPoint(resolved);
+    const resolved = await waitForTouchFrame(env, step.selector);
+    if ("fail" in resolved) return resolved.fail;
+    frame = resolved.frame;
+    center = getDescribeTapPoint(resolved.frame);
   } else {
     settle = await settleForGesture(env);
     if (settle.aborted) return ABORTED_OUTCOME;
@@ -1515,11 +1639,10 @@ async function runRotate(
   let frame: DescribeFrame | undefined;
   let settle: GestureSettle = {};
   if (step.selector) {
-    const resolved = await waitForFrame(env, step.selector);
-    if (resolved === "aborted") return ABORTED_OUTCOME;
-    if (!resolved) return await selectorMissReason(env, step.selector);
-    frame = resolved;
-    center = getDescribeTapPoint(resolved);
+    const resolved = await waitForTouchFrame(env, step.selector);
+    if ("fail" in resolved) return resolved.fail;
+    frame = resolved.frame;
+    center = getDescribeTapPoint(resolved.frame);
   } else {
     settle = await settleForGesture(env);
     if (settle.aborted) return ABORTED_OUTCOME;
@@ -1628,11 +1751,12 @@ async function runSwipe(
   // appears is blamed on the anchor, the element the finger needs first.
   const ends = [step.from, step.to] as const;
   const selectors = ends.map((end) => (end && "selector" in end ? end.selector : undefined));
-  const frames = await waitForFrames(env, selectors);
+  // The finger goes down on `from`, so the keyboard must not cover it; `to` is
+  // where it lifts, and a swipe that ends over the keyboard still moves the
+  // view it started in.
+  const frames = await waitForFrames(env, selectors, false, [true, false]);
   if (frames === "aborted") return ABORTED_OUTCOME;
-  if (!Array.isArray(frames)) {
-    return await selectorMissReason(env, frames.unresolved);
-  }
+  if (!Array.isArray(frames)) return await targetMissReason(env, frames);
   const [fromFrame, toFrame] = frames;
 
   // A selector end already resolved against a settled tree; with neither end
@@ -1849,11 +1973,9 @@ async function runType(
   env: ActionEnv,
   step: { into: FlowSelector; text: string; submit?: boolean }
 ): Promise<DirectiveOutcome> {
-  const frame = await waitForFrame(env, step.into, true);
-  if (frame === "aborted") return ABORTED_OUTCOME;
-  if (!frame) {
-    return await selectorMissReason(env, step.into);
-  }
+  const resolved = await waitForTouchFrame(env, step.into, true);
+  if ("fail" in resolved) return resolved.fail;
+  const { frame } = resolved;
   const focusTap = await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
   // Keys are injected at the HID level and go to whatever holds focus, so the
   // tap→type gap must cover the app's focus round-trip (see the constants).
@@ -2049,7 +2171,7 @@ async function waitForCondition(
       : "";
   // Nothing matched: say so when the selector looks stale.
   if (explainMiss && lastMatches.length === 0 && step.condition !== "hidden") {
-    const stale = await staleSelectorReason(env, step.selector);
+    const stale = await staleSelectorReason(env, step.selector, undefined, true);
     if (stale === "aborted") return ABORTED_OUTCOME;
     if (stale) return { ok: false, reason: stale + blipNote };
   }

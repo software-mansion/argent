@@ -466,4 +466,21 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(evaluateCondition("visible", undefined, below)).toBe(false);
     expect(selectorToFrame(tree, { text: "Item 8" })).toBeUndefined();
   });
+
+  it("marks the leaves of the input method's window only, and none without window-type", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" window-type="1" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.Button" text="Back" package="com.acme.app" bounds="[40,200][400,280]" />
+  </node>
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.ime" window-type="2" bounds="[0,1200][1080,1920]">
+    <node index="0" class="android.widget.FrameLayout" resource-id="com.acme.ime:id/key_pos_del" content-desc="Delete" package="com.acme.ime" bounds="[900,1700][1060,1800]" />
+  </node>
+</hierarchy>`;
+    const adapt = (x: string) => adaptFullAndroidHierarchyToDescribeResult(x, SCREEN_W, SCREEN_H);
+    expect(adapt(xml).children.map((c) => c.label)).toEqual(["Back", "Delete"]);
+    expect(adapt(xml).children.map((c) => c.keyboard)).toEqual([undefined, true]);
+    const bare = xml.replace(/ window-type="\d+"/g, "");
+    expect(adapt(bare).children.map((c) => c.keyboard)).toEqual([undefined, undefined]);
+  });
 });

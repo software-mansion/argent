@@ -721,6 +721,19 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("ios")).toHaveLength(1);
   });
 
+  it("iOS: says the runner's conditions do not see a key the live wait held on", async () => {
+    const shift = n({ label: "shift", keyboard: true, frame: ROW });
+    serveTree(n({ role: "AXGroup", frame: FULL, children: [shift] }));
+    await startRecording("key");
+
+    const result = await recordWait("key", { condition: "visible", selector: { text: "shift" } });
+
+    expect(warningOf(result, "key")).toContain(
+      "The runner's conditions do not see the on-screen keyboard: a wait on a key holds only " +
+        "as the raw `tool:` step."
+    );
+  });
+
   it("iOS: a remote simulator reads as iOS, not as an unnamed platform", async () => {
     // A cloud sim resolves as platform "ios-remote", but both its trees are the
     // iOS ones — so the prose is the iOS prose. Read raw, "ios-remote" matches
