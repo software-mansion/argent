@@ -197,6 +197,7 @@ type ProfileResult = {
   launchMs: number | null;
   simulatorLaunchEstimateMs?: number | null;
   firstFrameEndMs: number;
+  exports: Record<string, string>;
   exportErrors?: Record<string, string>;
   profilerSession: { cpuXml: string; cpuSamples: number };
   warning: string | null;
@@ -250,8 +251,14 @@ describe('mode "profile" on a simulator', () => {
     expect(result.launchMs).toBeNull();
     expect(result.firstFrameEndMs).toBe(300);
     expect(result.simulatorLaunchEstimateMs).toBe(200);
-    // Instruments never fills the lifecycle table on a simulator: not an export error.
+    // Instruments never fills the lifecycle table on a simulator.
     expect(result.exportErrors).toBeUndefined();
+    expect(result.exports).not.toHaveProperty("lifecycle");
+    expect(
+      vi
+        .mocked(runLogged)
+        .mock.calls.some(([, args]) => args.join(" ").includes("life-cycle-period"))
+    ).toBe(false);
     expect(result.profilerSession.cpuSamples).toBe(2);
     const session = await readFile(result.profilerSession.cpuXml, "utf8");
     expect(session).toContain("render()");

@@ -200,8 +200,21 @@ describe("weighSamplesByPeriod", () => {
     expect(weighSamplesByPeriod(input, "")).toEqual({ xml: input, periodNs: null });
   });
 
-  it("rejects a dominant 5 ms gap when the same thread demonstrably ran at 1 ms", () => {
-    const input = ticks(5_000_000, 45).replace(">105000000<", ">101000000<");
+  /** A 5 ms recording with these ticks moved 3.8 ms early, each leaving a 1.2 ms gap. */
+  const jittered = (moved: number[]) =>
+    moved.reduce(
+      (xml, tick) =>
+        xml.replace(`>${100_000_000 + tick * 5_000_000}<`, `>${96_200_000 + tick * 5_000_000}<`),
+      ticks(5_000_000, 45)
+    );
+
+  it("weighs a 5 ms recording whose timestamps jitter", () => {
+    // A real 5 ms export had 13 of 429 same-thread gaps under 4.5 ms.
+    expect(weighSamplesByPeriod(jittered([2, 10, 18, 26]), "").periodNs).toBe(5_000_000);
+  });
+
+  it("rejects 5 ms when over a tenth of the same-thread gaps are shorter", () => {
+    const input = jittered([2, 10, 18, 26, 34]);
     expect(weighSamplesByPeriod(input, "")).toEqual({ xml: input, periodNs: null });
   });
 

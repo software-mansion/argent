@@ -188,7 +188,7 @@ function inferredSamplePeriodNs(xml: string): number | null {
   }
   let oneMs = 0;
   let onFiveMsGrid = 0;
-  let hasShorterGap = false;
+  let shorterGaps = 0;
   let gaps = 0;
   for (const series of times.values()) {
     series.sort((a, b) => a - b);
@@ -197,14 +197,14 @@ function inferredSamplePeriodNs(xml: string): number | null {
       if (gap <= 0) continue;
       if (gap === 1_000_000) oneMs++;
       if (gap % 5_000_000 === 0) onFiveMsGrid++;
-      // Allow timestamp jitter, but a clearly shorter same-thread gap rules out 5 ms.
-      if (gap < 4_500_000) hasShorterGap = true;
+      if (gap < 4_500_000) shorterGaps++;
       gaps++;
     }
   }
   if (gaps < 20) return null;
   if (oneMs * 2 >= gaps) return 1_000_000;
-  return !hasShorterGap && onFiveMsGrid * 2 >= gaps ? 5_000_000 : null;
+  // Real 5 ms recordings keep a few jittered gaps (3% seen, down to 0.2 ms); 1 ms ones are nearly all short.
+  return shorterGaps * 10 <= gaps && onFiveMsGrid * 2 >= gaps ? 5_000_000 : null;
 }
 
 /**

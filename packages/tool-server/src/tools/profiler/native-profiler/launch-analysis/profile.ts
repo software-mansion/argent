@@ -217,7 +217,12 @@ async function profilePreparedLaunch(
     exportErrors.toc = error instanceof Error ? error.message : String(error);
   }
   const xpaths = {
-    lifecycle: toc.includes('schema="life-cycle-period"') ? TABLE_XPATH("life-cycle-period") : null,
+    // Instruments fills it on an iPhone only.
+    ...(!context.simulator && {
+      lifecycle: toc.includes('schema="life-cycle-period"')
+        ? TABLE_XPATH("life-cycle-period")
+        : null,
+    }),
     dyld: toc.includes('schema="dyld-activity-interval"')
       ? TABLE_XPATH("dyld-activity-interval")
       : null,
@@ -289,8 +294,6 @@ async function profilePreparedLaunch(
     );
   }
 
-  // Instruments never fills life-cycle-period on a simulator, so that is not an export error.
-  if (context.simulator) delete exportErrors.lifecycle;
   const phases = exported.lifecycle
     ? parseLifecyclePhases(await fsp.readFile(exported.lifecycle, "utf8"))
     : [];
