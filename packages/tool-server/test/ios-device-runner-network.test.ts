@@ -2,7 +2,10 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRunnerCommandSender } from "../src/utils/ios-device/runner-route";
+import {
+  createRunnerCommandSender,
+  TunnelConnectError,
+} from "../src/utils/ios-device/runner-route";
 
 const servers: http.Server[] = [];
 afterEach(async () => {
@@ -67,5 +70,14 @@ describe("CoreDevice runner transport over IPv6 TCP", () => {
       sender.sendCommand("phone", port, { command: "tap" }, { timeoutMs: 2000 })
     ).rejects.toMatchObject({ kind: "http" });
     expect(calls).toBe(1);
+  });
+
+  it("marks a refused tunnel connection so the runner is recycled", async () => {
+    const port = await listen(() => {});
+    servers.splice(0).forEach((server) => server.close());
+    const sender = createRunnerCommandSender({ tunnelAddress: "::1" });
+    const sent = sender.sendCommand("phone", port, { command: "tap" }, { timeoutMs: 2000 });
+    await expect(sent).rejects.toBeInstanceOf(TunnelConnectError);
+    await expect(sent).rejects.toMatchObject({ kind: "runner-not-listening" });
   });
 });

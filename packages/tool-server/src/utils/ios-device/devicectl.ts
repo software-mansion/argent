@@ -41,8 +41,6 @@ interface IosPhysicalDevice {
    */
   transportType: string | null;
   tunnelState: string | null;
-  /** A connected CoreDevice tunnel that can carry runner traffic. */
-  tunnelAddress: string | null;
 }
 
 class IosDeviceControlError extends Error {
@@ -217,7 +215,6 @@ interface DevicectlListPayload {
         pairingState?: string;
         transportType?: string;
         tunnelState?: string;
-        tunnelIPAddress?: string;
       };
     }>;
   };
@@ -291,7 +288,6 @@ export async function listIosPhysicalDevices(): Promise<IosPhysicalDevice[]> {
       pairingState: d.connectionProperties?.pairingState ?? null,
       transportType: d.connectionProperties?.transportType ?? null,
       tunnelState: d.connectionProperties?.tunnelState ?? null,
-      tunnelAddress: coreDeviceTunnelAddress(d.connectionProperties),
     });
   }
   return out;

@@ -24,7 +24,7 @@ import {
   type RunnerSigningConfig,
 } from "../utils/ios-device/runner-build";
 import * as fs from "node:fs/promises";
-import { createRunnerCommandSender } from "../utils/ios-device/runner-route";
+import { createRunnerCommandSender, TunnelConnectError } from "../utils/ios-device/runner-route";
 import { isIosDeviceTransportError } from "../utils/ios-device/usbmux-protocol";
 import { readRunnerCrashSummary } from "../utils/ios-device/runner-crash";
 import {
@@ -414,9 +414,14 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
   recoverable(error: unknown): boolean {
     // A confirmed runner death, or a runner that answered only to report its
     // main thread stuck past recovery: both need a fresh runner, so the
-    // registry disposes this one and retries the tool once. Any other answer
-    // from a live runner, or a transport loss with a live child, is not
-    // recoverable here.
-    return isRunnerExitedError(error) || isRunnerWedgedError(error);
+    // registry disposes this one and retries the tool once. So does a runner
+    // that stopped answering on its tunnel address: nothing was sent, and the
+    // new runner binds the current address. Any other answer from a live
+    // runner, or a transport loss with a live child, is not recoverable here.
+    return (
+      isRunnerExitedError(error) ||
+      isRunnerWedgedError(error) ||
+      error instanceof TunnelConnectError
+    );
   },
 };

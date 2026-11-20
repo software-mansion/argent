@@ -13,6 +13,14 @@ import { IosDeviceTransportError, isIosDeviceTransportError } from "./usbmux-pro
 const READ_ONLY_MAX_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 300;
 const RETRY_MAX_DELAY_MS = 2_000;
+/** A dead tunnel fails fast; the command deadline still bounds the HTTP exchange. */
+const TUNNEL_CONNECT_TIMEOUT_MS = 5_000;
+
+/**
+ * The runner stopped answering on its tunnel address. Nothing was sent, and the
+ * address may have changed since the runner started, so only a fresh runner helps.
+ */
+export class TunnelConnectError extends IosDeviceTransportError {}
 
 export interface SendRunnerCommandOptions {
   timeoutMs: number;
@@ -91,7 +99,7 @@ async function openTunnelSocket(
   port: number,
   deadline: Deadline
 ): Promise<net.Socket> {
-  const timeoutMs = deadline.remainingMs();
+  const timeoutMs = Math.min(deadline.remainingMs(), TUNNEL_CONNECT_TIMEOUT_MS);
   if (timeoutMs <= 0) {
     throw new IosDeviceTransportError("timeout", "CoreDevice connection deadline elapsed", {
       retryable: true,
@@ -105,10 +113,14 @@ async function openTunnelSocket(
     return socket;
   } catch (error) {
     socket.destroy();
-    throw new IosDeviceTransportError(
+    throw new TunnelConnectError(
       signal.aborted ? "timeout" : "runner-not-listening",
       "Cannot connect to the runner through the CoreDevice tunnel",
-      { retryable: true, cause: error }
+      {
+        retryable: true,
+        hint: "Keep the device unlocked and connected in Xcode or through its fleet provider, then retry.",
+        cause: error,
+      }
     );
   }
 }

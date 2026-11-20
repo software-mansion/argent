@@ -424,7 +424,6 @@ describe("list-devices", () => {
           pairingState: "paired",
           transportType: "wired",
           tunnelState: "connected",
-          tunnelAddress: null,
         },
       ]);
 
@@ -792,22 +791,20 @@ describe("list-devices", () => {
     });
   });
 
-  it("accepts connected CoreDevice tunnels and sorts usable phones first", async () => {
+  it("accepts reachable network phones and sorts usable phones first", async () => {
     vi.mocked(listIosPhysicalDevices).mockResolvedValueOnce([
       {
         udid: "00008120-000A44443333801E",
-        tunnelAddress: null,
         name: "Office iPhone",
         model: "iPhone 14",
         osVersion: "18.5",
         developerModeEnabled: true,
         pairingState: "paired",
-        transportType: "localNetwork",
-        tunnelState: "disconnected",
+        transportType: null,
+        tunnelState: "unavailable",
       },
       {
         udid: "00008110-000978540290401E",
-        tunnelAddress: null,
         name: "Desk iPhone",
         model: "iPhone 13",
         osVersion: "26.0",
@@ -818,14 +815,13 @@ describe("list-devices", () => {
       },
       {
         udid: "00008120-000B55554444901E",
-        tunnelAddress: "fd12::1",
         name: "Tunnel iPhone",
         model: "iPhone 15",
         osVersion: "27.0",
         developerModeEnabled: true,
         pairingState: "paired",
         transportType: "localNetwork",
-        tunnelState: "connected",
+        tunnelState: "disconnected",
       },
     ]);
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
@@ -853,8 +849,8 @@ describe("list-devices", () => {
       ["Office iPhone", "paired"],
     ]);
     // pairingState/tunnelState ride along so callers can see WHY a row is paired.
-    expect(physical[2]).toMatchObject({ pairingState: "paired", tunnelState: "disconnected" });
-    expect(physical[1]).toMatchObject({ state: "connected", tunnelState: "connected" });
+    expect(physical[2]).toMatchObject({ pairingState: "paired", tunnelState: "unavailable" });
+    expect(physical[1]).toMatchObject({ state: "connected", tunnelState: "disconnected" });
     // The paired phone sinks below every usable device, booted simulators
     // included; flow auto-bind keys on state "connected" and skips it.
     expect(byName("Desk iPhone")).toBeLessThan(byName("Office iPhone"));

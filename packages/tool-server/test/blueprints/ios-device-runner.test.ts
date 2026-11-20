@@ -6,6 +6,7 @@ import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/regist
 import { iosDeviceRunnerBlueprint } from "../../src/blueprints/ios-device-runner";
 import { reserveLaunchMeasurement } from "../../src/utils/ios-device/runner-reservation";
 import { IosDeviceTransportError } from "../../src/utils/ios-device/usbmux-protocol";
+import { TunnelConnectError } from "../../src/utils/ios-device/runner-route";
 import {
   createRunnerClient,
   waitForRunnerReady,
@@ -502,6 +503,10 @@ describe("ios-device-runner blueprint: recoverable classification", () => {
     ).toBe(false);
     expect(recoverable(new Error("connect ECONNREFUSED 127.0.0.1:8080"))).toBe(false);
     expect(recoverable(new Error("the tunnel did not accept connection"))).toBe(false);
+    // The typed tunnel connect failure is: the runner may sit on a stale address.
+    expect(
+      recoverable(new TunnelConnectError("runner-not-listening", "refused", { retryable: true }))
+    ).toBe(true);
     // A RunnerCommandError means the runner answered, so it is alive, with
     // one exception: RUNNER_WEDGED is the runner's own verdict that its main
     // thread is stuck past recovery, and only a fresh runner clears that.
