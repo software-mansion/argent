@@ -107,7 +107,7 @@ function slicesOf(chunk: Buffer): Buffer[] {
 class DelayedQueue {
   private slices: QueuedSlice[] = [];
   private timer: NodeJS.Timeout | null = null;
-  private readonly sendTimers = new Set<NodeJS.Timeout>();
+  private readonly sendTimers = new Map<NodeJS.Timeout, () => void>();
   private lastArrival = 0;
   queuedBytes = 0;
 
@@ -130,23 +130,45 @@ class DelayedQueue {
     }
     let sentAt = 0;
     for (const slice of slicesOf(chunk)) {
-      const timing = link.send(slice.length, performance.now());
-      sentAt = timing.sentAt;
-      this.lastArrival = Math.max(this.lastArrival, timing.arrivesAt);
-      this.slices.push({ arrivesAt: this.lastArrival, chunk: slice });
+      const queued = { arrivesAt: 0, chunk: slice };
+      sentAt = this.pace(queued, link);
+      this.slices.push(queued);
       this.queuedBytes += slice.length;
     }
     this.schedule();
     if (done) this.whenSent(sentAt, done);
   }
 
+  /** Sends what is queued through the link again, after its conditions changed. */
+  repace(): void {
+    const link = this.link();
+    const waiting = [...this.sendTimers.values()];
+    this.stopTimers();
+    this.lastArrival = 0;
+    let sentAt = 0;
+    for (const slice of this.slices) sentAt = this.pace(slice, link);
+    this.schedule();
+    for (const done of waiting) this.whenSent(sentAt, done);
+  }
+
   clear(): void {
-    if (this.timer) clearTimeout(this.timer);
-    for (const timer of this.sendTimers) clearTimeout(timer);
-    this.sendTimers.clear();
-    this.timer = null;
+    this.stopTimers();
     this.slices = [];
     this.queuedBytes = 0;
+  }
+
+  private stopTimers(): void {
+    if (this.timer) clearTimeout(this.timer);
+    for (const timer of this.sendTimers.keys()) clearTimeout(timer);
+    this.sendTimers.clear();
+    this.timer = null;
+  }
+
+  private pace(slice: QueuedSlice, link: LinkDirection): number {
+    const timing = link.send(slice.chunk.length, performance.now());
+    this.lastArrival = Math.max(this.lastArrival, timing.arrivesAt);
+    slice.arrivesAt = this.lastArrival;
+    return timing.sentAt;
   }
 
   private whenSent(sentAt: number, done: () => void): void {
@@ -159,7 +181,7 @@ class DelayedQueue {
       this.sendTimers.delete(timer);
       done();
     }, wait);
-    this.sendTimers.add(timer);
+    this.sendTimers.set(timer, done);
   }
 
   private schedule(): void {
@@ -221,6 +243,11 @@ class ShapedSocket extends Duplex {
   setNoDelay(noDelay?: boolean): this {
     this.socket.setNoDelay(noDelay);
     return this;
+  }
+
+  repace(): void {
+    this.upload.repace();
+    this.download.repace();
   }
 
   override _read(): void {
@@ -364,6 +391,7 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
   const { resolveTarget } = options;
   const links = { upload: new LinkDirection(), download: new LinkDirection() };
   const sockets = new Set<net.Socket>();
+  const deviceSockets = new Set<ShapedSocket>();
   const agent = new http.Agent({ keepAlive: true });
 
   const track = (socket: net.Socket): void => {
@@ -501,7 +529,10 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
   server.on("upgrade", onUpgrade);
   const listener = net.createServer({ allowHalfOpen: true }, (socket) => {
     track(socket);
-    server.emit("connection", new ShapedSocket(socket, links, isBypassed));
+    const shaped = new ShapedSocket(socket, links, isBypassed);
+    deviceSockets.add(shaped);
+    socket.on("close", () => deviceSockets.delete(shaped));
+    server.emit("connection", shaped);
   });
   const port = await listen(listener);
 
@@ -510,6 +541,7 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
     setConditions(conditions) {
       links.upload.configure(conditions?.uploadKbps, conditions?.latencyMs);
       links.download.configure(conditions?.downloadKbps, conditions?.latencyMs);
+      for (const shaped of deviceSockets) shaped.repace();
     },
     async close() {
       for (const socket of sockets) socket.destroy();

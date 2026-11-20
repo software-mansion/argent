@@ -325,6 +325,41 @@ describe("the shaping proxy", () => {
     expect(cleared.ms).toBeLessThan(LATENCY_MS / 2);
   });
 
+  it.each([
+    { name: "a reset", next: null },
+    { name: "faster conditions", next: { downloadKbps: 100_000 } },
+  ])("frees a download that is mid-transfer at $name", async ({ next }) => {
+    const origin = await startOrigin();
+    const proxy = await startProxy();
+    proxy.setConditions({ downloadKbps: 8 });
+
+    const download = viaProxy(
+      proxy,
+      deviceAgent(),
+      `http://127.0.0.1:${origin.port}/?bytes=200000`
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const changed = performance.now();
+    proxy.setConditions(next);
+
+    expect((await download).body).toHaveLength(200_000);
+    expect(performance.now() - changed).toBeLessThan(1_000);
+  });
+
+  it("holds a download that is mid-transfer to slower new conditions", async () => {
+    const origin = await startOrigin();
+    const proxy = await startProxy();
+    proxy.setConditions({ downloadKbps: 100_000, latencyMs: 600 });
+
+    const download = viaProxy(proxy, deviceAgent(), `http://127.0.0.1:${origin.port}/?bytes=50000`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const changed = performance.now();
+    proxy.setConditions({ downloadKbps: 400 });
+
+    expect((await download).body).toHaveLength(50_000);
+    expect(performance.now() - changed).toBeGreaterThan(1_000 - SLACK_MS);
+  });
+
   it("limits the download speed", async () => {
     const origin = await startOrigin();
     const proxy = await startProxy();
