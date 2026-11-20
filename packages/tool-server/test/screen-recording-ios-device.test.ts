@@ -70,11 +70,11 @@ async function makeSession(): Promise<ScreenRecordingSessionApi> {
   return instance.api;
 }
 
-let close: ReturnType<typeof vi.fn>;
+let close: ReturnType<typeof vi.fn<() => void>>;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  close = vi.fn();
+  close = vi.fn<() => void>();
   mockRequireFfmpeg.mockResolvedValue("/fake/ffmpeg");
   mockList.mockResolvedValue([phone()]);
   mockStream.mockResolvedValue({
