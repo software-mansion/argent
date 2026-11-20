@@ -32,7 +32,7 @@ async function instantiate() {
 
 beforeEach(() => {
   vi.mocked(setArgentProxy).mockReset().mockResolvedValue();
-  vi.mocked(clearArgentProxy).mockClear();
+  vi.mocked(clearArgentProxy).mockReset().mockResolvedValue();
   proxy.setConditions.mockClear();
   proxy.close.mockClear();
 });
@@ -64,6 +64,19 @@ describe("the Android network shaper", () => {
 
     expect(clearArgentProxy).toHaveBeenCalledWith(SERIAL);
     expect(proxy.close).toHaveBeenCalled();
+  });
+
+  it("removes the proxy of a throttle that was still waiting when the tool-server stops", async () => {
+    const instance = await instantiate();
+    const order: string[] = [];
+    vi.mocked(setArgentProxy).mockImplementation(async () => void order.push("set"));
+    vi.mocked(clearArgentProxy).mockImplementation(async () => void order.push("clear"));
+
+    const reset = instance.api.clear();
+    const throttle = instance.api.throttle({ latencyMs: 400 }, 8081);
+    await Promise.all([reset, throttle, instance.dispose()]);
+
+    expect(order).toEqual(["clear", "set", "clear"]);
   });
 
   it("leaves the emulator alone when it stops without having throttled", async () => {

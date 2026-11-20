@@ -360,6 +360,19 @@ describe("the shaping proxy", () => {
     expect(performance.now() - changed).toBeGreaterThan(1_000 - SLACK_MS);
   });
 
+  it("leaves a transfer alone when the same conditions are set again", async () => {
+    const origin = await startOrigin();
+    const proxy = await startProxy();
+    const conditions = { latencyMs: 800 };
+    proxy.setConditions(conditions);
+
+    const request = viaProxy(proxy, deviceAgent(), `http://127.0.0.1:${origin.port}/`);
+    const again = setInterval(() => proxy.setConditions(conditions), 100);
+    cleanups.push(async () => clearInterval(again));
+
+    expect((await request).ms).toBeLessThan(800 + 4 * SLACK_MS);
+  });
+
   it("limits the download speed", async () => {
     const origin = await startOrigin();
     const proxy = await startProxy();

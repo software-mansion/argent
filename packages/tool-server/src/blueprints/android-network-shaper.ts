@@ -70,6 +70,10 @@ export const androidNetworkShaperBlueprint: ServiceBlueprint<AndroidNetworkShape
       proxyOnDevice = false;
     };
 
+    const clearIfSet = async (): Promise<void> => {
+      if (proxyOnDevice) await clear();
+    };
+
     const api: AndroidNetworkShaperApi = {
       throttle: (conditions, port) =>
         withKeyedLock(locks, serial, async () => {
@@ -82,13 +86,11 @@ export const androidNetworkShaperBlueprint: ServiceBlueprint<AndroidNetworkShape
     };
 
     const dispose = async (): Promise<void> => {
-      if (proxyOnDevice) {
-        await withKeyedLock(locks, serial, clear).catch((err: unknown) => {
-          process.stderr.write(
-            `[${ANDROID_NETWORK_SHAPER_NAMESPACE}:${serial}] could not remove the proxy: ${String(err)}\n`
-          );
-        });
-      }
+      await withKeyedLock(locks, serial, clearIfSet).catch((err: unknown) => {
+        process.stderr.write(
+          `[${ANDROID_NETWORK_SHAPER_NAMESPACE}:${serial}] could not remove the proxy: ${String(err)}\n`
+        );
+      });
       await proxy.close();
     };
 

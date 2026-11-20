@@ -59,10 +59,15 @@ export class LinkDirection {
   private bytesPerMs: number | null = null;
   private delayMs = 0;
 
-  configure(kbps: number | undefined, latencyMs: number | undefined): void {
-    this.bytesPerMs = kbps === undefined ? null : kbps / 8;
-    this.delayMs = (latencyMs ?? 0) / 2;
+  /** Whether the conditions differ from the ones in effect. */
+  configure(kbps: number | undefined, latencyMs: number | undefined): boolean {
+    const bytesPerMs = kbps === undefined ? null : kbps / 8;
+    const delayMs = (latencyMs ?? 0) / 2;
+    if (bytesPerMs === this.bytesPerMs && delayMs === this.delayMs) return false;
+    this.bytesPerMs = bytesPerMs;
+    this.delayMs = delayMs;
     this.freeAt = 0;
+    return true;
   }
 
   get shaping(): boolean {
@@ -539,8 +544,12 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
   return {
     port,
     setConditions(conditions) {
-      links.upload.configure(conditions?.uploadKbps, conditions?.latencyMs);
-      links.download.configure(conditions?.downloadKbps, conditions?.latencyMs);
+      const uploadChanged = links.upload.configure(conditions?.uploadKbps, conditions?.latencyMs);
+      const downloadChanged = links.download.configure(
+        conditions?.downloadKbps,
+        conditions?.latencyMs
+      );
+      if (!uploadChanged && !downloadChanged) return;
       for (const shaped of deviceSockets) shaped.repace();
     },
     async close() {
