@@ -1154,6 +1154,42 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
       });
     });
 
+    /**
+     * A process that crashes before its first handshake never closes a
+     * connection, so nothing wakes the wait. The host tells at its end.
+     */
+    it("says so after waiting 5 s when the launched process exits before it connects", async () => {
+      await withService(async (api) => {
+        await api.activateNetworkInspection(APP);
+
+        const note = await afterTheLaunchWait(async () => {
+          const result = api.networkCaptureAfterLaunch(APP);
+          await launchWaitStarted();
+          // The app crashes at start: the simulator lists no process of it.
+          sim.launchctlList = "";
+          return result;
+        });
+
+        expect(note).toBe(GONE_NOTE);
+      });
+    });
+
+    it("says the new process has not connected yet when the host cannot list the running apps at the end of the wait", async () => {
+      await withService(async (api) => {
+        await api.activateNetworkInspection(APP);
+
+        const note = await afterTheLaunchWait(async () => {
+          const result = api.networkCaptureAfterLaunch(APP);
+          await launchWaitStarted();
+          // As when the simulator stops answering during the launch.
+          sim.launchctlFails = true;
+          return result;
+        });
+
+        expect(note).toBe(NOT_CONNECTED_NOTE);
+      });
+    });
+
     it("keeps waiting when a connection closes but the launched process still runs", async () => {
       await withService(async (api) => {
         await expect(api.startNetworkCapture(APP, METRO_PORT)).resolves.toBe(false);
