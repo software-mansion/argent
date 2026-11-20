@@ -90,6 +90,24 @@ describe("describeAndroid uiautomator fallback", () => {
     expect(pending).toHaveLength(1);
   });
 
+  it("stops waiting for a joined dump that is still running when it turns three seconds old", async () => {
+    const stuck = read("emulator-5554");
+    const stuckFailed = expect(stuck).rejects.toThrow("could not get idle state");
+    await vi.advanceTimersByTimeAsync(400);
+    const joined = read("emulator-5554");
+    const joinedFailed = expect(joined).rejects.toThrow("Killed");
+    await vi.advanceTimersByTimeAsync(2_599);
+    expect(pending).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(2);
+    expect(pending).toHaveLength(2);
+    pending[1]!.finish("Killed");
+    await joinedFailed;
+
+    pending[0]!.finish(NEVER_IDLE);
+    await stuckFailed;
+  });
+
   it("runs the next dump after one that failed", async () => {
     const first = read("emulator-5554");
     const firstFailed = expect(first).rejects.toThrow("device offline");
@@ -115,14 +133,14 @@ describe("describeAndroid uiautomator fallback", () => {
     await Promise.all([a, b]);
   });
 
-  it("starts a dump anyway once a read waited three seconds for the running one", async () => {
+  it("starts a queued dump once the running one is three seconds old", async () => {
     const first = read("emulator-5554");
     await vi.advanceTimersByTimeAsync(1_000);
     const second = read("emulator-5554");
     await tick();
     expect(pending).toHaveLength(1);
 
-    await vi.advanceTimersByTimeAsync(2_999);
+    await vi.advanceTimersByTimeAsync(1_999);
     expect(pending).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -147,27 +165,44 @@ describe("describeAndroid uiautomator fallback", () => {
     expect(pending).toHaveLength(2);
   });
 
-  it("keeps queueing reads behind an older dump after a newer one on that device finished", async () => {
-    const first = read("emulator-5554");
-    await vi.advanceTimersByTimeAsync(1_000);
-    const second = read("emulator-5554");
-    await vi.advanceTimersByTimeAsync(3_000);
+  it("gives a read whose wait timed out its own dump's output while the older dump still runs", async () => {
+    const stuck = read("emulator-5554");
+    const stuckFailed = expect(stuck).rejects.toThrow("could not get idle state");
+    await vi.advanceTimersByTimeAsync(1_500);
+    const waited = read("emulator-5554");
+    const waitedFailed = expect(waited).rejects.toThrow("Killed");
+    await vi.advanceTimersByTimeAsync(1_500);
     expect(pending).toHaveLength(2);
 
-    pending[1]!.finish();
-    await second;
-    await vi.advanceTimersByTimeAsync(1_000);
-    const third = read("emulator-5554");
+    pending[1]!.finish("Killed");
+    await waitedFailed;
+    pending[0]!.finish(NEVER_IDLE);
+    await stuckFailed;
+  });
+
+  it("starts a dump at once for a read that finds only a dump older than three seconds running", async () => {
+    const stuck = read("emulator-5554");
+    await vi.advanceTimersByTimeAsync(3_000);
+    const repeat = read("emulator-5554");
+    const repeatFailed = expect(repeat).rejects.toThrow("Killed");
     await tick();
     expect(pending).toHaveLength(2);
+    pending[1]!.finish("Killed");
+    await repeatFailed;
 
-    pending[0]!.finish();
-    await first;
+    const again = read("emulator-5554");
+    const againFailed = expect(again).rejects.toThrow("Killed");
     await tick();
     expect(pending).toHaveLength(3);
+    pending[2]!.finish("Killed");
+    await againFailed;
 
-    pending[2]!.finish();
-    await third;
+    pending[0]!.finish();
+    await stuck;
+    const afterwards = read("emulator-5554");
+    await tick();
+    pending[3]!.finish();
+    expect(JSON.stringify((await afterwards).tree)).toContain("Continue");
   });
 
   it("shares the WebView re-reads of two describes instead of taking turns", async () => {
@@ -192,19 +227,6 @@ describe("describeAndroid uiautomator fallback", () => {
     expect(JSON.stringify(a.tree)).toContain("Continue");
     expect(JSON.stringify(b.tree)).toContain("Continue");
     expect(pending).toHaveLength(3);
-  });
-
-  it("fails a read queued behind a dump that could not get an idle screen", async () => {
-    const first = read("emulator-5560");
-    const firstFailed = expect(first).rejects.toThrow("could not get idle state");
-    await vi.advanceTimersByTimeAsync(1_000);
-    const second = read("emulator-5560");
-    const secondFailed = expect(second).rejects.toThrow("could not get idle state");
-    await tick();
-
-    pending[0]!.finish(NEVER_IDLE);
-    await Promise.all([firstFailed, secondFailed]);
-    expect(pending).toHaveLength(1);
   });
 
   it("queues a read behind a running dump after an earlier dump reported a never-idle screen", async () => {
