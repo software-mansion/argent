@@ -18,10 +18,43 @@ let wss: WebSocketServer;
 let session: Session;
 let sent: SentRequest[];
 
-function reply(id: number, error: Error | null, result: unknown): string {
-  return JSON.stringify(
-    error ? { id, error: { code: -32000, message: error.message } } : { id, result }
-  );
+interface RuntimeReply {
+  result?: { value?: unknown };
+  exceptionDetails?: { exception?: { objectId?: string; description?: string } };
+}
+
+function post(method: string, params: Record<string, unknown>): Promise<RuntimeReply> {
+  return new Promise((resolve, reject) => {
+    session.post(method, params, (error, result) =>
+      error ? reject(error) : resolve(result as RuntimeReply)
+    );
+  });
+}
+
+/**
+ * Hermes describes a thrown Error whose `stack` is empty as `name: message`.
+ * V8 before Node 24 describes it as "", so the description is filled in here.
+ */
+async function describeLikeHermes(reply: RuntimeReply): Promise<void> {
+  const exception = reply.exceptionDetails?.exception;
+  if (!exception?.objectId || exception.description !== "") return;
+
+  const named = await post("Runtime.callFunctionOn", {
+    objectId: exception.objectId,
+    functionDeclaration: "function () { return String(this); }",
+    returnByValue: true,
+  });
+  exception.description = String(named.result?.value);
+}
+
+async function run(id: number, method: string, params: Record<string, unknown>): Promise<string> {
+  try {
+    const result = await post(method, params);
+    await describeLikeHermes(result);
+    return JSON.stringify({ id, result });
+  } catch (error) {
+    return JSON.stringify({ id, error: { code: -32000, message: (error as Error).message } });
+  }
 }
 
 beforeEach(async () => {
@@ -32,11 +65,10 @@ beforeEach(async () => {
   await new Promise((resolve) => wss.once("listening", resolve));
 
   wss.on("connection", (ws) => {
-    ws.on("message", (raw) => {
+    ws.on("message", async (raw) => {
       const { id, method, params } = JSON.parse(raw.toString()) as SentRequest & { id: number };
       sent.push({ method, params });
-      const hermesParams = { ...params, awaitPromise: false };
-      session.post(method, hermesParams, (error, result) => ws.send(reply(id, error, result)));
+      ws.send(await run(id, method, { ...params, awaitPromise: false }));
     });
   });
 });
