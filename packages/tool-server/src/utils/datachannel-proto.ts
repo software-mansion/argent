@@ -3,7 +3,7 @@
  * MoQ control track.
  */
 
-export { encodeButton, encodeKey, encodeRotate, encodeTouch } from "@swmansion/argent-cloud-sdk";
+export { encodeButton, encodeRotate, encodeTouch } from "@swmansion/argent-cloud-sdk";
 
 export type {
   ButtonName,

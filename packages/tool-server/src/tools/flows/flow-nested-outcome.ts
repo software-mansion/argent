@@ -25,7 +25,7 @@ const FLOW_EXECUTE_TOOL_ID = "e2e-execute";
 const RUN_SEQUENCE_TOOL_ID = "run-sequence";
 
 interface NestedOutcome {
-  status: StepStatus;
+  status: Exclude<StepStatus, "pass">;
   reason: string;
 }
 
@@ -58,7 +58,8 @@ function count(value: unknown): number {
 
 /** A nested `flow-execute` result: a run report, or a prerequisite notice. */
 function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | undefined {
-  const flow = typeof result.flow === "string" ? result.flow : "the composed e2e test";
+  const name = result.e2eTest ?? result.flow;
+  const flow = typeof name === "string" ? name : "the composed e2e test";
 
   // A notice means the sub-flow ran NOTHING: nothing was asserted, so this is
   // the runner's error class — never runnable as written, like an unreadable
@@ -72,7 +73,7 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
       status: "error",
       reason:
         `e2e test "${flow}" did not run — its execution prerequisite was not acknowledged${prerequisite}. ` +
-        `Add prerequisiteAcknowledged: true to the step's args, or compose with run: instead.`,
+        `Set prerequisiteAcknowledged to true once it holds; an e2e test can compose it with run: instead.`,
     };
   }
 

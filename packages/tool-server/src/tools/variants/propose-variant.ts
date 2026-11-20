@@ -96,13 +96,6 @@ type Params = z.infer<typeof zodSchema>;
 export function createProposeVariantTool(registry: Registry): ToolDefinition<Params> {
   return {
     id: "propose_variant",
-    interaction: {
-      startedMsg: () => "Presenting variant options",
-      completedMsg: () => "Presented variant options",
-      failedMsg: ({ failureSignal }) =>
-        `Failed to present variant options: ${failureSignal.error_code}`,
-    },
-    featureFlag: "argent-lens",
     description: `Stage ONE design variant for ONE on-screen element, then return immediately (non-blocking).
 
 Use when you have produced multiple alternative designs for an element and want the human to pick.
@@ -120,8 +113,15 @@ arrives as a follow-up message (this is the case in an \`argent lens\` CLI sessi
 
 Returns { round, elementId, variantId, element, variantCount, totalElements }: confirmation only;
 it does not wait for the user.`,
-    searchHint: "propose design variant alternative option for element non-blocking ab choice",
     zodSchema,
+    searchHint: "propose design variant alternative option for element non-blocking ab choice",
+    featureFlag: "argent-lens",
+    interaction: {
+      startedMsg: () => "Presenting variant options",
+      completedMsg: () => "Presented variant options",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to present variant options: ${failureSignal.error_code}`,
+    },
     services: () => ({}),
     async execute(_services, params) {
       // Describe NOW — the variant is on screen at propose time — so each variant

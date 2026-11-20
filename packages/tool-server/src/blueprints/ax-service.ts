@@ -6,8 +6,10 @@ import {
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
+  subprocessFailureMetadata,
   TypedEventEmitter,
   type DeviceInfo,
+  type FailureSignal,
   type ServiceBlueprint,
   type ServiceInstance,
   type ServiceEvents,
@@ -47,6 +49,8 @@ export function axServiceRef(
 
 export interface AXDescribeElement {
   label?: string;
+  /** The VoiceOver hint. Only `describe` sends it, and a daemon older than this field does not. */
+  hint?: string;
   frame?: { x: number; y: number; width: number; height: number };
   tapPoint?: { x: number; y: number };
   traits?: string[];
@@ -61,7 +65,7 @@ export interface AXDescribeResponse {
 }
 
 /** A `tree` node, in document order; `parentIndex` names its accessibility parent. */
-export interface AXTreeNode extends AXDescribeElement {
+export interface AXTreeNode extends Omit<AXDescribeElement, "hint"> {
   index: number;
   parentIndex?: number;
   roleDescription?: string;
@@ -206,9 +210,190 @@ function startListener(
   });
 }
 
+/**
+ * Darwin's signal numbers. The local daemon only ever runs on a macOS host, and
+ * `os.constants.signals` numbers them for whichever host runs this code.
+ */
+const DARWIN_SIGNALS: Readonly<Record<number, string>> = {
+  1: "SIGHUP",
+  2: "SIGINT",
+  3: "SIGQUIT",
+  4: "SIGILL",
+  5: "SIGTRAP",
+  6: "SIGABRT",
+  7: "SIGEMT",
+  8: "SIGFPE",
+  9: "SIGKILL",
+  10: "SIGBUS",
+  11: "SIGSEGV",
+  12: "SIGSYS",
+  13: "SIGPIPE",
+  14: "SIGALRM",
+  15: "SIGTERM",
+};
+
+/**
+ * The signals a process dies on through its own fault. SIGKILL and SIGTERM are
+ * not among them: a simulator that shuts down ends the daemon that way, and so
+ * does this blueprint on dispose, and neither is a crash.
+ */
+const FAULT_SIGNALS: ReadonlySet<string> = new Set([
+  "SIGILL",
+  "SIGTRAP",
+  "SIGABRT",
+  "SIGEMT",
+  "SIGFPE",
+  "SIGBUS",
+  "SIGSEGV",
+  "SIGSYS",
+]);
+
+/**
+ * `xcrun simctl spawn` outlives a child that a signal killed: it prints this
+ * line and exits 128+N, so Node reports an exit code and no signal. The line
+ * is the evidence, not the code. simctl exits with its own error's code modulo
+ * 256 (SimError 405, "device is not booted", exits 149), which reaches the
+ * same range.
+ */
+const SIMCTL_CHILD_SIGNAL = /Child process terminated with signal (\d+)/;
+
+/** `exit` can be delivered before the last stderr chunk is read; see `watchDaemonExit`. */
+const STDERR_DRAIN_MS = 250;
+const STDERR_TAIL_CHARS = 4_000;
+
+/**
+ * A daemon that dies closes its socket before its exit is reported, and only
+ * the exit says how it died. A closed socket waits this long for the exit, so
+ * a crash is not reported as a bare disconnect. The exit follows within
+ * milliseconds (2 ms in the log of #800); an exit that misses the window is
+ * reported as the disconnect it used to be. Kept under the shortest RPC
+ * timeout, so a request in flight still fails with the cause.
+ */
+const DAEMON_EXIT_GRACE_MS = 1_000;
+
+/** How the daemon's process ended; `signal` names the signal that killed it. */
+interface AxDaemonExit {
+  code: number | null;
+  signal?: string;
+}
+
+export function readAxDaemonExit(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderr: string
+): AxDaemonExit {
+  // Node reports a signal only when it killed the `simctl spawn` process itself.
+  if (signal) return { code, signal };
+  const reported = SIMCTL_CHILD_SIGNAL.exec(stderr);
+  if (!reported) return { code };
+  const number = Number(reported[1]);
+  return { code, signal: DARWIN_SIGNALS[number] ?? `signal ${number}` };
+}
+
+/**
+ * The daemon died on a fault signal. The signal is carried apart from the
+ * message so a caller can name it without parsing.
+ */
+class AxDaemonCrashError extends FailureError {
+  readonly signalName: string;
+
+  constructor(message: string, signal: FailureSignal, signalName: string) {
+    super(message, signal);
+    this.name = "AxDaemonCrashError";
+    this.signalName = signalName;
+  }
+}
+
+/** `pick` over `err` and its causes: the registry wraps a factory rejection. */
+function findInCauses<T>(err: unknown, pick: (error: Error) => T | undefined): T | undefined {
+  let current = err;
+  for (let depth = 0; current instanceof Error && depth < 8; depth++) {
+    const found = pick(current);
+    if (found !== undefined) return found;
+    current = current.cause;
+  }
+  return undefined;
+}
+
+/** The fault signal that killed the daemon, when `err` reports one. */
+export function axDaemonCrashSignal(err: unknown): string | undefined {
+  return findInCauses(err, (error) =>
+    error instanceof AxDaemonCrashError ? error.signalName : undefined
+  );
+}
+
+// A failed start, by whether the entitlement bypass was inactive when it began.
+const startFailureDegraded = new WeakMap<Error, boolean>();
+
+/**
+ * What `AXServiceApi.degraded` would have said, had the start that failed with
+ * `err` succeeded. Undefined when it failed before the factory measured that.
+ * Without it a caller can only guess the boot state from the failure, and a
+ * daemon fails to start for reasons that have nothing to do with it.
+ */
+export function axStartFailureDegraded(err: unknown): boolean | undefined {
+  return findInCauses(err, (error) => startFailureDegraded.get(error));
+}
+
+export function axDaemonExitError(
+  exit: AxDaemonExit,
+  phase: "connecting" | "connected"
+): FailureError {
+  const suffix = phase === "connecting" ? " before connecting" : "";
+  const signal: FailureSignal = {
+    error_code:
+      phase === "connecting"
+        ? FAILURE_CODES.AX_DAEMON_EXITED_BEFORE_READY
+        : FAILURE_CODES.AX_DAEMON_PROCESS_ERROR,
+    failure_stage: phase === "connecting" ? "ax_service_spawn_ready" : "ax_service_process_exit",
+    failure_area: "tool_server",
+    error_kind: "subprocess",
+    ...subprocessFailureMetadata(exit, "ax_service"),
+  };
+  if (exit.signal === undefined) {
+    return new FailureError(`ax-service exited with code ${exit.code}${suffix}`, signal);
+  }
+  if (!FAULT_SIGNALS.has(exit.signal)) {
+    return new FailureError(`ax-service was killed by ${exit.signal}${suffix}`, signal);
+  }
+  return new AxDaemonCrashError(
+    `ax-service crashed with ${exit.signal}${suffix}`,
+    { ...signal, error_code: FAILURE_CODES.AX_DAEMON_CRASHED },
+    exit.signal
+  );
+}
+
+/**
+ * Resolves with how the daemon's process ended; never for a remote daemon,
+ * which has no local process. `exit` can be delivered before the last stderr
+ * chunk is read, and that chunk is where simctl names the signal, so the
+ * verdict waits for stderr to end, for STDERR_DRAIN_MS at most. `onExit` runs
+ * as soon as the exit is seen, before that wait.
+ */
+function watchDaemonExit(proc: ChildProcess, onExit: () => void): Promise<AxDaemonExit> {
+  return new Promise((resolve) => {
+    let stderrTail = "";
+    proc.stderr?.on("data", (chunk: Buffer | string) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_TAIL_CHARS);
+    });
+    proc.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+      onExit();
+      const settle = () => resolve(readAxDaemonExit(code, signal, stderrTail));
+      const stderr = proc.stderr;
+      if (signal || !stderr || stderr.readableEnded) return settle();
+      const timer = setTimeout(settle, STDERR_DRAIN_MS);
+      stderr.once("end", () => {
+        clearTimeout(timer);
+        settle();
+      });
+    });
+  });
+}
+
 function waitForDaemonConnection(
   server: net.Server,
   proc: ChildProcess,
+  exited: Promise<AxDaemonExit>,
   timeoutMs: number
 ): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
@@ -221,19 +406,12 @@ function waitForDaemonConnection(
       resolve(socket);
     };
 
-    const onExit = (code: number | null) => {
+    void exited.then((exit) => {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(
-        new FailureError(`ax-service exited with code ${code} before connecting`, {
-          error_code: FAILURE_CODES.AX_DAEMON_EXITED_BEFORE_READY,
-          failure_stage: "ax_service_spawn_ready",
-          failure_area: "tool_server",
-          error_kind: "subprocess",
-        })
-      );
-    };
+      reject(axDaemonExitError(exit, "connecting"));
+    });
 
     const onError = (err: Error) => {
       if (settled) return;
@@ -270,12 +448,10 @@ function waitForDaemonConnection(
     const cleanup = () => {
       clearTimeout(timer);
       server.off("connection", onConnection);
-      proc.off("exit", onExit);
       proc.off("error", onError);
     };
 
     server.on("connection", onConnection);
-    proc.on("exit", onExit);
     proc.on("error", onError);
   });
 }
@@ -348,6 +524,13 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     let nextRpcId = 1;
     let daemonSocket: net.Socket | null = null;
     let disposed = false;
+    // The daemon's process has exited; how it ended is known or being read.
+    let exitSeen = false;
+    // The socket has closed and nothing has said yet how the daemon ended.
+    let awaitingVerdict = false;
+    let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    // A remote daemon has no local process whose exit could follow the close.
+    const exitGraceMs = host.kind === "local" ? DAEMON_EXIT_GRACE_MS : 0;
 
     const failPending = (err: Error): void => {
       for (const { reject, timer } of pendingRpc.values()) {
@@ -357,7 +540,20 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       pendingRpc.clear();
     };
 
+    const terminate = (err: Error): void => {
+      if (disposed) return;
+      clearTimeout(disconnectTimer);
+      awaitingVerdict = false;
+      failPending(err);
+      events.emit("terminated", err);
+    };
+
     const { entitlementBypassActive } = await host.bootstrapAx(udid);
+    // Every failure from here on is of a start whose boot state is known.
+    const startFailed = (err: unknown): unknown => {
+      if (err instanceof Error) startFailureDegraded.set(err, !entitlementBypassActive);
+      return err;
+    };
 
     // Listen before spawning; the daemon dials in.
     const server = await startListener(endpoint, (socket) => {
@@ -395,67 +591,35 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       });
 
       socket.on("close", () => {
-        if (daemonSocket === socket) {
-          daemonSocket = null;
-          if (!disposed) {
-            const err = new FailureError("ax-service daemon disconnected", {
+        if (daemonSocket !== socket) return;
+        daemonSocket = null;
+        if (disposed) return;
+        awaitingVerdict = true;
+        // An exit already seen ends the service itself, and names the cause.
+        if (exitSeen) return;
+        const disconnected = () =>
+          terminate(
+            new FailureError("ax-service daemon disconnected", {
               error_code: FAILURE_CODES.AX_DAEMON_PROCESS_ERROR,
               failure_stage: "ax_service_socket_close",
               failure_area: "tool_server",
               error_kind: "subprocess",
-            });
-            failPending(err);
-            events.emit("terminated", err);
-          }
-        }
+            })
+          );
+        if (exitGraceMs === 0) disconnected();
+        else disconnectTimer = setTimeout(disconnected, exitGraceMs);
       });
 
       socket.on("error", () => {
         // close handler does the cleanup
       });
+    }).catch((err: unknown) => {
+      throw startFailed(err);
     });
 
-    if (endpoint.transport === "tcp") {
-      // Tunnel before spawn: the daemon dials 127.0.0.1:<port> inside the sim and
-      // the tunnel forwards it back to the listener above. No-op on local;
-      // `port` was populated by startListener.
-      await host.startProxy(udid, endpoint.port!);
-    }
-
-    const proc = host.spawnAxDaemon(udid, endpoint);
-
-    proc.on("exit", (code) => {
-      if (disposed) return;
-      const err = new FailureError(`ax-service exited with code ${code}`, {
-        error_code: FAILURE_CODES.AX_DAEMON_PROCESS_ERROR,
-        failure_stage: "ax_service_process_exit",
-        failure_area: "tool_server",
-        error_kind: "subprocess",
-      });
-      failPending(err);
-      events.emit("terminated", err);
-    });
-    proc.on("error", (err) => {
-      if (disposed) return;
-      const error = new FailureError(
-        err instanceof Error ? err.message : String(err),
-        {
-          error_code: FAILURE_CODES.AX_DAEMON_PROCESS_ERROR,
-          failure_stage: "ax_service_spawn_process",
-          failure_area: "tool_server",
-          error_kind: "subprocess",
-        },
-        { cause: err instanceof Error ? err : new Error(String(err)) }
-      );
-      failPending(error);
-      events.emit("terminated", error);
-    });
-
-    try {
-      daemonSocket = await waitForDaemonConnection(server, proc, 10_000);
-    } catch (err) {
-      // Don't leak the listener or the daemon.
-      if (!proc.killed) proc.kill("SIGTERM");
+    let proxyStarted = false;
+    // Don't leak the listener or the tunnel of a start that failed.
+    const abandonStart = async (): Promise<void> => {
       server.close();
       if (endpoint.transport === "unix") {
         try {
@@ -464,11 +628,60 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           /* best-effort socket cleanup */
         }
       }
-      if (endpoint.transport === "tcp") {
+      if (endpoint.transport === "tcp" && proxyStarted) {
         await host.stopProxy(udid, endpoint.port!);
       }
-      throw err;
+    };
+
+    let proc: ChildProcess;
+    try {
+      if (endpoint.transport === "tcp") {
+        // Tunnel before spawn: the daemon dials 127.0.0.1:<port> inside the sim and
+        // the tunnel forwards it back to the listener above. No-op on local;
+        // `port` was populated by startListener.
+        await host.startProxy(udid, endpoint.port!);
+        proxyStarted = true;
+      }
+      // Throws when the binary is missing.
+      proc = host.spawnAxDaemon(udid, endpoint);
+    } catch (err) {
+      await abandonStart();
+      throw startFailed(err);
     }
+
+    const exited = watchDaemonExit(proc, () => {
+      exitSeen = true;
+      // The exit's own verdict follows; a disconnect must not get in ahead of it.
+      clearTimeout(disconnectTimer);
+    });
+    proc.on("error", (err) => {
+      terminate(
+        new FailureError(
+          err instanceof Error ? err.message : String(err),
+          {
+            error_code: FAILURE_CODES.AX_DAEMON_PROCESS_ERROR,
+            failure_stage: "ax_service_spawn_process",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          },
+          { cause: err instanceof Error ? err : new Error(String(err)) }
+        )
+      );
+    });
+
+    try {
+      daemonSocket = await waitForDaemonConnection(server, proc, exited, 10_000);
+    } catch (err) {
+      // Don't leak the daemon either.
+      if (!proc.killed) proc.kill("SIGTERM");
+      await abandonStart();
+      throw startFailed(err);
+    }
+
+    // Registered once the daemon is connected: before that an exit fails the
+    // start above, and the SIGTERM that cleans up a failed start is no death
+    // to report.
+    void exited.then((exit) => terminate(axDaemonExitError(exit, "connected")));
 
     function query(
       command: string,
@@ -476,7 +689,11 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       params?: Record<string, unknown>
     ): Promise<unknown> {
       return new Promise((resolve, reject) => {
-        if (!daemonSocket || daemonSocket.destroyed) {
+        const socket = daemonSocket && !daemonSocket.destroyed ? daemonSocket : null;
+        // While the verdict on a closed socket is out, a request waits for it
+        // like the ones already in flight, and fails with how the daemon died
+        // instead of as merely not connected.
+        if (!socket && !awaitingVerdict) {
           reject(
             new FailureError("ax-service not connected", {
               error_code: FAILURE_CODES.AX_QUERY_FAILED,
@@ -502,7 +719,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           }
         }, timeoutMs);
         pendingRpc.set(id, { resolve, reject, timer });
-        daemonSocket.write(
+        socket?.write(
           JSON.stringify(params === undefined ? { id, command } : { id, command, params }) + "\n"
         );
       });
@@ -655,6 +872,8 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       api,
       dispose: async () => {
         disposed = true;
+        clearTimeout(disconnectTimer);
+        awaitingVerdict = false;
         failPending(new Error("ax-service disposed"));
         if (daemonSocket && !daemonSocket.destroyed) {
           daemonSocket.destroy();

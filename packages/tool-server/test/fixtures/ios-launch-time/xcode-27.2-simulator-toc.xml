@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+
+<trace-toc>
+    <run number="1">
+        <info>
+            <target>
+                <device platform="iOS Simulator" model="Simulated iPhone 17" memory-size="51539607552" name="iPhone 17" os-version="27.2 (24B8117)" uuid="F420A5F1-31E2-427E-964B-6A29C90704CC"/>
+                <host-device platform="macOS" model="MacBook Pro" name="MacBook Pro" os-version="26.7 (25G229)" uuid="00000000-0000-0000-0000-000000000000"/>
+                <process type="launched" return-exit-status="0" name="Ledger" pid="52072" termination-reason="exit(0)"/>
+            </target>
+        </info>
+        <processes>
+            <process name="kernel" pid="0" path="/System/Library/Kernels/kernel.release.t6050"/>
+            <process name="Ledger" pid="52072" path="/Users/developer/Library/Developer/CoreSimulator/Devices/F420A5F1-31E2-427E-964B-6A29C90704CC/data/Containers/Bundle/Application/2E2C262B-1D62-43B0-92A6-BB2D1EBB4F7C/Ledger.app"/>
+        </processes>
+        <data>
+            <table schema="dyld-activity-interval" target-pid="SINGLE"/>
+        </data>
+    </run>
+</trace-toc>

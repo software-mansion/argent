@@ -21,6 +21,7 @@ import {
   getFailureSignalOrFallback,
 } from "./errors";
 import { FAILURE_CODES } from "./failure-codes";
+import { canonicalToolArgs, ToolParamAliasError } from "./tool-ids";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
 import { randomUUID } from "node:crypto";
@@ -143,6 +144,18 @@ export class Registry {
       // `execute` with raw args, letting a flow YAML smuggle a string into a
       // `z.number()` port or shell metacharacters past a tool's regex.
       // `params ?? {}` mirrors express.json's {} for an empty body.
+      try {
+        params = canonicalToolArgs(toolId, params);
+      } catch (err) {
+        if (!(err instanceof ToolParamAliasError)) throw err;
+        throw new FailureError(`Invalid params for tool "${toolId}": ${err.message}`, {
+          error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+          failure_stage: "tool_params_parse",
+          failure_area: "registry",
+          error_kind: "validation",
+        });
+      }
+      effectiveParams = params;
       if (definition.zodSchema) {
         const parsed = definition.zodSchema.safeParse(params ?? {});
         if (!parsed.success) {

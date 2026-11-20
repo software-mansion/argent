@@ -8,6 +8,7 @@ import {
   isIosPhysicalUdid,
   nativeIdPlatform,
 } from "./external-devices";
+import { trackedMacosAppKind } from "./macos-app-kind";
 
 /**
  * Everything here classifies by shape because `xcrun simctl list` and `adb
@@ -52,6 +53,12 @@ export function withRemotePrefix(udid: string): string {
 }
 
 export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
+
+/**
+ * A native Mac app is a device of its own: `macos-app-<bundle id>`. The bundle
+ * id names one app, so the id stays the same across restarts of the process.
+ */
+export const MACOS_APP_ID_PREFIX = "macos-app-";
 
 /**
  * `vega device list` reports VVD / Fire-TV serials as `amazon-<id>` (e.g.
@@ -137,6 +144,9 @@ export function classifyDevice(udid: string): Platform {
   if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
   if (udid.startsWith(HARMONY_ID_PREFIX)) return "harmony";
+  // By the prefix alone, never by the flag: the capability gate refuses an
+  // unflagged Mac id with a message that names the flag.
+  if (udid.startsWith(MACOS_APP_ID_PREFIX)) return "macos";
   return nativeIdPlatform(udid);
 }
 
@@ -156,7 +166,8 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
 /**
  * Kind is defaulted by shape (a physical-iOS-shaped UDID gets 'device');
  * platform impls can enrich the result with name/state/sdkLevel from
- * simctl/adb/sim-remote.
+ * simctl/adb/sim-remote. A Mac app id has no shape for its kind, so that one
+ * comes from argent's record of the app (see `macosAppKind`).
  *
  * Vega is VVD-only: the tool-server neither connects to nor detects physical
  * Fire TV hardware, so every `amazon-` serial resolves to kind `vvd` and never
@@ -187,8 +198,19 @@ export function resolveDevice(udid: string): DeviceInfo {
               ? isAndroidEmulatorSerial(shapeId)
                 ? "emulator"
                 : "device"
-              : "app";
+              : platform === "macos"
+                ? macosAppKind(udid)
+                : "app";
   return { id: udid, platform, kind };
+}
+
+/**
+ * The id alone cannot tell a Mac Catalyst app from an AppKit app: the kind
+ * comes from the record of the build argent last started under the bundle id.
+ */
+function macosAppKind(udid: string): DeviceKind {
+  const bundleId = parseMacosAppBundleId(udid);
+  return bundleId ? trackedMacosAppKind(bundleId) : "app";
 }
 
 /**
@@ -218,4 +240,27 @@ export function parseChromiumCdpPort(udid: string): number | null {
 
 export function chromiumIdFromPort(port: number): string {
   return `${CHROMIUM_ID_PREFIX}${port}`;
+}
+
+/**
+ * A bundle id as macOS accepts it in `CFBundleIdentifier`: letters, digits,
+ * `.` and `-`, starting with a letter or digit. Narrower than the iOS
+ * `BUNDLE_ID_PATTERN`, so a device id never carries `_`, `/` or a shell
+ * metacharacter into a path or an `mdfind` query.
+ */
+const MACOS_BUNDLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.-]*$/;
+
+export function isMacosBundleId(bundleId: string): boolean {
+  return MACOS_BUNDLE_ID_PATTERN.test(bundleId);
+}
+
+/** The bundle id in a `macos-app-<bundle id>` device id, or null for any other id. */
+export function parseMacosAppBundleId(udid: string): string | null {
+  if (!udid.startsWith(MACOS_APP_ID_PREFIX)) return null;
+  const bundleId = udid.slice(MACOS_APP_ID_PREFIX.length);
+  return isMacosBundleId(bundleId) ? bundleId : null;
+}
+
+export function macosAppIdFromBundleId(bundleId: string): string {
+  return `${MACOS_APP_ID_PREFIX}${bundleId}`;
 }

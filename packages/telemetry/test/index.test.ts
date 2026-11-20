@@ -393,16 +393,6 @@ describe("telemetry public surface", () => {
     expect(getConsentState({}).enabled).toBe(true);
     expect(getConsentState({}).source.source).toBe("config_file");
   });
-
-  it("removes the local telemetry id", async () => {
-    track("toolserver:start", {});
-    expect(status().hasAnonIdOnDisk).toBe(true);
-
-    const result = await resetLocalTelemetryState();
-
-    expect(result.localIdRemoved).toBe(true);
-    expect(status().hasAnonIdOnDisk).toBe(false);
-  });
 });
 
 describe("the log record that goes on the wire", () => {

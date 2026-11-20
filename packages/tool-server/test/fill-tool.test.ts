@@ -25,6 +25,7 @@ vi.mock("../src/utils/ios-device/runner-commands", async (importOriginal) => {
 });
 
 import { createFillTool } from "../src/tools/fill";
+import { redactTypedSecrets } from "../src/utils/typed-secrets";
 import { KEY_TIMING } from "../src/tools/fill/keys";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
 import { isRemoteTvOsSimulator } from "../src/utils/sim-remote";
@@ -390,6 +391,27 @@ describe("fill: secrets and leaks", () => {
     expect(ax.fill).toHaveBeenCalledWith("hunter2-secret", { typeable: true });
     expect(JSON.stringify(result)).not.toContain("hunter2");
     expect(JSON.stringify(result)).not.toContain("FILL_PW");
+  });
+
+  it("notes the value for the device, so a quote of its screen names the placeholder", async () => {
+    vi.stubEnv("ARGENT_SECRET_FILL_PW", "hunter2-secret");
+    await run({ ax: axAnswers({ focused: true, verified: true }) }, IOS, "{{secret:FILL_PW}}");
+
+    expect(redactTypedSecrets(IOS, "field shows hunter2-secret")).toBe(
+      "field shows {{secret:FILL_PW}}"
+    );
+    expect(redactTypedSecrets(ANDROID, "hunter2-secret")).toBe("hunter2-secret");
+  });
+
+  it("resolves a secret the client sent ahead of the tool-server's own", async () => {
+    vi.stubEnv("ARGENT_SECRET_FILL_PW", "server-value");
+    const ax = axAnswers({ focused: true, verified: true });
+    const tool = createFillTool(registryWith({ ax }));
+    await tool.execute({}, { udid: IOS, text: "{{secret:FILL_PW}}" }, {
+      artifacts: {},
+      clientSecrets: new Map([["FILL_PW", "client-value"]]),
+    } as any);
+    expect(ax.fill).toHaveBeenCalledWith("client-value", { typeable: true });
   });
 
   it("names neither the text nor the secret in a failure", async () => {

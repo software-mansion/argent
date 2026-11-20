@@ -19,7 +19,9 @@ const registryMock = vi.hoisted(() => ({
 const httpHandleMock = vi.hoisted(() => ({
   dispose: vi.fn(),
   app: {
-    listen: vi.fn(),
+    listen: vi.fn(() => {
+      throw new Error("listen failed");
+    }),
   },
 }));
 
@@ -71,11 +73,17 @@ vi.mock("../src/utils/update-checker", () => ({
 vi.mock("../src/utils/simulator-watcher", () => ({
   startSimulatorWatcher: vi.fn(() => ({
     stop: watcherMock.stop,
-    ready: new Promise<void>((_resolve, reject) => {
-      setTimeout(() => reject(new Error("watcher failed")), 0);
-    }),
+    ready: Promise.resolve(),
   })),
 }));
+
+vi.mock("../src/utils/device-shutdown", () => ({
+  shutdownOwnedDevices: vi.fn(async () => {}),
+}));
+
+import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { shutdownOwnedDevices } from "../src/utils/device-shutdown";
+import { variantProposalStore } from "../src/utils/variant-proposals";
 
 describe("tool-server startup telemetry", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
@@ -103,10 +111,10 @@ describe("tool-server startup telemetry", () => {
       expect(telemetryMock.shutdown).toHaveBeenCalledWith(1500);
     });
 
-    // This path (watcher-ready rejection) fails the server before the listener
-    // binds, so it is a startup-phase crash: the readiness-gate `.catch` attaches
-    // the anonymous diagnostics derived from the rejection error. The rejection is
-    // a bare `new Error("watcher failed")`, so error_name is "Error", there is no
+    // A synchronous listen() throw fails the server before the listener binds, so
+    // it is a startup-phase crash: the readiness-gate `.catch` attaches the
+    // anonymous diagnostics derived from the thrown error. It is a bare
+    // `new Error("listen failed")`, so error_name is "Error", there is no
     // syscall code, and the de-identified stack yields a 16-hex fingerprint.
     expect(telemetryMock.track).toHaveBeenCalledWith("toolserver:stop", {
       reason: "crash",
@@ -130,5 +138,47 @@ describe("tool-server startup telemetry", () => {
     expect(watcherMock.stop).toHaveBeenCalledOnce();
     expect(httpHandleMock.dispose).toHaveBeenCalledOnce();
     expect(registryMock.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("does not bind when a shutdown lands before the watcher is ready", async () => {
+    let settleReady: () => void = () => {};
+    vi.mocked(startSimulatorWatcher).mockReturnValueOnce({
+      stop: watcherMock.stop,
+      ready: new Promise<void>((resolve) => (settleReady = resolve)),
+    });
+    const { start } = await import("../src/index");
+
+    start();
+    process.emit("SIGTERM");
+    await vi.waitFor(() => {
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    });
+    expect(watcherMock.stop).toHaveBeenCalledOnce();
+
+    // Stopping the watcher aborts its first poll, which settles ready, so the
+    // readiness gate still opens after the shutdown has run.
+    settleReady();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(httpHandleMock.app.listen).not.toHaveBeenCalled();
+  });
+
+  it("stops the watcher before it waits for the owned devices to shut down", async () => {
+    // The watcher's simctl calls run in their own process groups, so only the
+    // abort reaps them if the exit is cut short while a teardown hangs.
+    vi.mocked(startSimulatorWatcher).mockReturnValueOnce({
+      stop: watcherMock.stop,
+      ready: new Promise<void>(() => {}),
+    });
+    vi.mocked(shutdownOwnedDevices).mockReturnValueOnce(new Promise<void>(() => {}));
+    variantProposalStore.markDeviceOwned("OWNED-DEVICE");
+    const { start } = await import("../src/index");
+
+    start();
+    process.emit("SIGTERM");
+
+    await vi.waitFor(() => {
+      expect(shutdownOwnedDevices).toHaveBeenCalledWith(["OWNED-DEVICE"]);
+    });
+    expect(watcherMock.stop).toHaveBeenCalledOnce();
   });
 });

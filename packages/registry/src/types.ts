@@ -28,6 +28,13 @@ export const LINKED_CALL_HEADER = "x-argent-linked";
 export const E2E_DIR_CLIENT_HEADER = "x-argent-e2e-dir";
 
 /**
+ * The request header that carries the secrets an argent client sends with a
+ * call: base64 of a JSON object of secret name to value. The tool-server reads
+ * it as {@link InvokeToolOptions.clientSecrets}.
+ */
+export const CLIENT_SECRETS_HEADER = "x-argent-client-secrets";
+
+/**
  * True when a node holds (or is acquiring) a real process to tear down. ERROR
  * and TERMINATING nodes hold none — a start that threw (e.g. a tvOS UDID the
  * SimulatorServer blueprint rejects) leaves an ERROR node behind — so the stop
@@ -130,6 +137,12 @@ export interface InvokeToolOptions {
    */
   legacyE2eDir?: boolean;
   /**
+   * Secret values by name from the header `x-argent-client-secrets`, which
+   * `{{secret:NAME}}` resolves against ahead of the tool-server's own sources.
+   * Forwarded to every sub-tool call.
+   */
+  clientSecrets?: ReadonlyMap<string, string>;
+  /**
    * Internal: the run-stack entries of the flow runs that enclose this call,
    * outermost first, which a sub-tool call passes on to a nested
    * `flow-execute`. The HTTP route never sets it.
@@ -148,9 +161,14 @@ export interface ToolContext extends InvokeToolOptions {
   artifacts: ArtifactStore;
 }
 
-export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega" | "harmony";
+export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega" | "harmony" | "macos";
 
-export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
+/**
+ * `catalyst` is a Mac Catalyst app, an iPad (UIKit) app built for the Mac. It is
+ * a `macos` device with a `macos-app-` id, as an AppKit app (`app`) is.
+ */
+export type DeviceKind =
+  "simulator" | "emulator" | "vvd" | "device" | "app" | "catalyst" | "unknown";
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
@@ -190,6 +208,15 @@ export interface ToolCapability {
   };
   chromium?: {
     app?: boolean;
+  };
+  /**
+   * A native Mac app that argent drives from inside the app. Behind the macos-apps
+   * flag. `app` is an AppKit app (also SwiftUI for macOS and react-native-macos),
+   * `catalyst` a Mac Catalyst app. A tool with a `macos` block names both.
+   */
+  macos?: {
+    app?: boolean;
+    catalyst?: boolean;
   };
   vega?: {
     vvd?: boolean;

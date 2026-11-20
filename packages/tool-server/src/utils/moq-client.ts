@@ -5,7 +5,7 @@
  * Node WebTransport polyfill, and `Buffer` screenshots.
  */
 
-import { MoqDeviceSession, connectMoq } from "@swmansion/argent-cloud-sdk";
+import { MoqDeviceSession, connectMoq, type KeyActionName } from "@swmansion/argent-cloud-sdk";
 import { installNodeWebTransport } from "@swmansion/argent-cloud-sdk/node";
 import { moqInfo, type MoqInfo } from "./sim-remote";
 
@@ -13,6 +13,8 @@ const PUBLISH_PATH = "argent";
 
 export interface MoqClient {
   sendControl(payload: Uint8Array): Promise<void>;
+  /** Ordered "keys" track; the latest-wins control track drops reordered Down/Up pairs. */
+  key(action: KeyActionName, code: number): Promise<void>;
   screenshot(opts?: { scale?: number }): Promise<Buffer>;
   close(): Promise<void>;
 }
@@ -24,14 +26,21 @@ export async function openMoqClient(udid: string): Promise<MoqClient> {
 async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
   await installNodeWebTransport();
   const session = new MoqDeviceSession(await connectMoq(info), { publishPath: PUBLISH_PATH });
-  disposeWhenTransportDies(session);
+  let closed = false;
+  disposeWhenTransportDies(session, () => (closed = true));
+
+  // The SDK resolves sends on a closed session, reporting undelivered input as sent.
+  const refuseClosed = (send: () => Promise<void>) =>
+    closed ? Promise.reject(new Error("MoQ session is closed")) : send();
 
   return {
-    sendControl: (payload) => session.sendControl(payload),
+    sendControl: (payload) => refuseClosed(() => session.sendControl(payload)),
+    key: (action, code) => refuseClosed(() => session.key(action, code)),
     async screenshot(opts) {
       return Buffer.from(await session.screenshot({ scale: opts?.scale }));
     },
     async close() {
+      closed = true;
       session.close();
     },
   };
@@ -47,12 +56,12 @@ async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
  * asking a released machine for a screenshot killed the tool server.
  *
  * Closing the session when its transport closes takes the SDK's own guarded
- * path instead: `screenshot` then rejects before it opens any stream. Sends are
- * unaffected - they reuse the control track resolved at connect and keep
- * failing with `track is closed`.
+ * path instead: `screenshot` then rejects before it opens any stream. Sends get
+ * no such guard from the SDK, so `onDispose` lets the client refuse them.
  */
-function disposeWhenTransportDies(session: MoqDeviceSession): void {
+function disposeWhenTransportDies(session: MoqDeviceSession, onDispose: () => void): void {
   const dispose = () => {
+    onDispose();
     try {
       session.close();
     } catch {

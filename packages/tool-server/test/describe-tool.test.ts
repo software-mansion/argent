@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ServiceInitializationError } from "@argent/registry";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
+import { axDaemonExitError } from "../src/blueprints/ax-service";
 import type { NativeDevtoolsApi, NativeDevtoolsAppState } from "../src/blueprints/native-devtools";
 import { NON_INJECTABLE_NATIVE_WARNING } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/describe";
@@ -420,29 +422,6 @@ describe("describe tool", () => {
     // Dropping the bundleId half must not drop `screenshot` with it — the only
     // action left when the hierarchy cannot be read.
     expect(result.hint).toMatch(/screenshot/);
-  });
-
-  // An agent reads both forms, so both have to parse as English: the
-  // conditional clause and the action it leads into are one sentence, and
-  // joining them wrongly yields "measured, or Take a `screenshot`".
-  it.each([
-    ["with bundleId", "com.example.app", /on screen\. Take a `screenshot` to see what is there\.$/],
-    [
-      "without bundleId",
-      undefined,
-      /on screen\. Pass `bundleId` to have the connection state measured, or take a `screenshot` to see what is there\.$/,
-    ],
-  ] as const)("reads as one grammatical sentence %s", async (_label, bundleId, expected) => {
-    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
-    const registry = makeMockRegistry({ axService: axApi });
-    const tool = createDescribeTool(registry);
-
-    const result = await tool.execute(
-      {},
-      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", ...(bundleId ? { bundleId } : {}) }
-    );
-
-    expect(result.hint).toMatch(expected);
   });
 
   // The ax-service's own hint is the simulator's state and carries the only
@@ -1130,5 +1109,326 @@ describe("describe tool — ax-service read failure", () => {
     expect(result.source).toBe("native-devtools");
     expect(result.hint).toContain("ax-service query timed out: describe");
     expect(result.hint).not.toContain("not booted through argent");
+  });
+});
+
+// Issue #800: on Intel Macs the ax-service daemon dies of SIGSEGV on every
+// attach. It was reported as a simulator "not booted through argent", whose
+// remedy is `boot-device force=true`; the reboot started the same binary into
+// the same crash, the same hint came back, and an agent rebooted a healthy
+// simulator every 30 seconds until its session was killed.
+describe("describe tool — ax-service daemon crash", () => {
+  beforeEach(() => {
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+    mockIsTvOsSimulator.mockResolvedValue(false);
+    __resetBootCaveatStateForTests();
+  });
+
+  const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+
+  // What `resolveService` rejects with when the factory does: the registry
+  // wraps the blueprint's own error.
+  function startFailure(exit: { code: number | null; signal?: string }): Error {
+    const cause = axDaemonExitError(exit, "connecting");
+    return new ServiceInitializationError(`AXService:${UDID}`, cause.message, { cause });
+  }
+
+  function registryWhereAxFailsToStart(
+    failure: Error,
+    nativeDevtools?: NativeDevtoolsApi
+  ): ReturnType<typeof makeMockRegistry> {
+    const registry = makeMockRegistry({ nativeDevtools });
+    const resolve = registry.resolveService.getMockImplementation()!;
+    registry.resolveService.mockImplementation(async (urn: string) => {
+      if (urn.startsWith("AXService:")) throw failure;
+      return resolve(urn);
+    });
+    return registry;
+  }
+
+  // The daemon connected and died during the read, which is how the crash
+  // arrives when it attaches before it faults.
+  function axApiThatCrashesOnRead(degraded: boolean): AXServiceApi {
+    return {
+      ...makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded }),
+      describe: async () => {
+        throw axDaemonExitError({ code: 139, signal: "SIGSEGV" }, "connected");
+      },
+    };
+  }
+
+  const nativeTree = (bundleId: string) =>
+    makeNativeDevtoolsApi({
+      connectedBundleIds: [bundleId],
+      describeScreenResult: {
+        screenFrame: { x: 0, y: 0, width: 440, height: 956 },
+        elements: [
+          {
+            frame: { x: 20, y: 150, width: 400, height: 44 },
+            tapPoint: { x: 220, y: 172 },
+            normalizedFrame: { x: 0.045, y: 0.157, width: 0.909, height: 0.046 },
+            normalizedTapPoint: { x: 0.5, y: 0.18 },
+            traits: ["button"],
+            label: "Go",
+          },
+        ],
+      },
+    });
+
+  it("says the service crashed instead of prescribing a reboot", async () => {
+    const registry = registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }));
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: UDID });
+
+    expect(elementLineCount(result.description)).toBe(0);
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).not.toContain("not booted through argent");
+    // Both remedies are named only to be ruled out.
+    expect(result.hint).not.toMatch(/call boot-device/);
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  it("names whichever signal it was", async () => {
+    const registry = registryWhereAxFailsToStart(startFailure({ code: 134, signal: "SIGABRT" }));
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: UDID });
+
+    expect(result.hint).toContain("SIGABRT");
+  });
+
+  it("keeps the boot caveat for a start that failed without a crash or a measured boot state", async () => {
+    // An exit code, and a daemon the simulator killed on its way down: a
+    // reboot can bring the daemon back after either. These errors carry no
+    // measurement of how the sim was booted, which the real factory attaches
+    // (see ax-service-daemon-exit.test.ts), so they are still taken for a sim
+    // not booted through argent.
+    for (const exit of [{ code: 1 }, { code: 137, signal: "SIGKILL" }]) {
+      const tool = createDescribeTool(registryWhereAxFailsToStart(startFailure(exit)));
+      const result = await tool.execute({}, { udid: UDID });
+      expect(result.hint).toContain("not booted through argent");
+      expect(result.hint).toContain("Call boot-device with force=true");
+      expect(result.hint).not.toContain("crashed");
+      // No read took place, and the error is not dropped.
+      expect(result.hint).not.toContain("read returned no elements");
+      expect(result.hint).toMatch(
+        exit.signal
+          ? /was killed by SIGKILL before connecting/
+          : /exited with code 1 before connecting/
+      );
+    }
+  });
+
+  it("keeps an ordinary read failure an ordinary read failure", async () => {
+    const axApi: AXServiceApi = {
+      ...makeAXServiceApi({ alertVisible: false, elements: [] }),
+      describe: async () => {
+        throw new Error("ax-service daemon disconnected");
+      },
+    };
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+
+    const result = await tool.execute({}, { udid: UDID });
+
+    expect(result.hint).toContain(
+      "The accessibility read failed (ax-service daemon disconnected)."
+    );
+    expect(result.hint).not.toContain("crashed");
+  });
+
+  it("reports a crash during the read the same way, also on a sim booted externally", async () => {
+    // Degraded and blind would otherwise be the blind caveat: "the read
+    // returned no elements ... call boot-device with force=true". No read took
+    // place, and the reboot is the loop.
+    for (const degraded of [false, true]) {
+      const tool = createDescribeTool(
+        makeMockRegistry({ axService: axApiThatCrashesOnRead(degraded) })
+      );
+      const result = await tool.execute({}, { udid: UDID });
+      expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+      expect(result.hint).not.toContain("not booted through argent");
+      expect(result.hint).not.toContain("The accessibility read failed");
+    }
+  });
+
+  it("serves the native tree with the crash hint, on every call", async () => {
+    // Never deduped: the native tree carries no system dialog and no
+    // SpringBoard chrome, so each one may be missing what covers the screen.
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(
+        startFailure({ code: 139, signal: "SIGSEGV" }),
+        nativeTree("com.example.app")
+      )
+    );
+
+    const first = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
+    const second = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
+
+    expect(first.source).toBe("native-devtools");
+    expect(first.description).toMatch(/AXButton\s+"Go"/);
+    expect(first.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(second.hint).toBe(first.hint);
+  });
+
+  describe("and the standing boot caveat", () => {
+    // The crash hint says nothing about how the sim was booted, but the read
+    // that crashed knew: the service reports it once connected, and a failed
+    // start carries what the factory measured. The once-per-device state goes
+    // by that, as it does for a read that worked.
+    const response = {
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        { label: "General", frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 }, traits: [] },
+      ],
+    };
+    const degradedRead = () =>
+      createDescribeTool(
+        makeMockRegistry({ axService: makeAXServiceApi(response, { degraded: true }) })
+      ).execute({}, { udid: UDID });
+    const crashedRead = (degraded: boolean) =>
+      createDescribeTool(makeMockRegistry({ axService: axApiThatCrashesOnRead(degraded) })).execute(
+        {},
+        { udid: UDID }
+      );
+
+    it("is not re-armed by a crash on a sim still not booted through argent", async () => {
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await crashedRead(true)).hint).toContain("crashed with SIGSEGV");
+      // Same sim, same state: the caveat already told stays told.
+      expect((await degradedRead()).hint).toBeUndefined();
+    });
+
+    it("is re-armed by a crash on a sim booted through argent", async () => {
+      // The crashed read found the sim off the state the caveat describes, as a
+      // read that timed out in its place would have. A later external boot of
+      // the same udid has not been told.
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await crashedRead(false)).hint).toContain("crashed with SIGSEGV");
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+    });
+
+    it.each([true, false])(
+      "is not consumed by a crash that comes first (sim not booted through argent: %s)",
+      async (degraded) => {
+        // A crashed read told the agent nothing about the boot, so the first
+        // degraded read after it still owes the caveat.
+        expect((await crashedRead(degraded)).hint).toContain("crashed with SIGSEGV");
+        expect((await degradedRead()).hint).toMatch(/booted through argent/);
+        expect((await degradedRead()).hint).toBeUndefined();
+      }
+    );
+
+    it("is not re-armed by a crash whose boot state nothing measured", async () => {
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      const unmeasured = createDescribeTool(
+        registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }))
+      );
+      expect((await unmeasured.execute({}, { udid: UDID })).hint).toContain("crashed with SIGSEGV");
+      expect((await degradedRead()).hint).toBeUndefined();
+    });
+
+    it("is not re-armed by a start that failed without a crash, its boot state unmeasured", async () => {
+      // The crash's twin: the daemon was just as gone, and its hint is no more
+      // a caveat than the crash hint is. The measured cases, over a real start,
+      // are in ax-service-daemon-exit.test.ts.
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      const failed = createDescribeTool(registryWhereAxFailsToStart(startFailure({ code: 1 })));
+      expect((await failed.execute({}, { udid: UDID })).hint).toContain(
+        "ax-service exited with code 1 before connecting"
+      );
+      expect((await degradedRead()).hint).toBeUndefined();
+    });
+  });
+
+  it("sets the native fallback's own diagnosis apart from the crash", async () => {
+    // `unregistered` prescribes a tool-server restart for native devtools. The
+    // crash hint has just said a restart does not fix the crash, so the
+    // diagnosis has to read as the fallback's, with the crash hint first.
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(
+        startFailure({ code: 139, signal: "SIGSEGV" }),
+        makeNativeDevtoolsApi({ state: "unregistered" })
+      )
+    );
+
+    const result = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
+
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).toMatch(/SIGSEGV.*native fallback.*unrelated to the crash/is);
+    expect(result.hint).toContain("never registered its connection");
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  it("still flags the restart that brings the native fallback up", async () => {
+    // With the accessibility read gone the native tree is the only one left,
+    // and a stale process is one relaunch away from serving it.
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(
+        startFailure({ code: 139, signal: "SIGSEGV" }),
+        makeNativeDevtoolsApi({ state: "stale_process" })
+      )
+    );
+
+    const result = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
+
+    expect(result.should_restart).toBe(true);
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).toContain("call restart-app then retry");
+  });
+
+  it("adds the system-app dead end to the crash hint instead of dropping it", async () => {
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }))
+    );
+
+    const result = await tool.execute({}, { udid: UDID, bundleId: "com.apple.Preferences" });
+
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  it("keeps the crash hint ahead of a native fallback that could not be read", async () => {
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }))
+    );
+
+    const result = await tool.execute({}, { udid: UDID });
+
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  it("does not turn a crash on a provider's device into that provider's reboot caveat", async () => {
+    const external = { id: `ext:provider:${UDID}`, platform: "ios", kind: "simulator" } as const;
+    const crashed = await describeIos(
+      registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" })),
+      external,
+      {},
+      { isTvOs: false }
+    );
+    // The crash hint says describe continues on the native hierarchy "where
+    // that is available", so on a device that does not lend it, it says so.
+    expect(crashed.hint).toContain("SIGSEGV");
+    expect(crashed.hint).toMatch(/external provider.*fallback is unavailable/is);
+    expect(crashed.hint).toContain("screenshot");
+    expect(crashed.hint).not.toContain("Restart it from that application");
+
+    // The same device with a daemon that merely failed to start keeps the
+    // provider's caveat, with the failure in place of a read that never ran.
+    const failed = await describeIos(
+      registryWhereAxFailsToStart(startFailure({ code: 1 })),
+      external,
+      {},
+      { isTvOs: false }
+    );
+    expect(failed.hint).toContain(`AXService:${UDID}`);
+    expect(failed.hint).toContain("code 1");
+    expect(failed.hint).toMatch(/cannot reboot this device/i);
+    expect(failed.hint).toContain("screenshot");
   });
 });

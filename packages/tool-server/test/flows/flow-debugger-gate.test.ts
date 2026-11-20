@@ -72,7 +72,7 @@ describe("flow-execute with a debugger-status connectivity gate", () => {
     const result = asRun(
       await tool.execute(
         {},
-        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+        { name: "gated", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "X" }
       )
     );
 
@@ -122,7 +122,7 @@ steps:
     const result = asRun(
       await tool.execute(
         {},
-        { name: "log-gated", project_root: PROJECT_ROOT, flow_file: file, device: "X" }
+        { name: "log-gated", project_root: PROJECT_ROOT, e2e_test_file: file, device: "X" }
       )
     );
 
@@ -149,7 +149,7 @@ steps:
     const result = asRun(
       await tool.execute(
         {},
-        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+        { name: "gated", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "X" }
       )
     );
 
@@ -178,7 +178,7 @@ steps:
     const result = asRun(
       await tool.execute(
         {},
-        { name: "other", project_root: PROJECT_ROOT, flow_file: file, device: "X" }
+        { name: "other", project_root: PROJECT_ROOT, e2e_test_file: file, device: "X" }
       )
     );
 
