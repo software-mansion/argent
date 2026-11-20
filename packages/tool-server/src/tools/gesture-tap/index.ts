@@ -31,6 +31,7 @@ import { sleepOrAbort } from "../../utils/timing";
 import { selectorSchema, selectorTapTargets, type Selector } from "../../utils/ui-tree-match";
 import {
   getDescribeTapPoint,
+  type DescribeFrame,
   type DescribeNode,
   type DescribeSource,
   type DescribeTreeData,
@@ -214,6 +215,13 @@ function ambiguousSelectorError(
   );
 }
 
+function sameFrame(a: DescribeFrame | undefined, b: DescribeFrame): boolean {
+  return (
+    a !== undefined && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+  );
+}
+
+/** An element that appears during the wait is tapped once two reads in a row give the same frame. */
 async function resolveSelectorPoint(
   read: () => Promise<DescribeTreeData>,
   selector: Selector,
@@ -222,12 +230,15 @@ async function resolveSelectorPoint(
   const deadline = Date.now() + SELECTOR_WAIT_MS;
   let data = await read();
   let targets = selectorTapTargets(data.tree, selector, data.uiOrientation);
-  while (targets.length === 0 && Date.now() < deadline) {
+  let moving = false;
+  while ((targets.length === 0 || moving) && Date.now() < deadline) {
+    const before = targets[0]?.frame;
     if (!(await sleepOrAbort(SELECTOR_POLL_MS, signal))) {
       throw new Error("gesture-tap was cancelled while waiting for the selector to match");
     }
     data = await read();
     targets = selectorTapTargets(data.tree, selector, data.uiOrientation);
+    moving = targets.length === 1 && !sameFrame(before, targets[0]!.frame);
   }
   if (targets.length === 0) throw noMatchError(selector, data);
   if (targets.length > 1) throw ambiguousSelectorError(selector, targets, data.source);

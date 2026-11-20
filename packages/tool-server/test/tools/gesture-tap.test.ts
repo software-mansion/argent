@@ -280,7 +280,18 @@ describe("gesture-tap selector", () => {
   it("waits briefly for the element to appear", async () => {
     describeIos.mockResolvedValueOnce(screen()).mockResolvedValue(screen(loginButton));
     await gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "Log in" } });
-    expect(describeIos).toHaveBeenCalledTimes(2);
+    expect(describeIos).toHaveBeenCalledTimes(3);
+    expect(sent[0]).toMatchObject({ x: 0.5, y: 0.8125 });
+  });
+
+  it("taps an element that appears while moving at the frame it settles on", async () => {
+    const sliding = { ...loginButton, frame: { ...loginButton.frame, y: 0.9 } };
+    describeIos
+      .mockResolvedValueOnce(screen())
+      .mockResolvedValueOnce(screen(sliding))
+      .mockResolvedValue(screen(loginButton));
+    await gestureTapTool.execute(touchServices, { udid: SIM_UDID, selector: { text: "Log in" } });
+    expect(describeIos).toHaveBeenCalledTimes(4);
     expect(sent[0]).toMatchObject({ x: 0.5, y: 0.8125 });
   });
 
