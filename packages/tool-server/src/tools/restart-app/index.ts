@@ -18,6 +18,7 @@ import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
 import { harmonyImpl } from "./platforms/harmony";
+import { makeChromiumImpl } from "./platforms/chromium";
 import { macosImpl } from "./platforms/macos";
 
 // Same alphabet as launch-app's ACTIVITY_PATTERN: leading `.` for shorthand
@@ -28,6 +29,7 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
   macos: { app: true, catalyst: true },
@@ -38,14 +40,14 @@ const zodSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Target device id from `list-devices` (iOS UDID<flag:macos-apps>, Mac app id</flag:macos-apps><flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
+      "Target device id from `list-devices` (iOS UDID, <flag:macos-apps>Mac app id, </flag:macos-apps><flag:harmonyos>HarmonyOS id, </flag:harmonyos>Android serial, or Chromium id)."
     ),
   bundleId: z
     .string()
     .min(1)
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id. Android: package name. Vega: interactive component app id.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos><flag:macos-apps> Mac app: the bundle id in the device id.</flag:macos-apps>"
+      "App identifier. iOS: bundle id. Android: package name. Vega: interactive component app id.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos><flag:macos-apps> Mac app: the bundle id in the device id.</flag:macos-apps> Chromium: any tag in the same alphabet (letters, digits, '.', '_' and '-'), echoed back."
     ),
   activity: z
     .string()
@@ -72,14 +74,14 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     id: "restart-app",
     // Android's device probes, force-stop and `am start -W` can outlast the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>macOS, </flag:macos-apps>or Vega.
-Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).<flag:macos-apps> On a Mac app it quits the app and starts the same .app again in the background.</flag:macos-apps>
-Returns { restarted, bundleId, <flag:macos-apps>kind?, appPath?, args?, note?, </flag:macos-apps>networkCapture? }. networkCapture (Android) says whether native network capture followed the launch. Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.<flag:macos-apps>
-For Mac apps, kind is 'catalyst' or 'app'. Check appPath and args to confirm the restarted build and arguments. Check note for warnings such as a force-quit or no window.</flag:macos-apps>`,
+    description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>macOS, </flag:macos-apps>Vega, or Chromium.
+Use when you need a clean in-memory state without a full reinstall. On Chromium it relaunches an Electron app that this tool-server session booted (boot-device, or an e2e run), on the same port and device id; any other Chromium runtime cannot be restarted. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).<flag:macos-apps> On a Mac app it quits the app and starts the same .app again in the background.</flag:macos-apps>
+Returns { restarted, bundleId, <flag:macos-apps>kind?, </flag:macos-apps>appPath?, args?, <flag:macos-apps>note?, </flag:macos-apps>networkCapture? }. networkCapture (Android) says whether native network capture followed the launch. appPath and args are the app that runs and its arguments, to confirm the restarted build: <flag:macos-apps>on a Mac app the .app, and </flag:macos-apps>on Chromium the path and \`electronArgs\` of the boot it repeats. Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.<flag:macos-apps>
+For Mac apps, kind is 'catalyst' or 'app'. Check note for warnings such as a force-quit or no window.</flag:macos-apps>`,
     zodSchema,
     alwaysLoad: true,
     searchHint:
-      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
+      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv chromium electron<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
     interaction: {
       startedMsg: ({ params }) => `Restarting ${params.bundleId}`,
       completedMsg: ({ params }) => `Restarted ${params.bundleId}`,
@@ -100,7 +102,6 @@ For Mac apps, kind is 'catalyst' or 'app'. Check appPath and args to confirm the
       Record<string, unknown>,
       Params,
       RestartAppResult,
-      // No chromium branch.
       Record<string, unknown>,
       RestartAppVegaServices,
       RestartAppIosServices,
@@ -112,6 +113,7 @@ For Mac apps, kind is 'catalyst' or 'app'. Check appPath and args to confirm the
       iosDevice: iosDeviceImpl,
       iosRemote: forgettingUiOrientation(iosRemoteImpl),
       android: androidImpl,
+      chromium: makeChromiumImpl(registry),
       vega: vegaImpl,
       harmony: harmonyImpl,
       macos: macosImpl,

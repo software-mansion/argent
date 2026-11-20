@@ -47,6 +47,8 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (...args: unknown[]) =>
     (bootElectronApp as (...a: unknown[]) => unknown)(...args),
   killChromiumByPort: vi.fn(),
+  withPortLock: (_port: number, task: () => Promise<unknown>) => task(),
+  electronLaunchSpec: () => undefined,
 }));
 
 // Five tests here drive the launch gate's real 1.5 s settle plus the whole

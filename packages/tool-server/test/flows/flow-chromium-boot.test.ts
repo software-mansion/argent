@@ -3,7 +3,13 @@ import { writeFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FAILURE_CODES, FailureError, getFailureSignal, type Registry } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  ServiceState,
+  type Registry,
+} from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 
 // The runner boots a Chromium standalone flow's app itself. Mock the Electron
@@ -26,6 +32,11 @@ const defaultBoot = async (opts: { appPath: string; extraArgs?: string[] }) => {
 const bootElectronApp = vi.fn(defaultBoot);
 const killChromiumByPort = vi.fn();
 const killChromiumByPortAndWait = vi.fn(async () => {});
+const forgetElectronLaunchSpec = vi.fn();
+const electronLaunchSpec = vi.fn(
+  (_port: number): { pid?: number; pgid?: number } | undefined => undefined
+);
+const withPortLock = vi.fn((_port: number, task: () => Promise<unknown>) => task());
 vi.mock("../../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (...args: unknown[]) =>
     (bootElectronApp as (...a: unknown[]) => unknown)(...args),
@@ -33,6 +44,10 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
     (killChromiumByPort as (...a: unknown[]) => unknown)(...args),
   killChromiumByPortAndWait: (...args: unknown[]) =>
     (killChromiumByPortAndWait as (...a: unknown[]) => unknown)(...args),
+  forgetElectronLaunchSpec: (...args: unknown[]) =>
+    (forgetElectronLaunchSpec as (...a: unknown[]) => unknown)(...args),
+  withPortLock: (port: number, task: () => Promise<unknown>) => withPortLock(port, task),
+  electronLaunchSpec: (port: number) => electronLaunchSpec(port),
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
 
@@ -181,6 +196,9 @@ beforeEach(() => {
   bootElectronApp.mockReset().mockImplementation(defaultBoot);
   killChromiumByPort.mockReset();
   killChromiumByPortAndWait.mockReset();
+  forgetElectronLaunchSpec.mockReset();
+  withPortLock.mockClear();
+  electronLaunchSpec.mockReset().mockReturnValue(undefined);
   ensureCdpReachable.mockReset().mockImplementation(async () => ({ Browser: "TestApp/1.0" }));
 });
 
@@ -192,6 +210,22 @@ describe("flow-execute chromium boot", () => {
   it("boots a fresh instance for a chromium-only standalone flow and tears it down", async () => {
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: done\n");
     const registry = makeRegistry();
+    let inLock = false;
+    const insideLock: boolean[] = [];
+    withPortLock.mockImplementationOnce(async (_port, task) => {
+      inLock = true;
+      try {
+        return await task();
+      } finally {
+        inLock = false;
+      }
+    });
+    killChromiumByPortAndWait.mockImplementationOnce(async () => {
+      insideLock.push(inLock);
+    });
+    forgetElectronLaunchSpec.mockImplementationOnce(() => {
+      insideLock.push(inLock);
+    });
 
     const result = await runFlow(registry, {
       name: "chromium-e2e",
@@ -229,6 +263,30 @@ describe("flow-execute chromium boot", () => {
     // single-instance lock.
     expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
     expect(killChromiumByPort).not.toHaveBeenCalled();
+    // Torn down for good: restart-app must not relaunch the runner's instance.
+    expect(forgetElectronLaunchSpec).toHaveBeenCalledWith(12345);
+    // Behind any restart-app of the instance still in flight.
+    expect(withPortLock).toHaveBeenCalledWith(12345, expect.any(Function));
+    expect(insideLock).toEqual([true, true]);
+  });
+
+  it.each([
+    ["a restart-app replaced the booted process", { pid: 777, pgid: 777 }, 777],
+    // The group can outlive its launcher, still holding the port.
+    ["the replacement's launcher already exited", { pid: undefined, pgid: 777 }, 777],
+    // The emptied group's id may already name another group: signal nothing.
+    ["the app's group already emptied", { pid: undefined, pgid: undefined }, undefined],
+  ])("tears down the current process group when %s", async (_name, spec, pid) => {
+    electronLaunchSpec.mockReturnValue(spec);
+    const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: done\n");
+
+    await runFlow(makeRegistry(), {
+      name: "chromium-e2e",
+      project_root: PROJECT_ROOT,
+      e2e_test_file: flowFile,
+    });
+
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, pid);
   });
 
   it("counts the hoisted boot in the launch that settles it, as a later launch counts its own", async () => {
@@ -268,7 +326,14 @@ describe("flow-execute chromium boot", () => {
     );
     const flowDir = path.dirname(flowFile);
     await fs.writeFile(path.join(flowDir, "seed.mjs"), "", "utf8");
-    const registry = makeRegistry();
+    const events: string[] = [];
+    const registry = makeRegistry(async (id) => {
+      events.push(id);
+      return {};
+    });
+    (registry.resolveService as any).mockImplementation(async () => ({
+      cdp: { send: async (method: string) => events.push(method) },
+    }));
 
     const result = await runFlow(registry, {
       name: "seed-then-launch",
@@ -285,7 +350,93 @@ describe("flow-execute chromium boot", () => {
       status: "pass",
       reason: "booted chromium instance chromium-cdp-12345",
     });
+    // The seed ran while the hoisted instance was up, so the launch restarts it,
+    // as a launch after a script does on the other platforms.
+    const restarts = (registry.invokeTool as any).mock.calls.filter(
+      (c: unknown[]) => c[0] === "restart-app"
+    );
+    expect(restarts).toHaveLength(1);
+    // The relaunched window is a new one: front it, as a booting launch does.
+    expect(events.slice(events.indexOf("restart-app"))).toEqual([
+      "restart-app",
+      "Page.bringToFront",
+    ]);
     expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("reports a leading launch cancelled while restarting after a script as a skip", async () => {
+    const flowFile = await writeFlow(
+      "steps:\n  - script: { path: ./seed.mjs }\n  - launch: { chromium: ./app }\n"
+    );
+    const flowDir = path.dirname(flowFile);
+    await fs.writeFile(path.join(flowDir, "seed.mjs"), "", "utf8");
+    const controller = new AbortController();
+    // The cancellation makes the restart-app sub-tool itself reject.
+    const registry = makeRegistry(async (id) => {
+      if (id === "restart-app") {
+        controller.abort();
+        throw new Error("This operation was aborted");
+      }
+      return {};
+    });
+
+    const result = await runFlow(
+      registry,
+      { name: "seed-cancelled", project_root: flowDir, e2e_test_file: flowFile },
+      controller.signal
+    );
+
+    expect(result.steps[1]).toMatchObject({
+      kind: "launch",
+      status: "skip",
+      reason: "run aborted",
+    });
+  });
+
+  it("fails the leading launch when restarting the hoisted instance after a script fails", async () => {
+    const flowFile = await writeFlow(
+      "steps:\n  - script: { path: ./seed.mjs }\n  - launch: { chromium: ./app }\n  - echo: after\n"
+    );
+    const flowDir = path.dirname(flowFile);
+    await fs.writeFile(path.join(flowDir, "seed.mjs"), "", "utf8");
+    const registry = makeRegistry(async (id) => {
+      if (id === "restart-app") throw new Error("port 12345 is still held");
+      return {};
+    });
+
+    const result = await runFlow(registry, {
+      name: "seed-then-launch-fails",
+      project_root: flowDir,
+      e2e_test_file: flowFile,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[1]).toMatchObject({ kind: "launch", status: "error" });
+    expect(result.steps[1]!.reason).toContain("restart-app failed:");
+    expect(result.steps[1]!.reason).toContain("port 12345 is still held");
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
+  it("kills the booted instance before disposing its CDP session", async () => {
+    const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+    (registry.getSnapshot as any).mockReturnValue({
+      services: new Map([
+        ["ChromiumCdp:chromium-cdp-12345", { state: ServiceState.RUNNING, dependents: [] }],
+      ]),
+    });
+
+    await runFlow(registry, {
+      name: "teardown-order",
+      project_root: PROJECT_ROOT,
+      e2e_test_file: flowFile,
+    });
+
+    // A frozen renderer would stall the dispose's CDP calls while the app lives.
+    expect(registry.disposeService).toHaveBeenCalledWith("ChromiumCdp:chromium-cdp-12345");
+    expect(killChromiumByPortAndWait.mock.invocationCallOrder[0]).toBeLessThan(
+      (registry.disposeService as any).mock.invocationCallOrder[0]
+    );
   });
 
   it("forwards extra CLI args and boots when --platform chromium disambiguates a multi-platform launch", async () => {

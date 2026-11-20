@@ -19,9 +19,9 @@ export type RestartAppResult =
       bundleId: string;
       /** Mac apps: an AppKit app or a Mac Catalyst app, as list-devices names it. */
       kind?: MacosAppKind;
-      /** Mac apps: the `.app` the new process was started from. */
+      /** Mac apps and Chromium: the `.app`, or the Electron app path, the new process was started from. */
       appPath?: string;
-      /** Mac apps: the arguments the new process was started with. */
+      /** Mac apps and Chromium: the arguments the new process was started with (Chromium: the boot's `electronArgs`). */
       args?: string[];
       /** Mac apps: argent quit a copy that ran without its library, or the new process showed no window in time. */
       note?: string;
