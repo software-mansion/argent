@@ -188,20 +188,24 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
  * `p` as an absolute path on this machine. The tool-server works in the
  * directory of whichever client spawned it, so it cannot resolve a relative
  * path. A path with a `..` segment is prefixed with the directory it is
- * relative to (on Windows, that of its drive for `D:dir`), not normalized:
- * collapsing `..` ignores symlinks, so it can name another file than the kernel
- * opens. A trailing separator is kept, so `f.yaml/` still names no file. A
- * Windows path on another OS, and a spelling nothing expanded
+ * relative to (on Windows, that of its drive for `D:dir` and of the current
+ * drive for `\dir`), not normalized: collapsing `..` ignores symlinks, so it
+ * can name another file than the kernel opens. A trailing separator or `.`
+ * segment is kept, so `f.yaml/` and `f.yaml/.` still name no file. A Windows
+ * path on another OS, and a spelling nothing expanded
  * ({@link isUnexpandedPath}), are left for the tool-server to refuse.
  */
 export function callerPath(p: string): string {
-  if (path.isAbsolute(p) || path.win32.isAbsolute(p) || isUnexpandedPath(p)) return p;
+  if (isUnexpandedPath(p)) return p;
+  const onCurrentDrive = path.sep === "\\" && /^[\\/](?![\\/])/.test(p);
+  if (!onCurrentDrive && (path.isAbsolute(p) || path.win32.isAbsolute(p))) return p;
   const { root } = path.parse(p);
   const rest = p.slice(root.length);
   if (!rest.split(/[\\/]/).includes("..")) {
     const resolved = path.resolve(p);
-    const trailing = (p.endsWith("/") || p.endsWith(path.sep)) && !resolved.endsWith(path.sep);
-    return trailing ? `${resolved}${path.sep}` : resolved;
+    const last = p.split(path.sep === "\\" ? /[\\/]/ : "/").at(-1);
+    const dirOnly = p !== last && (last === "" || last === ".") && !resolved.endsWith(path.sep);
+    return dirOnly ? `${resolved}${path.sep}` : resolved;
   }
   const base = path.resolve(root);
   return base.endsWith(path.sep) ? `${base}${rest}` : `${base}${path.sep}${rest}`;

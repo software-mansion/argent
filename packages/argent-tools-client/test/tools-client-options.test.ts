@@ -3,7 +3,7 @@ import { createServer, type Server, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { existsSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // link-config.ts captures ~/.argent/link.json at module load; an isolated HOME
@@ -625,6 +625,28 @@ describe("refuseRelativeProjectPaths", () => {
       expect(recordBodies()).toEqual([{ project_root: { __argentFileInput: true, path: root } }]);
     }
   );
+
+  it("refuses a Windows project_root on the current drive, which the tool-server's may not be", async () => {
+    vi.resetModules();
+    vi.doMock("node:path", () => ({ ...win32, default: win32 }));
+    vi.spyOn(process, "cwd").mockReturnValue("D:\\work");
+    try {
+      const { createToolsClient: createOnWindows } = await import("../src/tools-client.js");
+      const { callTool } = createOnWindows({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        refuseRelativeProjectPaths: true,
+      });
+
+      await expect(callTool("record", { project_root: "\\team\\app" })).rejects.toThrow(
+        'project_root must be an absolute path (got "\\team\\app")'
+      );
+      expect(recordBodies()).toEqual([]);
+    } finally {
+      vi.doUnmock("node:path");
+      vi.restoreAllMocks();
+      vi.resetModules();
+    }
+  });
 
   it("leaves project_root alone for a tool whose file inputs do not name it", async () => {
     const { callTool } = createToolsClient({

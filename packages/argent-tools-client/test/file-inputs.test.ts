@@ -499,21 +499,25 @@ describe("prepareFileInputs — relative paths", () => {
     });
   });
 
-  it("keeps the trailing separator of a relative path", async () => {
-    await fs.writeFile(path.join(cwd, "ok.yaml"), "steps: []\n");
-    const specs: FileInputSpec[] = [
-      { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file" },
-    ];
+  it.each(["ok.yaml/", "ok.yaml/."])(
+    "keeps the directory requirement of the relative path %s",
+    async (e2eTestPath) => {
+      await fs.writeFile(path.join(cwd, "ok.yaml"), "steps: []\n");
+      const specs: FileInputSpec[] = [
+        { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file" },
+      ];
 
-    const out = (await prepareFileInputs(
-      specs,
-      { e2e_test_path: "ok.yaml/" },
-      { includeContent: false }
-    )) as Record<string, FileInputWire>;
+      const out = (await prepareFileInputs(
+        specs,
+        { e2e_test_path: e2eTestPath },
+        { includeContent: true }
+      )) as Record<string, FileInputWire>;
 
-    expect(out.e2e_test_path!.path).toBe(`${path.join(cwd, "ok.yaml")}${path.sep}`);
-    expect(out.e2e_test_path!.size).toBeUndefined();
-  });
+      expect(out.e2e_test_path!.path).toBe(`${path.join(cwd, "ok.yaml")}${path.sep}`);
+      expect(out.e2e_test_path!.size).toBeUndefined();
+      expect(out.e2e_test_path!.content).toBeUndefined();
+    }
+  );
 
   it("leaves the caller's args as they were", async () => {
     const specs: FileInputSpec[] = [
@@ -732,6 +736,27 @@ describe("prepareFileInputs — relative paths", () => {
       >;
 
       expect(out.appPath!.path).toBe(sent);
+    } finally {
+      vi.doUnmock("node:path");
+      vi.restoreAllMocks();
+      vi.resetModules();
+    }
+  });
+
+  it.each([
+    ["\\team\\app", "D:\\team\\app"],
+    ["/team/app", "D:\\team\\app"],
+    ["\\team\\..\\app", "D:\\team\\..\\app"],
+    ["C:\\team\\app", "C:\\team\\app"],
+    ["\\\\server\\share\\app", "\\\\server\\share\\app"],
+  ])("on Windows, sends %s on the caller's drive", async (projectRoot, sent) => {
+    vi.resetModules();
+    vi.doMock("node:path", () => ({ ...path.win32, default: path.win32 }));
+    vi.spyOn(process, "cwd").mockReturnValue("D:\\work");
+    try {
+      const { callerPath: callerPathOnWindows } = await import("../src/file-inputs.js");
+
+      expect(callerPathOnWindows(projectRoot)).toBe(sent);
     } finally {
       vi.doUnmock("node:path");
       vi.restoreAllMocks();
