@@ -474,10 +474,15 @@ class LibraryChannel {
   armed = false;
   /** The Network.enable on its way, resolved by the acknowledgement. */
   enabling?: Promise<boolean>;
+  /** Resolves `enabling` as armed when the acknowledgement of an earlier Network.enable arms the channel first. */
+  armEnabling?: () => void;
   /** Why the last Network.enable did not arm this channel. */
   enableFailure?: string;
-  /** The CDP id of the last Network.enable sent on this channel. */
-  private enableId?: number;
+  /**
+   * The CDP ids of the Network.enable requests sent on this channel since its
+   * last Network.disable: an acknowledgement of any of them arms it.
+   */
+  private readonly enableIds = new Set<number>();
   private readonly pending = new Map<number, PendingCall>();
   private nextId = 1;
   private hello: MacosLibraryHandshake | null = null;
@@ -505,7 +510,8 @@ class LibraryChannel {
       label: `macos-app ${bundleId}`,
       send: (frame) => {
         const p = (frame as { payload: { id: number; method: string } }).payload;
-        if (p.method === "Network.enable") this.enableId = p.id;
+        if (p.method === "Network.enable") this.enableIds.add(p.id);
+        if (p.method === "Network.disable") this.enableIds.clear();
         return writeNdjsonFrame(socket, frame);
       },
     });
@@ -606,8 +612,10 @@ class LibraryChannel {
       // events after it are read. A network event has a method and no id.
       const p = msg.payload;
       // An app held suspended (Instruments, a debugger) acknowledges after the
-      // request timed out, and from then on it captures.
-      if (p && p.id === this.enableId && "result" in p) this.network.enabled(this);
+      // request timed out, also while a retry waits for its own, and from then on it captures.
+      if (p && typeof p.id === "number" && this.enableIds.has(p.id) && "result" in p) {
+        this.network.enabled(this);
+      }
       if (this.cdp.handleResponse(p)) return;
       if (p && typeof p.method === "string" && p.id === undefined) {
         this.network.event(p.method, p.params, this.hello.pid);
@@ -937,6 +945,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       if (!captureStarted) return;
       ch.armed = true;
       delete ch.enableFailure;
+      ch.armEnabling?.();
     },
   };
 
@@ -945,28 +954,31 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
    * the reply. The reply arms the channel as its frame is read, before the
    * events after it, unless capture was stopped meanwhile. A channel that does
    * not answer in time stays unarmed until its late reply comes: the next
-   * start asks again.
+   * start asks again, and the late reply of an earlier start also arms it.
    */
   const enableOn = (ch: LibraryChannel): Promise<boolean> => {
     if (ch.armed) return Promise.resolve(true);
     if (ch.enabling) return ch.enabling;
     delete ch.enableFailure;
-    const enabling = ch.cdp
-      .request("Network.enable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS })
-      .then(
-        () => ch.armed,
+    const enabling = new Promise<boolean>((resolve) => {
+      ch.armEnabling = () => resolve(true);
+      ch.cdp.request("Network.enable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS }).then(
+        () => resolve(ch.armed),
         (err: unknown) => {
-          if (!ch.isOpen || disposed) return false;
-          ch.enableFailure =
-            getFailureSignal(err)?.error_kind === "timeout"
-              ? `the app did not acknowledge Network.enable within ${NETWORK_CAPTURE_ACK_TIMEOUT_MS / 1000} s; network-capture-start asks again`
-              : `the app did not enable capture (${errorMessage(err)}); network-capture-start asks again`;
-          return false;
+          if (ch.isOpen && !disposed && !ch.armed) {
+            ch.enableFailure =
+              getFailureSignal(err)?.error_kind === "timeout"
+                ? `the app did not acknowledge Network.enable within ${NETWORK_CAPTURE_ACK_TIMEOUT_MS / 1000} s; network-capture-start asks again`
+                : `the app did not enable capture (${errorMessage(err)}); network-capture-start asks again`;
+          }
+          resolve(false);
         }
-      )
-      .finally(() => {
-        if (ch.enabling === enabling) ch.enabling = undefined;
-      });
+      );
+    }).finally(() => {
+      if (ch.enabling !== enabling) return;
+      ch.enabling = undefined;
+      ch.armEnabling = undefined;
+    });
     ch.enabling = enabling;
     return enabling;
   };
@@ -1649,6 +1661,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       // The next start sends Network.enable again, whatever became of one on its way now.
       ch.armed = false;
       ch.enabling = undefined;
+      ch.armEnabling = undefined;
       delete ch.enableFailure;
       try {
         await ch.cdp.request("Network.disable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS });

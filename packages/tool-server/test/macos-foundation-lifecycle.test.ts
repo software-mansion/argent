@@ -1610,6 +1610,29 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       });
     }, 20_000);
 
+    it("arms a retried start when the app acknowledges the Network.enable of the start before", async () => {
+      // Each CDP request is answered 6.2 s after the one before it, so the first
+      // start stops waiting before its acknowledgement and the retry gets it.
+      const { pid } = await run("boot-device", {
+        macosAppPath: appPath,
+        macosAppArgs: ["--cdp-delay=6200"],
+      });
+      expect((await start()).layers).toEqual([
+        {
+          layer: "macos-native",
+          armed: false,
+          reason:
+            "the app did not acknowledge Network.enable within 5 s; network-capture-start asks again",
+        },
+      ]);
+      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
+      expect(await request("https://example.com/retry")).toMatchObject({ active: true });
+      expect(await readLog()).toMatchObject({
+        armed: true,
+        header: `macos-native: armed, 1 request (pid ${pid}; ${GAP})`,
+      });
+    }, 20_000);
+
     it("records no new request after a stop that the app did not acknowledge", async () => {
       await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=disable-silent"] });
       await start();
