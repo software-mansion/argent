@@ -3,7 +3,7 @@
 ## Documentation
 
 The docs site lives in `packages/docs/` and is published to docs.swmansion.com/argent.
-See `packages/docs/CLAUDE.md` for writing style, front matter and checks.
+See `packages/docs/AGENTS.md` for writing style, front matter and checks.
 
 The site documents two products. Argent, the toolkit in this repository, lives at the
 root of `packages/docs/docs/`. Argent Cloud lives in `packages/docs/docs/cloud/`. The paths

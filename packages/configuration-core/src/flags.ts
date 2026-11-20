@@ -81,7 +81,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
   {
     name: "macos-apps",
     description:
-      "Drive native Mac apps (AppKit, SwiftUI, react-native-macos) from inside the app. " +
+      "Control native Mac apps, including Mac Catalyst. " +
       "Adds the macos platform to list-devices and boot-device, and the file-panel and menu-bar tools. " +
       "On by default; turn it off with `argent disable macos-apps`.",
     defaultEnabled: true,
