@@ -88,6 +88,17 @@ describe("CDPClient.evaluateAwaited", () => {
     await client.disconnect();
   });
 
+  it("keeps a rejection reason that is not an Error readable", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const error = await client
+      .evaluateAwaited("new Promise((_, reject) => setTimeout(() => reject({ code: 7 }), 150))")
+      .catch((e: unknown) => e);
+
+    expect((error as Error).message).toContain('Promise rejected with: {"code":7}');
+    await client.disconnect();
+  });
+
   it("returns primitives and objects by value and releases the handle", async () => {
     const client = await connect({ awaitPromisesInApp: true });
 

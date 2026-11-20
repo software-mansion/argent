@@ -32,7 +32,8 @@ export const WATCH_PROMISE_FUNCTION = `function (slot) {
 /**
  * Returns `slot` while the box at `globalThis[slot]` is pending. Once it has
  * settled, removes the box and returns the value, or throws the rejection
- * reason.
+ * reason. A reason that is not an Error is wrapped in one, because Hermes
+ * reports a thrown plain value without its contents.
  */
 export function takeSettledScript(slot: string): string {
   return `(function (slot) {
@@ -41,7 +42,16 @@ export function takeSettledScript(slot: string): string {
   if (!box.settled) return slot;
 
   delete globalThis[slot];
-  if (box.rejected) throw box.value;
-  return box.value;
+  if (!box.rejected) return box.value;
+  if (box.value instanceof Error) throw box.value;
+  throw new Error("Promise rejected with: " + describe(box.value));
+
+  function describe(reason) {
+    try {
+      return JSON.stringify(reason);
+    } catch (e) {
+      return String(reason);
+    }
+  }
 })(${JSON.stringify(slot)})`;
 }
