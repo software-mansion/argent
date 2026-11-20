@@ -1192,6 +1192,36 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         });
       }, 15_000);
 
+      it("when the app has no listening socket to reconnect to", async () => {
+        // No socket path under so long a HOME fits sun_path.
+        vi.stubEnv("HOME", path.join(root, "h".repeat(90)));
+        fs.mkdirSync(process.env.HOME!, { recursive: true });
+        setFlag("macos-apps", true, "global");
+        const booted = await run("boot-device", { macosAppPath: appPath });
+        expect(booted.note).toContain("too long for a listening socket");
+        await start();
+        await request("https://example.com/kept", {
+          method: "POST",
+          postData: "SENT",
+          body: "RECEIVED",
+        });
+        const [{ id }] = (await readLog()).requests;
+        const app = await macosApp();
+        await app.call("Net.drop");
+        await waitUntil(() => !app.isConnected());
+
+        expect(await details(id)).toMatchObject({
+          request: { postData: CLOSED },
+          response: { body: CLOSED },
+        });
+        // A start cannot reconnect to the process either.
+        expect((await start()).layers[0]).toMatchObject({
+          armed: false,
+          reason: expect.stringContaining("too long for a listening socket"),
+        });
+        expect((await details(id)).response.body).toBe(CLOSED);
+      });
+
       it("when stop-simulator-server stops the app's services during the read", async () => {
         await run("boot-device", { macosAppPath: appPath });
         await start();

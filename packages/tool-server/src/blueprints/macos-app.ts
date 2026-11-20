@@ -885,9 +885,15 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
    * The app process whose events the records take, and the channel they come
    * on. The records number the process as their connection: argent can
    * reconnect to the same process, which keeps its number, and a new process
-   * gets the next one.
+   * gets the next one. A process without a listening socket keeps only the
+   * channel of its start, so argent cannot reconnect to it.
    */
-  let recordedProcess: { pid: number; index: number; channel: LibraryChannel } | null = null;
+  let recordedProcess: {
+    pid: number;
+    index: number;
+    channel: LibraryChannel;
+    listens: boolean;
+  } | null = null;
   let nextProcessIndex = 1;
 
   /** The adopted channel, while it is open. */
@@ -932,7 +938,10 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       },
       // Not once the app's services stopped, which drops the records, or the process ended.
       canReconnect: (index) =>
-        !disposed && recordedProcess?.index === index && pidIsAlive(recordedProcess.pid),
+        !disposed &&
+        recordedProcess?.index === index &&
+        recordedProcess.listens &&
+        pidIsAlive(recordedProcess.pid),
     },
     () => captureStarted,
     "macos-native"
@@ -1005,7 +1014,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     return enabling;
   };
 
-  const adopt = (ch: LibraryChannel, launched = false): void => {
+  const adopt = (ch: LibraryChannel, launched = false, listens = true): void => {
     if (channel !== ch) channel?.close();
     channel = ch;
     const pid = ch.handshake!.pid;
@@ -1014,7 +1023,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       if (recordedProcess) {
         records.connectionClosed(recordedProcess.index, { superseded: true });
       }
-      recordedProcess = { pid, index: nextProcessIndex++, channel: ch };
+      recordedProcess = { pid, index: nextProcessIndex++, channel: ch, listens };
       // A process argent did not start just now ran before capture reached it.
       captureGap = captureStarted && !launched;
       armedSinceLaunch = launched && captureStarted;
@@ -1549,7 +1558,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       sandboxed: info.sandboxed,
       logPath,
     };
-    adopt(ch, true);
+    adopt(ch, true, listen !== null);
     const { note: noWindow, refusal: noDrivableWindow } = await waitForFirstWindow(
       ch,
       pid,
