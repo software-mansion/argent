@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
+import * as fs from "node:fs";
 
 // Capture the options object handed to every `execFile` call so we can assert
 // the timeout is backed by a SIGKILL. Node's `execFile` `timeout` only sends its
@@ -67,7 +68,7 @@ import {
   isEntitlementBypassActive,
 } from "../src/utils/ax-prefs";
 import { listIosSimulators } from "../src/utils/ios-devices";
-import { localIosHost } from "../src/utils/ios-host";
+import { audioDir, localIosHost } from "../src/utils/ios-host";
 
 beforeEach(() => {
   calls.length = 0;
@@ -76,6 +77,9 @@ beforeEach(() => {
 function xcrunCalls() {
   return calls.filter((c) => c.cmd === "xcrun" && c.args[0] === "simctl");
 }
+
+// Arming creates the simulator's audio control directory in /tmp: remove what this file's fake simulator left.
+afterAll(() => fs.rmSync(audioDir("UDID-HOST-3"), { recursive: true, force: true }));
 
 describe("iOS simctl calls are hard-killed on timeout (SIGKILL, not SIGTERM)", () => {
   it("ensureAutomationEnabled passes killSignal SIGKILL + a finite timeout", async () => {

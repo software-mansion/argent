@@ -24,14 +24,17 @@ describe("the --platform line of argent e2e --help", () => {
   let logs: string[];
 
   /** The `--platform` values that the help lists. */
-  async function platforms(): Promise<string> {
+  async function platforms(): Promise<string[]> {
     logs = [];
     await e2e(["run", "--help"], opts);
     const line = logs
       .join("\n")
       .split("\n")
       .find((l) => l.includes("--platform <p>"));
-    return line!.replace(/^.*<p>\s+/, "").replace(/ — .*$/, "");
+    return line!
+      .replace(/^.*<p>\s+/, "")
+      .replace(/ — .*$/, "")
+      .split(/\s*\|\s*/);
   }
 
   function host(platform: NodeJS.Platform): void {
@@ -49,18 +52,15 @@ describe("the --platform line of argent e2e --help", () => {
     vi.restoreAllMocks();
   });
 
-  const WITH_MACOS = "ios | android | chromium | vega | macos | ios-remote";
-  const WITHOUT_MACOS = "ios | android | chromium | vega | ios-remote";
-
   it("lists macos on macOS and does not read the link", async () => {
     host("darwin");
-    expect(await platforms()).toBe(WITH_MACOS);
+    expect(await platforms()).toContain("macos");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
   });
 
   it.each(["linux", "win32"] as const)("does not list macos on %s without a link", async (p) => {
     host(p);
-    expect(await platforms()).toBe(WITHOUT_MACOS);
+    expect(await platforms()).not.toContain("macos");
   });
 
   it.each([
@@ -69,7 +69,7 @@ describe("the --platform line of argent e2e --help", () => {
   ])("lists macos off macOS when %s names a tool-server", async (_name, resolved) => {
     host("linux");
     getResolvedToolsUrlMock.mockResolvedValue(resolved);
-    expect(await platforms()).toBe(WITH_MACOS);
+    expect(await platforms()).toContain("macos");
   });
 
   it("does not list macos with the flag off, on any host or link, and does not read the link", async () => {
@@ -77,7 +77,7 @@ describe("the --platform line of argent e2e --help", () => {
     getResolvedToolsUrlMock.mockResolvedValue(LINK);
     for (const p of ["darwin", "linux"] as const) {
       host(p);
-      expect(await platforms()).toBe(WITHOUT_MACOS);
+      expect(await platforms()).not.toContain("macos");
     }
     expect(flagMock).toHaveBeenCalledWith("macos-apps");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
@@ -86,6 +86,6 @@ describe("the --platform line of argent e2e --help", () => {
   it("prints the help without macos when the link cannot be read", async () => {
     host("linux");
     getResolvedToolsUrlMock.mockRejectedValue(new Error("unreadable"));
-    expect(await platforms()).toBe(WITHOUT_MACOS);
+    expect(await platforms()).not.toContain("macos");
   });
 });

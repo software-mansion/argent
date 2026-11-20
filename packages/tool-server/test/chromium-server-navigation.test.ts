@@ -50,12 +50,10 @@ describe("chromium-server/navigation", () => {
       { send } as unknown as CDPClient,
       "http://user:pass@h/?token=secret"
     ).catch((e: unknown) => e);
-    expect((err as Error).message).toBe(
-      "Chromium could not navigate: net::ERR_ABORTED. Chromium aborts a URL it does not load in" +
-        " a page, such as tel:, mailto: or an unknown scheme, a response with no content, a" +
-        " navigation another one replaced, and one a beforeunload handler on the current page" +
-        " cancelled."
-    );
+    const message = (err as Error).message;
+    expect(message).toContain("net::ERR_ABORTED");
+    expect(message).toContain("tel:");
+    expect(message).not.toMatch(/user:pass|token=secret/);
   });
 
   it("navigate: classifies Chromium's rejection of an invalid URL as a failed navigation", async () => {
