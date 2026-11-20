@@ -3474,6 +3474,7 @@ describe("the tools on the Android native layer", () => {
           state: "complete",
           status: 200,
           mimeType: "application/json",
+          bytes: 11,
           durationMs: expect.any(Number),
           rnRequestId: 3,
         },

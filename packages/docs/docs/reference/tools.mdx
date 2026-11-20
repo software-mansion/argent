@@ -199,19 +199,19 @@ The [Mac apps](#mac-apps) section contains the details.
 
 `native-network-logs` returns one row for each request on each platform. A row has these fields:
 
-| Field         | Content                                                                             |
-| ------------- | ----------------------------------------------------------------------------------- |
-| `id`          | The ID of the request                                                               |
-| `method`      | The HTTP method                                                                     |
-| `url`         | The URL that the app requested                                                      |
-| `state`       | `pending`, `headers` (the response started), `complete` or `failed`                 |
-| `status`      | The HTTP status of the response                                                     |
-| `mimeType`    | The type of the response                                                            |
-| `durationMs`  | The duration of a `complete` or `failed` request                                    |
-| `errorText`   | The error of a `failed` request                                                     |
-| `bytes`       | iOS and Mac apps: the size of the response                                          |
-| `finalUrl`    | iOS and Mac apps: the URL of the response, when a redirect ended at a different URL |
-| `rnRequestId` | Android: the ID that React Native gave to the request                               |
+| Field         | Content                                                             |
+| ------------- | ------------------------------------------------------------------- |
+| `id`          | The ID of the request                                               |
+| `method`      | The HTTP method                                                     |
+| `url`         | The URL that the app requested                                      |
+| `finalUrl`    | The URL of the response, when a redirect ended at a different URL   |
+| `state`       | `pending`, `headers` (the response started), `complete` or `failed` |
+| `status`      | The HTTP status of the response                                     |
+| `mimeType`    | The type of the response                                            |
+| `bytes`       | The size of the response                                            |
+| `durationMs`  | The duration of a `complete` or `failed` request                    |
+| `errorText`   | The error of a `failed` request                                     |
+| `rnRequestId` | Android: the ID that React Native gave to the request               |
 
 The result has `count` for the rows in the list and `total` for the requests in the log.
 

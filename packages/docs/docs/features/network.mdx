@@ -82,7 +82,7 @@ A size with `~`, for example `~1.2 MB`, is approximate. The JS runtime layer sho
 
 In native network capture, the header line tells if the capture is active, waits for the app to load OkHttp, or is unavailable. For an unavailable capture, the header line gives the reason. Sometimes an active capture gets only some requests of the app. Then the header line tells which requests Argent captures.
 
-In the two native layers, a row has the same fields: `id`, `method`, `url`, `state`, `status`, `mimeType`, `durationMs` and `errorText`. The `state` field is `pending`, `headers`, `complete` or `failed`. A row of the native `NSURLProtocol` layer also has `bytes`, and `finalUrl` after a redirect to a different URL. The result has `count` for the rows in the list and `total` for the requests in the log.
+In the two native layers, a row has the same fields: `id`, `method`, `url`, `state`, `status`, `mimeType`, `bytes`, `durationMs` and `errorText`. The `state` field is `pending`, `headers`, `complete` or `failed`. After a redirect to a different URL, a row also has `finalUrl`. The result has `count` for the rows in the list and `total` for the requests in the log.
 
 Then the agent reads the details of one record by its ID. The native `NSURLProtocol` layer has no details. For the headers of this layer, the agent reads the raw events with `format: "events"`. Each request has several events. In the other layers, the details contain these items:
 

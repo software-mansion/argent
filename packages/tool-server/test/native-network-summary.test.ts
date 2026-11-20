@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { type NativeDevtoolsApi, type NetworkEvent } from "../src/blueprints/native-devtools";
 import { Registry } from "@argent/registry";
+import recordedIosEvents from "./fixtures/native-network-events-ios.json";
 import {
   createNativeNetworkLogsTool,
   summarizeRequests,
@@ -49,7 +50,11 @@ describe("native-network-logs request summary", () => {
       ...Array.from({ length: 50 }, () =>
         ev("Network.dataReceived", { requestId: "1", dataLength: 1000 })
       ),
-      ev("Network.loadingFinished", { requestId: "1", timestamp: 10.25, encodedDataLength: 50000 }),
+      ev("Network.loadingFinished", {
+        requestId: "1",
+        encodedDataLength: 50000,
+        nativeDevtoolsDurationMs: 250.2,
+      }),
       ev("Network.requestWillBeSent", {
         requestId: "2",
         timestamp: 11,
@@ -57,9 +62,9 @@ describe("native-network-logs request summary", () => {
       }),
       ev("Network.loadingFailed", {
         requestId: "2",
-        timestamp: 11.5,
         errorText: "offline",
         encodedDataLength: 0,
+        nativeDevtoolsDurationMs: 499.6,
       }),
     ]);
     expect(rows).toEqual([
@@ -81,6 +86,51 @@ describe("native-network-logs request summary", () => {
         errorText: "offline",
         bytes: 0,
         durationMs: 500,
+      },
+    ]);
+  });
+
+  it("folds events recorded from the iOS dylib on a simulator", () => {
+    expect(summarizeRequests(recordedIosEvents)).toEqual([
+      {
+        id: "420318B5-F43B-4877-8EDE-C1BED61CAF5A",
+        state: "complete",
+        method: "GET",
+        url: "http://127.0.0.1:4210/ok?n=first",
+        status: 200,
+        mimeType: "application/json",
+        bytes: 23,
+        durationMs: 15,
+      },
+      {
+        id: "7AB9EAA8-079A-414E-B16F-22BD7F56819C",
+        state: "complete",
+        method: "GET",
+        url: "http://127.0.0.1:4210/missing",
+        status: 404,
+        mimeType: "application/json",
+        bytes: 21,
+        durationMs: 18,
+      },
+      {
+        id: "1B65117A-383D-42F6-8ABA-8090BD1863E2",
+        state: "failed",
+        method: "GET",
+        url: "http://127.0.0.1:4249/refused",
+        errorText: "Could not connect to the server.",
+        bytes: 0,
+        durationMs: 19,
+      },
+      {
+        id: "2D5BAA19-DADD-472B-92C1-104D5A149635",
+        state: "complete",
+        method: "GET",
+        url: "http://127.0.0.1:4210/redirect",
+        finalUrl: "http://127.0.0.1:4210/landed",
+        status: 200,
+        mimeType: "application/json",
+        bytes: 15,
+        durationMs: 19,
       },
     ]);
   });
@@ -139,22 +189,6 @@ describe("native-network-logs request summary", () => {
     expect(rows.map((r) => r.finalUrl)).toEqual([undefined, undefined]);
   });
 
-  it("rounds fractional dylib timestamps to whole milliseconds", () => {
-    const [row] = summarizeRequests([
-      ev("Network.requestWillBeSent", {
-        requestId: "1",
-        timestamp: 1760000000.1,
-        request: { method: "GET", url: "http://x/a" },
-      }),
-      ev("Network.loadingFinished", {
-        requestId: "1",
-        timestamp: 1760000000.35333,
-        encodedDataLength: 1,
-      }),
-    ]);
-    expect(row?.durationMs).toBe(253);
-  });
-
   it("takes the dylib's duration when the request event is gone", () => {
     const rows = summarizeRequests([
       ev("Network.loadingFinished", {
@@ -172,23 +206,6 @@ describe("native-network-logs request summary", () => {
       }),
     ]);
     expect(rows.map((r) => r.durationMs)).toEqual([5012, 60000]);
-  });
-
-  it("prefers the dylib's duration over the timestamp difference", () => {
-    const [row] = summarizeRequests([
-      ev("Network.requestWillBeSent", {
-        requestId: "1",
-        timestamp: 10,
-        request: { method: "GET", url: "http://x/big" },
-      }),
-      ev("Network.loadingFinished", {
-        requestId: "1",
-        timestamp: 10.236,
-        encodedDataLength: 1048576,
-        nativeDevtoolsDurationMs: 213.4,
-      }),
-    ]);
-    expect(row?.durationMs).toBe(213);
   });
 });
 
