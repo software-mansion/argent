@@ -70,7 +70,11 @@ vi.mock("../src/update-target.js", () => ({
 }));
 // Mutable install topology read through the utils mock — tests flip these to
 // stage "the global install landed at v99" or "no global install at all".
-const topologyState = vi.hoisted(() => ({ globalInstalled: true, globalVersion: "1.0.0" }));
+const topologyState = vi.hoisted(() => ({
+  globalInstalled: true,
+  globalVersion: "1.0.0",
+  globalRoot: null as string | null,
+}));
 // A release whose agents bundle dropped a file, with a retired list whose hash
 // matches the test's own copy.
 const bundleOverride = vi.hoisted(() => ({
@@ -84,6 +88,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     ...original,
     isGloballyInstalled: vi.fn(() => topologyState.globalInstalled),
     getGloballyInstalledVersion: vi.fn(() => topologyState.globalVersion),
+    getGloballyInstalledPackageRoot: vi.fn(() => topologyState.globalRoot),
     get AGENTS_DIR() {
       return bundleOverride.agentsDir ?? original.AGENTS_DIR;
     },
@@ -118,6 +123,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   topologyState.globalInstalled = true;
   topologyState.globalVersion = "1.0.0";
+  topologyState.globalRoot = null;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-update-decline-"));
   originalCwd = process.cwd();
   // Sandbox HOME: the accepted-update path runs the real config refresh, which
@@ -227,6 +233,47 @@ function npmCalls(): Array<[string, string[]]> {
     ([bin]) => bin === "npm"
   );
 }
+
+describe("update — the global install's own package manager", () => {
+  let savedBunInstall: string | undefined;
+  beforeEach(() => {
+    savedBunInstall = process.env.BUN_INSTALL;
+    process.env.BUN_INSTALL = tmpDir;
+  });
+  afterEach(() => {
+    if (savedBunInstall === undefined) delete process.env.BUN_INSTALL;
+    else process.env.BUN_INSTALL = savedBunInstall;
+  });
+
+  it("updates a bun-owned global install with bun, not with the launcher's npm", async () => {
+    // A bare `argent update` carries no npm_config_user_agent (unset above):
+    // only the install's location says bun. The root is on disk and a real
+    // path, as the topology probe reports it.
+    const globalRoot = path.join(
+      tmpDir,
+      "install",
+      "global",
+      "node_modules",
+      "@swmansion",
+      "argent"
+    );
+    fs.mkdirSync(globalRoot, { recursive: true });
+    topologyState.globalRoot = fs.realpathSync(globalRoot);
+    childProcessMock.execFileSync.mockImplementation(((bin: string) => {
+      if (bin === "bun") topologyState.globalVersion = "99.0.0";
+      return undefined;
+    }) as never);
+
+    await update(["--yes", "--global"]);
+
+    const pmCalls = (childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>).filter(
+      ([bin]) => bin === "bun" || bin === "npm"
+    );
+    expect(pmCalls).toEqual([
+      ["bun", ["add", "-g", "@swmansion/argent@99.0.0"], expect.anything()],
+    ]);
+  });
+});
 
 describe("update — agent-triggered runs never install a missing global", () => {
   it("mcp_update trigger no-ops a --global target when no global install exists", async () => {
