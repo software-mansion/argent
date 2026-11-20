@@ -51,6 +51,26 @@ export function captureName(layer: CaptureParams["layer"]): string {
       : "network capture";
 }
 
+/**
+ * The layers as a call with `layer` returns them: a reason that tells to call
+ * network-capture-start or network-capture-stop again also tells to pass the same
+ * layer, so that call leaves the other layer as it is.
+ */
+export function withLayerInRetries<L extends { reason?: string }>(
+  layers: L[],
+  layer: CaptureParams["layer"]
+): L[] {
+  if (layer === undefined) return layers;
+  return layers.map((entry) =>
+    entry.reason && /network-capture-(start|stop)/.test(entry.reason)
+      ? {
+          ...entry,
+          reason: `${entry.reason}; pass layer "${layer}" to that call, so it leaves the other layer as it is`,
+        }
+      : entry
+  );
+}
+
 /** The devices native-network-logs reads, where every layer start covers can run. */
 export const CAPTURE_CAPABILITY: ToolCapability = {
   apple: { simulator: true },

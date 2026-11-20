@@ -1386,6 +1386,22 @@ describe("network-capture-start", () => {
       expect(await read(IOS_UDID)).toContain('"GET /after-restart"');
     });
 
+    it("tells only to restart an app whose running process cannot be armed on a start of the native layer alone, as the relaunch arms it", async () => {
+      ios.appState = "stale_process";
+
+      const result = await start(IOS_UDID, APP, undefined, "native");
+
+      expect(result.layers).toEqual([
+        {
+          layer: "ios-native",
+          armed: false,
+          reason:
+            "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app",
+        },
+      ]);
+      expect(ios.isNetworkCaptureStarted(APP)).toBe(true);
+    });
+
     it("says what a failed restart-app means for an app with no running process, which may not be installed", async () => {
       const typo = "com.example.shopp";
       ios.appState = "not_running";
@@ -3594,6 +3610,42 @@ describe("the layer option", () => {
   });
 
   describe("when the named layer cannot capture", () => {
+    const KEEP_JS = `; pass layer "js" to that call, so it leaves the other layer as it is`;
+
+    it("tells to start again with layer js when a JS start finds no app on Metro yet", async () => {
+      serve(PORT, SERIAL, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+
+      const result = await start(SERIAL, APP, undefined, "js");
+
+      expect(result.layers).toEqual([
+        {
+          layer: "js",
+          armed: false,
+          reason: `no app is connected to Metro on port ${PORT} yet; call network-capture-start again once the app runs${KEEP_JS}`,
+        },
+      ]);
+    });
+
+    it("tells to stop again with layer js when a JS stop cannot reach the runtime that may still record, and leaves native capture on", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, SERIAL, rt);
+      await start(SERIAL, APP);
+      await reconnect(PORT, SERIAL, undefined);
+
+      const result = await stop(SERIAL, APP, undefined, "js");
+
+      expect(result.layers).toEqual([
+        {
+          layer: "js",
+          armed: true,
+          total: 0,
+          reason: `${METRO_DOWN}; the interceptor already in the app's JS runtime may still record, so call network-capture-stop again once the app answers${KEEP_JS}`,
+        },
+      ]);
+      expect(rt.paused).toBe(false);
+      expect(androidFor(APP).isStarted()).toBe(true);
+    });
+
     it("fails a JS start whose Metro is down with NETWORK_CAPTURE_UNAVAILABLE, and starts no native layer", async () => {
       const err = await start(SERIAL, APP, undefined, "js").then(
         () => undefined,

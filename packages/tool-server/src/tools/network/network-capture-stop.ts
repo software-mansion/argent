@@ -39,6 +39,7 @@ import {
   otherPortHint,
   requestedLayers,
   runLayers,
+  withLayerInRetries,
   withCaptureLock,
   type CaptureParams,
   type CaptureResult,
@@ -104,7 +105,7 @@ Returns { status, layers }: per layer the call stopped, armed (false once the la
             : []),
         ])
       );
-      return { status: "ok", layers };
+      return { status: "ok", layers: withLayerInRetries(layers, params.layer) };
     },
   };
 }

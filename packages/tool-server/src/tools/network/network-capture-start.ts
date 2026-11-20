@@ -49,6 +49,7 @@ import {
   otherPortHint,
   requestedLayers,
   runLayers,
+  withLayerInRetries,
   setIosUnavailable,
   withCaptureLock,
   type CaptureParams,
@@ -129,7 +130,7 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer the call names can capture 
             ? [
                 device.platform === "android"
                   ? startAndroidLayer(registry, device, params.bundleId, port)
-                  : startIosLayer(registry, device, params.bundleId, port),
+                  : startIosLayer(registry, device, params.bundleId, port, run.js),
               ]
             : []),
         ]);
@@ -146,7 +147,7 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer the call names can capture 
           }
         );
       }
-      return { status: "ok", layers };
+      return { status: "ok", layers: withLayerInRetries(layers, params.layer) };
     },
   };
 }
@@ -337,7 +338,9 @@ async function startIosLayer(
   registry: Registry,
   device: DeviceInfo,
   bundleId: string,
-  port: number
+  port: number,
+  /** The call starts the JS layer too, whose capture a relaunch ends. */
+  jsToo: boolean
 ): Promise<StartedLayer> {
   if (!isInjectableBundleId(bundleId)) {
     return unavailable(
@@ -402,7 +405,7 @@ async function startIosLayer(
     armed: false,
     reason:
       block?.status === "restart_required"
-        ? "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app"
+        ? `no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now${jsToo ? ", then network-capture-start again, since a relaunch ends the JS layer's capture" : ""}; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app`
         : "the app has not connected yet; capture arms when it does",
   };
 }
