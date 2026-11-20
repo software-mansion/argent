@@ -1,6 +1,6 @@
 ---
 name: argent-native-profiler
-description: Diagnose native CPU hotspots, UI hangs, and memory issues. Use Instruments (xctrace) on iOS simulators and Mac apps, or Perfetto on Android. Use when diagnosing native-level performance issues.
+description: Diagnose native CPU hotspots, UI hangs, memory issues, and iOS app launch time. Use Instruments (xctrace) on iOS simulators, iPhones (launch time only) and Mac apps, or Perfetto on Android. Use when diagnosing native-level performance issues.
 ---
 
 ## 1. Tools and platforms
@@ -9,7 +9,7 @@ description: Diagnose native CPU hotspots, UI hangs, and memory issues. Use Inst
 - `profiler-stack-query`: drill into the analyzed data (hang stacks, function callers, thread breakdown, leaks).
 - `profiler-load`: reload an earlier session from disk.
 
-**iOS** (Instruments via `xctrace`): simulator only; a physical iPhone is not supported. Needs full Xcode (`xcrun xctrace version`). Reports CPU hotspots, UI hangs and memory leaks.
+**iOS** (Instruments via `xctrace`): the profiling session (`native-profiler-start`) runs on a simulator only; `native-profiler-launch-analysis` (§4) also runs on a physical iPhone. Needs full Xcode (`xcrun xctrace version`). Reports CPU hotspots, UI hangs and memory leaks.
 
 **Android** (Perfetto): emulator or physical device. Reports CPU hotspots and UI hangs (with jank reasons and the main thread's blocking function), plus an RSS-growth signal for memory pressure: treat it as a hint to confirm, not a confirmed leak. The app must be debuggable or declare `<profileable android:shell="true"/>` in its manifest, or no `perf_sample` callstacks are captured.
 
@@ -47,3 +47,15 @@ While logging is off, avoid `Leaks`, `Allocations`, and other templates that use
 - **Profiler overhead:** if `JSLexer`, `JSONEmitter` or Hermes internals dominate the JS thread, that is instrumentation cost, not app work. Discount those entries.
 - **Run-to-run variance:** treat only consistent, directional changes (across 2+ runs, or a >15% delta) as signal.
 - **Live data:** if the app fetches live API data, different responses change the workload independently of code changes. Note when data-dependent screens vary.
+
+## 4. App Launch (iOS)
+
+For any iOS app (Swift, Objective-C, React Native, Flutter) when the user asks about launch or startup time.
+
+1. Build a Release build and install it yourself with the project's own scripts or build setup (for React Native, find them as `argent-react-native-app-workflow` describes); the tool only measures an installed build. Debug-build timings are not meaningful.
+2. Target a physical iPhone on USB. Ask the user before you use a booted simulator: its timings reflect the Mac hardware.
+3. Run `native-profiler-launch-analysis`: `mode: "measure"` for the baseline and to verify fixes, `mode: "profile"` to find the cause of a slow launch. On an iPhone, `measure` runs on Argent's on-device runner (see `argent-ios-device-setup`); `profile` does not need it. If the runner cannot be signed, tell the user how to fix it. A profile still shows the cause, but it does not replace the five-launch baseline.
+4. For a profile, run `profiler-stack-query` `thread_breakdown` on the main thread, then `function_callers` for the dominant function. Typical causes: static initializers, dylib loading, heavy `didFinishLaunching` work.
+5. Rebuild and reinstall the Release build after each native or JS change, before you measure again.
+
+`native-profiler-launch-analysis` ends at the first frame. Framework work before it (e.g. React Native runtime creation) appears in the launch profile. Work after it (e.g. a JS bundle, startup data loading, the first screen's render) is not in the result, and the first frame is often only a splash screen. For the time until the app is usable, investigate that work separately; for React Native, see Startup time in `argent-react-native-optimization`.

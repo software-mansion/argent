@@ -5,6 +5,7 @@ import { macosAppRef } from "../../blueprints/macos-app";
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { forgettingUiOrientation } from "../../utils/ios-ui-orientation";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type {
   LaunchAppResult,
@@ -33,7 +34,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 const zodSchema = z.object({
@@ -79,7 +80,8 @@ export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, 
     longRunning: true,
     description: `Open an installed app, or confirm the running renderer (Chromium).<flag:macos-apps> On a Mac app it starts the app in the background when it does not run, and leaves a running app as it is.</flag:macos-apps>
 Use when starting any app; prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (iOS and Apple TV).
-Returns { launched, bundleId, <flag:macos-apps>appPath?, args?, </flag:macos-apps>note?, networkCapture? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready.<flag:macos-apps> appPath and args (Mac app) are the .app that runs and its arguments; note (Mac app) also says when the app already ran or shows no window.</flag:macos-apps> networkCapture (Android) says whether native network capture followed the launch.
+Returns { launched, bundleId, <flag:macos-apps>kind?, appPath?, args?, </flag:macos-apps>note?, networkCapture? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready. networkCapture (Android) says whether native network capture followed the launch.<flag:macos-apps>
+For Mac apps, kind is 'catalyst' or 'app'. Check appPath and args to confirm the build and arguments in use. The note can report an already running app or a missing window.</flag:macos-apps>
 For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
 
 Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.mobileslideshow (Photos), com.apple.MobileAddressBook
@@ -116,9 +118,9 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
     >({
       toolId: "launch-app",
       capability,
-      ios: makeIosImpl(registry),
+      ios: forgettingUiOrientation(makeIosImpl(registry)),
       iosDevice: iosDeviceImpl,
-      iosRemote: iosRemoteImpl,
+      iosRemote: forgettingUiOrientation(iosRemoteImpl),
       android: androidImpl,
       chromium: chromiumImpl,
       vega: vegaImpl,

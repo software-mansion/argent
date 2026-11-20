@@ -39,6 +39,7 @@ import {
   hashBundledContent,
   removeRetiredFiles,
   RETIRED_BUNDLED_PATHS,
+  RETIRED_GLOBAL_RULES,
   dirExists,
   detectPackageManager,
   globalInstallCommand,
@@ -53,7 +54,6 @@ import {
   npxChildEnv,
   listBundledSkills,
   resolveProjectRoot,
-  SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
   localInstallCommand,
@@ -385,6 +385,20 @@ describe("RETIRED_BUNDLED_PATHS", () => {
         const content = fs.readFileSync(file, "utf8");
         expect(shipped, relativePath).toContain(hashBundledContent(content));
       }
+    }
+  });
+});
+
+describe("RETIRED_GLOBAL_RULES", () => {
+  // The project rule a local init at the home dir copies into ~/.claude/rules
+  // must not read as a retired global one.
+  it("does not list the rule the bundle ships now", () => {
+    for (const { path: relativePath, shipped } of RETIRED_GLOBAL_RULES) {
+      const file = path.join(RULES_DIR, ...relativePath.split("/"));
+      if (!fs.existsSync(file)) continue;
+      expect(shipped, relativePath).not.toContain(
+        hashBundledContent(fs.readFileSync(file, "utf8"))
+      );
     }
   });
 });
@@ -730,22 +744,6 @@ describe("formatShellCommand", () => {
     expect(
       formatShellCommand({ bin: "npm", args: ["install", "-g", "/path/with spaces/pkg.tgz"] })
     ).toBe('npm install -g "/path/with spaces/pkg.tgz"');
-  });
-});
-
-// ── Bundled paths ─────────────────────────────────────────────────────────────
-
-describe("bundled paths", () => {
-  it("SKILLS_DIR is a string ending with skills", () => {
-    expect(SKILLS_DIR).toMatch(/skills$/);
-  });
-
-  it("RULES_DIR is a string ending with rules", () => {
-    expect(RULES_DIR).toMatch(/rules$/);
-  });
-
-  it("AGENTS_DIR is a string ending with agents", () => {
-    expect(AGENTS_DIR).toMatch(/agents$/);
   });
 });
 
