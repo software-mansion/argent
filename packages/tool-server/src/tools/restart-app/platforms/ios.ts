@@ -16,6 +16,7 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
+import { settleWithin } from "../../../utils/timing";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -28,7 +29,7 @@ export function makeIosImpl(
 ): PlatformImpl<Record<string, unknown>, RestartAppParams, RestartAppResult> {
   return {
     requires: ["xcrun"],
-    handler: async (_services, params, device) => {
+    handler: async (_services, params, device, options) => {
       const { udid, bundleId } = params;
       /**
        * Same reasoning as launch-app. native-devtools is a granted mechanism,
@@ -92,7 +93,16 @@ export function makeIosImpl(
           { cause: err instanceof Error ? err : new Error(String(err)) }
         );
       }
-      const networkCapture = await nativeDevtools?.networkCaptureAfterLaunch(bundleId);
+      // A cancelled call stops waiting for the new process to be armed.
+      const capture = nativeDevtools
+        ? await settleWithin(
+            nativeDevtools.networkCaptureAfterLaunch(bundleId),
+            undefined,
+            options?.signal
+          )
+        : undefined;
+      if (capture?.type === "error") throw capture.cause;
+      const networkCapture = capture?.type === "value" ? capture.value : undefined;
       return { restarted: true, bundleId, ...(networkCapture ? { networkCapture } : {}) };
     },
   };
