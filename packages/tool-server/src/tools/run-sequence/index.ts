@@ -121,11 +121,22 @@ function mayStartTransition(step: Step): boolean {
   return typeof text === "string" && /[\r\n]/.test(text);
 }
 
+function repeatsTap(step: Step, next: Step): boolean {
+  return (
+    step.tool === "gesture-tap" &&
+    next.tool === "gesture-tap" &&
+    step.args.x === next.args.x &&
+    step.args.y === next.args.y
+  );
+}
+
 function settleTreeReader(registry: Registry, device: DeviceInfo): ReadTree | undefined {
   if (device.platform === "ios" && device.kind === "simulator") {
     return () => describeIos(registry, device, {});
   }
-  if (device.platform === "android") return () => queryAndroidFullHierarchy(registry, device);
+  if (device.platform === "android") {
+    return () => queryAndroidFullHierarchy(registry, device, { waitForIdleMs: 0 });
+  }
   if (device.platform === "chromium") return () => queryChromiumTree(registry, device);
   return undefined;
 }
@@ -150,7 +161,7 @@ export function createRunSequenceTool(
     id: "run-sequence",
     description: `Execute several device interaction steps in one call.
 Use when every step is known in advance and you do not need to see the screen between steps (e.g. scrolling several times, typing then pressing enter). If a step depends on the result of an earlier one (e.g. a menu item that appears only after a tap), make separate calls instead.
-Steps run in order. On a local iOS simulator, Android and Chromium, a step after a tap, button, enter/escape key, text with a newline or met await-ui-element first waits up to 1000ms for the element tree to stop changing. The tree can read still while a transition is still moving (e.g. a native iOS push or sheet) or before a late animation starts, so keep an await-ui-element before a step that needs the new screen.
+Steps run in order. On a local iOS simulator, Android and Chromium, a step after a tap, button, enter/escape key, text with a newline or met await-ui-element first waits up to 1000ms for the element tree to stop changing (not between two taps at the same point, so a double or triple tap keeps its timing). The tree can read still while a transition is still moving (e.g. a native iOS push or sheet) or before a late animation starts, so keep an await-ui-element before a step that needs the new screen. A screen that never stops changing costs the full 1000ms after each such step: pass settle: false to skip the wait.
 If a step fails (an error, a tool that is not allowed or not supported on the target, or an await-ui-element that returns success=false), the sequence stops there and later steps do NOT run. Returns { completed, total, steps } with a result or an error for each step that ran, so a stopped sequence returns partial results.
 One screenshot and element tree are captured after the whole sequence, not per step: call screenshot separately only for a baseline before it or to see an intermediate step. A \`{{secret:...}}\` in any step skips that capture, so type a secret and submit it in one sequence.
 On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
@@ -258,6 +269,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
           readSettleTree &&
           next &&
           next.tool !== AWAIT_UI_ELEMENT_TOOL_ID &&
+          !repeatsTap(step, next) &&
           mayStartTransition(step)
         ) {
           await waitForStillTree(readSettleTree, signal);

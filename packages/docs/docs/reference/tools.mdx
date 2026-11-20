@@ -133,7 +133,7 @@ In `run-sequence`, Argent waits for the element tree to stop changing after some
 - An enter or escape key, or `keyboard` text that contains a newline.
 - An `await-ui-element` step with a met condition.
 
-Argent reads the element tree until two reads are equal, for at most 1 second. Then Argent applies the `delayMs` of the step and starts the next step. Argent does not wait when the next step is `await-ui-element`, because that step polls the tree itself.
+Argent reads the element tree until two reads are equal, for at most 1 second. Then Argent applies the `delayMs` of the step and starts the next step. Argent does not wait when the next step is `await-ui-element`, because that step polls the tree itself. Argent also does not wait between two taps at the same position, so a double tap or a triple tap keeps its timing.
 
 Argent does this wait on a local iOS simulator, an Android device and Chromium. On Android, the wait reads the tree through the Argent helper app only.
 

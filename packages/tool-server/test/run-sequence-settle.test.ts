@@ -3,10 +3,14 @@ import type { Registry } from "@argent/registry";
 import type { DescribeTreeData } from "../src/tools/describe/contract";
 
 const readTree = vi.fn<() => Promise<DescribeTreeData>>();
+const androidReadOptions = vi.fn();
 
 vi.mock("../src/tools/describe/platforms/ios", () => ({ describeIos: () => readTree() }));
 vi.mock("../src/tools/flows/flow-android-tree", () => ({
-  queryAndroidFullHierarchy: () => readTree(),
+  queryAndroidFullHierarchy: (_registry: unknown, _device: unknown, options: unknown) => {
+    androidReadOptions(options);
+    return readTree();
+  },
 }));
 vi.mock("../src/tools/flows/flow-chromium-tree", () => ({
   queryChromiumTree: () => readTree(),
@@ -58,6 +62,7 @@ function treeSequence(...trees: DescribeTreeData[]): void {
 }
 
 const tap = { tool: "gesture-tap", args: { x: 0.5, y: 0.9 }, delayMs: 0 };
+const tapElsewhere = { tool: "gesture-tap", args: { x: 0.5, y: 0.5 }, delayMs: 0 };
 
 async function run(udid: string, steps: object[], settle?: boolean): Promise<void> {
   const tool = createRunSequenceTool(recordingRegistry());
@@ -67,6 +72,7 @@ async function run(udid: string, steps: object[], settle?: boolean): Promise<voi
 beforeEach(() => {
   log = [];
   readTree.mockReset();
+  androidReadOptions.mockReset();
   treeSequence(sheetAt(0.9));
 });
 
@@ -76,7 +82,7 @@ describe("run-sequence settle", () => {
     async (udid) => {
       treeSequence(sheetAt(0.9), sheetAt(0.6), sheetAt(0.5), sheetAt(0.5));
 
-      await run(udid, [tap, tap]);
+      await run(udid, [tap, tapElsewhere]);
 
       expect(log).toEqual(["gesture-tap", "read", "read", "read", "read", "gesture-tap"]);
     }
@@ -116,7 +122,7 @@ describe("run-sequence settle", () => {
       tap,
       awaitElement,
       tap,
-      tap,
+      tapElsewhere,
     ]);
 
     expect(log).toEqual([
@@ -131,10 +137,51 @@ describe("run-sequence settle", () => {
   });
 
   it("skips the wait with settle: false and on targets without a fast tree read", async () => {
-    await run(IOS_SIMULATOR, [tap, tap], false);
-    for (const udid of [PHYSICAL_IPHONE, IOS_REMOTE, HARMONY]) await run(udid, [tap, tap]);
+    await run(IOS_SIMULATOR, [tap, tapElsewhere], false);
+    for (const udid of [PHYSICAL_IPHONE, IOS_REMOTE, HARMONY]) await run(udid, [tap, tapElsewhere]);
 
     expect(log).toEqual(Array(8).fill("gesture-tap"));
+  });
+
+  it("applies the step's delayMs after the settle wait", async () => {
+    const times: number[] = [];
+    readTree.mockImplementation(async () => {
+      times.push(Date.now());
+      return sheetAt(0.9);
+    });
+    const registry = recordingRegistry();
+    vi.mocked(registry.invokeTool).mockImplementation(async () => {
+      times.push(Date.now());
+      return { success: true };
+    });
+    const tool = createRunSequenceTool(registry);
+
+    await tool.execute({}, {
+      udid: IOS_SIMULATOR,
+      steps: [{ ...tap, delayMs: 300 }, tapElsewhere],
+    } as never);
+
+    expect(times).toHaveLength(4);
+    expect(times[3]! - times[2]!).toBeGreaterThanOrEqual(290);
+  });
+
+  it("reads the Android tree without the helper's own idle wait", async () => {
+    await run(ANDROID, [tap, tapElsewhere]);
+
+    expect(androidReadOptions).toHaveBeenCalledWith({ waitForIdleMs: 0 });
+  });
+
+  it("sends taps at the same point back to back, so a double tap keeps its timing", async () => {
+    await run(IOS_SIMULATOR, [tap, tap, tap, tapElsewhere]);
+
+    expect(log).toEqual([
+      "gesture-tap",
+      "gesture-tap",
+      "gesture-tap",
+      "read",
+      "read",
+      "gesture-tap",
+    ]);
   });
 
   it("ends the wait on a failed read", async () => {
@@ -143,7 +190,7 @@ describe("run-sequence settle", () => {
       throw new Error("Target closed");
     });
 
-    await run(CHROMIUM, [tap, tap]);
+    await run(CHROMIUM, [tap, tapElsewhere]);
 
     expect(log).toEqual(["gesture-tap", "read", "gesture-tap"]);
   });
@@ -163,7 +210,7 @@ describe("run-sequence settle", () => {
     const started = Date.now();
     await tool.execute(
       {},
-      { udid: IOS_SIMULATOR, steps: [tap, tap] } as never,
+      { udid: IOS_SIMULATOR, steps: [tap, tapElsewhere] } as never,
       {
         signal: controller.signal,
       } as never
@@ -181,7 +228,7 @@ describe("run-sequence settle", () => {
     readTree.mockImplementation(async () => read());
 
     const started = Date.now();
-    await run(IOS_SIMULATOR, [tap, tap]);
+    await run(IOS_SIMULATOR, [tap, tapElsewhere]);
     const elapsed = Date.now() - started;
 
     expect(log).toEqual(["gesture-tap", "gesture-tap"]);
