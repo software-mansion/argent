@@ -67,6 +67,7 @@ export interface ComponentFinding {
     isMemoized: boolean;
     hasUseCallback: boolean;
     hasUseMemo: boolean;
+    otherMatches?: Array<{ file: string; line: number }>;
   };
   sourceSnippet?: string;
 }

@@ -31,13 +31,14 @@ export function label(text: string, extra: Partial<DescribeNode> = {}): Describe
   });
 }
 
-function mockRegistry(calls?: ToolCall[]): Registry {
+function mockRegistry(calls?: ToolCall[], onCall?: (call: ToolCall) => void): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
       // A failed step's screenshot (flow-failure-screen.test.ts) is not a step's action.
       if (id === "screenshot") return {};
       calls?.push({ tool: id, args });
+      onCall?.({ tool: id, args });
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -75,19 +76,22 @@ export function createFlowTestHarness(options: {
   async function execute(
     name: string,
     calls?: ToolCall[],
-    device: string = IOS_DEVICE
+    device: string = IOS_DEVICE,
+    onCall?: (call: ToolCall) => void
   ): Promise<FlowRunResult> {
-    const tool = createRunFlowTool(mockRegistry(calls));
+    const tool = createRunFlowTool(mockRegistry(calls, onCall));
     return asRun(await tool.execute({}, { name, project_root: tmpDir, device }));
   }
 
   const run = (name: string): Promise<FlowRunResult> => execute(name);
+  /** `onCall` sees each tool call as it is made, and may throw to fail it. */
   const runWithCalls = async (
     name: string,
-    device?: string
+    device?: string,
+    onCall?: (call: ToolCall) => void
   ): Promise<FlowRunResult & { calls: ToolCall[] }> => {
     const calls: ToolCall[] = [];
-    return Object.assign(await execute(name, calls, device), { calls });
+    return Object.assign(await execute(name, calls, device, onCall), { calls });
   };
 
   return { writeFlow, run, runWithCalls, root: () => tmpDir };

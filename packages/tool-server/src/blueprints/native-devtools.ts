@@ -10,6 +10,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
+import { XcodeFirstLaunchPendingError } from "../utils/dependency-errors";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
@@ -60,10 +61,9 @@ export function isInjectableBundleId(bundleId: string): boolean {
  * *reports* `injectable: false` rather than throwing.
  */
 export const NON_INJECTABLE_NATIVE_WARNING =
-  "Do not fall back to the native-devtools feature tools (native-describe-screen, " +
-  "native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, " +
-  "native-user-interactable-view-at-point): they run the same injection precheck and fail " +
-  "with the same non-injectable error.";
+  "Do not fall back to the native-devtools feature tools (native-find-views, " +
+  "native-full-hierarchy, native-network-logs, native-view-at-point): they run the same " +
+  "injection precheck and fail with the same non-injectable error.";
 
 /**
  * Full recovery guidance for surfaces reached BEFORE `describe` has been tried
@@ -90,7 +90,6 @@ export const NON_INJECTABLE_RECOVERY =
 
 // Max consecutive init failures per service instance before it stops retrying.
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
-const MAX_NETWORK_LOG_ENTRIES = 1000;
 
 /**
  * Why an app has no live devtools connection — and so what, if anything,
@@ -353,7 +352,13 @@ export async function precheckNativeDevtools(
 
   try {
     await api.ensureEnvReady();
-  } catch {
+  } catch (err) {
+    // Not a fault of the simulator, so not recorded as one: let it say what to do.
+    if (err instanceof XcodeFirstLaunchPendingError) {
+      // A connected app is read over its own socket, which needs no simctl.
+      if (bundleId !== undefined && api.isConnected(bundleId)) return null;
+      throw err;
+    }
     const failure = api.getInitFailure();
     if (failure) return buildInitFailedResult(udid, failure);
     return buildInitFailedResult(udid, {
@@ -370,7 +375,10 @@ export async function precheckNativeDevtools(
   // other consumer rather than letting a raw `Invalid device: <udid>` out: a
   // failure recorded by that re-apply means the sim itself is gone
   // (init_failed's case), anything else leaves the connection unmeasured.
-  const state = await api.appConnectionState(bundleId).catch(() => {
+  const state = await api.appConnectionState(bundleId).catch((err: unknown) => {
+    // On an armed service `ensureEnvReady` above runs no simctl, so this is where
+    // the refusal lands. A connected app answers before it needs simctl.
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const failure = api.getInitFailure();
     return failure ? buildInitFailedResult(udid, failure) : ("indeterminate" as const);
   });
@@ -419,6 +427,9 @@ export interface NetworkEvent {
   params: unknown;
   timestamp: number;
 }
+
+/** How many network events a log keeps, per app; the oldest go first. A Mac app's log uses the same limit. */
+export const NATIVE_NETWORK_LOG_LIMIT = 1000;
 
 type ViewInspectorMethod =
   | "ViewHierarchy.getFullHierarchy"
@@ -488,7 +499,7 @@ export interface NativeDevtoolsApi {
   activateNetworkInspection(bundleId: string): void;
   getNetworkLog(bundleId: string): NetworkEvent[];
   clearNetworkLog(bundleId: string): void;
-  /** True once the log dropped its oldest events to stay at MAX_NETWORK_LOG_ENTRIES; cleared with the log. */
+  /** True once the log dropped its oldest events to stay at NATIVE_NETWORK_LOG_LIMIT; cleared with the log. */
   networkLogEvicted(bundleId: string): boolean;
   getAppState(bundleId: string): Promise<NativeAppState>;
   detectFrontmostBundleId(): Promise<string | null>;
@@ -593,7 +604,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const { device } = opts;
     if (device.platform !== "ios" && device.platform !== "ios-remote") {
       throw new FailureError(
-        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`,
+        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-find-views, native-view-at-point, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`,
         {
           error_code: FAILURE_CODES.NATIVE_DEVTOOLS_WRONG_PLATFORM,
           failure_stage: "native_devtools_factory_options",
@@ -671,6 +682,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const noteInitFailure = (err: unknown): void => {
+      /**
+       * Refused because Xcode's component install is pending. That ends when
+       * the user installs the components, so counting it would give up for
+       * good on a simulator that then works.
+       */
+      if (err instanceof XcodeFirstLaunchPendingError) return;
       const lastError = err instanceof Error ? err.message : String(err);
       const attempts = (initFailure?.attempts ?? 0) + 1;
       const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS;
@@ -830,7 +847,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             if (p.method && p.id === undefined) {
               const conn = connections.get(bundleId);
               if (conn) {
-                if (conn.networkLog.length >= MAX_NETWORK_LOG_ENTRIES) {
+                if (conn.networkLog.length >= NATIVE_NETWORK_LOG_LIMIT) {
                   conn.networkLog.shift();
                   conn.networkLogEvicted = true;
                 }

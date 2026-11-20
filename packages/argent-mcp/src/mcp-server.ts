@@ -36,8 +36,14 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  CAPTURE_TIMEOUT_MS,
+  PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
+import { createTreeMemory, describedTree, treeIdLine } from "./unchanged-tree.js";
 import { toMcpToolList } from "./tool-mapping.js";
+import { listDevicesText } from "./list-devices-text.js";
+import { showsSchemaKeywords } from "./keyword-facts.js";
+import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
 
@@ -51,6 +57,8 @@ export interface StartMcpServerOptions {
   paths: ToolsServerPaths;
   /** The editor connection. Defaults to stdio; a test passes an in-memory one. */
   transport?: Transport;
+  /** Cap of the post-action capture. Defaults to CAPTURE_TIMEOUT_MS; a test passes a short one. */
+  captureTimeoutMs?: number;
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
@@ -66,6 +74,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // tool call. A flag change therefore needs an MCP restart to take effect.
   const autoScreenshotOn = autoScreenshotEnabled();
   const autoDescribeOn = autoDescribeEnabled();
+  const captureTimeoutMs = options.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS;
+  const trees = createTreeMemory();
 
   let TOOLS_URL: string;
   let AUTH_TOKEN: string;
@@ -100,7 +110,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // telemetry. Unrecognized names collapse to `other`; the raw name is never sent.
   function aiClientHeaders(): Record<string, string> {
     const rawName = server.getClientVersion()?.name?.trim() || undefined;
-    const aiClient = canonicalizeAiClient(rawName);
+    const aiClient = canonicalizeAiClient(rawName, process.env);
     if (aiClient) return { "X-Argent-AI-Client": aiClient };
     if (rawName) return { "X-Argent-AI-Client": "other" };
     return {};
@@ -145,26 +155,115 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     extraHeaders: aiClientHeaders,
   });
 
+  /**
+   * Lets the screen settle before capturing, bounded by the per-tool budget:
+   * `await-screen-idle` polls the tree server-side and usually returns well
+   * under the cap. If the call fails (e.g. a tool-server without that tool),
+   * falls back to sleeping out the rest of the budget. Resolves whether it
+   * settled.
+   */
+  async function awaitScreenSettled(udid: string, toolName: string): Promise<boolean> {
+    const maxWaitMs = getAutoScreenshotDelayMs(toolName);
+    if (maxWaitMs === 0) return true;
+    const started = Date.now();
+    try {
+      const idle = await callTool(
+        "await-screen-idle",
+        { udid, timeoutMs: maxWaitMs },
+        // The tool bounds its poll to maxWaitMs; the rest covers its setup.
+        { signal: AbortSignal.timeout(maxWaitMs + captureTimeoutMs) }
+      );
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "auto_screenshot_readiness",
+        name: toolName,
+        maxWaitMs,
+        ...(idle.result as Record<string, unknown>),
+      });
+      return (idle.result as { settled?: unknown } | null)?.settled === true;
+    } catch {
+      await new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - started))));
+      return false;
+    }
+  }
+
+  async function captureScreenshotBlocks(
+    udid: string,
+    signal: AbortSignal
+  ): Promise<ContentBlock[]> {
+    try {
+      const { result } = await callTool("screenshot", { udid }, { signal });
+      const blocks = await toMcpContent(result, "image", {
+        toolsUrl: TOOLS_URL,
+        authToken: AUTH_TOKEN,
+        deviceId: udid,
+      });
+      if (!blocks.some((b) => b.type === "image")) return [];
+      return [{ type: "text" as const, text: "--- Screen after action ---" }, ...blocks];
+    } catch {
+      return []; /* best-effort */
+    }
+  }
+
+  /**
+   * The element tree the agent would otherwise have to fetch with a `describe`
+   * round-trip before its next tap. Measured on Sonnet over 70 runs: −21%
+   * turns, −23% wall time, −17% cost at equal task success (see PR #958). The
+   * tree is a few hundred tokens per action. A tree identical to the last one
+   * sent for the device is replaced by a note (unchanged-tree.ts).
+   */
+  async function captureTreeBlocks(
+    udid: string,
+    toolName: string,
+    signal: AbortSignal
+  ): Promise<ContentBlock[]> {
+    const t1 = Date.now();
+    try {
+      const d = await callTool("describe", { udid }, { signal });
+      const tree = describedTree(d.result);
+      const shown = tree === undefined ? undefined : trees.afterAction(udid, tree, toolName);
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "auto_describe",
+        name: toolName,
+        durationMs: Date.now() - t1,
+        chars: tree?.length ?? 0,
+        // `identical` is the repeat rate; `note` is what the agent was spared.
+        identical: shown?.identical ?? false,
+        note: shown?.note ?? false,
+      });
+      if (shown === undefined) return [];
+      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${shown.text}` }];
+    } catch (e) {
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "auto_describe",
+        name: toolName,
+        durationMs: Date.now() - t1,
+        error: String(e instanceof Error ? e.message : e),
+      });
+      return [];
+    }
+  }
+
   const server = new Server(
     { name: "argent", version: getInstalledVersion() },
     {
       capabilities: { tools: {} },
-      instructions:
-        "Argent — iOS Simulator, Android Emulator, and Chromium app control for interacting, testing, profiling and debugging mobile and Chromium applications. " +
-        "Interaction tools return the screen after the action: a screenshot plus the accessibility element tree with normalized tap frames. Take coordinates from that tree; call describe (or debugger-component-tree) only when no fresh tree is available — never guess coordinates from pixels. " +
-        "On session end: call stop-all-simulator-servers with devices: [...] naming the devices this session used, and perform any necessary cleanup. " +
-        "One tool-server is shared by every agent using this argent install, so an unscoped call tears down their devices too — reserve it for a deliberate machine-wide cleanup. " +
-        "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
+      instructions: SERVER_INSTRUCTIONS,
     }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
-      const tools = toMcpToolList(await fetchTools());
+      // The handshake precedes tools/list, so the client is known by now.
+      const keywordFacts = !showsSchemaKeywords(server.getClientVersion()?.name);
+      const tools = toMcpToolList(await fetchTools(), { keywordFacts });
       await spyLog({
         ts: new Date().toISOString(),
         event: "list_tools",
         count: tools.length,
+        keywordFacts,
       });
       return { tools };
     } catch (err) {
@@ -175,8 +274,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal: cancelled }) => {
     const t0 = Date.now();
+    // The device whose tree memory this call wrote to, if any.
+    let treeUdid: string | undefined;
     await spyLog({
       ts: new Date().toISOString(),
       event: "tool_called",
@@ -184,7 +285,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       args: params.arguments,
     });
     try {
-      const { result, outputHint, note } = await callTool(params.name, params.arguments);
+      const { result, outputHint, note, profiling } = await callTool(params.name, params.arguments);
 
       await spyLog({
         ts: new Date().toISOString(),
@@ -201,12 +302,16 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         deviceId: getDeviceIdFromArgs(params.arguments),
       };
 
+      const devicesText =
+        canonicalToolId(params.name) === "list-devices" ? listDevicesText(result) : undefined;
       let content: ContentBlock[];
-      if (
+      if (devicesText !== undefined) {
+        content = [{ type: "text" as const, text: devicesText }];
+      } else if (
         canonicalToolId(params.name) === "e2e-execute" &&
         result &&
         typeof result === "object" &&
-        "flow" in result &&
+        ("e2eTest" in result || "flow" in result) &&
         "steps" in result
       ) {
         content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);
@@ -217,8 +322,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
-      const wantScreenshot = autoScreenshotOn && shouldAutoScreenshot(params.name);
-      const wantTree = autoDescribeOn && shouldAutoDescribe(params.name);
+      if (udid && autoDescribeOn && canonicalToolId(params.name) === "describe") {
+        // The agent now has this tree, so the next action's tree is compared
+        // with it. The id lets a later note name it.
+        const tree = describedTree(result);
+        if (tree !== undefined) {
+          treeUdid = udid;
+          const id = trees.sent(udid, tree, "describe");
+          content = [...content, { type: "text" as const, text: treeIdLine(id) }];
+        }
+      }
+      const wantScreenshot =
+        autoScreenshotOn && shouldAutoScreenshot(params.name, params.arguments);
+      const wantTree = autoDescribeOn && shouldAutoDescribe(params.name, params.arguments);
       if (udid && (wantScreenshot || wantTree) && containsSecretPlaceholder(params.arguments)) {
         // The tool-server typed the *resolved* secret; a screenshot of a
         // non-secure-entry field would hand the plaintext back to the model as
@@ -235,91 +351,42 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
             text: "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
           },
         ];
+      } else if (udid && (wantScreenshot || wantTree) && profiling) {
+        // The screenshot and describe load the app a profiler is recording on
+        // this device, distorting the profile. The idle wait stays: without it,
+        // a `describe` sent right after the action reads the screen from before
+        // it. `describe` has already answered with the tree, so it needs no
+        // pointer to itself.
+        if (params.name !== "describe") {
+          await awaitScreenSettled(udid, params.name);
+          content = [...content, { type: "text" as const, text: PROFILING_CAPTURE_SKIPPED_NOTE }];
+        }
       } else if (udid && (wantScreenshot || wantTree)) {
-        // Let the screen settle before capturing, bounded by the per-tool
-        // budget: `await-screen-idle` polls the tree server-side and usually
-        // returns well under the cap. If the call fails (e.g. a tool-server
-        // without that tool), fall back to sleeping the full budget.
-        const maxWaitMs = getAutoScreenshotDelayMs(params.name);
-        if (maxWaitMs > 0) {
-          try {
-            const idle = await callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs });
-            await spyLog({
-              ts: new Date().toISOString(),
-              event: "auto_screenshot_readiness",
-              name: params.name,
-              maxWaitMs,
-              ...(idle.result as Record<string, unknown>),
-            });
-          } catch {
-            await new Promise((r) => setTimeout(r, maxWaitMs));
-          }
-        }
-
-        if (wantScreenshot) {
-          try {
-            const screenshotResult = await callTool("screenshot", { udid });
-            const screenshotContent = await toMcpContent(screenshotResult.result, "image", {
-              toolsUrl: TOOLS_URL,
-              authToken: AUTH_TOKEN,
-              deviceId: udid,
-            });
-            const hasImage = screenshotContent.some((b) => b.type === "image");
-            if (hasImage) {
-              content = [
-                ...content,
-                {
-                  type: "text" as const,
-                  text: "--- Screen after action ---",
-                },
-                ...screenshotContent,
-              ];
-            }
-          } catch {
-            /* best-effort */
-          }
-        }
-
-        // Append the element tree the agent would otherwise have to fetch with
-        // a `describe` round-trip before its next tap. Measured on Sonnet over
-        // 70 runs: −21% turns, −23% wall time, −17% cost at equal task success
-        // (see PR #958). The tree is a few hundred tokens per action.
-        if (wantTree) {
-          const t1 = Date.now();
-          try {
-            const d = await callTool("describe", { udid });
-            const desc = (d.result as { description?: unknown } | null)?.description;
-            if (typeof desc === "string" && desc.length > 0) {
-              content = [
-                ...content,
-                { type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` },
-              ];
-            }
-            await spyLog({
-              ts: new Date().toISOString(),
-              event: "auto_describe",
-              name: params.name,
-              durationMs: Date.now() - t1,
-              chars: typeof desc === "string" ? desc.length : 0,
-            });
-          } catch (e) {
-            await spyLog({
-              ts: new Date().toISOString(),
-              event: "auto_describe",
-              name: params.name,
-              durationMs: Date.now() - t1,
-              error: String(e instanceof Error ? e.message : e),
-            });
-          }
-        }
+        const screenSettled = await awaitScreenSettled(udid, params.name);
+        const signal = AbortSignal.timeout(captureTimeoutMs);
+        const screenshot = wantScreenshot
+          ? captureScreenshotBlocks(udid, signal)
+          : Promise.resolve([]);
+        // An unsettled screen can leave a tree read in flight, which a
+        // concurrent describe would reuse (physical iPhone).
+        if (!screenSettled) await screenshot;
+        if (wantTree) treeUdid = udid;
+        const tree = wantTree ? captureTreeBlocks(udid, params.name, signal) : Promise.resolve([]);
+        content = [...content, ...(await screenshot), ...(await tree)];
       }
 
       if (note) {
         content = [{ type: "text" as const, text: note }, ...content];
       }
 
+      // The client gave up on this call (an interrupt, its tool timeout), and
+      // the SDK drops the response. The agent never gets the tree recorded
+      // above, so a later note must not name it.
+      if (treeUdid !== undefined && cancelled.aborted) trees.forget(treeUdid);
+
       return { content };
     } catch (err) {
+      if (treeUdid !== undefined) trees.forget(treeUdid);
       await spyLog({
         ts: new Date().toISOString(),
         event: "tool_result",

@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { type NativeDevtoolsApi, type NetworkEvent } from "../src/blueprints/native-devtools";
+import { Registry } from "@argent/registry";
 import {
-  nativeNetworkLogsTool,
+  createNativeNetworkLogsTool,
   summarizeRequests,
 } from "../src/tools/native-devtools/native-network-logs";
+
+const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 
 vi.mock("../src/blueprints/native-devtools", async () => {
   const actual = await vi.importActual<typeof import("../src/blueprints/native-devtools")>(
@@ -61,7 +64,8 @@ describe("native-network-logs request summary", () => {
     ]);
     expect(rows).toEqual([
       {
-        requestId: "1",
+        id: "1",
+        state: "complete",
         method: "POST",
         url: "http://x/rpc/feed",
         status: 200,
@@ -70,10 +74,11 @@ describe("native-network-logs request summary", () => {
         durationMs: 250,
       },
       {
-        requestId: "2",
+        id: "2",
+        state: "failed",
         method: "GET",
         url: "http://x/down",
-        error: "offline",
+        errorText: "offline",
         bytes: 0,
         durationMs: 500,
       },
@@ -92,7 +97,8 @@ describe("native-network-logs request summary", () => {
       }),
     ]);
     expect(row).toEqual({
-      requestId: "1",
+      id: "1",
+      state: "headers",
       method: "GET",
       url: "http://x/api/me",
       finalUrl: "http://x/login",
@@ -108,7 +114,7 @@ describe("native-network-logs request summary", () => {
         response: { url: "http://x/login", status: 200, mimeType: "text/html" },
       }),
     ]);
-    expect(row).toEqual({ requestId: "1", status: 200, mimeType: "text/html" });
+    expect(row).toEqual({ id: "1", state: "headers", status: 200, mimeType: "text/html" });
   });
 
   it("does not treat a canonicalized url as a redirect", () => {
@@ -242,7 +248,7 @@ describe("native-network-logs execute", () => {
       "http://x/b",
       "http://x/c",
     ]);
-    expect(out).toMatchObject({ status: "ok", count: 3, totalRequests: 3 });
+    expect(out).toMatchObject({ status: "ok", count: 3, total: 3 });
     expect(out.truncated).toBeUndefined();
   });
 
@@ -254,7 +260,7 @@ describe("native-network-logs execute", () => {
 
   it("limits to the most recent requests and still counts them all", async () => {
     const out = await run(log, { limit: 1 }).result;
-    expect(out).toMatchObject({ count: 1, totalRequests: 3 });
+    expect(out).toMatchObject({ count: 1, total: 3 });
     expect(out.requests[0].url).toBe("http://x/c");
   });
 
@@ -270,7 +276,7 @@ describe("native-network-logs execute", () => {
   it("returns every request when there are fewer than limit", async () => {
     const many = Array.from({ length: 30 }, (_, i) => request(`r${i}`, `http://x/${i}`, i)).flat();
     const out = await run(many).result;
-    expect(out).toMatchObject({ count: 30, totalRequests: 30 });
+    expect(out).toMatchObject({ count: 30, total: 30 });
     expect(out.requests[0].url).toBe("http://x/0");
   });
 
@@ -287,7 +293,7 @@ describe("native-network-logs execute", () => {
   it("returns no rows for limit 0 but still counts them", async () => {
     expect(await run(log, { limit: 0 }).result).toMatchObject({
       count: 0,
-      totalRequests: 3,
+      total: 3,
       requests: [],
     });
     expect((await run(log, { limit: 0, format: "events" }).result).events).toEqual([]);

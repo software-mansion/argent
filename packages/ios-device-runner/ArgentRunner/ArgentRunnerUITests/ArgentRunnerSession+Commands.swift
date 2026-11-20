@@ -3,11 +3,15 @@ import XCTest
 
 extension DeviceButton {
     /// The XCUIDevice member for this wire name.
-    var hardwareButton: XCUIDevice.Button {
+    var hardwareButton: XCUIDevice.Button? {
         switch self {
         case .home: return .home
+        #if targetEnvironment(simulator)
+        case .volumeUp, .volumeDown: return nil
+        #else
         case .volumeUp: return .volumeUp
         case .volumeDown: return .volumeDown
+        #endif
         case .actionButton: return .action
         }
     }
@@ -159,6 +163,8 @@ extension ArgentRunnerSession {
             return performLongPress(request, on: app)
         case .drag:
             return performDrag(request, on: app)
+        case .touchPaths:
+            return performTouchPaths(request, on: app)
         case .type:
             return performType(request, on: app)
         case .keyboardReturn:
@@ -189,7 +195,9 @@ extension ArgentRunnerSession {
 
         // press on an absent button is a silent no-op that would read as a
         // successful press, so it is refused up front.
-        guard device.hasHardwareButton(button.hardwareButton) else {
+        guard let hardwareButton = button.hardwareButton,
+            device.hasHardwareButton(hardwareButton)
+        else {
             return .failure(
                 .unsupportedOperation,
                 "this \(UIDevice.current.model) has no \(button.rawValue) button",
@@ -198,7 +206,7 @@ extension ArgentRunnerSession {
             )
         }
 
-        device.press(button.hardwareButton)
+        device.press(hardwareButton)
 
         return .success(MessagePayload(message: "pressed \(button.rawValue)"))
     }

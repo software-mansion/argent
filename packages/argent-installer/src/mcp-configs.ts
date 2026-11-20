@@ -7,6 +7,7 @@ import {
   MCP_BINARY_NAME,
   PACKAGE_NAME,
   PERMISSION_RULE,
+  DEVIN_PERMISSION_RULE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
 import {
@@ -19,6 +20,8 @@ import {
   readYaml,
   writeYaml,
   copyDir,
+  findRetiredFiles,
+  resolveLinkedDestination,
   realpathOrSelf,
   editJsoncFile,
   isYarnPnp,
@@ -26,6 +29,9 @@ import {
   RULES_DIR,
   AGENTS_DIR,
   ARGENT_SKILL_PREFIX,
+  RETIRED_BUNDLED_PATHS,
+  RETIRED_GLOBAL_RULES,
+  type RetiredFile,
 } from "./utils.js";
 import { isMap, parse as parseYamlText } from "yaml";
 import { parse as parseJsoncText, type ParseError } from "jsonc-parser";
@@ -69,6 +75,9 @@ interface ShadowingConfigFinding {
 
 export interface McpConfigAdapter {
   name: string;
+  // Telemetry slug kept stable across a product rename; defaults to the
+  // sanitized `name`.
+  telemetryName?: string;
   detect(): boolean;
   projectPath(root: string): string | null;
   globalPath(): string | null;
@@ -85,8 +94,42 @@ export interface McpConfigAdapter {
   // Report argent state outside the projectPath/globalPath pair that can keep
   // the entry written at `writtenScope` from taking effect.
   findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
+  // `init` only, after the user agreed. `update` never calls it: the user may
+  // have removed or narrowed the rules since, and that choice stays.
   addAllowlist?(root: string, scope: "local" | "global"): void;
+  // Why addAllowlist would write nothing here, for init to report; null when
+  // it would write.
+  allowlistSkipReason?(root: string, scope: "local" | "global"): string | null;
+  // `update` only: carry an allowlist the user still has over to the tools
+  // this version added. Never re-adds rules the user removed.
+  refreshAllowlist?(root: string, scope: "local" | "global"): void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
+}
+
+// `write` replaces the whole argent server entry, so an approval key the
+// editor keeps inside that entry (Devin's alwaysAllow, Gemini's trust, Kiro's
+// autoApprove) would be lost on every update. This reads it back so the new
+// entry carries it over, whatever the user set it to.
+function existingEntryKeys(
+  configPath: string,
+  serversKey: string,
+  keys: readonly string[]
+): Record<string, unknown> {
+  let entry: unknown;
+  try {
+    entry = (readJsonc(configPath)[serversKey] as Record<string, unknown> | undefined)?.[
+      MCP_SERVER_KEY
+    ];
+  } catch {
+    return {};
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return {};
+  const kept: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = (entry as Record<string, unknown>)[key];
+    if (value !== undefined) kept[key] = value;
+  }
+  return kept;
 }
 
 type CodexConfig = {
@@ -338,8 +381,9 @@ function jsonLooksArgentServerOnly(filePath: string, containerKey: string): bool
 // rules/ and agents/ are byte copies of the bundled payloads, so argent-written
 // means every entry matches a bundled name exactly (a user's own
 // "argent-notes.md" must NOT pass); skills/ come from the skills CLI, where
-// argent owns the ARGENT_SKILL_PREFIX namespace. An empty dir is user evidence:
-// argent's copies always carry content.
+// argent owns the ARGENT_SKILL_PREFIX namespace. Retired paths count too, so a
+// leftover from an older version is not user evidence. An empty dir is user
+// evidence: argent's copies always carry content.
 let bundledManagedNamesCache: Map<string, Set<string>> | null = null;
 function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
   if (!bundledManagedNamesCache) bundledManagedNamesCache = new Map();
@@ -351,6 +395,7 @@ function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
   } catch {
     names = new Set();
   }
+  for (const retired of RETIRED_BUNDLED_PATHS[kind]) names.add(retired.path.split("/")[0]);
   bundledManagedNamesCache.set(kind, names);
   return names;
 }
@@ -624,6 +669,16 @@ function codexDirLooksArgentOnly(dir: string): boolean {
 
 // MARK: Cursor
 
+function cursorPermissionsPath(): string {
+  return path.join(homedir(), ".cursor", "permissions.json");
+}
+
+// The file's mcpAllowlist, or null when the file or the key is missing.
+function cursorPermissionsList(): string[] | null {
+  const list = readJsonc(cursorPermissionsPath()).mcpAllowlist;
+  return Array.isArray(list) ? (list as string[]) : null;
+}
+
 const cursorAdapter: McpConfigAdapter = {
   name: "Cursor",
 
@@ -674,19 +729,27 @@ const cursorAdapter: McpConfigAdapter = {
 
   // The allowlist lives in a separate ~/.cursor/permissions.json that may carry
   // the user's own rules, so edit that one key instead of rewriting the file.
+  // Only a file that already has an mcpAllowlist is edited. Once that key is
+  // non-empty, Cursor enforces the file: Run Everything drops to Allowlist, and
+  // the file's list replaces the in-IDE one. Under Run Everything the rule does
+  // nothing anyway, and without the file the user approves argent in Cursor.
+  allowlistSkipReason(): string | null {
+    return cursorPermissionsList() === null
+      ? "creating ~/.cursor/permissions.json would turn off Cursor's Run Everything mode; approve argent in Cursor instead"
+      : null;
+  },
+
   addAllowlist(): void {
-    const permPath = path.join(homedir(), ".cursor", "permissions.json");
-    const config = readJsonc(permPath);
-    const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : [];
-    if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
-    editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
+    const list = cursorPermissionsList();
+    if (list === null || list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
+    editJsoncFile(cursorPermissionsPath(), ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
   },
 
   removeAllowlist(_root: string, scope: "local" | "global"): void {
     // The allowlist lives ONLY in the machine-global permissions file, which a
     // retained global install still depends on.
     if (scope !== "global") return;
-    const permPath = path.join(homedir(), ".cursor", "permissions.json");
+    const permPath = cursorPermissionsPath();
     if (!fs.existsSync(permPath)) return;
     const config = readJsonc(permPath);
     const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : undefined;
@@ -993,8 +1056,21 @@ function vscodeUserDirs(): string[] {
 
 // MARK: Windsurf
 
+// Windsurf was renamed Devin Desktop. Its bundled Devin agent still loads MCP
+// servers from ~/.codeium/windsurf/mcp_config.json, but ignores alwaysAllow
+// there: tool approvals come only from permissions.allow in its own user config.
+function devinUserConfigPath(): string {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(homedir(), "AppData", "Roaming");
+    return path.join(appData, "devin", "config.json");
+  }
+  const xdg = process.env.XDG_CONFIG_HOME;
+  return path.join(xdg || path.join(homedir(), ".config"), "devin", "config.json");
+}
+
 const windsurfAdapter: McpConfigAdapter = {
-  name: "Windsurf",
+  name: "Devin Desktop",
+  telemetryName: "windsurf",
 
   detect(): boolean {
     return dirHasEditorEvidence(
@@ -1017,6 +1093,7 @@ const windsurfAdapter: McpConfigAdapter = {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...existingEntryKeys(configPath, "mcpServers", ["alwaysAllow"]),
     });
   },
 
@@ -1041,19 +1118,22 @@ const windsurfAdapter: McpConfigAdapter = {
   },
 
   // Targets just the argent entry's alwaysAllow key, so comments and foreign
-  // servers survive.
+  // servers survive. alwaysAllow serves the legacy Cascade agent; the Devin
+  // agent needs its own permission rule.
   addAllowlist(): void {
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return;
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], ["*"]);
+    addAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
   },
 
   removeAllowlist(_root: string, scope: "local" | "global"): void {
     // Global-only client: a scope-"local" cleanup must not touch the
     // machine-global config a retained global install depends on.
     if (scope !== "global") return;
+    removeAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     if (!fs.existsSync(configPath)) return;
     const config = readJsonc(configPath);
@@ -1164,6 +1244,7 @@ const geminiAdapter: McpConfigAdapter = {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...existingEntryKeys(configPath, "mcpServers", ["trust"]),
     });
   },
 
@@ -1242,10 +1323,14 @@ const codexAdapter: McpConfigAdapter = {
   write(configPath: string, entry: McpServerEntry): void {
     const config = readToml(configPath);
     const servers = (config.mcp_servers ?? {}) as Record<string, unknown>;
+    // The per-tool approvals live inside the entry, so keep them as they are
+    // (see existingEntryKeys).
+    const previous = servers[MCP_SERVER_KEY] as { tools?: unknown } | undefined;
     servers[MCP_SERVER_KEY] = {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...(previous?.tools !== undefined ? { tools: previous.tools } : {}),
     };
     config.mcp_servers = servers;
     writeToml(configPath, config);
@@ -1294,6 +1379,30 @@ const codexAdapter: McpConfigAdapter = {
       };
     }
 
+    writeToml(configPath, config);
+  },
+
+  // Codex has no wildcard: each tool id is listed. A table with at least one
+  // approved tool means the user kept the allowlist, so tools this version
+  // added are approved too. Tools already listed keep the mode the user gave
+  // them, and an emptied or removed table stays as it is.
+  refreshAllowlist(root, scope): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+    if (!configPath || !fs.existsSync(configPath)) return;
+
+    const config = readToml(configPath) as CodexConfig;
+    const toolsConfig = config.mcp_servers?.argent?.tools;
+    if (!toolsConfig) return;
+    const optedIn = Object.values(toolsConfig).some(
+      (tool) => (tool as { approval_mode?: unknown } | undefined)?.approval_mode === "approve"
+    );
+    if (!optedIn) return;
+
+    const missing = getAvailableToolIds().filter((tool) => !(tool in toolsConfig));
+    if (missing.length === 0) return;
+    for (const tool of missing) {
+      toolsConfig[tool] = { approval_mode: "approve" };
+    }
     writeToml(configPath, config);
   },
 
@@ -1511,6 +1620,7 @@ const kiroAdapter: McpConfigAdapter = {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...existingEntryKeys(configPath, "mcpServers", ["autoApprove"]),
     });
   },
 
@@ -1620,39 +1730,45 @@ export function findConfiguredAdapterScopes(
   return results;
 }
 
-export function addClaudePermission(root: string, scope: "local" | "global"): void {
-  const settingsPath =
-    scope === "global"
-      ? path.join(homedir(), ".claude", "settings.json")
-      : path.join(root, ".claude", "settings.json");
-
+// Shared by Claude Code and Devin, whose settings both keep tool approvals in
+// a `permissions.allow` string array.
+function addAllowRule(settingsPath: string, rule: string): void {
   // Route through readJsonc / editJsoncFile so a hand-added comment can't make
   // readJson's `catch { return {} }` drop the user's other permissions on write.
   // editJsoncFile creates the permissions.allow path if absent.
   const config = readJsonc(settingsPath);
   const permissions = (config.permissions ?? {}) as Record<string, unknown>;
   const allow = Array.isArray(permissions.allow) ? (permissions.allow as string[]) : [];
-  if (allow.includes(PERMISSION_RULE)) return;
-  editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, PERMISSION_RULE]);
+  if (allow.includes(rule)) return;
+  editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, rule]);
 }
 
-export function removeClaudePermission(root: string, scope: "local" | "global"): void {
-  const settingsPath =
-    scope === "global"
-      ? path.join(homedir(), ".claude", "settings.json")
-      : path.join(root, ".claude", "settings.json");
-
+function removeAllowRule(settingsPath: string, rule: string): void {
   if (!fs.existsSync(settingsPath)) return;
   const config = readJsonc(settingsPath);
   const permissions = config?.permissions as Record<string, unknown> | undefined;
   const allow = permissions?.allow;
   if (!permissions || !Array.isArray(allow)) return;
-  if (!allow.includes(PERMISSION_RULE)) return;
-  const next = (allow as string[]).filter((rule) => rule !== PERMISSION_RULE);
+  if (!allow.includes(rule)) return;
+  const next = (allow as string[]).filter((r) => r !== rule);
   // undefined deletes the emptied `allow`; editJsoncFile then prunes an emptied
   // `permissions` and removes the file if the document collapses to {}, while a
   // comment or foreign permission keeps the file and survives byte-intact.
   editJsoncFile(settingsPath, ["permissions", "allow"], next.length > 0 ? next : undefined);
+}
+
+function claudeSettingsPath(root: string, scope: "local" | "global"): string {
+  return scope === "global"
+    ? path.join(homedir(), ".claude", "settings.json")
+    : path.join(root, ".claude", "settings.json");
+}
+
+export function addClaudePermission(root: string, scope: "local" | "global"): void {
+  addAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
+}
+
+export function removeClaudePermission(root: string, scope: "local" | "global"): void {
+  removeAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
 }
 
 type ManagedContentScope = "local" | "global";
@@ -1799,6 +1915,19 @@ export function getManagedContentTargets(
         addManagedTarget(targets.skillTargets, adapter.name, path.join(kiroBase, "skills"), root);
         break;
       }
+      case "Devin Desktop": {
+        // Argent writes no skills here itself, but `npx skills add` links
+        // Devin's skills/<name> into .agents/skills once Devin's config dir
+        // exists, and addAllowlist creates it. The skills CLI resolves the
+        // global dir from XDG_CONFIG_HOME on every platform, so this is not
+        // devinUserConfigPath(), which uses %APPDATA% on Windows.
+        const devinBase =
+          scope === "global"
+            ? path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config"), "devin")
+            : path.join(root, ".devin");
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(devinBase, "skills"), root);
+        break;
+      }
     }
   }
 
@@ -1876,6 +2005,59 @@ export function removeCodexRules(configPath: string): boolean {
 
 // MARK: Copy orchestrator
 
+export interface RetiredTargetFiles {
+  kind: "rules" | "agents";
+  target: ManagedContentTarget;
+  /** The target's label, naming where its link leads when it is one. */
+  location: string;
+  files: RetiredFile[];
+}
+
+// Copying only adds files, so one an older version wrote and this one dropped
+// stays, and editors keep loading it. Same targets as copyRulesAndAgents, for
+// each scan's adapters and scope. Global rule dirs get no rule at all, so every
+// rule argent once copied there is retired.
+export function findRetiredRulesAndAgents(
+  scans: ReadonlyArray<{ adapters: McpConfigAdapter[]; scope: ManagedContentScope }>,
+  root: string,
+  rulesDir: string,
+  agentsDir: string
+): RetiredTargetFiles[] {
+  const targets = scans.flatMap(({ adapters, scope }) => {
+    const { ruleTargets, agentTargets } = getManagedContentTargets(adapters, root, scope);
+    const globalRules = scope === "global";
+    return [
+      ...ruleTargets.map((target) => ({
+        kind: "rules" as const,
+        target,
+        bundleDir: globalRules ? null : rulesDir,
+        retired: globalRules
+          ? [...RETIRED_BUNDLED_PATHS.rules, ...RETIRED_GLOBAL_RULES]
+          : RETIRED_BUNDLED_PATHS.rules,
+      })),
+      ...agentTargets.map((target) => ({
+        kind: "agents" as const,
+        target,
+        bundleDir: agentsDir,
+        retired: RETIRED_BUNDLED_PATHS.agents,
+      })),
+    ];
+  });
+  const found: RetiredTargetFiles[] = [];
+  // Targets that are one dir share its files: list them once. That is a link to
+  // a canonical dir, or the local and global target when root is the home dir.
+  const seen = new Set<string>();
+  for (const { kind, target, bundleDir, retired } of targets) {
+    const dir = resolveLinkedDestination(target.targetPath);
+    if (seen.has(`${kind}:${realpathOrSelf(dir)}`)) continue;
+    seen.add(`${kind}:${realpathOrSelf(dir)}`);
+    const files = findRetiredFiles(retired, bundleDir, target.targetPath);
+    if (files.length === 0) continue;
+    found.push({ kind, target, location: formatCopyDestination(target, dir, root), files });
+  }
+  return found;
+}
+
 export function copyRulesAndAgents(
   adapters: McpConfigAdapter[],
   root: string,
@@ -1885,8 +2067,13 @@ export function copyRulesAndAgents(
 ): string[] {
   const results: string[] = [];
   const managedTargets = getManagedContentTargets(adapters, root, scope);
+  // The rule only tells an agent in a project set up for argent what to do
+  // when argent is not installed. The usage guidance is in the MCP server's
+  // instructions, so a global copy would cost every session in every project
+  // tokens for nothing. findRetiredRulesAndAgents offers to remove old ones.
+  const globalScope = scope === "global";
 
-  for (const target of managedTargets.ruleTargets) {
+  for (const target of globalScope ? [] : managedTargets.ruleTargets) {
     try {
       const written = copyDir(rulesDir, target.targetPath);
       if (written) {
@@ -1909,6 +2096,18 @@ export function copyRulesAndAgents(
   }
 
   for (const target of managedTargets.codexConfigTargets) {
+    if (globalScope) {
+      // The section sits between argent's markers, so removing it loses
+      // nothing of the user's.
+      try {
+        if (removeCodexRules(target.targetPath)) {
+          results.push(`  Removed argent rules from ${target.targetPath} (developer_instructions)`);
+        }
+      } catch (err) {
+        results.push(`  Could not remove argent rules from ${target.targetPath}: ${err}`);
+      }
+      continue;
+    }
     try {
       const injected = injectCodexRules(target.targetPath, rulesDir);
       if (injected) {

@@ -18,6 +18,11 @@ import {
   type ActionEnv,
 } from "../../src/tools/flows/flow-actions";
 import { redirectTmpdir } from "../helpers/tmpdir-env";
+import {
+  __resetUiOrientationForTests,
+  setUiOrientationSourceProvider,
+} from "../../src/utils/ios-ui-orientation";
+import { nativePointToUi } from "../../src/utils/ui-orientation";
 
 // Stub settle + capture so the tests exercise only the baseline write/diff decision.
 const h = vi.hoisted(() => ({
@@ -30,6 +35,8 @@ const h = vi.hoisted(() => ({
   outputDir: "",
   /** Set by the differ mock: the currentPath it was asked to compare. */
   diffCurrentPath: "",
+  /** Set by the differ mock: that file's bytes, which a pass sweeps from scratch. */
+  diffCurrentBytes: Buffer.alloc(0),
   /** Set by the differ mock: the top-mask policy it was passed. */
   diffTopMask: "" as "" | NonNullable<DiffPngFilesOptions["topMask"]>,
   /** Set by the differ mock: the normalizeSizes option it was passed. */
@@ -62,6 +69,7 @@ vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
   diffPngFiles: vi.fn(async (options: DiffPngFilesOptions) => {
     h.outputDir = options.outputDir;
     h.diffCurrentPath = options.currentPath;
+    h.diffCurrentBytes = await (await import("node:fs/promises")).readFile(options.currentPath);
     h.diffTopMask = options.topMask ?? "status-bar";
     h.diffNormalizeSizes = options.normalizeSizes;
     // The real differ bails before writing anything on a dimension mismatch.
@@ -261,6 +269,18 @@ describe("runSnapshot baselines", () => {
     expect(r.snapshotKey).toBeUndefined();
   });
 
+  it("compares a Mac window's top band: it is the title bar and toolbar, not a status bar", async () => {
+    const macEnv = { ...env, device: { platform: "macos", id: "macos-app-com.example.notes" } };
+    const macBaseline = path.join(tmpDir, "__baselines__", "checkout", "home__macos-390x844.png");
+    await fs.mkdir(path.dirname(macBaseline), { recursive: true });
+    await writeFakePng(macBaseline);
+
+    const r = await runSnapshot(macEnv as unknown as ActionEnv, opts());
+
+    expect(r.status).toBe("pass");
+    expect(h.diffTopMask).toBe("none");
+  });
+
   it("fails a dimension-mismatch bail instead of passing its 0% mismatch", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
@@ -301,6 +321,22 @@ describe("runSnapshot baselines", () => {
       hostPath: h.contextDiffPath,
       filename: "home__ios-390x844-diff.png",
     });
+  });
+
+  it("passes a diff exactly at maxMismatch despite float error, and fails one pixel over", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    // 3000x4800: 100800 px is exactly 0.7% but computes 0.7000000000000001.
+    h.mismatchPercentage = (100800 / 14_400_000) * 100;
+    expect((await runSnapshot(env, opts({ maxMismatch: 0.7 }))).status).toBe("pass");
+
+    h.mismatchPercentage = (100801 / 14_400_000) * 100;
+    expect((await runSnapshot(env, opts({ maxMismatch: 0.7 }))).status).toBe("fail");
+
+    // 1206x2622: 59505 px is one over 1.8818%, yet within 1e-9 points of it.
+    h.mismatchPercentage = (59505 / 3_162_132) * 100;
+    expect((await runSnapshot(env, opts({ maxMismatch: 1.8818 }))).status).toBe("fail");
   });
 
   it("fails without a diff artifact when the differ produced no context image", async () => {
@@ -390,6 +426,40 @@ describe("runSnapshot settle", () => {
     expect(r.status).toBe("skip");
     expect(r.reason).toContain("aborted");
     expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+  });
+
+  it("settles a tree-sourced platform before capturing", async () => {
+    vi.mocked(settleTree).mockClear();
+    vi.mocked(invokeOnDevice).mockClear();
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    await runSnapshot(env, opts());
+
+    expect(vi.mocked(settleTree)).toHaveBeenCalledOnce();
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(env, "screenshot", expect.anything());
+  });
+
+  it("skips the settle on a platform with no flow tree source, and still captures", async () => {
+    // Flows have no harmony tree source, so a settle read would always fail.
+    vi.mocked(settleTree).mockClear();
+    vi.mocked(invokeOnDevice).mockClear();
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(path.join(tmpDir, "__baselines__", "checkout", "home__harmony-390x844.png"));
+    const harmonyEnv = {
+      ...env,
+      device: { platform: "harmony", kind: "device", id: "harmony-127.0.0.1:5555" },
+    } as unknown as ActionEnv;
+
+    const r = await runSnapshot(harmonyEnv, opts());
+
+    expect(r.status).toBe("pass");
+    expect(vi.mocked(settleTree)).not.toHaveBeenCalled();
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(
+      harmonyEnv,
+      "screenshot",
+      expect.anything()
+    );
   });
 });
 
@@ -809,5 +879,65 @@ describe("runSnapshot on a remote simulator", () => {
     expect(remote.reason).toContain(`${local.snapshotKey}.png`);
     const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
     expect(files).toEqual([`${local.snapshotKey}.png`]);
+  });
+});
+
+describe("runSnapshot against a baseline an older Argent took of a landscape iOS UI", () => {
+  const sim = {
+    device: { platform: "ios", kind: "simulator", id: "405655A7-F5FD-4101-9168-148F0F0953D1" },
+    signal: undefined,
+    ctx: { artifacts: new ArtifactStore() },
+  } as unknown as ActionEnv;
+  const dir = () => path.join(tmpDir, "__baselines__", "checkout");
+
+  beforeEach(() => {
+    __resetUiOrientationForTests();
+    setUiOrientationSourceProvider(async () => ({
+      orientation: async () => ({ interfaceOrientation: "landscapeRight" }),
+    }));
+  });
+  afterEach(() => setUiOrientationSourceProvider(undefined));
+
+  it("compares the capture, turned back to the native space, against the sideways key", async () => {
+    // An upright landscape capture, 8x4; the old baseline was native, 4x8.
+    await writeCoordPng(h.shotPath, 8, 4);
+    await fs.mkdir(dir(), { recursive: true });
+    await writeFakePng(path.join(dir(), "home__ios-4x8.png"), 4, 8);
+
+    const r = await runSnapshot(sim, opts());
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("home__ios-4x8.png");
+    expect(r.warning).toContain("older Argent");
+    expect(r.warning).toContain("home__ios-8x4.png");
+    const turned = PNG.sync.read(h.diffCurrentBytes);
+    expect({ w: turned.width, h: turned.height }).toEqual({ w: 4, h: 8 });
+    // Each native pixel holds the upright pixel the turn maps it to.
+    for (const [x, y] of [
+      [0, 0],
+      [3, 7],
+      [1, 5],
+    ] as const) {
+      const p = nativePointToUi({ x: (x + 0.5) / 4, y: (y + 0.5) / 8 }, "landscapeRight");
+      const i = (y * 4 + x) * 4;
+      expect([turned.data[i], turned.data[i + 1]]).toEqual([
+        Math.floor(p.x * 8),
+        Math.floor(p.y * 4),
+      ]);
+    }
+  });
+
+  it("prefers an upright baseline, and writes one under updateBaselines", async () => {
+    await writeCoordPng(h.shotPath, 8, 4);
+    await fs.mkdir(dir(), { recursive: true });
+    await writeFakePng(path.join(dir(), "home__ios-4x8.png"), 4, 8);
+    const written = await runSnapshot(sim, opts({ updateBaselines: true }));
+    expect(written.reason).toContain("home__ios-8x4.png");
+    await expect(fs.access(path.join(dir(), "home__ios-8x4.png"))).resolves.toBeUndefined();
+
+    const r = await runSnapshot(sim, opts());
+    expect(r.reason).toContain("home__ios-8x4.png");
+    expect(r).not.toHaveProperty("warning");
+    expect(h.diffCurrentPath).toBe(h.shotPath);
   });
 });

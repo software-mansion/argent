@@ -124,7 +124,7 @@ async function runBothWays(name: string): Promise<{
         fileInputs: boundary.fileInputs,
       })
     );
-    const sent = Object.keys(boundary.fileInputs!.flow_file!.members!);
+    const sent = Object.keys(boundary.fileInputs!.e2e_test_file!.members!);
     return { resolved, sent, colocated, linked };
   } finally {
     await boundary.cleanup();
@@ -200,7 +200,7 @@ describe("the client's walk and the runner's parse name the same run: targets", 
 
     const expected = runnerTargets(text);
     expect(expected).not.toEqual([]);
-    const members = (wire.flow_file as FileInputWire).members as FileInputMember[];
+    const members = (wire.e2e_test_file as FileInputWire).members as FileInputMember[];
     expect(members.map((m) => m.key)).toEqual(expected.map((t) => flowMemberKey(flowsDir, t)));
   });
 });

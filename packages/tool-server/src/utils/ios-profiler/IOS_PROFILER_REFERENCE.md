@@ -35,14 +35,14 @@ Three concerns are captured: **CPU hotspots**, **UI hangs**, and **memory leaks*
 
 `Argent.tracetemplate` enables the following Instruments. Identifiers are taken from the binary plist (`com.apple.xray.instrument-type.*` / `com.apple.dt-perfteam.*`):
 
-| Instrument identifier                                 | Common name                                         | Used by Argent's pipeline?                                                                                                                                                                                                                                                                                                            |
-| ----------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `com.apple.xray.instrument-type.coresampler2`         | **Time Profiler** (kernel-driven sampling profiler) | **Yes** — exported as the `time-profile` table → CPU hotspots.                                                                                                                                                                                                                                                                        |
-| `com.apple.dt-perfteam.hangs`                         | **Hangs** (main-thread responsiveness detector)     | **Yes** — exported as the `potential-hangs` table → UI hangs.                                                                                                                                                                                                                                                                         |
-| `com.apple.xray.instrument-type.homeleaks`            | **Leaks** (periodic leak scan)                      | **Yes** — exported via the `Leaks` track → memory leaks. Responsible frame/library is populated only when the target ran under Malloc Stack Logging — argent's `malloc_stack_logging` cold launch, or an app launched with the diagnostic externally (e.g. an Xcode scheme) and then attached to (else `<Call stack limit reached>`). |
-| `com.apple.xray.instrument-type.oa`                   | **Allocations** (object lifetime + alloc tree)      | Recorded but not consumed directly; with `malloc_stack_logging` it supplies the allocation backtraces that make leaks attributable.                                                                                                                                                                                                   |
-| `com.apple.xray.instrument-type.poi`                  | **Points of Interest** (`os_signpost`)              | Recorded but not consumed.                                                                                                                                                                                                                                                                                                            |
-| `com.apple.xray.instrument-type.device-thermal-state` | **Thermal State**                                   | Recorded but not consumed.                                                                                                                                                                                                                                                                                                            |
+| Instrument identifier                                 | Common name                                         | Used by Argent's pipeline?                                                                                                                                                                                |
+| ----------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `com.apple.xray.instrument-type.coresampler2`         | **Time Profiler** (kernel-driven sampling profiler) | **Yes** — exported as the `time-profile` table → CPU hotspots.                                                                                                                                            |
+| `com.apple.dt-perfteam.hangs`                         | **Hangs** (main-thread responsiveness detector)     | **Yes** — exported as the `potential-hangs` table → UI hangs.                                                                                                                                             |
+| `com.apple.xray.instrument-type.homeleaks`            | **Leaks** (periodic leak scan)                      | **Yes**. The Leaks track supplies the leak rows. On the iOS simulator, use Malloc Stack Logging for allocation stacks. On Mac, Instruments can also capture stacks for allocations made during recording. |
+| `com.apple.xray.instrument-type.oa`                   | **Allocations** (object lifetime + alloc tree)      | Supplies allocation stacks to Leaks. C++ object naming (`identifyVirtualCppObjects`) is disabled because symbolication during recording can stall the app. Leaks still names leaked C++ objects.          |
+| `com.apple.xray.instrument-type.poi`                  | **Points of Interest** (`os_signpost`)              | Recorded but not consumed.                                                                                                                                                                                |
+| `com.apple.xray.instrument-type.device-thermal-state` | **Thermal State**                                   | Recorded but not consumed.                                                                                                                                                                                |
 
 > The hangs Instrument is the same engine that powers Xcode's "hang reports" — Apple's term for any stretch of time the main thread fails to service the run loop.
 
@@ -84,8 +84,8 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    and all of 27+ as broken, with no upper bound). Because the malloc path terminates the running app before
    launching, `native-profiler-start { malloc_stack_logging: true }` is **rejected
    up front** on those versions (before the app is touched) rather than silently
-   capturing nothing — re-run without the flag (leaks are still detected, just
-   unattributed) or set `ARGENT_IOS_CAPTURE=device` to force it on a known-good
+   capturing nothing — re-run without the flag (CPU and hang data only: that capture has no
+   leak data, and the reports say so) or set `ARGENT_IOS_CAPTURE=device` to force it on a known-good
    host. The non-malloc path already routes around this via the capture-strategy
    selector (`--all-processes` fallback), but that fallback cannot `--launch`, so
    it cannot substitute for the malloc cold start. Forcing
@@ -107,6 +107,7 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    - `<base>_raw_cpu.xml` — `time-profile` table
    - `<base>_raw_hangs.xml` — `potential-hangs` table
    - `<base>_raw_leaks.xml` — `Leaks` track detail
+   - For Mac apps, `<base>.trace.metadata.json` stores the recording duration, whether the app ended, and the suspension intervals used in the report.
 4. Returns `{ traceFile, exportedFiles, exportDiagnostics }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data.
 
 ### `native-profiler-analyze`
@@ -146,6 +147,7 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 - **Hang ↔ CPU correlation.** For each hang, filter CPU samples whose `timestampNs` ∈ `[startNs, startNs + durationNs]`. Within that window, count the **dominant function** of every sample and the **app call chain** (system + hex frames stripped). Top 5 functions and top 3 chains attach to the hang. Their timestamps are also returned in `hangSampleTimestamps` so Stage 2 can flag overlapping CPU hotspots.
 - **Leak aggregation.** Group raw leaks by `(objectType, responsible frame)`, summing `sizeBytes * count` — with `malloc_stack_logging` the same object type can leak from several distinct call sites, and each site is its own finding. The frame half of the key is normalized the way `isLeakAttributed` matches it: trimmed, with every unattributed spelling (`""`, `Unknown`, the `<Call stack limit reached>` sentinel) collapsed into one bucket, so an export that mixes those spellings still yields one unattributed group per type (and under `--attach`, where nothing is attributed, grouping degrades to per-type). Attributed leaks (a resolved responsible frame) sort first, then by total size descending. (Leaks have no timestamps, so they cannot be correlated with CPU samples — they are reported independently.) Severity follows attribution: a resolved responsible frame ⇒ RED, no recorded frame ⇒ a low-confidence YELLOW (see `isLeakAttributed`).
 - Hang severity is classified from the type string: contains `severe` or equals `hang` ⇒ RED; `microhang` ⇒ YELLOW.
+- For Mac app suspension timing, see [Mac app suspensions](./PIPELINE_DESIGN.md#mac-app-suspensions).
 
 ### Stage 2 — Aggregate CPU (`pipeline/02-aggregate.ts`)
 
@@ -166,8 +168,8 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 
 `renderNativeProfilerReport` produces a markdown document with these sections:
 
-1. **Header** — trace filename, platform, timestamp, any export warnings.
-2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks).
+1. **Header** — trace filename, platform, timestamp, any export warnings. When the trace has no leak data (the `all-processes` capture, or a leaks export that failed), a warning that memory leaks were not checked and that the app must not be reported as leak-free.
+2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks). Memory Leaks reads `not recorded` when the trace has no leak data.
 3. **CPU Hotspots** — table of dominant function, thread, weight (ms / %), sample count, `duringHang` flag, severity. Per hotspot: top 3 call chains and either burst windows or active range.
 4. **UI Hangs** — table of type / start (`MM:SS.mmm`) / duration / severity. Per hang: top app call chains during the hang window with sample counts (or top suspected functions if chain extraction was empty).
 5. **Memory Leaks** — table of object type, count, total size, responsible frame, library.
@@ -175,6 +177,8 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 7. **Next Steps** — concrete `profiler-stack-query` invocations the agent can chain into.
 
 The inline report is capped (top 5 hotspots, top 3 hangs); the full report is always written to `<trace>-report.md` for re-read.
+
+With no findings, the report is a short all clear instead. Without leak data it keeps the header warning and says only that no CPU hotspots or UI hangs were detected.
 
 ---
 
@@ -187,7 +191,7 @@ Reads the cached `parsedData` on the session — no XML re-parse. Modes:
 | `hang_stacks`      | `hang_index`                  | The hang's suspected functions, app call chains during the hang, plus all unique stacks across CPU samples whose dominant function matches a suspect.                          |
 | `function_callers` | `function_name`               | Frames immediately above (callers) and below (callees) the named frame across all samples, ranked by frequency. Effectively a poor-man's call graph for a hot native function. |
 | `thread_breakdown` | optional `thread` filter      | Per-thread weight (ms/%) and sample count. With a filter, also lists hotspots on that thread.                                                                                  |
-| `leak_stacks`      | optional `object_type` filter | Filtered, sorted memory leak table.                                                                                                                                            |
+| `leak_stacks`      | optional `object_type` filter | Filtered, sorted memory leak table, or a note that no leak data was recorded.                                                                                                  |
 
 Top-N is configurable (default 15).
 
@@ -198,7 +202,7 @@ Top-N is configurable (default 15).
 Lists prior `.trace` directories under the debug dir (`<os.tmpdir()>/argent-profiler-cwd/`, e.g. `/var/folders/.../T/argent-profiler-cwd/` on macOS) and re-parses them on demand:
 
 - `mode=list` — enumerate sessions on disk.
-- `mode=load_instruments session_id=<ts> device_id=<UDID>` — re-runs the parsing pipeline on the stored XMLs and re-hydrates the session so query tools work again.
+- `mode=load_native session_id=<ts> device_id=<id>` parses the saved XML again so query tools can use it. A Mac session restores its capture notes and hang suspension timing when the metadata file is available.
 - (Also supports `mode=load_react` for Hermes profiler sessions; same idea, different files.)
 
 This is what makes before/after comparisons possible without keeping the original capture session alive.

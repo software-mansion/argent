@@ -35,6 +35,11 @@ import {
   readJson,
   writeJson,
   copyDir,
+  findRetiredFiles,
+  hashBundledContent,
+  removeRetiredFiles,
+  RETIRED_BUNDLED_PATHS,
+  RETIRED_GLOBAL_RULES,
   dirExists,
   detectPackageManager,
   globalInstallCommand,
@@ -49,7 +54,6 @@ import {
   npxChildEnv,
   listBundledSkills,
   resolveProjectRoot,
-  SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
   localInstallCommand,
@@ -161,6 +165,17 @@ describe("copyDir", () => {
 
   it("returns null when source does not exist", () => {
     expect(copyDir(path.join(tmpDir, "nope"), path.join(tmpDir, "dest"))).toBeNull();
+  });
+
+  // A release that dropped every agent: the copy must not leave an empty
+  // .claude/agents behind, nor report one as written.
+  it("returns null and creates nothing when the source holds no files", () => {
+    const src = path.join(tmpDir, "src");
+    fs.mkdirSync(path.join(src, "sub"), { recursive: true });
+    const dest = path.join(tmpDir, "dest");
+
+    expect(copyDir(src, dest)).toBeNull();
+    expect(fs.existsSync(dest)).toBe(false);
   });
 
   it("copies directory recursively and reports where it wrote", () => {
@@ -351,6 +366,184 @@ describe("copyDir", () => {
     } finally {
       fs.chmodSync(dest, 0o755);
     }
+  });
+});
+
+// ── Retired bundled files ─────────────────────────────────────────────────────
+
+describe("RETIRED_BUNDLED_PATHS", () => {
+  // A retired file the bundle still ships has to be listed as it ships now, or
+  // copies of this version would stay once the bundle drops it.
+  it("lists the hash of every retired file the bundle still ships", () => {
+    for (const [kind, dir] of [
+      ["agents", AGENTS_DIR],
+      ["rules", RULES_DIR],
+    ] as const) {
+      for (const { path: relativePath, shipped } of RETIRED_BUNDLED_PATHS[kind]) {
+        const file = path.join(dir, ...relativePath.split("/"));
+        if (!fs.existsSync(file)) continue;
+        const content = fs.readFileSync(file, "utf8");
+        expect(shipped, relativePath).toContain(hashBundledContent(content));
+      }
+    }
+  });
+});
+
+describe("RETIRED_GLOBAL_RULES", () => {
+  // The project rule a local init at the home dir copies into ~/.claude/rules
+  // must not read as a retired global one.
+  it("does not list the rule the bundle ships now", () => {
+    for (const { path: relativePath, shipped } of RETIRED_GLOBAL_RULES) {
+      const file = path.join(RULES_DIR, ...relativePath.split("/"));
+      if (!fs.existsSync(file)) continue;
+      expect(shipped, relativePath).not.toContain(
+        hashBundledContent(fs.readFileSync(file, "utf8"))
+      );
+    }
+  });
+});
+
+describe("findRetiredFiles / removeRetiredFiles", () => {
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n\nInspects.\n";
+  const CHECKLIST = "## Quality control checklist\n\nFields.\n";
+  const retired = [
+    {
+      path: "argent-environment-inspector.md",
+      shipped: [hashBundledContent(INSPECTOR)],
+    },
+    {
+      path: "references/quality-control-checklist.md",
+      shipped: [hashBundledContent(CHECKLIST)],
+    },
+  ];
+  let bundle: string;
+  let target: string;
+
+  function put(filePath: string, contents: string): void {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, contents);
+  }
+
+  function stageRetired(targetDir: string): void {
+    put(path.join(targetDir, "argent-environment-inspector.md"), INSPECTOR);
+    put(path.join(targetDir, "references", "quality-control-checklist.md"), CHECKLIST);
+  }
+
+  function removeAllFound(targetDir: string) {
+    return removeRetiredFiles(targetDir, findRetiredFiles(retired, bundle, targetDir));
+  }
+
+  beforeEach(() => {
+    // A release that no longer ships either retired file.
+    bundle = path.join(tmpDir, "bundle");
+    put(path.join(bundle, "argent-other.md"), "other");
+    target = path.join(tmpDir, ".claude", "agents");
+  });
+
+  it("finds copies of retired files the bundle no longer ships", () => {
+    stageRetired(target);
+
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([
+      { relativePath: "argent-environment-inspector.md", sha256: hashBundledContent(INSPECTOR) },
+      {
+        relativePath: "references/quality-control-checklist.md",
+        sha256: hashBundledContent(CHECKLIST),
+      },
+    ]);
+  });
+
+  it("reads a copy with CRLF line endings as the version shipped", () => {
+    put(path.join(target, "argent-environment-inspector.md"), INSPECTOR.replace(/\n/g, "\r\n"));
+
+    expect(findRetiredFiles(retired, bundle, target)).toMatchObject([
+      { relativePath: "argent-environment-inspector.md" },
+    ]);
+  });
+
+  // An edited copy and the user's own file look alike: both may hold their work.
+  it("does not list a file at a retired path that matches no shipped version", () => {
+    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}My own step.\n`);
+    put(path.join(target, "references", "quality-control-checklist.md"), "# My own checklist\n");
+
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([]);
+  });
+
+  it("does not list a retired file while the bundle still ships it", () => {
+    put(path.join(bundle, "argent-environment-inspector.md"), INSPECTOR);
+    stageRetired(target);
+
+    expect(findRetiredFiles(retired, bundle, target).map((f) => f.relativePath)).toEqual([
+      "references/quality-control-checklist.md",
+    ]);
+  });
+
+  it("finds nothing when the target dir is missing", () => {
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, ".claude"))).toBe(false);
+  });
+
+  it("removes the files, then the dirs that leaves empty, up to the target itself", () => {
+    stageRetired(target);
+
+    expect(removeAllFound(target)).toEqual({
+      removedPaths: ["argent-environment-inspector.md", "references/quality-control-checklist.md"],
+      removedRoot: true,
+    });
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".claude"))).toBe(true);
+  });
+
+  it("keeps the user's own files and every dir that still holds one", () => {
+    stageRetired(target);
+    put(path.join(target, "my-agent.md"), "mine");
+    put(path.join(target, "references", "my-notes.md"), "mine");
+
+    expect(removeAllFound(target)).toMatchObject({ removedRoot: false });
+    expect(fs.readdirSync(target).sort()).toEqual(["my-agent.md", "references"]);
+    expect(fs.readdirSync(path.join(target, "references"))).toEqual(["my-notes.md"]);
+  });
+
+  it("keeps a file that changed after it was found", () => {
+    stageRetired(target);
+    const found = findRetiredFiles(retired, bundle, target);
+    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}Changed meanwhile.\n`);
+
+    expect(removeRetiredFiles(target, found).removedPaths).toEqual([
+      "references/quality-control-checklist.md",
+    ]);
+    expect(fs.existsSync(path.join(target, "argent-environment-inspector.md"))).toBe(true);
+  });
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  describe.skipIf(process.platform === "win32")("symlinked targets", () => {
+    it("works through a linked target and keeps the link and the dir it leads to", () => {
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      stageRetired(canonical);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "agents"), target);
+
+      expect(removeAllFound(target)).toEqual({
+        removedPaths: [
+          "argent-environment-inspector.md",
+          "references/quality-control-checklist.md",
+        ],
+        removedRoot: false,
+      });
+      expect(fs.readdirSync(canonical)).toEqual([]);
+      expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
+    });
+
+    it("removes the copy a linked file leads to, and the link left dangling", () => {
+      const shared = path.join(tmpDir, "shared", "argent-environment-inspector.md");
+      const link = path.join(target, "argent-environment-inspector.md");
+      put(shared, INSPECTOR);
+      put(path.join(target, "my-agent.md"), "mine");
+      fs.symlinkSync(path.join("..", "..", "shared", "argent-environment-inspector.md"), link);
+
+      expect(removeAllFound(target).removedPaths).toEqual(["argent-environment-inspector.md"]);
+      expect(fs.existsSync(shared)).toBe(false);
+      expect(fs.lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
+    });
   });
 });
 
@@ -551,22 +744,6 @@ describe("formatShellCommand", () => {
     expect(
       formatShellCommand({ bin: "npm", args: ["install", "-g", "/path/with spaces/pkg.tgz"] })
     ).toBe('npm install -g "/path/with spaces/pkg.tgz"');
-  });
-});
-
-// ── Bundled paths ─────────────────────────────────────────────────────────────
-
-describe("bundled paths", () => {
-  it("SKILLS_DIR is a string ending with skills", () => {
-    expect(SKILLS_DIR).toMatch(/skills$/);
-  });
-
-  it("RULES_DIR is a string ending with rules", () => {
-    expect(RULES_DIR).toMatch(/rules$/);
-  });
-
-  it("AGENTS_DIR is a string ending with agents", () => {
-    expect(AGENTS_DIR).toMatch(/agents$/);
   });
 });
 
@@ -777,6 +954,12 @@ describe("isOnline", () => {
 // ── isSkillsCliAvailable ─────────────────────────────────────────────────────
 
 describe("npxChildEnv", () => {
+  const SKIP_SUBMODULE_CONFIG = {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "submodule.packages/argent-private.update",
+    GIT_CONFIG_VALUE_0: "none",
+  };
+
   it("drops npm_config_package so a nested npx installs the package it is asked for", () => {
     // `npx --package @swmansion/argent -- argent init` exports this to argent (#1335).
     const env = npxChildEnv({
@@ -785,13 +968,41 @@ describe("npxChildEnv", () => {
       npm_config_yes: "true",
     });
 
-    expect(env).toEqual({ PATH: "/usr/bin", npm_config_yes: "true" });
+    expect(env).toEqual({ PATH: "/usr/bin", npm_config_yes: "true", ...SKIP_SUBMODULE_CONFIG });
   });
 
   it("matches the variable name case-insensitively", () => {
     const env = npxChildEnv({ NPM_CONFIG_PACKAGE: "@swmansion/argent", HOME: "/home/u" });
 
-    expect(env).toEqual({ HOME: "/home/u" });
+    expect(env).toEqual({ HOME: "/home/u", ...SKIP_SUBMODULE_CONFIG });
+  });
+
+  it("tells git to skip the private submodule the pinned skills source carries", () => {
+    // skills 1.8.0+ inits submodules after the clone; the SSH one hangs on a
+    // host-key prompt behind the spinner on machines without github.com known.
+    expect(npxChildEnv({})).toEqual(SKIP_SUBMODULE_CONFIG);
+  });
+
+  it("appends after git config entries the caller already set", () => {
+    const env = npxChildEnv({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.proxy",
+      GIT_CONFIG_VALUE_0: "http://proxy:3128",
+    });
+
+    expect(env).toEqual({
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "http.proxy",
+      GIT_CONFIG_VALUE_0: "http://proxy:3128",
+      GIT_CONFIG_KEY_1: "submodule.packages/argent-private.update",
+      GIT_CONFIG_VALUE_1: "none",
+    });
+  });
+
+  it("starts the git config entries over when the inherited count is not one git accepts", () => {
+    for (const bogus of ["", "abc", "-1", "1.5"]) {
+      expect(npxChildEnv({ GIT_CONFIG_COUNT: bogus })).toEqual(SKIP_SUBMODULE_CONFIG);
+    }
   });
 
   it("does not modify the environment it was given", () => {
@@ -862,6 +1073,18 @@ describe("isSkillsCliAvailable", () => {
     expect(typeof opts?.timeout).toBe("number");
     expect(opts!.timeout!).toBeGreaterThan(0);
   });
+
+  it("probes from the given cwd, where the `skills` command will run", () => {
+    execSyncMock.mockReturnValue(Buffer.from(""));
+
+    isSkillsCliAvailable("/work/repo");
+    isSkillsCliAvailable();
+
+    const pinned = execSyncMock.mock.calls[0]![1] as { cwd?: string };
+    const unpinned = execSyncMock.mock.calls[1]![1] as { cwd?: string };
+    expect(pinned.cwd).toBe("/work/repo");
+    expect(unpinned).not.toHaveProperty("cwd");
+  });
 });
 
 // ── localInstallCommand / localUninstallCommand ──────────────────────────────
@@ -879,8 +1102,12 @@ describe("localInstallCommand", () => {
       args: ["add", "--dev", "pkg"],
     });
   });
-  it("uses add -D for pnpm", () => {
-    expect(localInstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["add", "-D", "pkg"] });
+  it("uses add -D for pnpm, skipping the workspace-root check", () => {
+    // A bare `pnpm add` at a workspace root fails with ERR_PNPM_ADDING_TO_ROOT.
+    expect(localInstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["add", "-D", "--ignore-workspace-root-check", "pkg"],
+    });
   });
   it("uses add -d for bun", () => {
     expect(localInstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["add", "-d", "pkg"] });

@@ -4,6 +4,12 @@ import { z } from "zod";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import type { Registry } from "@argent/registry";
 
+// A runtime without zstd, so GET /tools has to list what this one reads.
+vi.mock("@argent/archive", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/archive")>()),
+  ARCHIVE_FORMATS: ["gzip"],
+}));
+
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(() => ({
     updateAvailable: false,
@@ -58,6 +64,7 @@ function stubRegistry(): Registry {
           description: "Deferred but hinted",
           inputSchema: { type: "object", properties: {} },
           searchHint: "profiling hotspots cpu",
+          readOnly: true,
           services: () => ({}),
           execute: async () => ({}),
         };
@@ -138,6 +145,21 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(byName.get("hinted-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("searchHint");
+  });
+
+  it("passes readOnly through on /tools response only for tools that set it", async () => {
+    const res = await request(handle.app).get("/tools").expect(200);
+    const byName = new Map<string, Record<string, unknown>>(
+      (res.body.tools as Record<string, unknown>[]).map((t) => [t.name as string, t])
+    );
+
+    expect(byName.get("hinted-tool")).toMatchObject({ readOnly: true });
+    expect(byName.get("plain-tool")).not.toHaveProperty("readOnly");
+  });
+
+  it("lists the archive formats POST /upload accepts", async () => {
+    const res = await request(handle.app).get("/tools").expect(200);
+    expect(res.body.uploadFormats).toEqual(["gzip"]);
   });
 
   it("lists a hideFromMcp tool with the flag set, and still runs it", async () => {

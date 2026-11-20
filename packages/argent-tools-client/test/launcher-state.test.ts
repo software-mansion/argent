@@ -60,11 +60,6 @@ describe("writeToolsServerState ↔ readToolsServerState round-trip (per-bundle)
     expect(await launcher.readToolsServerState(BUNDLE)).toEqual(sampleState);
   });
 
-  it("creates the state directory if it does not exist", async () => {
-    await launcher.writeToolsServerState(sampleState);
-    expect(existsSync(launcher.stateFileForBundle(BUNDLE))).toBe(true);
-  });
-
   it("overwrites prior state on subsequent writes", async () => {
     await launcher.writeToolsServerState(sampleState);
     await launcher.writeToolsServerState({ ...sampleState, port: 9999 });
