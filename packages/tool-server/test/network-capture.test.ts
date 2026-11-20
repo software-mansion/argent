@@ -136,6 +136,9 @@ const OTHER = "com.example.other";
 const PORT = 8081;
 const NOT_STARTED = "capture was not started for this app";
 const METRO_DOWN = `Metro is not running on port ${PORT}; start it, or pass the port of the app's Metro`;
+/** The restart advice of a start of the native layer alone, which cannot tell whether JS capture runs. */
+const RESTART_NATIVE_ONLY =
+  'no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now; a relaunch also ends any JS capture of the app: if it ran and you still need it, call network-capture-start with layer "js" and the same port and logicalDeviceId as its start once the app\'s JavaScript loads (for native requests alone, restart-app is enough); if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app';
 const JS_NOT_LOADED =
   "the app's JavaScript has not loaded yet; call network-capture-start again once it has, before you trigger the requests to inspect";
 const RESTART_REASON =
@@ -1383,7 +1386,7 @@ describe("network-capture-start", () => {
       expect(await read(IOS_UDID)).toContain('"GET /after-restart"');
     });
 
-    it("tells only to restart an app whose running process cannot be armed on a start of the native layer alone, as the relaunch arms it", async () => {
+    it("tells to restart an app whose running process cannot be armed on a start of the native layer alone, and when to start the JS layer again", async () => {
       ios.appState = "stale_process";
 
       const result = await start(IOS_UDID, APP, undefined, "native");
@@ -1392,8 +1395,7 @@ describe("network-capture-start", () => {
         {
           layer: "ios-native",
           armed: false,
-          reason:
-            "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app",
+          reason: RESTART_NATIVE_ONLY,
         },
       ]);
       expect(ios.isNetworkCaptureStarted(APP)).toBe(true);
@@ -1411,8 +1413,7 @@ describe("network-capture-start", () => {
         {
           layer: "ios-native",
           armed: false,
-          reason:
-            'no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now; a relaunch also ends the JS capture that an earlier start turned on, so if you need it, call network-capture-start with layer "js" once the app\'s JavaScript loads (for native requests alone, restart-app is enough); if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app',
+          reason: RESTART_NATIVE_ONLY,
         },
       ]);
     });
