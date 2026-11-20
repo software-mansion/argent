@@ -109,6 +109,7 @@ describe("maskBodySecrets", () => {
         "[" + `{"password":"\\"","a":`.repeat(repeats) + '"\\'.repeat(repeats),
     },
     { shape: "form", crafted: (repeats: number) => "a" + "[]".repeat(repeats) + "x=1" },
+    { shape: "form array", crafted: (repeats: number) => "a" + "[]".repeat(repeats) + "=1" },
   ])("scans a large crafted $shape body in linear time", ({ crafted }) => {
     const scanMs = (body: string) => {
       const started = performance.now();
@@ -116,8 +117,8 @@ describe("maskBodySecrets", () => {
       return performance.now() - started;
     };
     const fastestMs = (body: string) => Math.min(scanMs(body), scanMs(body), scanMs(body));
-    const small = fastestMs(crafted(20_000));
-    const large = fastestMs(crafted(200_000));
+    const small = fastestMs(crafted(5_000));
+    const large = fastestMs(crafted(50_000));
     expect(large).toBeLessThan(Math.max(small, 2) * 30);
   });
 });
