@@ -7,6 +7,7 @@ type DefaultsVerb = "export" | "delete";
 
 const calls: Array<{ cmd: string; args: readonly string[] }> = [];
 let exportedPlist = "";
+let plistAfterDelete: string | undefined;
 const failures = new Map<DefaultsVerb, Error & { stderr?: string }>();
 
 function failureFor(args: readonly string[]): Error | undefined {
@@ -26,6 +27,9 @@ vi.mock("node:child_process", async () => {
     ) => {
       const callback = typeof opts === "function" ? opts : cb!;
       calls.push({ cmd, args });
+      if (args.includes("delete") && plistAfterDelete !== undefined) {
+        exportedPlist = plistAfterDelete;
+      }
       const err = failureFor(args);
       if (err) callback(err);
       else callback(null, { stdout: args.includes("export") ? exportedPlist : "", stderr: "" });
@@ -69,6 +73,7 @@ function preBootKeys(): Array<string | undefined> {
 beforeEach(() => {
   calls.length = 0;
   exportedPlist = accessibilityPlist(["AccessibilityEnabled"]);
+  plistAfterDelete = undefined;
   failures.clear();
 });
 
@@ -131,6 +136,14 @@ describe("AutomationEnabled, which leaves Full Keyboard Access unable to move fo
     failures.set("delete", defaultsError("Defaults have not been changed."));
 
     await expect(clearAutomationEnabled("UDID-11")).rejects.toThrow("Command failed");
+  });
+
+  it("clearAutomationEnabled resolves when a concurrent clear deleted the pref first", async () => {
+    exportedPlist = accessibilityPlist(["AutomationEnabled"]);
+    plistAfterDelete = accessibilityPlist([]);
+    failures.set("delete", defaultsError("Error: Could not find key 'AutomationEnabled'"));
+
+    await expect(clearAutomationEnabled("UDID-12")).resolves.toBeUndefined();
   });
 
   it("localIosHost.bootstrapAx rejects when the sim is not booted", async () => {

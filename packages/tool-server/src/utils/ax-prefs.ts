@@ -50,8 +50,12 @@ async function hasAutomationEnabled(udid: string): Promise<boolean> {
  * (an empty one for a missing domain) on every runtime.
  */
 export async function clearAutomationEnabled(udid: string): Promise<void> {
-  if (await hasAutomationEnabled(udid)) {
+  if (!(await hasAutomationEnabled(udid))) return;
+  try {
     await accessibilityDefaults(udid, "delete", "AutomationEnabled");
+  } catch (err) {
+    // Another clear of the same sim can delete the key between the check and here.
+    if (await hasAutomationEnabled(udid)) throw err;
   }
 }
 
