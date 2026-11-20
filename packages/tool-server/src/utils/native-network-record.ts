@@ -106,6 +106,13 @@ export function isOpen(record: NativeNetworkRecord): boolean {
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "10.0.2.2", "[::1]"]);
+/** `URL.port` is empty for the protocol's default port, even when the URL names it. */
+const DEFAULT_PORTS: Record<string, number> = {
+  "http:": 80,
+  "ws:": 80,
+  "https:": 443,
+  "wss:": 443,
+};
 
 /**
  * Metro's own traffic on `metroPort`: the bundle, HMR, symbolication, the
@@ -118,7 +125,8 @@ export function isMetroTraffic(url: string, metroPort: number): boolean {
   } catch {
     return false;
   }
-  return LOOPBACK_HOSTS.has(parsed.hostname) && Number(parsed.port) === metroPort;
+  const port = parsed.port === "" ? DEFAULT_PORTS[parsed.protocol] : Number(parsed.port);
+  return LOOPBACK_HOSTS.has(parsed.hostname) && port === metroPort;
 }
 
 /** Keeps the start of an absurdly long value and says how much was left out. */

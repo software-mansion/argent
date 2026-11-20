@@ -365,6 +365,26 @@ describe("native-network-logs lists an iOS app's native requests", () => {
     });
   });
 
+  it.each([
+    ["http://127.0.0.1:80/index.bundle", 80],
+    ["https://localhost:443/index.bundle", 443],
+  ])(
+    "leaves out Metro's traffic to %s on its default port and out of the limit",
+    async (url, port) => {
+      await withService(async (api) => {
+        const app = await launchApp(api);
+        completeRequest(app, "api", "https://api.example.com/items");
+        completeRequest(app, "bundle", url);
+        await recorded(api, 2);
+
+        const listing = await list(api, { port, limit: 1 });
+        expect(urls(listing)).toEqual(["https://api.example.com/items"]);
+        expect(listing).toMatchObject({ count: 1, total: 1 });
+        app.close();
+      });
+    }
+  );
+
   it("returns the newest requests up to limit, oldest first", async () => {
     await withService(async (api) => {
       const app = await launchApp(api);

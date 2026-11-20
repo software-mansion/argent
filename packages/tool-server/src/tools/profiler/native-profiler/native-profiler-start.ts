@@ -18,7 +18,7 @@ import { trackProfilingRun } from "../../../utils/profiling-devices";
 const capability = {
   apple: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 } as const;
 
 export { handleXctraceExit } from "./platforms/xctrace";

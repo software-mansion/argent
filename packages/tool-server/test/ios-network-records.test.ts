@@ -24,6 +24,7 @@ import {
   PROCESS_ENDED,
   PROCESS_GONE,
   RECORD_CHARS_BUDGET,
+  isMetroTraffic,
   recordSize,
   type NativeNetworkBody,
 } from "../src/utils/native-network-record";
@@ -722,6 +723,32 @@ describe("iOS native network records: Metro filter", () => {
     expect(store.records(9000).map((r) => r.layerId)).toEqual(["localhost", "ipv4", "ipv6", "lan"]);
     // Filtered, not dropped.
     expect(store.records(4000)).toHaveLength(5);
+  });
+
+  it.each([
+    ["http", "http://127.0.0.1:80/index.bundle", 80],
+    ["http without a port", "http://localhost/index.bundle", 80],
+    ["ws", "ws://localhost:80/hot", 80],
+    ["https", "https://localhost:443/index.bundle", 443],
+    ["https without a port", "https://[::1]/symbolicate", 443],
+    ["wss", "wss://127.0.0.1:443/inspector/device", 443],
+  ])("leaves out Metro's traffic on the default port of %s", (_protocol, url, port) => {
+    expect(isMetroTraffic(url, port)).toBe(true);
+
+    const store = newStore();
+    const agent = agentOn(store);
+    agent.complete("metro", url);
+    agent.complete("api", "https://api.example.com/items");
+
+    expect(store.records(port).map((r) => r.layerId)).toEqual(["api"]);
+    expect(store.records(8081).map((r) => r.layerId)).toEqual(["metro", "api"]);
+  });
+
+  it("keeps a loopback request without a port when Metro is on another port", () => {
+    expect(isMetroTraffic("http://localhost/index.bundle", 443)).toBe(false);
+    expect(isMetroTraffic("https://localhost/index.bundle", 80)).toBe(false);
+    expect(isMetroTraffic("http://localhost/index.bundle", 0)).toBe(false);
+    expect(isMetroTraffic("ftp://localhost/index.bundle", 0)).toBe(false);
   });
 });
 

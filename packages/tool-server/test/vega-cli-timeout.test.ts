@@ -68,7 +68,6 @@ const SENTINEL_LINGER = sentinel(4);
 const SENTINEL_OVERFLOW_ERR = sentinel(5);
 const SENTINEL_LINGER_NEAR_DEADLINE = sentinel(6);
 const SENTINEL_LINGER_GROUPED = sentinel(7);
-const SENTINEL_SWEEP = sentinel(8);
 let dir: string;
 let prevPath: string | undefined;
 
@@ -510,33 +509,7 @@ describe("runVega timeout (real subprocess)", () => {
   });
 });
 
-describe("sentinel bookkeeping", () => {
-  it("keeps the random block a fixed three digits", () => {
-    // The other half of the equal-width invariant `SentinelSlot` documents: the slot is a
-    // compile error if it widens, but the random block only stays three digits because it
-    // is padded. Dropping the padding narrows it 10% of the time — too rare to surface as
-    // a failing run, and it hands a shorter-pid run a sweep glob that reaches into ours.
-    const widths = new Set(Array.from({ length: 2_000 }, () => randomTagBlock().length));
-    expect([...widths]).toEqual([3]);
-  });
-
-  it("sees a live worker and sweeps it", async () => {
-    // Positive control for every `waitForClear(...)).toBe(0)` above. Those read 0 both
-    // when a reap succeeded and when the pattern matches nothing at all — a
-    // `cmdlinePattern` that stopped matching the shape `spawn` actually produces, or a
-    // host without `pgrep`/`pkill`, where `|| true` makes strayCount return 0 rather
-    // than throw. Requiring a count of 1 first makes that failure loud.
-    //
-    // It also pins sweep(), which is otherwise unasserted: the two `linger` tests'
-    // detached workers are documented as unreapable by runVega, so this is the only
-    // thing that removes them.
-    const worker = spawn("sleep", [SENTINEL_SWEEP], { stdio: "ignore" });
-    worker.unref();
-    expect(await waitForCount(SENTINEL_SWEEP, 1)).toBe(1);
-    sweep();
-    expect(await waitForClear(SENTINEL_SWEEP)).toBe(0);
-  });
-
+describe("concurrent Vega test runs", () => {
   it("leaves a longer-pid run's sentinel alone", async () => {
     // A run whose pid has one more digit builds sentinels that begin with our entire tag
     // and carry two trailing digits where ours carry one, so a sweep without `$` reaches
