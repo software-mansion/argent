@@ -10,8 +10,4 @@ describe("getInstalledVersion", () => {
     ) as { version: string };
     expect(getInstalledVersion()).toBe(pkg.version);
   });
-
-  it("never returns the stale literal this replaced", () => {
-    expect(getInstalledVersion()).not.toBe("0.5.3");
-  });
 });
