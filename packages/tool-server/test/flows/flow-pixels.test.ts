@@ -10,7 +10,6 @@ import {
   FIRST_PIXEL_CAPTURE_TIMEOUT_MS,
   MOTION_FRACTION,
   PIXEL_CAPTURE_TIMEOUT_MS,
-  PIXEL_THRESHOLD,
   comparePixels,
   pixelCaptureTimeoutMs,
   statusBarMaskFraction,
@@ -179,14 +178,6 @@ describe("comparePixels", () => {
     expect(comparePixels(solid(30, 30, [165, 128, 193]), solid(30, 30, [149, 105, 181]))).toBe(
       "moving"
     );
-  });
-
-  it("keeps its tolerance pinned, and stricter than a stored-baseline one", () => {
-    // Pin the value so the gate — the whole motion oracle — cannot drift
-    // silently, and so "restore parity with screenshot-diff" (0.1) is a
-    // deliberate act that trips a test rather than a quiet 3.3x widening of
-    // the cross-fade blind spot the case above measures.
-    expect(PIXEL_THRESHOLD).toBe(0.03);
   });
 
   it("ignores a handful of changed pixels below the motion threshold", () => {

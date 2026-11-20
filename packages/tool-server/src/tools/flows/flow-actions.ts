@@ -5,10 +5,8 @@ import {
   type DescribeNode,
   type DescribeSource,
   type DescribeTreeData,
-  type UiOrientation,
 } from "../describe/contract";
 import { isBlindRead } from "../describe/blind-read";
-import { nativeDirection, uiPointToNative, uiVectorToNative } from "./flow-orientation";
 import {
   selectorToNode,
   findAll,
@@ -26,7 +24,6 @@ import {
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { isIosSimulator } from "../../utils/device-info";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import { isFlagOffered } from "../../utils/capability";
 import { bindDeviceArgs } from "./flow-device";
@@ -147,21 +144,6 @@ export interface ActionEnv {
    * `ActionEnv` by hand, which leaves every settle on its own budget.
    */
   treeOutage?: { proven?: { deviceId: string; error: Error } };
-  /**
-   * What the run's most recent tree read said about how the UI lies on the
-   * frame space, for the directives that turn a UI-space direction into it
-   * (`swipe: down`, `scroll-to`; see `flow-orientation.ts`) and for the
-   * selector relations and picks that go by reading order (`after`, `next`,
-   * `any: true`, a `text` condition; see `ui-tree-match.ts`). Written by every
-   * read that goes through {@link readFlowTree} — the settle a swipe or a
-   * scroll round makes before it dispatches is the read that fills it, and
-   * every selector resolves against the tree of the read that just filled it
-   * — and one holder per run, shared with nested `run:` flows like
-   * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
-   * `ActionEnv` by hand, which leaves every direction, and reading order, in
-   * the frame space.
-   */
-  lastRead?: { uiOrientation?: UiOrientation };
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -432,14 +414,10 @@ function selectorAlternatives(sel: FlowSelector): Selector[] {
  * is kept only as a last resort, so `exists` still sees those nodes without
  * blocking the text pass from finding the visible element.
  */
-function flowFindAll(
-  tree: DescribeNode,
-  sel: FlowSelector,
-  orientation: UiOrientation | undefined
-): DescribeNode[] {
+function flowFindAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
   let fallback: DescribeNode[] = [];
   for (const s of selectorAlternatives(sel)) {
-    const matches = findAll(tree, s, orientation);
+    const matches = findAll(tree, s);
     if (matches.some(isVisible)) return matches;
     if (fallback.length === 0) fallback = matches;
   }
@@ -447,35 +425,16 @@ function flowFindAll(
 }
 
 /** Identifier-first-then-text resolution for a (possibly loose) selector. */
-function flowSelectorToNode(
-  tree: DescribeNode,
-  sel: FlowSelector,
-  orientation: UiOrientation | undefined
-): DescribeNode | undefined {
+function flowSelectorToNode(tree: DescribeNode, sel: FlowSelector): DescribeNode | undefined {
   for (const s of selectorAlternatives(sel)) {
-    const node = selectorToNode(tree, s, orientation);
+    const node = selectorToNode(tree, s);
     if (node) return node;
   }
   return undefined;
 }
 
-function flowSelectorToFrame(
-  tree: DescribeNode,
-  sel: FlowSelector,
-  orientation: UiOrientation | undefined
-): DescribeFrame | undefined {
-  return flowSelectorToNode(tree, sel, orientation)?.frame;
-}
-
-/**
- * How the UI lies on the frame space of the tree a selector is about to
- * resolve against, for the relations and picks that go by reading order: the
- * orientation the run's last read reported ({@link ActionEnv.lastRead}). Every
- * selector resolves against the tree of the read that just filled it — the
- * settle, the poll, the focus wait — so the last read's answer is that tree's.
- */
-function readingOrientation(env: ActionEnv): UiOrientation | undefined {
-  return env.lastRead?.uiOrientation;
+function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFrame | undefined {
+  return flowSelectorToNode(tree, sel)?.frame;
 }
 
 /**
@@ -502,7 +461,6 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
   return fetchFlowTree(env.registry, env.device, env.treeTarget).then((data) => {
     if (env.treeOutage) env.treeOutage.proven = undefined;
-    if (env.lastRead) env.lastRead.uiOrientation = data.uiOrientation;
     return data;
   });
 }
@@ -611,10 +569,7 @@ async function waitForFrames(
     if (env.signal?.aborted) return "aborted";
     const tree = await settleTree(env);
     if (tree) {
-      const orientation = readingOrientation(env);
-      const frames = selectors.map((s) =>
-        s ? flowSelectorToFrame(tree, s, orientation) : undefined
-      );
+      const frames = selectors.map((s) => (s ? flowSelectorToFrame(tree, s) : undefined));
       const missing = pending.find(({ i }) => frames[i] === undefined);
       if (!missing) return frames;
       unresolved = missing.selector;
@@ -715,9 +670,9 @@ async function waitForFocus(
   for (;;) {
     if (env.signal?.aborted) return;
     try {
-      const { tree, source, uiOrientation } = await readFlowTree(env);
+      const { tree, source } = await readFlowTree(env);
       if (!FOCUS_REPORTING_SOURCES.has(source)) return;
-      const target = flowSelectorToFrame(tree, into, uiOrientation) ?? tappedFrame;
+      const target = flowSelectorToFrame(tree, into) ?? tappedFrame;
       if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
     } catch {
       // transient describe failure — retry until the deadline
@@ -867,14 +822,6 @@ async function scrollToVisible(
     const tree = await settleTree(env);
     if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
-    // The direction is the UI's, and so is the reading order the selectors go
-    // by; the frames, the clip and the gesture are in the frame space, so the
-    // direction is turned into it (flow-orientation.ts) as the settle above
-    // read it. Re-read every round: a fold or a rotation mid-scroll is a settle
-    // away.
-    const orientation = readingOrientation(env);
-    const axisDirection = nativeDirection(direction, orientation);
-
     // A target a scroll container cuts along the axis is scrolled inside that
     // scroller, whether or not the tree has a node for it: the gesture is anchored
     // where the walker found a wheel moves it against a cutting scroller (`clipAnchors`),
@@ -888,19 +835,19 @@ async function scrollToVisible(
     // container still cuts is scrolled as an uncut one: the window leaves out boxes
     // inside its scroller that clip without scrolling natively (one moved by its own
     // wheel listener), and a wheel at the anchor carries such a box along.
-    const container = within ? flowSelectorToNode(tree, within, orientation) : undefined;
+    const container = within ? flowSelectorToNode(tree, within) : undefined;
     if (within && !container) {
       return { reason: `scroll container ${describeSelector(within)} is not visible` };
     }
-    const targetNode = flowSelectorToNode(tree, target, orientation);
+    const targetNode = flowSelectorToNode(tree, target);
     const frame = targetNode?.frame;
     const cut = frame && targetNode.clipBounds;
-    const vertical = axisDirection === "up" || axisDirection === "down";
+    const vertical = direction === "up" || direction === "down";
     const withinCut =
       cut &&
       container &&
-      axisFullyInside(frame, axisDirection, cut) &&
-      !axisFullyInside(frame, axisDirection, container.clipFrame ?? container.frame);
+      axisFullyInside(frame, direction, cut) &&
+      !axisFullyInside(frame, direction, container.clipFrame ?? container.frame);
     const anchor = cut && !withinCut ? targetNode.clipAnchors?.[vertical ? "y" : "x"] : undefined;
     const axisCut = anchor ? cut : undefined;
     const region =
@@ -909,7 +856,7 @@ async function scrollToVisible(
           ? { x: frame.x, y: axisCut.y, width: frame.width, height: axisCut.height }
           : { x: axisCut.x, y: frame.y, width: axisCut.width, height: frame.height }
         : (container?.frame ?? FULL_SCREEN);
-    if (frame && axisFullyInside(frame, axisDirection, axisCut ?? container?.clipFrame ?? region)) {
+    if (frame && axisFullyInside(frame, direction, axisCut ?? container?.clipFrame ?? region)) {
       return { frame, ...warnedBy(warning) };
     }
     // How far the target reaches into its window from the cutting edge changes only
@@ -924,7 +871,7 @@ async function scrollToVisible(
     // could scroll the target's own content instead of its window. Later increments
     // go there regardless, so a scrollable target the retry carries under it can
     // still take one.
-    const room = frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined;
+    const room = frame && axisCut ? leadingRoom(frame, axisCut, direction) : undefined;
     const shown = room === undefined ? undefined : (vertical ? region.height : region.width) - room;
     let spentNow = false;
     if (shown !== undefined && prevShown !== undefined && Math.abs(shown - prevShown) < 1e-4) {
@@ -969,8 +916,8 @@ async function scrollToVisible(
     }
     try {
       const sent = anchorSpent
-        ? await scrollIncrement(env, axisDirection, retry, room)
-        : await scrollIncrement(env, axisDirection, region, room, anchor);
+        ? await scrollIncrement(env, direction, retry, room)
+        : await scrollIncrement(env, direction, region, room, anchor);
       warning ??= sent;
     } catch (err) {
       if (!(err instanceof Error && NO_SCROLLABLE_VIEW.test(err.message))) throw err;
@@ -1186,18 +1133,6 @@ function toolWarning(result: unknown): string | undefined {
 function warnedBy(...warnings: Array<string | undefined>): { warning?: string } {
   const text = warnings.filter((w): w is string => w !== undefined).join(" ");
   return text.length > 0 ? { warning: text } : {};
-}
-
-/**
- * What a direction swipe adds to that warning: without a tree read, nothing
- * said how the UI lies on the screen now.
- */
-function unreadOrientationNote(orientation: UiOrientation | undefined): string {
-  return orientation
-    ? `The direction was turned for the UI orientation an earlier read reported ` +
-        `(${orientation}); if the UI has turned since, the finger went another way.`
-    : `No read reported the UI's orientation, so the direction was sent in the screen's ` +
-        `portrait space; on a landscape UI the finger went sideways.`;
 }
 
 /** What a gesture reports when an outage left it unsettled, in the source's own words. */
@@ -1585,15 +1520,6 @@ async function runSwipe(
     toPoint = p;
   }
 
-  // A direction is the UI's; the points dispatched are in the frame space, and
-  // on a landscape UI the two differ by a rotation (flow-orientation.ts). The
-  // settle above is the read that said which.
-  const orientation = env.lastRead?.uiOrientation;
-  if (settle.warning !== undefined && step.direction && isIosSimulator(env.device)) {
-    // No tree this time: the turn comes from an older read, or from none.
-    settle = { ...settle, warning: `${settle.warning} ${unreadOrientationNote(orientation)}` };
-  }
-
   let start: { x: number; y: number };
   if (step.from) {
     const p = targetPointFromFrame(step.from, fromFrame);
@@ -1602,7 +1528,7 @@ async function runSwipe(
   } else if (step.direction) {
     // A fresh object: SWIPE_GEOMETRY is shared by every swipe in the process,
     // and the unanchored `by` arm below slides the local start in place.
-    start = uiPointToNative(SWIPE_GEOMETRY[step.direction].start, orientation);
+    start = { ...SWIPE_GEOMETRY[step.direction].start };
   } else {
     start = { x: 0.5, y: 0.5 };
   }
@@ -1629,24 +1555,15 @@ async function runSwipe(
   let end: { x: number; y: number };
   if (step.direction) {
     const g = SWIPE_GEOMETRY[step.direction];
-    // The preset's travel, as a UI-space vector along its axis, turned into the
-    // frame space. Its magnitude is the same in both.
-    const travelVector = uiVectorToNative(
-      g.axis === "x" ? { x: g.end - g.start.x, y: 0 } : { x: 0, y: g.end - g.start.y },
-      orientation
-    );
-    const axis: "x" | "y" = travelVector.x !== 0 ? "x" : "y";
+    const travelVector =
+      g.axis === "x" ? { x: g.end - g.start.x, y: 0 } : { x: 0, y: g.end - g.start.y };
+    const axis = g.axis;
     const startOnTravelAxis = start[axis];
     // The preset line is the endpoint only for the unanchored default start; any
     // other anchor travels the preset's signed magnitude from where the finger
     // goes down, so an element in the last band of the axis still swipes in the
     // requested direction instead of reversing.
-    const endOnTravelAxis = step.from
-      ? clamp01(startOnTravelAxis + travelVector[axis])
-      : uiPointToNative(
-          g.axis === "x" ? { x: g.end, y: g.start.y } : { x: g.start.x, y: g.end },
-          orientation
-        )[axis];
+    const endOnTravelAxis = step.from ? clamp01(startOnTravelAxis + travelVector[axis]) : g.end;
     end = axis === "x" ? { x: endOnTravelAxis, y: start.y } : { x: start.x, y: endOnTravelAxis };
     // Clamping can only shorten travel, never flip its sign, so a below-floor
     // result means the anchor sits too near the edge to swipe.
@@ -1868,7 +1785,7 @@ async function waitForCondition(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
       const data = await readFlowTree(env);
-      lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
+      lastMatches = flowFindAll(data.tree, step.selector);
       lastData = data;
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
@@ -1886,7 +1803,6 @@ async function waitForCondition(
           step.expectedText,
           lastMatches,
           step.textMatch,
-          data.uiOrientation,
           env.device.platform === "macos"
         )
       ) {
@@ -1984,9 +1900,6 @@ async function waitForCondition(
         step.expectedText,
         step.textMatch,
         lastMatches,
-        // The read `lastMatches` came from is the last one that answered, and
-        // only a read that answers writes the orientation.
-        readingOrientation(env),
         env.device.platform === "macos",
         // The text of an element is the only part of a reason that comes off
         // the screen, where a field shows a typed secret.
@@ -2572,7 +2485,6 @@ function assertReason(
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
   matches: ReturnType<typeof findAll>,
-  orientation: UiOrientation | undefined,
   macos: boolean,
   quoted: (node: DescribeNode, read: (node: DescribeNode) => string) => string
 ): string {
@@ -2593,7 +2505,7 @@ function assertReason(
     case "text": {
       // The same pick evaluateCondition made, so the reason quotes the element
       // the check read.
-      const first = textCheckTarget(matches, orientation, macos);
+      const first = textCheckTarget(matches, macos);
       if (!first) return `no element matched selector ${sel}`;
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted

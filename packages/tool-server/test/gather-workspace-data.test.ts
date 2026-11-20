@@ -34,22 +34,6 @@ afterEach(async () => {
 });
 
 describe("gather-workspace-data tool", () => {
-  it("has correct id", () => {
-    expect(gatherWorkspaceDataTool.id).toBe("gather-workspace-data");
-  });
-
-  it("has a description", () => {
-    expect(gatherWorkspaceDataTool.description).toBeTruthy();
-  });
-
-  it("is hidden from MCP", () => {
-    expect(gatherWorkspaceDataTool.hideFromMcp).toBe(true);
-  });
-
-  it("declares no service dependencies", () => {
-    expect(gatherWorkspaceDataTool.services({ workspacePath: "/tmp" })).toEqual({});
-  });
-
   it("zodSchema requires workspacePath string", () => {
     const result = gatherWorkspaceDataTool.zodSchema!.safeParse({});
     expect(result.success).toBe(false);

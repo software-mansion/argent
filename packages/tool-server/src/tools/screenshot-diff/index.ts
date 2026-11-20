@@ -206,10 +206,11 @@ export async function executeScreenshotDiffTool(
   });
 
   // A live capture of a foldable whose panel could not be resolved is of the
-  // cover panel; the summary is the one channel this result has, so it says so
-  // there, once per distinct warning.
+  // cover panel, and one of an iOS simulator whose interface orientation could
+  // not be read is in the screen's portrait-native space; the summary is the
+  // one channel this result has, so it says so there, once per distinct warning.
   let summary = result.summary;
-  for (const warning of new Set(warnings)) summary = `${summary}\n- panel: ${warning}`;
+  for (const warning of new Set(warnings)) summary = `${summary}\n- capture: ${warning}`;
   // On a foldable a size mismatch is usually a posture mismatch: the two
   // panels differ in size, and a baseline belongs to the posture that produced
   // it. Name the posture behind each size; every other device is unchanged.
@@ -495,8 +496,8 @@ async function captureLiveInput(params: {
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
   await fs.mkdir(params.outputDir, { recursive: true });
   await fs.copyFile(capture.path, destination);
-  return {
-    path: destination,
-    ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
-  };
+  // Both say why the image may not be the one expected: a foldable's cover
+  // panel, or a landscape UI left in the screen's portrait-native space.
+  const warning = [panel?.warning, capture.note].filter((w) => w !== undefined).join(" ");
+  return { path: destination, ...(warning ? { warning } : {}) };
 }
