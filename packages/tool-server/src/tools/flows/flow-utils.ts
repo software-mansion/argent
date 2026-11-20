@@ -3912,8 +3912,32 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 /**
  * The e2e file format version this build writes and the newest it reads. A file
  * without `version` is version 1.
+ *
+ * - 1: on an iOS simulator, the raw points (`tap: { x, y }`, a swipe's `from`
+ *   and `to` points, its `by`) and the coordinates of a raw `tool:` step are
+ *   in the screen's portrait-native space, which a landscape UI lies sideways
+ *   in.
+ * - 2: they are in the UI's upright space, as screenshots and describe frames
+ *   are, and as on every other platform.
+ *
+ * The two differ only for a landscape or upside-down UI on an iOS simulator.
+ * A version 1 file still runs as it was recorded: the runner turns its points
+ * (flow-legacy-points.ts).
  */
-const FLOW_FILE_VERSION = 1;
+const FLOW_FILE_VERSION = 2;
+
+/**
+ * The format version of each flow {@link parseFlow} read from a file older
+ * than {@link FLOW_FILE_VERSION}. Kept beside the flow rather than in it, so a
+ * parsed flow compares equal to one built in memory and the version is never
+ * written back.
+ */
+const olderFormatVersions = new WeakMap<FlowFile, number>();
+
+/** The format version `flow` was read in: this build's own unless parseFlow read an older file. */
+export function flowFormatVersion(flow: FlowFile): number {
+  return olderFormatVersions.get(flow) ?? FLOW_FILE_VERSION;
+}
 
 function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["requires"] {
   return {
@@ -4047,6 +4071,7 @@ export function parseFlow(content: string): FlowFile {
     steps,
   };
   validateFlow(flow);
+  if (version < FLOW_FILE_VERSION) olderFormatVersions.set(flow, version);
   return flow;
 }
 

@@ -199,6 +199,7 @@ async function buildRemoteInstance(
   const api: SimulatorServerApi = {
     apiUrl: stubUrl,
     streamUrl: stubUrl,
+    deviceId: device.id,
     // Through `sendCommand`, as the attached instance below does, so a key the
     // session refuses reports the same failure as a refused touch instead of a
     // bare SDK error the caller cannot classify.
