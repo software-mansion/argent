@@ -22,6 +22,7 @@ import { openMoqClient } from "../utils/moq-client";
 import {
   createMoqTransport,
   fetchDisplayState,
+  KEY_ACK_TIMEOUT_MS,
   sendCommand,
   type SimulatorDisplayState,
 } from "../utils/simulator-client";
@@ -204,7 +205,11 @@ async function buildRemoteInstance(
     // session refuses reports the same failure as a refused touch instead of a
     // bare SDK error the caller cannot classify.
     pressKey: async (direction, keyCode) => {
-      await sendCommand(api, { cmd: "key", code: keyCode, direction });
+      await sendCommand(
+        api,
+        { cmd: "key", code: keyCode, direction },
+        { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+      );
     },
     transport,
   };
@@ -256,7 +261,7 @@ async function buildAttachedInstance(
     deviceId: device.id,
     external: true,
     pressKey: async (direction, code) => {
-      await sendCommand(api, { cmd: "key", code, direction });
+      await sendCommand(api, { cmd: "key", code, direction }, { ackTimeoutMs: KEY_ACK_TIMEOUT_MS });
     },
     streamUrl: externalDevice.simulatorServer.streamUrl,
     /** `transport: undefined`, so the WS + HTTP path is reused unchanged. */
@@ -624,11 +629,15 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
        * stdin, so a stdin write resolved at once and a stalled server let keys
        * pile up and land in a burst while `keyboard` reported them typed
        * (#2030). The ack holds each press until the server has taken it, and
-       * a server that stops answering fails the press with
-       * SIMULATOR_COMMAND_ACK_TIMEOUT.
+       * a server that stops answering for KEY_ACK_TIMEOUT_MS fails the press
+       * with SIMULATOR_COMMAND_ACK_TIMEOUT.
        */
       pressKey: async (direction, keyCode) => {
-        await sendCommand(api, { cmd: "key", code: keyCode, direction });
+        await sendCommand(
+          api,
+          { cmd: "key", code: keyCode, direction },
+          { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+        );
       },
     };
     const instance: ServiceInstance<SimulatorServerApi> = {

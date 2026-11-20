@@ -30,16 +30,33 @@ export async function typeSimulatorServer(
   let keysPressed = 0;
 
   const pressKeyCode = async (keyCode: number, withShift = false) => {
-    if (withShift) {
-      await api.pressKey("Down", SHIFT_KEYCODE);
-      await sleep(10);
-    }
-    await api.pressKey("Down", keyCode);
-    await sleep(KEY_HOLD.ms);
-    await api.pressKey("Up", keyCode);
-    if (withShift) {
-      await sleep(10);
-      await api.pressKey("Up", SHIFT_KEYCODE);
+    // Keys sent Down and not yet acknowledged Up, last pressed last.
+    const down: number[] = [];
+    const press = async (direction: "Down" | "Up", code: number) => {
+      if (direction === "Down") down.push(code);
+      await api.pressKey(direction, code);
+      if (direction === "Up") down.splice(down.lastIndexOf(code), 1);
+    };
+    try {
+      if (withShift) {
+        await press("Down", SHIFT_KEYCODE);
+        await sleep(10);
+      }
+      await press("Down", keyCode);
+      await sleep(KEY_HOLD.ms);
+      await press("Up", keyCode);
+      if (withShift) {
+        await sleep(10);
+        await press("Up", SHIFT_KEYCODE);
+      }
+    } catch (err) {
+      // A press that failed can still land: a Down the server took but did
+      // not acknowledge in time arrives once it resumes. Without its Up the
+      // key stays held and iOS repeats it or opens the accent pop-up
+      // (#2030). So every key that went down gets an Up, best effort; an
+      // extra Up for a key that is already up does nothing.
+      for (const code of down.reverse()) await api.pressKey("Up", code).catch(() => {});
+      throw err;
     }
     keysPressed++;
   };

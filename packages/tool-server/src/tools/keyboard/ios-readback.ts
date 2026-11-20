@@ -20,16 +20,29 @@ import { axServiceRef, type AXServiceApi } from "../../blueprints/ax-service";
  * a length limit). The warning never quotes the text: it may be a secret.
  */
 
-/** Mutable for tests only. */
+/**
+ * The ax-service check waits up to 1 s for the field to hold the text it is
+ * asked about, re-reading it, and answers "no" only when that wait runs out.
+ * So "yes" comes back fast and "no" after about 1 s. Mutable for tests only.
+ */
 export const READBACK_TIMING = {
-  /** Budget for the empty-field check before typing; past it, typing goes on unchecked. */
-  precheckMs: 1_500,
-  /** How long the field gets to show the typed text: an app can apply input late. */
-  settleMs: 1_000,
-  pollMs: 100,
+  /** Budget to reach the ax-service; past it, typing goes on unchecked. */
+  resolveMs: 1_500,
+  /**
+   * Budget for the empty-field check before typing. An empty field answers
+   * in about 0.1 s; a field that holds text answers only after the daemon's
+   * 1 s wait, which would slow every append. Past this budget the field
+   * counts as not empty, and typing goes on unchecked.
+   */
+  precheckMs: 400,
+  /**
+   * Budget for the check after typing. It must outlast the daemon's 1 s
+   * wait, or a field that does not hold the text never answers "no". The
+   * daemon's wait also gives an app that applies input late the time it
+   * needs.
+   */
+  checkMs: 3_500,
 };
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Return and Tab can submit a form or move focus, so the field read after
 // them is not the one typed into.
@@ -79,7 +92,7 @@ export async function typeWithReadback<T>(
 ): Promise<{ result: T; readback?: ReadbackOutcome }> {
   if (!text || FOCUS_MOVING.test(text)) return { result: await type() };
 
-  const ax = await within(READBACK_TIMING.precheckMs, async () => {
+  const ax = await within(READBACK_TIMING.resolveMs, async () => {
     const ref = axServiceRef(device);
     const api = await registry.resolveService<AXServiceApi>(ref.urn, ref.options);
     return api.degraded ? undefined : api;
@@ -91,14 +104,9 @@ export async function typeWithReadback<T>(
   const result = await type();
   if (!ax || !checkable) return { result };
 
-  const deadline = Date.now() + READBACK_TIMING.settleMs;
-  for (;;) {
-    const after = await within(READBACK_TIMING.settleMs, () => ax.fill(text, { check: true }));
-    if (after?.verified) return { result, readback: { verified: true } };
-    // No answer, or focus left the field (the app moved it): nothing to judge.
-    if (!after || !after.focused || after.timedOut) return { result };
-    if (Date.now() >= deadline) break;
-    await sleep(READBACK_TIMING.pollMs);
-  }
+  const after = await within(READBACK_TIMING.checkMs, () => ax.fill(text, { check: true }));
+  if (after?.verified) return { result, readback: { verified: true } };
+  // No answer, or focus left the field (the app moved it): nothing to judge.
+  if (!after || !after.focused || after.timedOut) return { result };
   return { result, readback: { verified: false, warning: READBACK_MISMATCH_WARNING } };
 }

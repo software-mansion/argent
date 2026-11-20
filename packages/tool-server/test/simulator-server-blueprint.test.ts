@@ -269,9 +269,12 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     await instance.api.pressKey("Down", 0x29);
     await instance.api.pressKey("Up", 0x29);
 
+    // With the longer key budget: a key that times out loses its Up (#2030).
+    const { KEY_ACK_TIMEOUT_MS } = await import("../src/utils/simulator-client");
+    const budget = { ackTimeoutMs: KEY_ACK_TIMEOUT_MS };
     expect(sendCommandMock.mock.calls).toEqual([
-      [instance.api, { cmd: "key", code: 0x29, direction: "Down" }],
-      [instance.api, { cmd: "key", code: 0x29, direction: "Up" }],
+      [instance.api, { cmd: "key", code: 0x29, direction: "Down" }, budget],
+      [instance.api, { cmd: "key", code: 0x29, direction: "Up" }, budget],
     ]);
     expect(fakeProc.stdin.write).not.toHaveBeenCalled();
   });

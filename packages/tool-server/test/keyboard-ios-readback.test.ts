@@ -5,6 +5,7 @@ import {
   READBACK_TIMING,
   typeWithReadback,
 } from "../src/tools/keyboard/ios-readback";
+import { SHIFT_KEYCODE } from "../src/tools/keyboard/key-codes";
 import { KEY_HOLD, typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 
 // #2030: a stalled simulator drops or repeats keys while every key is acked,
@@ -26,7 +27,7 @@ function registryWith(api: unknown) {
 
 const saved = { ...READBACK_TIMING };
 beforeEach(() => {
-  Object.assign(READBACK_TIMING, { precheckMs: 50, settleMs: 60, pollMs: 10 });
+  Object.assign(READBACK_TIMING, { resolveMs: 50, precheckMs: 50, checkMs: 300 });
 });
 afterEach(() => {
   Object.assign(READBACK_TIMING, saved);
@@ -64,22 +65,55 @@ describe("typeWithReadback", () => {
     expect(READBACK_MISMATCH_WARNING).not.toContain("s3cret");
   });
 
-  it("waits for an app that applies the text late", async () => {
-    let checks = 0;
+  // The daemon answers "no" only after its own wait for the text runs out,
+  // so the check after typing has to outlast that wait to see the mismatch.
+  it("warns when the mismatch answer comes back late", async () => {
     let typed = false;
-    const { api } = fakeAx((text) => {
+    const { api } = fakeAx(async (text) => {
       if (text === "") return { focused: true, verified: !typed };
-      checks++;
-      return { focused: true, verified: checks >= 3 };
+      await new Promise((r) => setTimeout(r, 120));
+      return { focused: true, verified: false };
     });
 
-    const out = await typeWithReadback(registryWith(api), IOS_SIM, "hi", async () => {
+    const out = await typeWithReadback(registryWith(api), IOS_SIM, "general", async () => {
+      typed = true;
+      return { typed: "general", keys: 7 };
+    });
+
+    expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
+  });
+
+  it("checks the field once after typing", async () => {
+    let typed = false;
+    const { api, fill } = fakeAx((text) => ({
+      focused: true,
+      verified: text === "" ? !typed : typed,
+    }));
+
+    await typeWithReadback(registryWith(api), IOS_SIM, "hi", async () => {
       typed = true;
       return { typed: "hi", keys: 2 };
     });
 
-    expect(out.readback).toEqual({ verified: true });
-    expect(checks).toBe(3);
+    expect(fill.mock.calls.map((c) => c[0])).toEqual(["", "hi"]);
+  });
+
+  // A field that holds text answers the empty check only after the daemon's
+  // wait: appending must not pay for that.
+  it("gives up on a slow empty-field check and types unchecked", async () => {
+    const { api, fill } = fakeAx(async () => {
+      await new Promise((r) => setTimeout(r, 1_000));
+      return { focused: true, verified: false };
+    });
+    const type = vi.fn(async () => ({ typed: "xyz", keys: 3 }));
+
+    const started = Date.now();
+    const out = await typeWithReadback(registryWith(api), IOS_SIM, "xyz", type);
+
+    expect(out.readback).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(type).toHaveBeenCalledTimes(1);
+    expect(fill).toHaveBeenCalledTimes(1);
   });
 
   it("skips the check when the field was not empty: the keys insert at the caret", async () => {
@@ -165,6 +199,43 @@ describe("typeWithReadback", () => {
     await typeWithReadback(registry as never, IOS_SIM, "", type);
     expect(type).toHaveBeenCalledTimes(1);
     expect(registry.resolveService).not.toHaveBeenCalled();
+  });
+});
+
+describe("typeSimulatorServer key release", () => {
+  // A Down that was not acknowledged in time can still land once the server
+  // resumes; without an Up the key stays held.
+  it("sends Up for every key that went down when a press fails", async () => {
+    const sent: Array<[string, number]> = [];
+    const api = {
+      pressKey: async (direction: string, code: number) => {
+        sent.push([direction, code]);
+        if (direction === "Down" && code !== SHIFT_KEYCODE) throw new Error("no ack");
+      },
+    };
+
+    await expect(
+      typeSimulatorServer(registryWith(api), IOS_SIM, { udid: IOS_SIM.id, text: "Ab" })
+    ).rejects.toThrow("no ack");
+
+    const aKey = sent[1]![1];
+    expect(sent).toEqual([
+      ["Down", SHIFT_KEYCODE],
+      ["Down", aKey],
+      ["Up", aKey],
+      ["Up", SHIFT_KEYCODE],
+    ]);
+  });
+
+  it("still fails with the press error when the release fails too", async () => {
+    const api = {
+      pressKey: async () => {
+        throw new Error("wedged");
+      },
+    };
+    await expect(
+      typeSimulatorServer(registryWith(api), IOS_SIM, { udid: IOS_SIM.id, text: "a" })
+    ).rejects.toThrow("wedged");
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
-import { sendCommand } from "../src/utils/simulator-client";
+import { KEY_ACK_TIMEOUT_MS, sendCommand } from "../src/utils/simulator-client";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
@@ -168,6 +168,30 @@ describe("sendCommand — command acknowledgement", () => {
     const signal = getFailureSignal(await inFlight);
     expect(signal?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT);
     expect(signal?.error_kind).toBe("timeout");
+    vi.useRealTimers();
+    await server.close();
+  });
+
+  it("waits the longer key budget when asked, then times out (#2030)", async () => {
+    const server = await startServer();
+    await sendCommand(server.api, { ...TOUCH });
+    server.setReply("silent");
+    vi.useFakeTimers();
+    let settled = false;
+    const inFlight = sendCommand(
+      server.api,
+      { cmd: "key", code: 4, direction: "Down" },
+      { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+    )
+      .catch((e: unknown) => e)
+      .finally(() => (settled = true));
+    // A stall past the default budget does not fail a key.
+    await vi.advanceTimersByTimeAsync(6_500);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(KEY_ACK_TIMEOUT_MS);
+    expect(getFailureSignal(await inFlight)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT
+    );
     vi.useRealTimers();
     await server.close();
   });
