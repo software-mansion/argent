@@ -19,6 +19,7 @@ import { resolveLivePanel, screenLabel, unresolvedPanelNote, type FoldablePanel 
 import { isIosSimulator, resolveDevice } from "./device-info";
 import {
   forgetUiOrientation,
+  inNativeCoordinates,
   readUiOrientation,
   unknownOrientationNote,
 } from "./ios-ui-orientation";
@@ -281,8 +282,12 @@ export async function sendCommand(
   cmd: Record<string, unknown>
 ): Promise<SendCommandOutcome> {
   const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
-  // The UI turns with the device: what was read of its orientation is stale.
-  if (cmd.cmd === "rotate" && api.deviceId) forgetUiOrientation(api.deviceId);
+  // The UI turns with the device, and a button (home, app switcher, lock) can
+  // bring another app or the home screen to the front: either way what was
+  // read of the orientation is stale.
+  if ((cmd.cmd === "rotate" || cmd.cmd === "button") && api.deviceId) {
+    forgetUiOrientation(api.deviceId);
+  }
   const { cmd: native, warning: turnWarning } = await withNativeTouchSpace(api, cmd);
   // MoQ carries no screen: a remote simulator is driven on its main screen.
   if (api.transport) {
@@ -388,7 +393,12 @@ async function withNativeTouchSpace(
   api: SimulatorServerApi,
   cmd: Record<string, unknown>
 ): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
-  if (cmd.cmd !== "touch" || !api.deviceId || !isIosSimulator(resolveDevice(api.deviceId))) {
+  if (
+    cmd.cmd !== "touch" ||
+    !api.deviceId ||
+    inNativeCoordinates() ||
+    !isIosSimulator(resolveDevice(api.deviceId))
+  ) {
     return { cmd };
   }
   let orientation: UiOrientation | undefined;

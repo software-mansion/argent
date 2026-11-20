@@ -1237,7 +1237,7 @@ describe("flow composition (run:)", () => {
     });
     await fs.writeFile(
       path.join(tmpDir, ".argent", "flows", "newer.yaml"),
-      "version: 2\nsteps:\n  - echo: hi\n",
+      "version: 3\nsteps:\n  - echo: hi\n",
       "utf8"
     );
 
@@ -1254,7 +1254,7 @@ describe("flow composition (run:)", () => {
       kind: "run",
       status: "error",
       reason:
-        'could not load fragment "newer.yaml": The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it.',
+        'could not load fragment "newer.yaml": The e2e test file is version 3, but this Argent reads up to version 2. Update Argent to run it.',
     });
   });
 

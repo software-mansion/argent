@@ -396,9 +396,9 @@ All coordinates use the UI as the user sees it, also when the UI is landscape or
 - The tap points of `debugger-component-tree`
 - The coordinates of the gesture tools
 
-Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `launch-app`, `restart-app` and `open-url`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
+Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `button`, `launch-app`, `restart-app`, `open-url`, `terminate-app` and `reinstall-app`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
 
-If Argent cannot read the orientation, the tool result has a note. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
+If Argent cannot read the orientation, the tool result has a note. For a live capture of `screenshot-diff`, the note is in the summary. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
 
 Scrolling targets the nearest scrollable content under the point. Web content scrolls first; an enclosing native scroll view can take over at the page boundary. The call fails if no eligible content can scroll.
 

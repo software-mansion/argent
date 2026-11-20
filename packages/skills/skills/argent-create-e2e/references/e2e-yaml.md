@@ -38,7 +38,7 @@ executionPrerequisite: User is signed in and viewing Settings
 steps: []
 ```
 
-The recorder also writes `version: 1`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused.
+The recorder also writes `version: 2`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused. Do not change the version of an existing file: on an iOS simulator with a landscape UI, version 1 coordinates use the portrait axes of the screen and version 2 coordinates the UI as the user sees it, and Argent runs each as it was recorded.
 
 E2E tests never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 

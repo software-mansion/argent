@@ -16,7 +16,7 @@ import {
 import { InvalidToolInputError } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { isIosSimulator, resolveDevice } from "../../utils/device-info";
-import { readUiOrientation } from "../../utils/ios-ui-orientation";
+import { inNativeCoordinates, readUiOrientation } from "../../utils/ios-ui-orientation";
 import {
   fixedPointFromUpright,
   fixedSpaceOf,
@@ -102,8 +102,12 @@ export async function queryViewHierarchyFor<T, R>(
     if (blocked) return blocked;
     // On an iOS simulator the library's fixed (portrait-native) space is
     // turned to the UI's upright one, in both directions
-    // (`utils/native-devtools-upright.ts`).
-    const read = isIosSimulator(device) ? await readUiOrientation(device.id) : undefined;
+    // (`utils/native-devtools-upright.ts`), except for a version 1 e2e test's
+    // step, which was recorded in the fixed space.
+    const read =
+      isIosSimulator(device) && !inNativeCoordinates()
+        ? await readUiOrientation(device.id)
+        : undefined;
     const lookupSpace = read ? fixedSpaceOf(undefined, read) : undefined;
     if (lookupSpace && typeof rpcParams.x === "number" && typeof rpcParams.y === "number") {
       Object.assign(

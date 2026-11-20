@@ -41,6 +41,7 @@ import {
   flowNameCasingError,
   isBlockStep,
   parseFlow,
+  flowFormatVersion,
   precedesLeadingLaunch,
   runTargetName,
   type BlockStep,
@@ -86,6 +87,8 @@ import {
   type FlowPlatform,
 } from "./flow-device";
 import { isNestedOrchestratorTool } from "./flow-nested-outcome";
+import { uprightLegacyPoints } from "./flow-legacy-points";
+import { inCoordinateSpace } from "../../utils/ios-ui-orientation";
 import { toolResultVerdict } from "../../utils/tool-result-verdict";
 import {
   runDirective,
@@ -1885,6 +1888,7 @@ Without a link, every step kind runs.`,
           runStack: seed,
           rootDisplay: rootEntry.display,
           depth: 0,
+          legacyPoints: flowFormatVersion(flow) < 2,
         });
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
@@ -2410,6 +2414,12 @@ interface StepScope {
   runStack: RunStackEntry[];
   rootDisplay: string;
   depth: number;
+  /**
+   * The steps are from a version 1 file, whose raw points and raw tool steps
+   * are in an iOS simulator's portrait-native space (flow-legacy-points.ts).
+   * Set per file: a fragment of either version can run from the other.
+   */
+  legacyPoints: boolean;
 }
 
 /** The e2e test steps in this scope are attributed to (StepReport.e2eTest). */
@@ -2573,7 +2583,13 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       state.hoistedBootMs = undefined;
     }
     if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
-    const report = await execLeafStep(state, step, index, scope);
+    // A version 1 file's raw tool step runs in the native coordinates it was
+    // recorded in; everything else, also a nested run such a step starts, in
+    // the upright ones.
+    const report = await inCoordinateSpace(
+      scope.legacyPoints && step.kind === "tool" ? "native" : "upright",
+      () => execLeafStep(state, step, index, scope)
+    );
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
       const screen = await captureFailureScreen(state);
@@ -2881,7 +2897,10 @@ async function execRunStep(
   await execSteps(
     state,
     fragment.steps,
-    childScope(scope, { runStack: [...scope.runStack, { canonical, display }] })
+    childScope(scope, {
+      runStack: [...scope.runStack, { canonical, display }],
+      legacyPoints: flowFormatVersion(fragment) < 2,
+    })
   );
 }
 
@@ -3037,7 +3056,12 @@ async function execLeafStep(
       // land in the structured report rather than abort the whole run
       // unreported.
       try {
-        const r = await runDirective(deviceEnv(state), step);
+        const env = deviceEnv(state);
+        const legacy = scope.legacyPoints
+          ? await uprightLegacyPoints(env.device, step)
+          : { step, warning: undefined };
+        const r = await runDirective(env, legacy.step);
+        const warning = [legacy.warning, r.warning].filter((w) => w !== undefined).join(" ");
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
@@ -3061,7 +3085,7 @@ async function execLeafStep(
           ...base,
           status: r.ok ? "pass" : "fail",
           reason: r.reason,
-          ...(r.warning !== undefined ? { warning: r.warning } : {}),
+          ...(warning ? { warning } : {}),
         };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };

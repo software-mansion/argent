@@ -9,7 +9,11 @@ import {
 } from "./device-orientation";
 import { httpScreenshot } from "./simulator-client";
 import { isIosSimulator } from "./device-info";
-import { readUiOrientation, unknownOrientationNote } from "./ios-ui-orientation";
+import {
+  inNativeCoordinates,
+  readUiOrientation,
+  unknownOrientationNote,
+} from "./ios-ui-orientation";
 import { uprightCaptureRotation } from "./ui-orientation";
 
 /**
@@ -60,7 +64,12 @@ export async function captureScreenshotUpright(
 ): Promise<{ url: string; path: string; note?: string }> {
   // An explicit rotation from the caller always wins.
   if (requestedRotation !== undefined) return capture(api, requestedRotation, signal, scale);
-  if (isIosSimulator(device)) return captureIosUpright(api, device, signal, scale, capture);
+  if (isIosSimulator(device)) {
+    // A version 1 e2e test's step compares against images in the screen's
+    // portrait-native space, which is what an unrotated capture is.
+    if (inNativeCoordinates()) return capture(api, undefined, signal, scale);
+    return captureIosUpright(api, device, signal, scale, capture);
+  }
   if (device.platform !== "android") return capture(api, undefined, signal, scale);
 
   const surface = await readAndroidSurfaceRotation(device.id, peek);

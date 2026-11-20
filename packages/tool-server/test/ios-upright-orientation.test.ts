@@ -7,6 +7,7 @@ import { sendCommand } from "../src/utils/simulator-client";
 import {
   __resetUiOrientationForTests,
   forgetUiOrientation,
+  inCoordinateSpace,
   noteUiOrientation,
   readUiOrientation,
   setUiOrientationSourceProvider,
@@ -247,6 +248,22 @@ describe("sendCommand on an iOS simulator", () => {
     expect(orientationMock).not.toHaveBeenCalled();
   });
 
+  it("sends a touch untouched, asking nothing, in native coordinates", async () => {
+    orientationMock.mockResolvedValue({ interfaceOrientation: "landscapeRight" });
+    await inCoordinateSpace("native", () =>
+      sendCommand(apiFor(ws.port, SIM), touch("Down", 0.1, 0.2))
+    );
+    expect(ws.received[0]).toMatchObject({ x: 0.1, y: 0.2 });
+    expect(orientationMock).not.toHaveBeenCalled();
+  });
+
+  it("forgets the orientation when a button can change the front app", async () => {
+    noteUiOrientation(SIM, "landscapeRight");
+    await sendCommand(apiFor(ws.port, SIM), { cmd: "button", button: "home", direction: "Up" });
+    orientationMock.mockResolvedValue({ interfaceOrientation: "portrait" });
+    expect((await readUiOrientation(SIM)).orientation).toBe("portrait");
+  });
+
   it("forgets the orientation when it rotates the device", async () => {
     noteUiOrientation(SIM, "landscapeRight");
     await sendCommand(apiFor(ws.port, SIM), { cmd: "rotate", direction: "Portrait" });
@@ -265,6 +282,16 @@ describe("captureScreenshotUpright on an iOS simulator", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await captureScreenshotUpright(api, device, undefined, undefined, 0.5, capture);
     expect(capture).toHaveBeenCalledWith(api, "LandscapeLeft", undefined, 0.5);
+  });
+
+  it("captures unturned, asking nothing, in native coordinates", async () => {
+    orientationMock.mockResolvedValue({ interfaceOrientation: "landscapeRight" });
+    const capture = vi.fn(async () => ({ url: "u", path: "p" }));
+    await inCoordinateSpace("native", () =>
+      captureScreenshotUpright(api, device, undefined, undefined, 1, capture)
+    );
+    expect(capture).toHaveBeenCalledWith(api, undefined, undefined, 1);
+    expect(orientationMock).not.toHaveBeenCalled();
   });
 
   it("lets an explicit rotation win without asking", async () => {

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { UiOrientation } from "../tools/describe/contract";
 import { isTvOsSimulator } from "./ios-devices";
 import { resolveDevice } from "./device-info";
@@ -190,7 +191,7 @@ export function unknownOrientationNote(read: UiOrientationRead, what: string): s
 
 /**
  * An iOS simulator branch of a tool that changes the front app (launch-app,
- * restart-app, open-url): the new app can lie another way, so what was read
+ * restart-app, open-url, terminate-app, reinstall-app): the new app can lie another way, so what was read
  * of the last one's orientation is forgotten once it ran, as after a rotate.
  */
 export function forgettingUiOrientation<S, P, O>(
@@ -206,4 +207,26 @@ export function forgettingUiOrientation<S, P, O>(
       }
     },
   };
+}
+
+/**
+ * Where the coordinates of the work in progress are: `upright` (the UI's own
+ * space, what every tool speaks) unless an e2e test step from a version 1 file
+ * runs. Such a file was recorded when an iOS simulator's touches, captures and
+ * view lookups were in the screen's portrait-native space, so a raw tool step
+ * from it (`tool: gesture-swipe`, `tool: run-sequence`) carries native
+ * coordinates, and runs `native`: the tool-server then turns none of them.
+ */
+export type CoordinateSpace = "upright" | "native";
+
+const coordinateSpace = new AsyncLocalStorage<CoordinateSpace>();
+
+/** Run `fn` with its touches, captures and view lookups in `space`. */
+export function inCoordinateSpace<T>(space: CoordinateSpace, fn: () => Promise<T>): Promise<T> {
+  return coordinateSpace.run(space, fn);
+}
+
+/** True while a version 1 e2e test's raw tool step runs: nothing is turned. */
+export function inNativeCoordinates(): boolean {
+  return coordinateSpace.getStore() === "native";
 }

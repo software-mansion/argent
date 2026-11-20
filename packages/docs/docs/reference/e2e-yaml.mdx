@@ -57,11 +57,22 @@ The file has four top-level keys:
 | `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                  |
 | `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                            |
 | `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                          |
-| `version`               | no       | The file format version. The value is `1`. Argent writes it. A file without `version` is version 1 |
+| `version`               | no       | The file format version. The value is `2`. Argent writes it. A file without `version` is version 1 |
 
 Argent refuses a file with a `version` that is higher than the version it reads. Update Argent to run that file.
 
 Argent releases from before the `version` key refuse a file that has the key. To run the file on such a release, delete the `version` line.
+
+The versions differ only on an iOS simulator with a landscape or upside-down UI:
+
+| Version | Coordinates in `tap: { x, y }`, in the `from`, `to` and `by` of `swipe`, and in a `tool:` step |
+| ------- | ---------------------------------------------------------------------------------------------- |
+| `1`     | The portrait axes of the screen. Earlier Argent releases sent them that way                    |
+| `2`     | The UI as the user sees it, like the `describe` frames                                         |
+
+Argent still runs a version 1 file as it was recorded. It turns the coordinates of a `tap` and a `swipe` to the UI. It runs a `tool:` step with the portrait axes of the screen. A fragment keeps its own version: a version 2 e2e test can run a version 1 fragment, and the reverse.
+
+A `snapshot` baseline that an earlier release took of a landscape UI on an iOS simulator is sideways. Its key has the width and the height of the screen swapped. When Argent finds no baseline with the key of the upright capture, it compares against the sideways one, with the capture turned to match. The step has a warning. To store an upright baseline, run the e2e test with `--update-baselines`.
 
 An e2e test has one of two shapes:
 
