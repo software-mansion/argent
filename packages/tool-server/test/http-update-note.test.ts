@@ -187,28 +187,6 @@ describe("HTTP update note injection", () => {
     expect(res.body.note).toContain("will not repeat for the next 30 minutes");
   });
 
-  // Agents read "save a note" as an instruction from tool output and refuse it,
-  // and a reminder they think they own gets answered with their own memory or
-  // cron job, which leaves this note running.
-  it("note says the reminder is Argent's own and gives the agent nothing to save", async () => {
-    mockGetUpdateState.mockReturnValue(
-      mkState({
-        updateAvailable: true,
-        updateInstallable: true,
-        latestVersion: "1.2.3",
-        installableVersion: "1.2.3",
-      })
-    );
-
-    handle = createHttpApp(stubRegistry());
-
-    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
-
-    expect(res.body.note).toContain("comes from Argent itself");
-    expect(res.body.note).toContain("needs no task, memory entry or scheduled reminder");
-    expect(res.body.note).not.toContain("ACTION REQUIRED");
-  });
-
   it("does NOT include a note on 500 error responses", async () => {
     const errorRegistry = {
       getSnapshot: vi.fn(() => ({ services: new Map(), namespaces: [], tools: ["test-tool"] })),

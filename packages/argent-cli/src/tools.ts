@@ -1,4 +1,5 @@
 import { createToolsClient, type ToolsServerPaths } from "@argent/tools-client";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import { formatSchemaUsage, type JsonSchema } from "./flag-parser.js";
 
 export interface ToolsCommandOptions {
@@ -11,6 +12,8 @@ function summarize(description: string | undefined, max = 80): string {
   if (firstLine.length <= max) return firstLine;
   return firstLine.slice(0, max - 1).trimEnd() + "…";
 }
+
+const TOOLS_OPTIONS = { json: { kind: "boolean" } } as const satisfies OptionSpecs;
 
 export async function tools(argv: string[], options: ToolsCommandOptions): Promise<void> {
   const { fetchTool, fetchTools } = createToolsClient({ paths: options.paths });
@@ -67,17 +70,33 @@ Listing tools contacts the argent tool-server, starting one if none is running.
 `);
   }
 
-  const json = argv.includes("--json");
-  // Checked before contacting the tool-server, and only in the subcommand slot so
-  // `argent tools describe <name> --help` still reaches describeTool's flag output.
   const isHelpFlag = (a: string) => a === "--help" || a === "-h";
-  const positional = argv.filter((a) => !a.startsWith("--") || isHelpFlag(a));
-  const sub = positional[0];
-
-  if (sub !== undefined && isHelpFlag(sub)) {
+  if (argv.some(isHelpFlag)) {
+    // `tools describe <name> --help` asks for that tool's flags; a help flag
+    // before the name asks for this usage.
+    const [first, second] = argv.filter((a) => !a.startsWith("-") || isHelpFlag(a));
+    if (first === "describe" && second !== undefined && !isHelpFlag(second)) {
+      await describeTool(second, argv.includes("--json"));
+      return;
+    }
     printUsage();
     return;
   }
+
+  const usageError = (message: string): never => {
+    console.error(`Error: ${message}\n`);
+    printUsage();
+    process.exit(2);
+  };
+  let parsed: ReturnType<typeof parseCommandArgs>;
+  try {
+    parsed = parseCommandArgs(argv, TOOLS_OPTIONS);
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    return usageError(err.message);
+  }
+  const [sub, name, extra] = parsed.positionals;
+  const json = parsed.options.json === true;
 
   if (!sub) {
     await listTools(json);
@@ -85,15 +104,11 @@ Listing tools contacts the argent tool-server, starting one if none is running.
   }
 
   if (sub === "describe") {
-    const name = positional[1];
-    if (!name) {
-      console.error("Usage: argent tools describe <tool-name>");
-      process.exit(1);
-    }
+    if (!name) return usageError("`argent tools describe` requires a <tool-name>");
+    if (extra !== undefined) usageError(`Unexpected argument "${extra}"`);
     await describeTool(name, json);
     return;
   }
 
-  console.error(`Unknown subcommand: tools ${sub}`);
-  process.exit(1);
+  usageError(`Unknown subcommand: tools ${sub}`);
 }

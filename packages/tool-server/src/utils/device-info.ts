@@ -8,6 +8,7 @@ import {
   isIosPhysicalUdid,
   nativeIdPlatform,
 } from "./external-devices";
+import { trackedMacosAppKind } from "./macos-app-kind";
 
 /**
  * Everything here classifies by shape because `xcrun simctl list` and `adb
@@ -187,7 +188,8 @@ export function isWirelessAdbSerial(serial: string): boolean {
 /**
  * Kind is defaulted by shape (a physical-iOS-shaped UDID gets 'device');
  * platform impls can enrich the result with name/state/sdkLevel from
- * simctl/adb/sim-remote.
+ * simctl/adb/sim-remote. A Mac app id has no shape for its kind, so that one
+ * comes from argent's record of the app (see `macosAppKind`).
  *
  * Vega is VVD-only: the tool-server neither connects to nor detects physical
  * Fire TV hardware, so every `amazon-` serial resolves to kind `vvd` and never
@@ -218,8 +220,19 @@ export function resolveDevice(udid: string): DeviceInfo {
               ? isAndroidEmulatorSerial(shapeId)
                 ? "emulator"
                 : "device"
-              : "app";
+              : platform === "macos"
+                ? macosAppKind(udid)
+                : "app";
   return { id: udid, platform, kind };
+}
+
+/**
+ * The id alone cannot tell a Mac Catalyst app from an AppKit app: the kind
+ * comes from the record of the build argent last started under the bundle id.
+ */
+function macosAppKind(udid: string): DeviceKind {
+  const bundleId = parseMacosAppBundleId(udid);
+  return bundleId ? trackedMacosAppKind(bundleId) : "app";
 }
 
 /**

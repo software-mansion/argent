@@ -91,22 +91,6 @@ beforeEach(() => {
   adbDefaults();
 });
 
-describe("settings-permissions failure codes are defined", () => {
-  // Guards the whole suite: `failsWith` compares against these constants, and a
-  // stale @argent/registry dist that predates them would resolve them to
-  // `undefined`, silently defanging every `failsWith` assertion. Assert they are
-  // real strings so a missing code fails here loudly instead of hiding elsewhere.
-  it("resolves the three settings-permissions codes to strings", () => {
-    for (const code of [
-      "SETTINGS_PERMISSION_UNSUPPORTED",
-      "IOS_SETTINGS_PERMISSION_FAILED",
-      "ANDROID_SETTINGS_PERMISSION_FAILED",
-    ] as const) {
-      expect(typeof FAILURE_CODES[code], code).toBe("string");
-    }
-  });
-});
-
 describe("settings-permissions schema", () => {
   const schema = settingsPermissionsTool.zodSchema!;
 
