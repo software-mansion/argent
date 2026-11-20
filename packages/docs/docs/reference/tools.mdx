@@ -149,6 +149,20 @@ A `describe` call always returns the full element tree, with its `Tree id`. With
 
 Call `screenshot` or `describe` to read the screen again.
 
+## Audio
+
+| Tool          | Description                                                                               |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| `audio-input` | Choose what apps in an iOS simulator hear as microphone input: a file, a tone, or the mic |
+
+The audio tool needs an iOS simulator on the same Mac as the tool-server. These rules apply:
+
+- Argent loads the audio hook into each app that starts after Argent arms the simulator. Restart an app that started before that.
+- The `ios-audio-always-inserted` flag is on by default. When it is off, Argent loads the hook at the first `audio-input` call. See [feature flags](/docs/reference/configuration#available-flags).
+- A remote (`remote:`) simulator, a tvOS simulator, a physical device, Android and Chromium fail before Argent starts a service.
+- The simulator must be booted. For a shut-down or unknown simulator, `audio-input` fails with `AUDIO_SIMULATOR_NOT_BOOTED`. Boot it with `boot-device` first.
+- Without `libArgentAudio.dylib` in the install, `audio-input` fails with `AUDIO_HOOK_UNAVAILABLE`. The other tools work.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |
