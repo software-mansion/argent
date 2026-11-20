@@ -521,6 +521,83 @@ describe("selectTarget", () => {
       expect(message).toMatch(/reinstall-app[\s\S]*retry with the id shown for it/);
     });
   });
+
+  describe("when a logicalDeviceId this process has not seen matches no target", () => {
+    // Real repro: a fresh tool-server, Metro serving an iOS simulator and an
+    // Android emulator. The simulator's app is stopped before the first call,
+    // so Metro lists only the emulator, and the first call names the
+    // simulator's logicalDeviceId, which this process has never listed.
+    const SIMULATOR_ID = "8e8a3f0c5b1d4e2f9a7c6b5d4e3f2a1b0c9d8e7f";
+    const EMULATOR_ID = "6661c0de5ab9d24f7e8a3b1c2d4e5f60718293a4";
+
+    const emulator = () =>
+      makeTarget({
+        id: "emulator",
+        deviceName: "sdk_gphone64_arm64 - 14 - API 34",
+        webSocketDebuggerUrl: "ws://10.0.2.2:8081/inspector/debug?device=1&page=1",
+        reactNative: {
+          logicalDeviceId: EMULATOR_ID,
+          capabilities: { prefersFuseboxFrontend: true },
+        },
+      });
+    const simulator = () =>
+      makeTarget({
+        id: "simulator",
+        deviceName: "iPhone 17 Pro",
+        webSocketDebuggerUrl: "ws://localhost:8081/inspector/debug?device=0&page=1",
+        reactNative: {
+          logicalDeviceId: SIMULATOR_ID,
+          capabilities: { prefersFuseboxFrontend: true },
+        },
+      });
+
+    function selectUnattachedSimulator(): unknown {
+      try {
+        selectTarget([emulator()], 8081, { deviceId: SIMULATOR_ID });
+      } catch (err) {
+        return err;
+      }
+      return undefined;
+    }
+
+    it("refuses with DEBUGGER_METRO_NO_TARGETS instead of routing to the only device", () => {
+      const thrown = selectUnattachedSimulator();
+
+      expect(thrown).toBeInstanceOf(FailureError);
+      expect(getFailureSignal(thrown)).toMatchObject({
+        error_code: FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS,
+        failure_stage: "debugger_select_target",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      });
+    });
+
+    it("says the id is not attached, not that it left, and names the device Metro lists", () => {
+      const message = (selectUnattachedSimulator() as Error | undefined)?.message;
+
+      expect(message).toContain(`"${SIMULATOR_ID}" is not attached to Metro on port 8081`);
+      expect(message).not.toContain("no longer attached");
+      expect(message).toContain(`sdk_gphone64_arm64 - 14 - API 34 (${EMULATOR_ID})`);
+    });
+
+    it("routes to the device once its app attaches", () => {
+      expect(selectUnattachedSimulator()).toBeInstanceOf(FailureError);
+
+      const result = selectTarget([emulator(), simulator()], 8081, { deviceId: SIMULATOR_ID });
+
+      expect(result.target.id).toBe("simulator");
+    });
+
+    it("still falls back for a simulator UDID or an emulator serial", () => {
+      expect(
+        selectTarget([emulator()], 8081, { deviceId: "B1C2D3E4-5F60-4718-9A2B-3C4D5E6F7A8B" })
+          .target.id
+      ).toBe("emulator");
+      expect(selectTarget([emulator()], 8081, { deviceId: "emulator-5554" }).target.id).toBe(
+        "emulator"
+      );
+    });
+  });
 });
 
 /**
