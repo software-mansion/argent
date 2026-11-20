@@ -231,15 +231,12 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
       settle +
       // Name both axes: the walker clips each edge on its own, so a
       // horizontally scrolled node comes back zero-WIDTH at a normal height.
-      "A zero-area frame in `describe` means off-viewport, inside a closed `<details>` " +
-      "(its `<summary>` opens it), or clipped by an `overflow` ancestor — zero height for a " +
-      "node cut off above or below, zero width for one cut off left or right, since the " +
-      "walker clips each edge on its own. Where a scroll reveals it " +
-      "(off-viewport, or in a scroller), the fix there is a `scroll-to` before the check rather " +
-      "than a different selector, with `within` naming a scroller away from the screen's " +
-      "center; one an `overflow: hidden` box clips stays hidden unless that box's wheel " +
-      "handler scrolls it, with `within` naming the box. A password field reaches the runner " +
-      "under the name `[password]`, so only an `id`/`role` selector can match it"
+      "A zero-area frame in `describe` means off-viewport, clipped by an `overflow` ancestor " +
+      "or inside a closed `<details>` (its `<summary>` opens it) — zero height for a node cut " +
+      "off above or below, zero width for one cut off left or right, since the walker clips " +
+      "each edge on its own — and the fix for a scrolled-out node is a `scroll-to` before the " +
+      "check rather than a different selector; a password field reaches the runner under the " +
+      "name `[password]`, so only an `id`/`role` selector can match it"
     );
   }
   if (platform === "macos") {

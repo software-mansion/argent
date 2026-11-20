@@ -131,7 +131,7 @@ Use the launch map for cross-platform tests. A bare launch applies everywhere an
 
 An Android app that needs a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` and keep the test as a fragment.
 
-In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `down`, `left`, and `right` directions. The default is `down`; set it explicitly to reach a target above the viewport or along a horizontal carousel. If the target is already visible, the step is a safe no-op. `tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` when the target can be off-screen. Use `within` for a nested scroller. On Chromium, a target that a scroller cuts along the scroll direction is scrolled inside that scroller, whatever `within` names. If that leaves the cut in place, the next scrolls go to the center of `within`, else to the center of the scroller's visible part in line with the target, and the target is accepted cut when it lies under that center or the cut holds again, so a cut no scroll can move further passes the step still cut. With `within`, the target is also measured against `within` along the scroll direction: while the scroller no longer cuts it but `within` does (an `overflow: hidden` box its own wheel handler scrolls), the scrolls go to the center of `within`.
+In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `down`, `left`, and `right` directions. The default is `down`; set it explicitly to reach a target above the viewport or along a horizontal carousel. If the target is already visible, the step is a safe no-op. `tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` when the target can be off-screen. Use `within` for a nested scroller.
 
 ### `swipe`
 
@@ -179,8 +179,6 @@ A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinc
 - `contains`: case-insensitive substring.
 - `equals`: case-insensitive full match.
 - `matches`: case-sensitive JavaScript regex.
-
-On Chromium, text has the letter case the page shows: a button whose CSS `text-transform: uppercase` shows `Save` as `SAVE` reads as `SAVE`. Write a `matches` regex in that case.
 
 Use `equals` or an anchored regex when boundaries matter. For example, `contains: "Taps: 3"` also matches `Taps: 30`.
 

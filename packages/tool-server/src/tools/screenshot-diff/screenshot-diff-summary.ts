@@ -44,7 +44,7 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
     // Reference the result fields instead of embedding the paths: the client
     // rewrites `diffPath`/`contextDiffPath` to paths on its own machine, so a
     // server path inlined here would dangle when the tool-server runs remotely.
-    lines.push(`- diff_images: see diffPath (input size) and contextDiffPath in this result`);
+    lines.push(`- diff_images: see diffPath (full size) and contextDiffPath in this result`);
     lines.push(
       `  - legend: green=pixel brighter in current, red=pixel darker in current, yellow rectangles outline changed regions`
     );

@@ -106,20 +106,14 @@ const zodSchema = z.object({
     .describe(
       "Device ID of the app to inspect<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>. During a recording, use the ID passed to react-profiler-start."
     ),
-  top_n: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(20)
-    .describe("Number of components to return, by self render time"),
+  top_n: z.coerce.number().int().positive().default(20).describe("Number of components to return"),
 });
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
   description: `Scan the live React fiber tree and count the mounted instances of each component, with their last render durations.
-Returns a markdown table sorted by total self time, with each component's instance count and its largest instance's subtree time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
-Self time comes from each fiber's last render, often its mount, and subtree time from the last commit that reached it, so self time can exceed the subtree column: compare self time between rows.
-Use when you want a quick look at which mounted components are expensive in a live connected app, without a profiling session.
+Returns a markdown table of the components with the longest total self render time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
+Use when you want a quick look at what is mounted in a live connected app, without a profiling session.
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   zodSchema,
   readOnly: true,

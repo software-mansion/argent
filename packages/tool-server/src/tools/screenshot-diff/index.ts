@@ -117,11 +117,11 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
   id: "screenshot-diff",
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
 Each side is a saved PNG or a live capture from the device<flag:harmonyos> (iOS, Android or HarmonyOS)</flag:harmonyos>. baselinePath + captureCurrent is the common visual-regression flow.
-Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model, orientation and foldable posture. Any size difference is reported as a dimension mismatch and nothing is compared.
+Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model. A size difference fails as a dimension mismatch.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 Physical iPhones: live captures are device-wide and need no registered app.
 <flag:macos-apps>Mac apps: a resized window fails as a dimension mismatch.
-</flag:macos-apps>Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the diff image at input size and contextDiffPath is a downscaled image for MCP/agent display.
+</flag:macos-apps>Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
 Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable.`,
   zodSchema,

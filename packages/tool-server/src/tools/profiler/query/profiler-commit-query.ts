@@ -528,9 +528,8 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Max results to return. Defaults to 20 for by_component / by_time_range, which count " +
-        "commits, and render_counts, which counts components. by_index counts individual fibers, " +
-        "ranked by self time, and returns all of them unless this is set; a small cap there can " +
-        "show less than the analyze report it is meant to expand on."
+        "commits, and render_counts, which counts components. by_index counts individual fibers and returns all of them unless this is set; " +
+        "a small cap there can show less than the analyze report it is meant to expand on."
     ),
 });
 

@@ -211,34 +211,12 @@ describe("screenshotDiffTool", () => {
     expect(captureScreenshot).toHaveBeenCalledTimes(1);
   });
 
-  it("states the identical-dimensions requirement and labels diffPath by input size", async () => {
+  it("states the identical-dimensions requirement", () => {
     const { captureBaseline, captureCurrent } = screenshotDiffTool.zodSchema!.shape;
     expect(captureBaseline.description).toContain("live from the device, at full resolution");
     expect(captureCurrent.description).toContain("live from the device, at full resolution");
     expect(screenshotDiffTool.description).toContain(
-      "Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model, orientation and foldable posture."
-    );
-    expect(screenshotDiffTool.description).toContain("diffPath is the diff image at input size");
-
-    const dir = await makeTempDir("argent-screenshot-diff-dimensions-");
-    const baselinePath = path.join(dir, "baseline.png");
-    const capturedPath = path.join(dir, "captured.png");
-    await writePng(baselinePath, 8, 8, { r: 0, g: 0, b: 0 });
-    await writePng(capturedPath, 8, 8, { r: 0, g: 0, b: 0 });
-    const captureScreenshot = vi.fn(async () => ({
-      url: "http://localhost/current.png",
-      path: capturedPath,
-    }));
-
-    const { summary } = await executeScreenshotDiffTool(
-      { simulatorServer: { apiUrl: "http://localhost:4949" } },
-      { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
-      { artifacts: new ArtifactStore() },
-      captureScreenshot as never
-    );
-
-    expect(summary.split("\n")).toContain(
-      "- diff_images: see diffPath (input size) and contextDiffPath in this result"
+      "Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model."
     );
   });
 
