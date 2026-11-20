@@ -36,6 +36,7 @@ export const FAILURE_COMMANDS = [
   "ax_service",
   "simulator_server",
   "ffmpeg",
+  "afconvert",
   "cdp",
   "electron",
   "npm",
@@ -43,6 +44,8 @@ export const FAILURE_COMMANDS = [
   "unknown",
   "devicectl",
   "xcodebuild",
+  // `xcrun xcresulttool`, which reads an XCTest result bundle.
+  "xcresulttool",
 ] as const;
 
 export type FailureCommand = (typeof FAILURE_COMMANDS)[number];

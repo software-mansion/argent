@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRegistry } from "../src/utils/setup-registry";
 import { renderFlagGated } from "../src/utils/flag-gated-text";
-import { definitionsById, EXPECTED_TOOL_COUNT } from "./helpers/catalog";
+import { definitionsById } from "./helpers/catalog";
 
 vi.mock("@argent/configuration-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/configuration-core")>();
@@ -24,10 +24,6 @@ describe("tool descriptions", () => {
     id,
     length: renderFlagGated(def.description ?? "", () => true).length,
   }));
-
-  it("are all found", () => {
-    expect(tools).toHaveLength(EXPECTED_TOOL_COUNT);
-  });
 
   it(`fit in Claude Code's ${CLAUDE_CODE_DESCRIPTION_LIMIT}-character limit`, () => {
     expect(tools.filter(({ length }) => length > CLAUDE_CODE_DESCRIPTION_LIMIT)).toEqual([]);

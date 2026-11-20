@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { forgettingUiOrientation } from "../../utils/ios-ui-orientation";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { ReinstallAppResult, ReinstallAppServices } from "./types";
 import { iosImpl } from "./platforms/ios";
@@ -70,10 +71,10 @@ Returns { reinstalled, bundleId }. Fails if \`appPath\` does not exist or is not
   >({
     toolId: "reinstall-app",
     capability,
-    ios: iosImpl,
+    ios: forgettingUiOrientation(iosImpl),
     android: androidImpl,
     iosDevice: iosDeviceImpl,
-    iosRemote: iosRemoteImpl,
+    iosRemote: forgettingUiOrientation(iosRemoteImpl),
     vega: vegaImpl,
     harmony: harmonyImpl,
   }),

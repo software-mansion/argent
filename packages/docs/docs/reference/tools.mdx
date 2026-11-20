@@ -86,7 +86,7 @@ On an Android emulator:
 - On a generic foldable profile, closed shows only the left part of the display, and `describe` frames do not match taps. Use a Pixel Fold profile to test the cover panel.
 - A physical device and an emulator without a hinge reject the call.
 
-Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
+Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent does not select a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
 With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started and that are still running. See [Mac app IDs and kinds](#start-and-restart-an-app).
 
@@ -148,6 +148,20 @@ Argent sends the full element tree again in these cases:
 A `describe` call always returns the full element tree, with its `Tree id`. With the `disable-auto-describe` flag, a `describe` result has no `Tree id`.
 
 Call `screenshot` or `describe` to read the screen again.
+
+## Audio
+
+| Tool          | Description                                                                               |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| `audio-input` | Choose what apps in an iOS simulator hear as microphone input: a file, a tone, or the mic |
+
+The audio tool needs an iOS simulator on the same Mac as the tool-server. These rules apply:
+
+- Argent loads the audio hook into each app that starts after Argent arms the simulator. Restart an app that started before that.
+- The `ios-audio-always-inserted` flag is on by default. When it is off, Argent loads the hook at the first `audio-input` call. See [feature flags](/docs/reference/configuration#available-flags).
+- A remote (`remote:`) simulator, a tvOS simulator, a physical device, Android and Chromium fail before Argent starts a service.
+- The simulator must be booted. For a shut-down or unknown simulator, `audio-input` fails with `AUDIO_SIMULATOR_NOT_BOOTED`. Boot it with `boot-device` first.
+- Without `libArgentAudio.dylib` in the install, `audio-input` fails with `AUDIO_HOOK_UNAVAILABLE`. The other tools work.
 
 ## JavaScript runtime debugging
 
@@ -398,6 +412,20 @@ On a Mac app, pass `modifiers` to `gesture-tap` as a list of keys from `control`
 
 Use `scale: 1.0` for one pixel per point. By default, screenshots downscale windows larger than 768 points on the longest side, to at least 0.6 pixels per point. The minimum explicit scale is `0.1`. Mac apps ignore `ARGENT_SCREENSHOT_SCALE` and `rotation`.
 
+#### Rotated devices
+
+All coordinates use the UI as the user sees it, also when the UI is landscape or upside down. On an iOS simulator, Argent turns these surfaces to the orientation of the UI:
+
+- Screenshots
+- `describe` frames
+- The points of the native view tools
+- The tap points of `debugger-component-tree`
+- The coordinates of the gesture tools
+
+Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `button`, `launch-app`, `restart-app`, `open-url`, `terminate-app` and `reinstall-app`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
+
+If Argent cannot read the orientation, the tool result has a note. For a live capture of `screenshot-diff`, the note is in the summary. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
+
 Scrolling targets the nearest scrollable content under the point. Web content scrolls first; an enclosing native scroll view can take over at the page boundary. The call fails if no eligible content can scroll.
 
 `scrolled: true` does not prove movement. Compare the tree before and after scrolling to detect the end of a list.
@@ -613,21 +641,22 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 
 ## Profiling
 
-| Tool                        | Description                                                                  |
-| --------------------------- | ---------------------------------------------------------------------------- |
-| `react-profiler-start`      | Start CPU profiling and React commit capture on the connected Hermes runtime |
-| `react-profiler-stop`       | Stop profiling and collect the CPU profile and commit tree                   |
-| `react-profiler-status`     | Check if a React profiler run records, was saved, was lost or taken over     |
-| `react-profiler-analyze`    | Analyze stored profiling data into a markdown performance report             |
-| `react-profiler-fiber-tree` | Inspect the React fiber tree as JSON                                         |
-| `native-profiler-start`     | Start native profiling: Instruments on iOS and Mac apps, Perfetto on Android |
-| `native-profiler-stop`      | Stop native profiling and export the trace                                   |
-| `native-profiler-analyze`   | Analyze an exported native trace into a markdown report                      |
-| `profiler-combined-report`  | Cross-correlate React Profiler and native profiler data                      |
-| `profiler-load`             | Restore a previously captured session from disk so query tools can use it    |
-| `profiler-commit-query`     | Query React commit data, or the render counts of each component              |
-| `profiler-cpu-query`        | Query Hermes CPU profile data with targeted modes                            |
-| `profiler-stack-query`      | Query native trace data for iterative native investigation                   |
+| Tool                              | Description                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime       |
+| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                         |
+| `react-profiler-status`           | Check if a React profiler run records, was saved, was lost or taken over           |
+| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report                   |
+| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                               |
+| `native-profiler-start`           | Start native profiling: Instruments on iOS and Mac apps, Perfetto on Android       |
+| `native-profiler-stop`            | Stop native profiling and export the trace                                         |
+| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                            |
+| `native-profiler-launch-analysis` | Measure iOS app launch times with XCTest or record a launch with Xcode Instruments |
+| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                            |
+| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it          |
+| `profiler-commit-query`           | Query React commit data, or the render counts of each component                    |
+| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                                  |
+| `profiler-stack-query`            | Query native trace data for iterative native investigation                         |
 
 Argent caps Instruments recordings at 10 minutes on iOS simulators and [Mac apps](#profiling-a-mac-app). Call `native-profiler-stop` to recover the available trace after the cap or an unexpected exit.
 
@@ -701,6 +730,51 @@ While `react-profiler-stop` collects a run, wait for its result:
 - `react-profiler-status` returns `active`.
 - `react-profiler-start` returns `already_running` with `mine: true`, also when you pass `force: true`.
 - A second `react-profiler-stop` fails with `REACT_PROFILER_STOP_IN_PROGRESS`.
+
+### iOS launch analysis
+
+`native-profiler-launch-analysis` measures launch times or records a launch trace to investigate startup work.
+
+| Parameter          | Description                                                                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`             | Required. `measure` for launch timings, or `profile` for an Instruments trace.                                                    |
+| `bundle_id`        | Required. Bundle ID of the installed Release app.                                                                                 |
+| `device_id`        | Required for an iPhone: its UDID. With `allow_simulator`, accepts a booted simulator UDID; omit to use the only booted simulator. |
+| `allow_simulator`  | Allow a booted simulator. Default `false`. Simulator timings reflect the host hardware.                                           |
+| `duration_seconds` | `profile` only. Recording length from 5 to 60 seconds. Default `8`.                                                               |
+
+#### Prerequisites
+
+- A Mac with Xcode. For an iPhone, connect it by USB cable and follow the [physical device requirements](/docs/features/physical-ios-devices#requirements).
+- A Release build installed on the selected device. Build and install it again after code changes; the tool does not build or install the app.
+- For simulator use, boot the simulator and set `allow_simulator: true`.
+
+#### Measure
+
+Use `mode: "measure"` to establish a baseline or compare launch times after a change. Argent's UI test runner collects five launches with `XCTApplicationLaunchMetric`. The metric includes the first frame and any extended launch tasks registered by the app.
+
+The result includes:
+
+- `averageMs`, `medianMs` and `samplesMs`: launch times in milliseconds.
+- `samplesCollected` and `samplesExpected`: how many measurements XCTest returned out of the five requested.
+- `resultPath`, `metricsPath` and `logPath`: the XCTest result bundle, exported metrics and runner log.
+- `warning`: notes about missing samples or simulator timings, or `null`.
+
+#### Profile
+
+Use `mode: "profile"` to find which phases and functions contribute to startup. Argent records one launch with the Instruments App Launch template and collects CPU samples up to the first frame.
+
+The result includes:
+
+- `launchMs`: on an iPhone, launch time through the first frame, excluding the Process Creation phase because it includes profiler attachment time. On a simulator, this is `null`; `simulatorLaunchEstimateMs` gives a rough estimate instead.
+- `phases` and `firstFrameEndMs`: lifecycle phases and the end of the first frame, in milliseconds from the start of the trace. On a simulator, `phases` is empty.
+- `tracePath` and `exports`: the Instruments trace and exported tables.
+- `profilerSession`: the CPU session, including its `cpuXml` path and suggested `next` tool calls.
+- `warning` and optional `exportErrors`: notes about the recording and unavailable exports.
+
+If the trace has no first frame of the app, the tool fails with `LAUNCH_ANALYSIS_NO_FIRST_FRAME`. This occurs when the app stops before its first frame, or when the launch takes longer than `duration_seconds`.
+
+Load the CPU session with `profiler-load` in `load_native` mode, then use `profiler-stack-query` to inspect functions and threads. The trace also opens in Instruments. See [iOS launch performance](/docs/features/ios-launch-performance).
 
 <a id="flows" />
 
