@@ -1,34 +1,17 @@
 ---
-description: Always-on Argent rules for driving, testing and profiling apps on simulators, emulators, phones, TVs and Chromium
+description: What to do when this project uses Argent but Argent is not available in this environment
 alwaysApply: true
 ---
 
-Argent - general rules:
+This project uses Argent, through its `argent` MCP server, to drive, test and profile apps on simulators, emulators, phones, TVs and Chromium. The server's own instructions carry the usage guidance.
 
-- do not derive tap coordinates from screenshot pixels; use inspection tools that give coordinates
-- use the platform the user named; otherwise prefer a device `list-devices` shows already running, and don't default to iOS; in a single-platform project boot that platform; for a web app boot a browser (`boot-device` with `browser`), then `open-url`.
-- if tap fails twice, stop retrying and re-run a discovery tool
-- Prefer mcp-tool calls over raw commands like `xcrun` or `adb`; use them as fallback.
-- Interaction tools return screenshot and element tree automatically.
-- prefer `launch-app` or `open-url` than tapping icons on home screen.
-- If a task can require a saved e2e test, load `argent-create-e2e` (`argent-qa-e2e` for acceptance tests) before the first launch or in-app action; recording is not retroactive.
-- Load the matching `argent-*` skill before React Native build/debug, profiling, a physical phone, a Mac app or a TV.
-- Do not stop simulator servers when a task finishes: the next task reuses them. Call `stop-all-simulator-servers` when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services, with devices this session used. One tool-server is shared by every other agent, so unscoped call tears down their devices too. Never stop a Metro the user started unless they ask.
-- Use the `await-ui-element` tool to block until the UI settles instead of polling using screenshot.
-- The `argent` CLI manages the toolkit: `argent --help` lists commands, `argent --version` shows the installed version.
+Check once per session whether argent is available; do not re-probe before later calls:
 
-<availability_check>
-Run this check once per session. Do not re-probe before later calls.
-Confirm argent is available:
-
-1. Are `mcp__argent__*` tools in your tool list? If none, argent is not available.
+1. Are argent tools (such as `mcp__argent__*`) in your tool list? If none, argent is not available.
 2. If unsure, run `command -v argent`. Non-zero exit = the CLI is not on PATH.
 
-If argent IS available, ignore the rest of this block and follow this rule normally.
+If argent is available, ignore this rule.
 
-If argent is ABSENT, treat it as an expected state, not an error to retry. Do not call `mcp__argent__*` tools, do not run `argent` commands, do not attempt any argent workflow.
-Tell the user once, and ask if you should continue without argent:
+If argent is absent, treat it as an expected state, not an error to retry. Do not call argent tools, run `argent` commands or attempt any argent workflow. Tell the user once, and ask if you should continue without argent:
 
 > Argent isn't installed in this environment. To enable the mobile/Chromium tooling this repo is configured for, run `npx @swmansion/argent@latest init -y` (or `npm i -g @swmansion/argent@latest && argent init -y`).
-
-</availability_check>

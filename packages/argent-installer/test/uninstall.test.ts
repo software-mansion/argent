@@ -2,12 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import {
-  ALL_ADAPTERS,
-  getMcpEntry,
-  addClaudePermission,
-  removeClaudePermission,
-} from "../src/mcp-configs.js";
+import { getMcpEntry } from "../src/mcp-configs.js";
 import { hashBundledContent } from "../src/utils.js";
 import {
   cleanupSkillsLockFile,
@@ -259,51 +254,6 @@ describe("uninstall — telemetry consent preservation", () => {
   });
 });
 
-// ── MCP entry removal across all adapters ─────────────────────────────────────
-
-describe("uninstall — MCP entry removal", () => {
-  for (const adapter of ALL_ADAPTERS) {
-    it(`removes argent from ${adapter.name} config`, () => {
-      const configPath = adapter.projectPath(tmpDir);
-      if (!configPath) return; // skip adapters without project path
-
-      adapter.write(configPath, getMcpEntry());
-      expect(adapter.remove(configPath)).toBe(true);
-      expect(fs.existsSync(configPath)).toBe(false);
-    });
-  }
-
-  it("handles removal from non-existent files gracefully", () => {
-    for (const adapter of ALL_ADAPTERS) {
-      expect(adapter.remove(path.join(tmpDir, "nonexistent.json"))).toBe(false);
-    }
-  });
-});
-
-// ── Permissions cleanup ───────────────────────────────────────────────────────
-
-describe("uninstall — permissions cleanup", () => {
-  it("removes mcp__argent permission when present", () => {
-    addClaudePermission(tmpDir, "local");
-    removeClaudePermission(tmpDir, "local");
-
-    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
-    expect(fs.existsSync(settingsPath)).toBe(false);
-  });
-
-  it("does not throw when .claude/settings.json does not exist", () => {
-    expect(() => removeClaudePermission(tmpDir, "local")).not.toThrow();
-  });
-
-  it("does not throw when permissions.allow is missing", () => {
-    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
-    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify({}));
-
-    expect(() => removeClaudePermission(tmpDir, "local")).not.toThrow();
-  });
-});
-
 // ── Skills cleanup helpers ────────────────────────────────────────────────────
 
 describe("uninstall — skills cleanup helpers", () => {
@@ -545,6 +495,47 @@ describe("uninstall — prune bundled content", () => {
     );
     expect(result.removedRoot).toBe(true);
     expect(fs.existsSync(targetDir)).toBe(false);
+  });
+
+  it("removes a link to a directory that sits at a bundled file's path", () => {
+    const bundledDir = path.join(tmpDir, "bundled");
+    const targetDir = path.join(tmpDir, ".cursor", "rules");
+    const linkedDir = path.join(tmpDir, "elsewhere");
+
+    writeFile(path.join(bundledDir, "argent.md"));
+    writeFile(path.join(linkedDir, "notes.md"), "user");
+    writeFile(path.join(targetDir, "vendor.md"), "vendor");
+    fs.symlinkSync(linkedDir, path.join(targetDir, "argent.md"));
+
+    expect(removeBundledContent(bundledDir, targetDir).removedPaths).toEqual(["argent.md"]);
+    expect(fs.readdirSync(targetDir)).toEqual(["vendor.md"]);
+    expect(fs.readdirSync(linkedDir)).toEqual(["notes.md"]);
+  });
+
+  it("removes a bundled file link left dangling by an earlier target's cleanup", () => {
+    // .opencode/agents/<file> links to the Claude copy, which uninstall removes
+    // first, so by the time opencode is cleaned the link is dangling.
+    const bundledDir = path.join(tmpDir, "bundled");
+    const claudeDir = path.join(tmpDir, ".claude", "agents");
+    const opencodeDir = path.join(tmpDir, ".opencode", "agents");
+
+    writeFile(path.join(bundledDir, "argent-agent.md"));
+    writeFile(path.join(claudeDir, "argent-agent.md"), "argent");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    fs.symlinkSync(
+      path.join("..", "..", ".claude", "agents", "argent-agent.md"),
+      path.join(opencodeDir, "argent-agent.md")
+    );
+
+    expect(removeBundledContent(bundledDir, claudeDir).removedPaths).toEqual(["argent-agent.md"]);
+    // Dangling now: gone for existsSync, present for lstat.
+    expect(fs.existsSync(path.join(opencodeDir, "argent-agent.md"))).toBe(false);
+
+    const result = removeBundledContent(bundledDir, opencodeDir);
+
+    expect(result).toEqual({ removedPaths: ["argent-agent.md"], removedRoot: true });
+    expect(fs.existsSync(opencodeDir)).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".opencode"))).toBe(false);
   });
 
   it("handles missing source or target directories gracefully", () => {

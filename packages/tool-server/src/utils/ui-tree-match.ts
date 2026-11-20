@@ -632,9 +632,9 @@ export function evaluateCondition(
       // An element with no text at all reads as "", so `matches: '^$'` or a
       // negative lookahead can check an empty field. Selector matching still
       // skips empty text, or `.*` would select every unlabeled view. Not an
-      // iOS text field: the simulator's view tree carries no typed text, so a
-      // filled field reads "" there (an empty one reads its placeholder). Nor a
-      // Mac app's password field, whose text argent never reads.
+      // iOS text field: a secure field's text is never read, so a filled one
+      // reads "" there (an empty field reads its placeholder). Nor a Mac app's
+      // password field, whose text argent never reads.
       if (
         textMatch === "matches" &&
         (textFieldsShowText ? !first.password : first.role !== "AXTextField") &&

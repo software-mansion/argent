@@ -139,10 +139,12 @@ describe("createArgentClient", () => {
     killToolServer.mockResolvedValue(true);
     const argent = createArgentClient();
 
+    const fetchTools = vi.fn(async () => []);
+    createToolsClient.mockReturnValue({ fetchTools });
     expect(await argent.stopServer()).toBe(true);
     expect(killToolServer).toHaveBeenCalledWith(expect.stringMatching(/tool-server\.cjs$/));
-    // A fresh tools client, so the next call does not reuse the stopped server.
-    expect(createToolsClient).toHaveBeenCalledTimes(2);
+    await argent.listTools();
+    expect(fetchTools).toHaveBeenCalledOnce();
 
     killToolServer.mockResolvedValue(false);
     expect(await argent.stopServer()).toBe(false);

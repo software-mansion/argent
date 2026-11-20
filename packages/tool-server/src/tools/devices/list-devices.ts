@@ -30,7 +30,9 @@ import {
   isMacosAppsEnabled,
   listTrackedMacosApps,
   noListenSocketNote,
+  trackedAppKind,
 } from "../../utils/macos-apps";
+import type { MacosAppKind } from "../../utils/macos-app-kind";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
 import {
   listVegaDevices,
@@ -124,7 +126,8 @@ type ExternalListedDevice = {
 /** A native Mac app that argent started and that still runs. */
 type MacosAppDevice = {
   platform: "macos";
-  kind: "app";
+  /** `catalyst` for a Mac Catalyst app, `app` for an AppKit one. */
+  kind: MacosAppKind;
   id: string;
   name: string;
   bundleId: string;
@@ -258,7 +261,7 @@ async function listMacosApps(): Promise<MacosAppDevice[]> {
   const apps = await listTrackedMacosApps();
   return apps.map((app) => ({
     platform: "macos",
-    kind: "app",
+    kind: trackedAppKind(app),
     id: macosAppIdFromBundleId(app.bundleId),
     name: app.name,
     bundleId: app.bundleId,
