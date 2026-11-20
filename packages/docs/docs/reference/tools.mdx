@@ -291,7 +291,7 @@ Each entry of `requests` contains these fields:
 
 `view-network-request-details` does not give the details of an `ios-` ID.
 
-When the connection of the app closes, Argent marks each request that still runs as `failed`. The `errorText` field gives one of these errors:
+On a simulator without a device provider, when the connection of the app closes, Argent marks each request that still runs as `failed`. The `errorText` field gives one of these errors:
 
 | `errorText`                                                                                              | Cause                                                                             |
 | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
