@@ -26,7 +26,18 @@ import {
   isExternalId,
 } from "../../../../utils/external-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
-import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
+import {
+  DescribeTreeData,
+  parseDescribeResult,
+  type DescribeNode,
+  type UiOrientation,
+} from "../../contract";
+import {
+  noteUiOrientation,
+  readUiOrientation,
+  unknownOrientationNote,
+} from "../../../../utils/ios-ui-orientation";
+import { isTurned, nativeTreeToUi } from "../../../../utils/ui-orientation";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 
@@ -148,6 +159,15 @@ interface IosReadFacts {
   degraded?: boolean;
   /** The daemon crashed or never started, so no read took place. */
   daemonGone?: boolean;
+  /** An Apple TV, whose focus tree is not framed on a turned screen. */
+  tvOs?: boolean;
+  /** The interface orientation the accessibility read reported with its tree. */
+  uiOrientation?: UiOrientation;
+  /**
+   * The accessibility read answered. Without an orientation, the daemon could
+   * not name it or predates it, and asking it again would only repeat the walk.
+   */
+  axAnswered?: boolean;
 }
 
 const readFacts = new WeakMap<DescribeTreeData, IosReadFacts>();
@@ -243,6 +263,10 @@ interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, so poll/retry callers don't re-shell `xcrun` each
   // iteration. Omitted callers probe once.
   isTvOs?: boolean;
+  // `native` leaves the frames in the screen's portrait-native space, for the
+  // preview page, which draws them over the native video stream. Everything
+  // else, and every agent, gets the UI's upright space (see `toUprightFrames`).
+  frameSpace?: "upright" | "native";
 }
 
 // The ax-service blueprint factory shells out to `xcrun simctl spawn`. Without
@@ -260,7 +284,46 @@ export async function describeIos(
   const facts: IosReadFacts = {};
   const data = await readIos(registry, device, params, options, facts);
   readFacts.set(data, facts);
+  if (options.frameSpace !== "native" && !facts.tvOs) {
+    await toUprightFrames(data, device, facts);
+  }
   return data;
+}
+
+/**
+ * Turn the frames of an iOS simulator read from the screen's portrait-native
+ * space into the UI's upright one, the space screenshots come in and touches
+ * are taken in (`utils/ios-ui-orientation.ts`). Both sources frame on the
+ * native axes: the ax-service, and the native-devtools fallback.
+ *
+ * The orientation is the one the accessibility read reported with its tree,
+ * else a read of its own (the daemon may have been down for the tree). When
+ * neither names it the frames stay native, and the hint says so. In place, so
+ * the read facts keyed on `data` still find it.
+ */
+async function toUprightFrames(
+  data: DescribeTreeData,
+  device: DeviceInfo,
+  facts: IosReadFacts
+): Promise<void> {
+  let orientation = facts.uiOrientation;
+  if (orientation === undefined) {
+    if (facts.axAnswered || data.tree.children.length === 0) return;
+    // The daemon that would name it did not come up for this read; starting it
+    // again here would only repeat the failure the hint already reports.
+    const read = facts.daemonGone
+      ? { unknownReason: "the accessibility service is not running" }
+      : await readUiOrientation(device.id);
+    orientation = read.orientation;
+    if (orientation === undefined) {
+      if (read.unknownReason === undefined) return;
+      const note = unknownOrientationNote(read, "these frames are in");
+      data.hint = data.hint ? `${data.hint} ${note}` : note;
+      return;
+    }
+  }
+  if (!isTurned(orientation)) return;
+  data.tree = nativeTreeToUi(data.tree, orientation);
 }
 
 async function readIos(
@@ -272,6 +335,7 @@ async function readIos(
 ): Promise<DescribeTreeData> {
   // The focus-engine tree is served by tv-control, not the iOS ax-service.
   const isTvOs = options.isTvOs ?? (await isTvOsSimulator(device.id));
+  facts.tvOs = isTvOs;
   if (isTvOs) {
     return { tree: emptyTree(), source: "ax-service", hint: TVOS_HINT };
   }
@@ -329,7 +393,11 @@ async function readIos(
 
   if (axApi) {
     try {
-      tree = adaptAXDescribeToDescribeResult(await axApi.describe());
+      const response = await axApi.describe();
+      facts.axAnswered = true;
+      facts.uiOrientation = response.interfaceOrientation;
+      noteUiOrientation(device.id, response.interfaceOrientation, response.screenFrame);
+      tree = adaptAXDescribeToDescribeResult(response);
     } catch (err) {
       crashSignal = axDaemonCrashSignal(err);
       if (crashSignal === undefined) {

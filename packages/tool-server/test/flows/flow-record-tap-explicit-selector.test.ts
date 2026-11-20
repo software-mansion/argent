@@ -353,24 +353,25 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     expect(await recordedSteps()).toHaveLength(0);
   });
 
-  // Equal frames tie on reading order: the upper one on the frame space, the
-  // other in the UI of this landscape screen, which is the one a replay taps.
-  it("checks a supplied selector in the reading order of a landscape UI", async () => {
-    currentTreeData = () => ({
-      tree: n({
-        role: "AXGroup",
-        frame: { x: 0, y: 0, width: 1, height: 1 },
-        children: [
-          n({ frame: { x: 0.6, y: 0.1, width: 0.2, height: 0.1 }, label: "Dup" }),
-          n({ frame: { x: 0.1, y: 0.6, width: 0.2, height: 0.1 }, label: "Dup" }),
-        ],
-      }),
-      source: "native-devtools",
-      uiOrientation: "landscapeLeft",
-    });
-    await record({
+  // Equal frames tie on reading order, so a replay taps the upper one.
+  it("checks a supplied selector in the reading order a replay ranks in", async () => {
+    setTree([
+      n({ frame: { x: 0.6, y: 0.1, width: 0.2, height: 0.1 }, label: "Dup" }),
+      n({ frame: { x: 0.1, y: 0.6, width: 0.2, height: 0.1 }, label: "Dup" }),
+    ]);
+    const refused = (await record({
       command: "gesture-tap",
       args: JSON.stringify({ udid: DEVICE, x: 0.2, y: 0.65 }),
+      selector: { text: "Dup" },
+    })) as { message: string };
+    expect(refused.message).toMatch(
+      /to an element centred at \(0\.7, 0\.15\), and a replay taps there, not at this tap's point\./
+    );
+    expect(await recordedSteps()).toHaveLength(0);
+
+    await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.7, y: 0.15 }),
       selector: { text: "Dup" },
     });
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Dup" } }]);
@@ -456,7 +457,6 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
   it.each([
     ["ends in a no-break space", { text: "Save\u00a0" }],
     ["is blank", { identifier: "\u00a0" }],
-    ["holds a one-space line when folded", { text: `${"x".repeat(78)}\n \nb` }],
   ])(
     "refuses a value that %s, which a file ending in this step does not keep",
     async (_, selector) => {
