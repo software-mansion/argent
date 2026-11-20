@@ -913,6 +913,42 @@ describe("selectTarget by an iOS simulator UDID on a shared Metro", () => {
     );
   });
 
+  it.each([
+    ["Dev&QA", "Dev"],
+    ["Pro+Max", "Pro Max"],
+  ])("refuses a simulator named %s, which Metro lists as %s", async (name, listed) => {
+    listIosSimulators.mockResolvedValue([bootedSimulator(SIM_UDID, name)]);
+    const sim = deviceTarget("lid-sim", listed);
+
+    await expect(selectByDeviceId([emulator, sim], SIM_UDID)).rejects.toThrow(
+      /No debugger target matches device_id/
+    );
+  });
+
+  it.each([
+    ["Dev&QA", "Dev"],
+    ["Pro+Max", "Pro Max"],
+  ])("refuses when Metro lists another booted simulator, %s, as %s", async (name, listed) => {
+    listIosSimulators.mockResolvedValue([
+      bootedSimulator(SIM_UDID, listed),
+      bootedSimulator(OTHER_UDID, name),
+    ]);
+    const other = deviceTarget("lid-other", listed);
+
+    await expect(selectByDeviceId([emulator, other], SIM_UDID)).rejects.toThrow(
+      /No debugger target matches device_id/
+    );
+  });
+
+  it("does not look up simulator names for a provider's device", async () => {
+    const sim = deviceTarget("lid-sim", "iPhone 17 Pro");
+
+    await expect(selectByDeviceId([emulator, sim], `ext:provider:${SIM_UDID}`)).rejects.toThrow(
+      /No debugger target matches device_id/
+    );
+    expect(listIosSimulators).not.toHaveBeenCalled();
+  });
+
   it("does not look up simulator names when Metro lists one device", async () => {
     const sim = deviceTarget("lid-sim", "iPhone 17 Pro");
 

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { MACOS_APP_ID_PREFIX, resolveDevice } from "../device-info";
+import { isExternalId } from "../external-devices";
 import { listIosSimulators } from "../ios-devices";
 import { trackedMacosAppKind, trackedMacosAppVendorId } from "../macos-app-kind";
 import type { CDPTarget } from "./discovery";
@@ -108,23 +109,33 @@ function targetsOfOnlyDeviceNamed(
 }
 
 /**
+ * The device name Metro lists for an app on a simulator of this name. React
+ * Native sends the name unescaped in a query string, where `&` ends it and `+`
+ * reads as a space.
+ */
+function nameMetroLists(simulatorName: string): string {
+  return simulatorName.split("&")[0]!.replaceAll("+", " ");
+}
+
+/**
  * The name of the booted local iOS simulator `deviceId` names, for a Metro that
  * lists several devices. Metro never sees a UDID, only the name the app
- * reports, so {@link selectTarget} matches on that name. Undefined when another
- * booted simulator has the same name.
+ * reports, so {@link selectTarget} matches on that name. Undefined when Metro
+ * lists the name differently, or lists another booted simulator under it.
  */
 export async function simulatorNameOnSharedMetro(
   deviceId: string,
   targets: CDPTarget[]
 ): Promise<string | undefined> {
+  if (isExternalId(deviceId)) return undefined;
   const device = resolveDevice(deviceId);
   if (device.platform !== "ios" || device.kind !== "simulator") return undefined;
   if (metroDevices(targets).size < 2) return undefined;
   const simulators = await listIosSimulators().catch(() => []);
   const booted = simulators.filter((sim) => sim.state === "Booted");
   const name = booted.find((sim) => sim.udid === deviceId)?.name;
-  if (name === undefined) return undefined;
-  return booted.filter((sim) => sim.name === name).length === 1 ? name : undefined;
+  if (name === undefined || nameMetroLists(name) !== name) return undefined;
+  return booted.filter((sim) => nameMetroLists(sim.name) === name).length === 1 ? name : undefined;
 }
 
 /**

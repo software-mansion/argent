@@ -380,9 +380,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       // later tool that forwards the logicalDeviceId on this instance instead of
       // opening a second one. See utils/debugger/device-alias.ts.
       rememberDeviceAlias(api.logicalDeviceId, deviceId);
-      // Equal ids mean the caller connected with the logicalDeviceId itself, as
-      // `selectTarget` demands once a second device shares this Metro. Nothing
-      // then joins the session to a udid or serial, so a `list-devices`-scoped
+      // Equal ids mean the caller connected with the logicalDeviceId itself.
+      // Nothing then joins the session to a udid or serial, so a `list-devices`-scoped
       // `stop-all-simulator-servers` can only report it, never reach it.
       rememberLogicalKeyedDevice(api.logicalDeviceId, deviceId);
 
