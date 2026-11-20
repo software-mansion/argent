@@ -847,7 +847,7 @@ In `ui-tree`, fields a platform cannot report yet are listed in `unsupportedFiel
 
 ## Relative paths
 
-The client resolves a relative path in a file input of a tool against its working directory, for example `appPath` of `reinstall-app`. `GET /tools` lists the file inputs of a tool in `fileInputs`. The MCP server refuses a relative `project_root` or `e2e_test_path`.
+The client resolves a relative path in a file input of a tool against its working directory, for example `appPath` of `reinstall-app`. `GET /tools` lists the file inputs of a tool in `fileInputs`. The MCP server refuses such a path in `project_root` or `e2e_test_path`.
 
 ## Footnotes
 
