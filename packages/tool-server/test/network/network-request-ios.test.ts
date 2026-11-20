@@ -411,6 +411,58 @@ describe("view-network-request-details: iOS bodies and Content-Encoding", () => 
       expect((await details()).request.postData).toBe('{"plain":true}');
     });
   });
+
+  describe("a UTF-8 text body with no Content-Encoding", () => {
+    // 2100 chars, 4900 bytes: each "東京-" is 3 chars and 7 bytes.
+    const sent = "東京-".repeat(700);
+    const shown = `${sent.slice(0, 1000)}...`;
+
+    it.each([
+      [
+        "read as text",
+        "text/plain; charset=utf-8",
+        "",
+        () => textBody(sent),
+        `[TRUNCATED: first 1000 chars shown, full size: 2100 chars, MIME: text/plain]\n${shown}`,
+      ],
+      [
+        "read as text, cut by the agent",
+        "text/plain",
+        "identity",
+        () => textBody(sent, true),
+        `[TRUNCATED: first 1000 chars shown, full size: unknown; the agent kept only the first 4900 bytes, MIME: text/plain]\n${shown}`,
+      ],
+      [
+        "sent inline with the request",
+        "text/plain; charset=UTF-8",
+        "",
+        () => inlineBody(sent),
+        `[TRUNCATED: first 1000 chars shown, full size: 2100 chars, MIME: text/plain]\n${shown}`,
+      ],
+      [
+        "sent inline, cut by the host",
+        "text/plain",
+        "",
+        () => inlineBody(sent, 3000),
+        `[TRUNCATED: first 1000 chars shown, full size: 3000 chars, MIME: text/plain]\n${shown}`,
+      ],
+    ])(
+      "shows the body %s without copying it to a buffer",
+      async (_how, contentType, contentEncoding, reply, expected) => {
+        const headers: Record<string, string> = { "Content-Type": contentType };
+        if (contentEncoding) headers["Content-Encoding"] = contentEncoding;
+        serve(post(headers));
+        requestPostData.mockResolvedValue(reply());
+        const from = vi.spyOn(Buffer, "from");
+        try {
+          expect((await details()).request.postData).toBe(expected);
+          expect(from.mock.calls.filter(([value]) => value === sent).length).toBe(0);
+        } finally {
+          from.mockRestore();
+        }
+      }
+    );
+  });
 });
 
 describe("view-network-request-details: an iOS request body that the upload cut", () => {
