@@ -74,6 +74,16 @@ describe("profiler-load list — platform classification", () => {
     expect(androidSection).not.toContain("20260101-090000");
   });
 
+  it("lists a launch profile separately from an xctrace capture in the same second", async () => {
+    const timestamp = "20261120-102030";
+    const launchId = `${timestamp}-launch-10db6098-b3cc-4802-8697-a10a4f43bd83`;
+    await touch(`native-profiler-${launchId}_raw_cpu.xml`);
+    await touch(`native-profiler-${timestamp}_raw_hangs.xml`);
+    const output = await listOutput();
+    expect(output).toContain(`| \`${launchId}\` | CPU |`);
+    expect(output).toContain(`| \`${timestamp}\` | hangs |`);
+  });
+
   it("reports no sessions when the dir is empty", async () => {
     expect(await listOutput()).toContain("No profiling sessions found");
   });

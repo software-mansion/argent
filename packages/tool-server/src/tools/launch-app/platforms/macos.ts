@@ -18,11 +18,11 @@ export const macosImpl: PlatformImpl<{ macosApp: MacosAppApi }, LaunchAppParams,
   {
     handler: async (services, params, device) => {
       const bundleId = assertLaunchTargetsDevice(params.bundleId, device);
-      const { appPath, args, alreadyRunning, note } = await services.macosApp.launch({
+      const { kind, appPath, args, alreadyRunning, note } = await services.macosApp.launch({
         args: params.launchArgs,
       });
       if (!alreadyRunning) {
-        return { launched: true, bundleId, appPath, args, ...(note ? { note } : {}) };
+        return { launched: true, bundleId, kind, appPath, args, ...(note ? { note } : {}) };
       }
       // A restart would lose the state of an app that only closed its last window.
       const windows = await services.macosApp.call("Window.list").then(listedWindows, () => null);
@@ -30,6 +30,13 @@ export const macosImpl: PlatformImpl<{ macosApp: MacosAppApi }, LaunchAppParams,
         windows && !windows.some((w) => w.isReference === true)
           ? `The app was already running with the argent library. ${MACOS_NO_WINDOW_MESSAGE}`
           : "The app was already running with the argent library; use restart-app for a new process.";
-      return { launched: true, bundleId, appPath, args, note: note ? `${note} ${shown}` : shown };
+      return {
+        launched: true,
+        bundleId,
+        kind,
+        appPath,
+        args,
+        note: note ? `${note} ${shown}` : shown,
+      };
     },
   };
