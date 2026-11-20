@@ -71,7 +71,18 @@ export async function listEmulatorPidsForAvd(avdName: string): Promise<number[]>
  * flags (empty if none, or if `ps` is unavailable, as on Windows).
  */
 export async function listEmulatorProcessesForAvd(avdName: string): Promise<EmulatorProcess[]> {
-  if (process.platform === "win32") return [];
+  return (await readEmulatorProcessesForAvd(avdName)) ?? [];
+}
+
+/**
+ * Like {@link listEmulatorProcessesForAvd}, but null when the process table
+ * cannot be read (Windows, or `ps` failed or timed out), so a caller can tell
+ * "no such emulator" from "unknown".
+ */
+export async function readEmulatorProcessesForAvd(
+  avdName: string
+): Promise<EmulatorProcess[] | null> {
+  if (process.platform === "win32") return null;
   try {
     const { stdout } = await execFileAsync(PS_BIN, [...PS_ARGS_WITH_PID], {
       timeout: 5_000,
@@ -80,8 +91,8 @@ export async function listEmulatorProcessesForAvd(avdName: string): Promise<Emul
     return parseEmulatorProcessesForAvd(stdout, avdName);
   } catch (err) {
     process.stderr.write(
-      `[emulator-process] ps probe failed; assuming no emulator runs "${avdName}": ${String(err)}\n`
+      `[emulator-process] ps probe failed; cannot list the emulators of "${avdName}": ${String(err)}\n`
     );
-    return [];
+    return null;
   }
 }

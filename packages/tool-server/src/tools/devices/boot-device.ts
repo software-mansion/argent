@@ -10,6 +10,7 @@ import {
   statSync,
 } from "node:fs";
 import { rm } from "node:fs/promises";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -50,6 +51,7 @@ import { ensureDep } from "../../utils/check-deps";
 import {
   listEmulatorPidsForAvd,
   listEmulatorProcessesForAvd,
+  readEmulatorProcessesForAvd,
   type EmulatorProcess,
 } from "../../utils/emulator-process";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
@@ -850,6 +852,50 @@ const HOT_BOOT_BUDGET_MS = 90_000;
  * per `bootAndroid` invocation, before either attempt) because recomputing it
  * between attempts could include a failed hot-boot child still being reaped.
  */
+function portInUseError(message: string): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.BOOT_ANDROID_PORT_IN_USE,
+    failure_stage: "boot_android_port",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+function isPortInUse(err: unknown): boolean {
+  return getFailureSignal(err)?.error_code === FAILURE_CODES.BOOT_ANDROID_PORT_IN_USE;
+}
+
+/**
+ * Throw `BOOT_ANDROID_PORT_IN_USE` when the console on `serial` names another
+ * AVD: another emulator holds the port this boot pinned.
+ */
+async function assertPortNotTaken(serial: string, avdName: string): Promise<void> {
+  const answer = await readEmulatorConsoleAvdName(serial);
+  if (answer.status === "ok" && answer.avdName !== avdName)
+    throw portTakenError(serial, answer.avdName);
+}
+
+function portTakenError(serial: string, holderAvd: string): FailureError {
+  return portInUseError(
+    `Port ${serial.replace(/^emulator-/, "")} was taken by an emulator running AVD ` +
+      `"${holderAvd}" (${serial}) while this boot started. Pick another \`port\`.`
+  );
+}
+
+/** True when something accepts TCP connections on 127.0.0.1:`port`. */
+function isLocalPortListening(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    const done = (listening: boolean) => {
+      socket.destroy();
+      resolve(listening);
+    };
+    socket.setTimeout(1_000, () => done(false));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
+}
+
 async function attemptBoot(params: {
   avdName: string;
   emulatorBinary: string;
@@ -869,6 +915,9 @@ async function attemptBoot(params: {
   // The serial the emulator must register under: `emulator-<port>` when the
   // caller passed `-port`. Unset, ours is picked among the new serials.
   expectedSerial?: string;
+  // Without `expectedSerial`: serials that are never ours, because another
+  // boot pinned them with `-port`. Asked again on every poll.
+  pinnedElsewhere?: () => Promise<Set<string>>;
 }): Promise<{ serial: string; pid: number | undefined }> {
   // On Windows the emulator hangs mid-boot when spawned with stdio:"ignore" —
   // a detached process whose stdout/stderr are NUL never reaches
@@ -945,15 +994,36 @@ async function attemptBoot(params: {
   try {
     while (Date.now() < adbDeadline) {
       const launchError = readEarlyExitError();
-      if (launchError) throw launchError;
-      const newSerials = await listNewEmulatorSerials(params.serialsBefore);
+      if (launchError) {
+        // An emulator that exits on a pinned port usually lost the port to
+        // another one that bound it after the pre-spawn check.
+        if (params.expectedSerial !== undefined) {
+          await assertPortNotTaken(params.expectedSerial, params.avdName);
+        }
+        throw launchError;
+      }
+      let newSerials = await listNewEmulatorSerials(params.serialsBefore);
       if (params.expectedSerial !== undefined) {
         if (newSerials.includes(params.expectedSerial)) {
-          serial = params.expectedSerial;
-          break;
+          // The serial alone does not make the emulator ours: another emulator
+          // can bind the port first, and ours then exits. Only an emulator
+          // whose console names this AVD counts, so a failure path never kills
+          // somebody else's emulator by serial.
+          const answer = await readEmulatorConsoleAvdName(params.expectedSerial);
+          if (answer.status === "ok") {
+            if (answer.avdName !== params.avdName) {
+              throw portTakenError(params.expectedSerial, answer.avdName);
+            }
+            serial = params.expectedSerial;
+            break;
+          }
         }
       } else if (newSerials.length >= 1) {
-        const own = await pickOwnSerial(params.avdName, newSerials);
+        if (params.pinnedElsewhere) {
+          const pinned = await params.pinnedElsewhere();
+          newSerials = newSerials.filter((s) => !pinned.has(s));
+        }
+        const own = newSerials.length > 0 ? await pickOwnSerial(params.avdName, newSerials) : null;
         if (own) {
           serial = own;
           break;
@@ -966,6 +1036,12 @@ async function attemptBoot(params: {
     throw err;
   }
   if (!serial) {
+    if (params.expectedSerial !== undefined) {
+      await assertPortNotTaken(params.expectedSerial, params.avdName).catch((err: unknown) => {
+        killDetachedEmulator(child);
+        throw err;
+      });
+    }
     const launchError = readEarlyExitError();
     if (launchError) {
       killDetachedEmulator(child);
@@ -1087,9 +1163,17 @@ async function attemptBoot(params: {
 // exclusive on-disk lock and bails with a confusing "Running multiple
 // emulators". Coalescing makes the duplicate reuse the first result or error.
 // The key carries the mode and port: a read-only instance holds no lock, so
-// boots of one AVD on two ports, or read-only next to writable, are different
-// emulators and must not share a result.
-const inFlightBoots = new Map<string, Promise<AndroidBootResult>>();
+// boots of one AVD on two ports are different emulators and must not share a
+// result. Boots that cannot run side by side wait for each other instead; see
+// bootAndroid.
+// A default launch puts the gRPC server this far above the console port
+// (5554 -> 8554).
+const GRPC_PORT_OFFSET = 3000;
+
+const inFlightBoots = new Map<
+  string,
+  { avdName: string; readOnly: boolean; port?: number; promise: Promise<AndroidBootResult> }
+>();
 
 type AndroidBootParams = {
   avdName: string;
@@ -1108,26 +1192,51 @@ function inFlightBootKey(params: AndroidBootParams): string {
 // Read-only emulators argent booted, by serial. One launched without `-port`
 // shows no port in its command line, so only the pid ties it to its serial; the
 // pid also tells it from another emulator that later took the same console port.
-const readOnlyBoots = new Map<string, { avdName: string; pid: number }>();
+// `pinned` marks one launched with `-port`: it belongs to the calls that name
+// that port.
+const readOnlyBoots = new Map<string, { avdName: string; pid: number; pinned: boolean }>();
+
+/** What argent knows about the running instances of one AVD. */
+type AvdInstances = {
+  /** Serials of the read-only instances. */
+  readOnly: Set<string>;
+  /**
+   * Serials pinned with `-port`, by anyone, plus the ports of pinned boots in
+   * flight here. A call without `port` never takes one of these.
+   */
+  pinned: Set<string>;
+};
 
 /**
- * Serials of this AVD's running read-only instances: those launched with
- * `-read-only -port <n>` (by anyone), and the ones argent launched read-only
- * whose process still runs. Without `ps` (Windows) the set is empty, so a
- * read-only boot never reuses an instance there.
+ * Tell the running instances of `avdName` apart. The process table shows the
+ * `-read-only` and `-port` flags; argent's own record covers instances launched
+ * without `-port`. When the process table cannot be read (Windows, or `ps`
+ * failed), argent's record is trusted as it is: the emulators it lists may well
+ * still run, and dropping them would make the next boot take a read-only
+ * instance for a writable one.
  */
-async function readOnlySerialsForAvd(avdName: string): Promise<Set<string>> {
-  const processes = await listEmulatorProcessesForAvd(avdName);
-  const serials = new Set<string>();
-  for (const p of processes) {
-    if (p.readOnly && p.port !== null) serials.add(`emulator-${p.port}`);
+async function avdInstances(avdName: string): Promise<AvdInstances> {
+  const processes = await readEmulatorProcessesForAvd(avdName);
+  const readOnly = new Set<string>();
+  const pinned = new Set<string>();
+  for (const b of inFlightBoots.values()) {
+    if (b.port !== undefined) pinned.add(`emulator-${b.port}`);
+  }
+  for (const p of processes ?? []) {
+    if (p.port === null) continue;
+    pinned.add(`emulator-${p.port}`);
+    if (p.readOnly) readOnly.add(`emulator-${p.port}`);
   }
   for (const [serial, boot] of readOnlyBoots) {
     if (boot.avdName !== avdName) continue;
-    if (processes.some((p) => p.pid === boot.pid && p.readOnly)) serials.add(serial);
-    else readOnlyBoots.delete(serial);
+    if (processes !== null && !processes.some((p) => p.pid === boot.pid && p.readOnly)) {
+      readOnlyBoots.delete(serial);
+      continue;
+    }
+    readOnly.add(serial);
+    if (boot.pinned) pinned.add(serial);
   }
-  return serials;
+  return { readOnly, pinned };
 }
 
 /**
@@ -1140,14 +1249,40 @@ export function __resetInFlightBootsForTesting(): void {
   readOnlyBoots.clear();
 }
 
+/**
+ * Whether two boots must not run at the same time. The emulator runs one AVD
+ * writable once, or read-only any number of times, so any pair with a writable
+ * boot of the same AVD clashes; checked one after the other, the second sees
+ * the first's emulator and reports the conflict, while checked together both
+ * pass and the later spawn exits as if the AVD were corrupted. Two boots that
+ * pin the same port clash too, whatever their AVD.
+ */
+function bootsClash(
+  a: { avdName: string; readOnly: boolean; port?: number },
+  b: { avdName: string; readOnly: boolean; port?: number }
+): boolean {
+  if (a.port !== undefined && a.port === b.port) return true;
+  return a.avdName === b.avdName && !(a.readOnly && b.readOnly);
+}
+
 async function bootAndroid(params: AndroidBootParams): Promise<AndroidBootResult> {
   const key = inFlightBootKey(params);
-  const existing = inFlightBoots.get(key);
-  if (existing) return existing;
+  for (;;) {
+    const existing = inFlightBoots.get(key);
+    if (existing) return existing.promise;
+    const clashing = [...inFlightBoots.values()].filter((b) => bootsClash(b, params));
+    if (clashing.length === 0) break;
+    await Promise.allSettled(clashing.map((b) => b.promise));
+  }
   const promise = bootAndroidImpl(params).finally(() => {
     inFlightBoots.delete(key);
   });
-  inFlightBoots.set(key, promise);
+  inFlightBoots.set(key, {
+    avdName: params.avdName,
+    readOnly: params.readOnly,
+    ...(params.port !== undefined ? { port: params.port } : {}),
+    promise,
+  });
   return promise;
 }
 
@@ -1170,11 +1305,19 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   const hardeningArgs = launchHardeningArgs(params.sound);
   // `-read-only` lets several emulators share the AVD: it takes no AVD lock and
   // writes no snapshot. `-port` pins the console port, so the serial is known
-  // before the spawn. Neither changes qemu devices, so a snapshot probe and a
-  // hot boot with them still match the snapshot a writable cold boot saved.
+  // before the spawn. With `-port` the emulator starts no gRPC server and writes
+  // no `avd/running/pid_<pid>.ini`, and simulator-server finds the emulator
+  // through that file, so screenshots and gestures fail. `-grpc` on the port a
+  // default launch would take (console + 3000) with `-grpc-use-token` brings
+  // both back, with the same local-only, token-checked server. None of these
+  // changes qemu devices, so a snapshot probe and a hot boot with them still
+  // match the snapshot a writable cold boot saved.
+  const grpcPort = params.port !== undefined ? params.port + GRPC_PORT_OFFSET : null;
   const instanceArgs = [
     ...(params.readOnly ? ["-read-only"] : []),
-    ...(params.port !== undefined ? ["-port", String(params.port)] : []),
+    ...(params.port !== undefined
+      ? ["-port", String(params.port), "-grpc", String(grpcPort), "-grpc-use-token"]
+      : []),
   ];
   const portSerial = params.port !== undefined ? `emulator-${params.port}` : null;
 
@@ -1258,33 +1401,41 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
     const refreshed = await listAndroidDevices().catch(() => existingDevices);
     existingDevices.splice(0, existingDevices.length, ...refreshed);
   };
-  // Which running instance is this boot's: with a port, only the emulator on
-  // it. A read-only boot takes only a read-only instance, never a writable one,
-  // which would be someone's own emulator holding the AVD. A writable boot takes
-  // any, preferring a writable one: the emulator refuses to start a writable
-  // instance next to a read-only one anyway.
-  const readOnlySerials = await readOnlySerialsForAvd(params.avdName);
+  // Which running instance is this boot's. With a port, only the emulator on
+  // it. Without one, never an instance pinned with `-port`: that belongs to the
+  // calls that name its port, typically another agent's. A read-only boot takes
+  // only a read-only instance, never a writable one, which would be someone's
+  // own emulator holding the AVD. A writable boot takes any, preferring a
+  // writable one: the emulator refuses to start a writable instance next to a
+  // read-only one anyway.
+  const instances = await avdInstances(params.avdName);
   const candidates = existingDevices.filter(
-    (d) => isRunningAvd(d, params.avdName) && (portSerial === null || d.serial === portSerial)
+    (d) =>
+      isRunningAvd(d, params.avdName) &&
+      (portSerial === null ? !instances.pinned.has(d.serial) : d.serial === portSerial)
   );
   let alreadyRunning = params.readOnly
-    ? candidates.find((d) => readOnlySerials.has(d.serial))
-    : (candidates.find((d) => !readOnlySerials.has(d.serial)) ?? candidates[0]);
+    ? candidates.find((d) => instances.readOnly.has(d.serial))
+    : (candidates.find((d) => !instances.readOnly.has(d.serial)) ?? candidates[0]);
   if (params.readOnly && portSerial !== null && !alreadyRunning && candidates[0]) {
-    // This AVD runs writable on the requested port.
-    if (!params.force) {
-      throw new FailureError(
-        `${portSerial} already runs AVD "${params.avdName}" writable. ` +
-          `Pass \`force: true\` to shut it down and boot it read-only, or pick another \`port\`.`,
-        {
-          error_code: FAILURE_CODES.BOOT_ANDROID_PORT_IN_USE,
-          failure_stage: "boot_android_port",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
+    // This AVD runs on the requested port, launched in a way argent does not
+    // recognise as read-only (without `-port`, by someone else). With no
+    // writable instance of the AVD in the process table it is read-only.
+    const processes = await readEmulatorProcessesForAvd(params.avdName);
+    if (processes !== null && processes.every((p) => p.readOnly)) {
+      alreadyRunning = candidates[0];
+    } else if (!params.force) {
+      throw portInUseError(
+        processes !== null
+          ? `${portSerial} already runs AVD "${params.avdName}" writable. Pass \`force: true\` to ` +
+              `shut it down and boot it read-only, or pick another \`port\`.`
+          : `${portSerial} already runs AVD "${params.avdName}", and Argent cannot tell whether it ` +
+              `runs read-only: the process list of this host is not available. Use that emulator ` +
+              `as it is, or pick another \`port\`.`
       );
+    } else {
+      alreadyRunning = candidates[0];
     }
-    alreadyRunning = candidates[0];
   }
   let killedRunning = false;
   if (alreadyRunning) {
@@ -1317,29 +1468,35 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   // The emulator runs one AVD either writable once or read-only any number of
   // times, never both: it refuses the spawn with an early exit argent would
   // otherwise report as a corrupted AVD. Name the instance in the way instead.
-  // One this call just shut down may take a moment to leave the process table.
+  // A read-only boot is blocked by a writable instance; a writable boot by any
+  // instance it did not reuse, writable on another port included. One this call
+  // just shut down may take a moment to leave the process table.
   const blocking = await awaitEmulatorProcessesGone(
     params.avdName,
-    (p) => p.readOnly !== params.readOnly,
+    (p) => !params.readOnly || !p.readOnly,
     killedRunning ? Math.min(overallDeadline, Date.now() + EMULATOR_GONE_BUDGET_MS) : 0
   );
   if (blocking.length > 0) {
-    const pids = blocking.map((p) => p.pid).join(", ");
-    throw new FailureError(
-      params.readOnly
-        ? `AVD "${params.avdName}" is running writable (pid ${pids}), and the emulator starts a ` +
-            `read-only instance only next to other read-only ones. Close that emulator, or start it ` +
-            `with \`-read-only\` too, then retry.`
-        : `AVD "${params.avdName}" is running read-only (pid ${pids}), and the emulator cannot start ` +
-            `a writable instance next to it. Pass \`readOnly: true\`, or close the read-only ` +
-            `emulators, then retry.`,
-      {
-        error_code: FAILURE_CODES.BOOT_ANDROID_READ_ONLY_CONFLICT,
-        failure_stage: "boot_android_read_only",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
+    const describe = (p: EmulatorProcess) =>
+      `pid ${p.pid}${p.port !== null ? ` on emulator-${p.port}` : ""}`;
+    const writable = blocking.filter((p) => !p.readOnly);
+    const message = params.readOnly
+      ? `AVD "${params.avdName}" is running writable (${writable.map(describe).join(", ")}), and ` +
+        `the emulator starts a read-only instance only next to other read-only ones. Close that ` +
+        `emulator, or start it with \`-read-only\` too, then retry.`
+      : writable.length > 0
+        ? `AVD "${params.avdName}" is already running writable (${writable.map(describe).join(", ")}), ` +
+          `and the emulator runs one writable instance of an AVD at a time. Boot with that ` +
+          `instance's \`port\`, or without \`port\` if it has none, to use it, or close it, then retry.`
+        : `AVD "${params.avdName}" is running read-only (${blocking.map(describe).join(", ")}), and ` +
+          `the emulator cannot start a writable instance next to it. Pass \`readOnly: true\`, or ` +
+          `close the read-only emulators, then retry.`;
+    throw new FailureError(message, {
+      error_code: FAILURE_CODES.BOOT_ANDROID_READ_ONLY_CONFLICT,
+      failure_stage: "boot_android_read_only",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
 
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
@@ -1353,24 +1510,28 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
       if (answer.status !== "unreachable") {
         const holder =
           answer.status === "ok" ? `an emulator running AVD "${answer.avdName}"` : "an emulator";
-        throw new FailureError(
+        throw portInUseError(
           `Port ${params.port} is in use by ${holder} (${portSerial}). ` +
-            `Pick another \`port\`, or wait for that emulator to finish starting or shutting down.`,
-          {
-            error_code: FAILURE_CODES.BOOT_ANDROID_PORT_IN_USE,
-            failure_stage: "boot_android_port",
-            failure_area: "tool_server",
-            error_kind: "validation",
-          }
+            `Pick another \`port\`, or wait for that emulator to finish starting or shutting down.`
         );
       }
+    }
+    // The emulator needs the gRPC port next to the console port; taken, it
+    // starts without the server and simulator-server cannot reach it.
+    if (grpcPort !== null && (await isLocalPortListening(grpcPort))) {
+      throw portInUseError(
+        `Port ${grpcPort}, the gRPC port of console port ${params.port}, is in use. ` +
+          `Pick another \`port\`.`
+      );
     }
     serialsBefore.delete(portSerial);
   }
   const expectedSerial = portSerial ?? undefined;
+  const pinnedElsewhere =
+    portSerial === null ? async () => (await avdInstances(params.avdName)).pinned : undefined;
   const rememberReadOnly = (serial: string, pid: number | undefined) => {
     if (params.readOnly && pid !== undefined) {
-      readOnlyBoots.set(serial, { avdName: params.avdName, pid });
+      readOnlyBoots.set(serial, { avdName: params.avdName, pid, pinned: portSerial !== null });
     }
   };
 
@@ -1443,6 +1604,7 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
           pmProbeBudgetMs: 10_000,
           tearDownIfUnready: true,
           expectedSerial,
+          pinnedElsewhere,
         });
         await assertScreencapAlive(result.serial);
         rememberReadOnly(result.serial, result.pid);
@@ -1453,6 +1615,8 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
           booted: true,
         };
       } catch (err) {
+        // Another emulator took the pinned port: a cold boot would only lose it again.
+        if (isPortInUse(err)) throw err;
         hotBootFailureReason = err instanceof Error ? err.message : String(err);
         // attemptBoot already killed the failed child. A serial still listed
         // past the wait is a zombie the cold boot must not take for its own.
@@ -1505,8 +1669,10 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
       pmProbeBudgetMs: STAGE_BUDGET.pmReady,
       tearDownIfUnready: false,
       expectedSerial,
+      pinnedElsewhere,
     });
   } catch (err) {
+    if (isPortInUse(err)) throw err;
     const base = err instanceof Error ? err.message : String(err);
     const suffix = hotBootFailureReason
       ? ` Hot-boot was not viable (${hotBootFailureReason}).`
@@ -2437,7 +2603,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Android only: boot the emulator with `-read-only`, so that several emulators can run one AVD at once, for example one per agent. Defaults to false. A read-only emulator saves no snapshot and loses its changes when it exits, so the AVD and its quickboot snapshot stay as they were. The emulator runs an AVD either writable once or read-only any number of times, never both, so the boot fails while the AVD runs writable (and a writable boot fails while it runs read-only on another port). A read-only boot reuses only a running read-only emulator. Ignored on other platforms."
+      "Android only: boot the emulator with `-read-only`, so that several emulators can run one AVD at once, for example one per agent. Defaults to false. A read-only emulator saves no snapshot and loses its changes when it exits, so the AVD and its quickboot snapshot stay as they were. The emulator runs an AVD either writable once or read-only any number of times, never both, so the boot fails while the AVD runs writable, and a writable boot fails while the AVD runs in any instance it cannot reuse. A read-only boot reuses only a running read-only emulator. Ignored on other platforms."
     ),
   port: z
     .number()
@@ -2447,7 +2613,7 @@ const zodSchema = z.object({
     .multipleOf(2)
     .optional()
     .describe(
-      "Android only: the emulator's console port, an even number from 5554 to 5682 (`emulator -port`); its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there in the other mode (`readOnly`) and `force` is not set. Ignored on other platforms."
+      "Android only: the emulator's console port, an even number from 5554 to 5682 (`emulator -port`); its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. The gRPC server Argent needs for screenshots and gestures goes on the port plus 3000, which must be free too. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there writable on a read-only boot and `force` is not set. An emulator started with `-port` belongs to the calls that give that port: a call without `port` never reuses or shuts it down. Ignored on other platforms."
     ),
   headless: z
     .boolean()
