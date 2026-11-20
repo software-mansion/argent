@@ -1046,8 +1046,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
           : "rotate is unsupported on HarmonyOS — `uinput -T -m` is the platform's only multi-contact injection and it moves each finger along ONE straight line per call, with no way to chain segments into an arc; drive the app's own rotate control with `tap`, or `pinch`, which is a straight-line gesture and does run here",
     };
   }
-  // Only a Mac app takes a right-click; the others refuse it before the auto-wait too,
-  // rather than after it with gesture-tap's own error.
+  // Reject Mac-only tap options before waiting for the target.
   if (step.kind === "tap" && step.button === "right" && env.device.platform !== "macos") {
     const platform = env.device.platform;
     return {
@@ -1062,6 +1061,20 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
               (platform === "harmony"
                 ? ""
                 : ". On a touch screen, open a context menu with long-press"),
+        isFlagOffered
+      ),
+    };
+  }
+  if (step.kind === "tap" && step.modifiers !== undefined && env.device.platform !== "macos") {
+    const platform = env.device.platform;
+    return {
+      ok: false,
+      reason: renderFlagGated(
+        platform === "chromium"
+          ? `tap with modifiers holds keyboard keys through a mouse click<flag:macos-apps>, which argent sends only to a Mac app</flag:macos-apps>; ` +
+              `argent does not support it on chromium yet`
+          : `tap with modifiers holds keyboard keys through a mouse click<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>; ` +
+              `${platform} takes none`,
         isFlagOffered
       ),
     };
@@ -1247,8 +1260,8 @@ function targetPointFromFrame(
 /**
  * Tap a resolved target point. `times` rides the gesture-tap tool's
  * `clickCount`: one dispatched multi-tap gesture, never N separate calls, whose
- * RPC gaps could fall outside the OS double-tap window. `button` rides the
- * tool's `button` unchanged.
+ * RPC gaps could fall outside the OS double-tap window. Pass `button` and
+ * `modifiers` through to `gesture-tap`.
  */
 async function runTap(
   env: ActionEnv,
@@ -1260,6 +1273,7 @@ async function runTap(
     ...resolved.point,
     ...(target.times !== undefined ? { clickCount: target.times } : {}),
     ...(target.button !== undefined ? { button: target.button } : {}),
+    ...(target.modifiers !== undefined ? { modifiers: target.modifiers } : {}),
   });
   return { ok: true, ...warnedBy(resolved.warning, toolWarning(sent)) };
 }
