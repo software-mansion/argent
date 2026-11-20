@@ -124,6 +124,7 @@ import { PROCESS_ENDED } from "../src/utils/native-network-record";
 import { MACOS_CONNECTION_DROPPED } from "../src/blueprints/ios-network-records";
 import {
   chromiumRefusal,
+  findMacosAppByBundleId,
   findRunningCopies,
   getTrackedMacosApp,
   hardenedRuntimeRefusal,
@@ -956,6 +957,8 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     const SERVICES_STOPPED =
       "the app's services stopped during this start, which ended the capture; call network-capture-start again";
     const NOT_RUNNING = `${BUNDLE_ID} is not running; capture arms when boot-device, launch-app or restart-app starts it`;
+    /** No copy that argent started runs, and neither a launch record nor Spotlight names a build. */
+    const BUILD_UNKNOWN = `no copy of ${BUNDLE_ID} that argent started is running, and argent cannot find the app's build to look for another copy; capture arms when boot-device with macosAppPath starts it`;
 
     it("starts nothing on a read, and lists records with ids once network-capture-start armed the app", async () => {
       const { pid } = await run("boot-device", { macosAppPath: appPath });
@@ -1686,11 +1689,12 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     });
 
     it("arms the app when argent starts it after a start that found it not running", async () => {
+      // argent never started the app and Spotlight does not know it.
       expect((await start()).layers).toEqual([
         {
           layer: "macos-native",
           armed: false,
-          reason: NOT_RUNNING,
+          reason: BUILD_UNKNOWN,
         },
       ]);
       expect((await readLog()).header).toBe(
@@ -1931,6 +1935,38 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       );
     }, 20_000);
 
+    it("keeps the unconfirmed stop in the listing while a retried stop waits", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=disable-silent"] });
+      await start();
+      expect((await stop()).layers).toEqual([
+        expect.objectContaining({ layer: "macos-native", armed: true }),
+      ]);
+      const retrying = stop();
+      await new Promise((r) => setTimeout(r, 300));
+      // The app still intercepts its requests.
+      expect((await readLog()).header).toContain("did not acknowledge Network.disable");
+      expect((await retrying).layers).toEqual([
+        expect.objectContaining({ layer: "macos-native", armed: true }),
+      ]);
+      expect((await readLog()).header).toContain("did not acknowledge Network.disable");
+    }, 20_000);
+
+    it("confirms a retried stop when the app acknowledges the Network.disable of the stop before", async () => {
+      // Each CDP request is answered 6.2 s after the one before it. The start and
+      // the first stop stop waiting before their acknowledgements, and the retried
+      // stop gets the acknowledgement of the first stop.
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--cdp-delay=6200"] });
+      expect((await start()).layers).toEqual([expect.objectContaining({ armed: false })]);
+      expect((await stop()).layers).toEqual([
+        expect.objectContaining({ layer: "macos-native", armed: true }),
+      ]);
+      expect((await stop()).layers).toEqual([{ layer: "macos-native", armed: false, total: 0 }]);
+      expect((await readLog()).header).toBe(
+        "macos-native: stopped, 0 requests (capture stopped by network-capture-stop; network-capture-start turns it on again)"
+      );
+      expect(await request("https://example.com/after-stop")).toMatchObject({ active: false });
+    }, 30_000);
+
     it("names a copy of the app that argent did not start and says that it must be quit", async () => {
       searched.spotlight[BUNDLE_ID] = appPath;
       const outside = await startOutsideCopy();
@@ -1963,6 +1999,31 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         `${otherBuild} (pid ${outside.pid}) without the argent library`
       );
       expect(layer!.reason).toContain("Quit that copy if it is yours");
+    });
+
+    it("does not say that the app is not running when argent cannot find its build to look for a copy", async () => {
+      // A build that argent did not start and that Spotlight does not know.
+      const unknownBuild = writeBundle(path.join(root, `unknown-${Date.now()}`), BUNDLE_ID);
+      const outside = await startOutsideCopyOf(
+        path.join(unknownBuild, "Contents", "MacOS", "FakeApp")
+      );
+      expect(getTrackedMacosApp(BUNDLE_ID)).toBeUndefined();
+      expect(await findMacosAppByBundleId(BUNDLE_ID)).toBeNull();
+
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: BUILD_UNKNOWN },
+      ]);
+      const err = await (await macosApp()).call("Echo").catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_NOT_RUNNING);
+      expect((err as Error).message).not.toMatch(/is not running/);
+      expect((err as Error).message).toContain("boot-device with macosAppPath");
+      // As the reason says, boot-device with the path finds the copy that runs.
+      const booted = await run("boot-device", { macosAppPath: unknownBuild }).catch(
+        (e: unknown) => e
+      );
+      expect(codeOf(booted)).toBe(FAILURE_CODES.MACOS_APP_ALREADY_RUNNING);
+      expect((booted as Error).message).toContain(`pid ${outside.pid}`);
+      expect(outside.signals()).toEqual([]);
     });
 
     it("records no new request after a stop that the app did not acknowledge", async () => {

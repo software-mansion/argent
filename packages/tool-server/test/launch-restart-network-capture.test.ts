@@ -847,6 +847,26 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
     });
   });
 
+  it("says capture is stopped when network-capture-stop lands while the host reads the process at the end of the wait", async () => {
+    await withService(async (api) => {
+      await api.startNetworkCapture(APP, METRO_PORT);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const note = api.networkCaptureAfterLaunch(APP);
+      await launchWaitStarted();
+      let readLaunch!: () => void;
+      sim.launchctlHeld = new Promise((resolve) => (readLaunch = resolve));
+      const probes = probeCalls().length;
+
+      // The wait ends with no connection, so the host reads the app's process once more.
+      await vi.advanceTimersByTimeAsync(LAUNCH_ARM_WAIT_MS);
+      await vi.waitFor(() => expect(probeCalls().length).toBeGreaterThan(probes));
+      await expect(api.stopNetworkCapture(APP)).resolves.toEqual({ confirmed: true });
+      readLaunch();
+
+      await expect(note).resolves.toBe(STOPPED_NOTE);
+    });
+  });
+
   /**
    * launch-app only brings a running app to the front, so a process started
    * without the injection stays the app's process and never connects.

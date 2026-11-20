@@ -613,16 +613,19 @@ async function readNativeBody(
   if (body.inlineChars !== undefined) {
     return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing);
   }
+  const asSent = (): string => {
+    const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
+    return body.truncated
+      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing, body.incomplete)
+      : truncateBody(text, mimeType);
+  };
+  // A text body with no Content-Encoding reads as it came, with no copy of its bytes.
+  if (!body.base64Encoded && contentCodings(framing.contentEncoding).length === 0) return asSent();
   // A body sent as text has the body's own bytes as UTF-8, so its Content-Encoding applies to them.
   const kept = Buffer.from(body.body, body.base64Encoded ? "base64" : "utf8");
   const bytes = decodeContent(kept, framing.contentEncoding, body.truncated);
   if (!bytes) return decodesTooLarge(framing);
-  if (!body.base64Encoded && bytes === kept) {
-    const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
-    return body.truncated
-      ? cutByAgent(text, mimeType, kept.length, framing, body.incomplete)
-      : truncateBody(text, mimeType);
-  }
+  if (!body.base64Encoded && bytes === kept) return asSent();
   const text = decodeText(bytes, charsetOf(framing.contentType), body.truncated);
   if (text === null) {
     return body.truncated
@@ -667,15 +670,16 @@ function inlineBody(
   if (BINARY_BODY_TYPES.test(mimeType.toLowerCase())) {
     return `[body omitted: binary ${mimeType}, ${framing.wholeSize ?? "size unknown"}]`;
   }
-  const sent = Buffer.from(text, "utf8");
-  const bytes = decodeContent(sent, framing.contentEncoding, truncated);
-  if (!bytes) return decodesTooLarge(framing);
-  const encoded = bytes !== sent;
+  // A body with no Content-Encoding reads as it came, with no copy of its bytes.
+  const sent = contentCodings(framing.contentEncoding).length ? Buffer.from(text, "utf8") : null;
+  const bytes = sent && decodeContent(sent, framing.contentEncoding, truncated);
+  if (sent && !bytes) return decodesTooLarge(framing);
+  const encoded = bytes && bytes !== sent ? bytes : null;
   const decoded = encoded
-    ? decodeText(bytes, charsetOf(framing.contentType), truncated)
+    ? decodeText(encoded, charsetOf(framing.contentType), truncated)
     : inDeclaredCharset(text, framing.contentType, truncated);
   if (decoded === null) {
-    const size = truncated ? (framing.wholeSize ?? "size unknown") : `${bytes.length} bytes`;
+    const size = truncated ? (framing.wholeSize ?? "size unknown") : `${encoded!.length} bytes`;
     return `[body omitted: binary ${mimeType || "data"}, ${size}]`;
   }
   if (!truncated) return truncateBody(decoded, mimeType);
@@ -725,18 +729,22 @@ function sizeInBytes(bytes: number, how: string): string | undefined {
  * reads as it came; `null` means it decodes to more than the cap.
  */
 function decodeContent(bytes: Buffer, contentEncoding: string, truncated = false): Buffer | null {
-  const codings = contentEncoding
-    .split(",")
-    .map((coding) => coding.trim().toLowerCase())
-    .filter((coding) => coding !== "" && coding !== "identity");
   let decoded = bytes;
-  for (const coding of codings.reverse()) {
+  for (const coding of contentCodings(contentEncoding).reverse()) {
     const next = decodeOne(decoded, coding, truncated);
     if (next === null) return null;
     if (next === undefined) return bytes;
     decoded = next;
   }
   return decoded;
+}
+
+/** The codings a Content-Encoding names, in the order they were applied. */
+function contentCodings(contentEncoding: string): string[] {
+  return contentEncoding
+    .split(",")
+    .map((coding) => coding.trim().toLowerCase())
+    .filter((coding) => coding !== "" && coding !== "identity");
 }
 
 function decodeOne(bytes: Buffer, coding: string, truncated: boolean): Buffer | null | undefined {

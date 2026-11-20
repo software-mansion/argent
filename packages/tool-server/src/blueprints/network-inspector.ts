@@ -15,9 +15,10 @@ import {
 } from "./js-runtime-debugger";
 import {
   NETWORK_CAPTURE_END_SCRIPT,
-  NETWORK_CAPTURE_RELEASE_SCRIPT,
   NETWORK_INTERCEPTOR_SCRIPT,
+  exitedHolders,
   makeNetworkCaptureControlScript,
+  makeNetworkCaptureReleaseScript,
 } from "../utils/debugger/scripts/network-interceptor";
 import { resolveDevice } from "../utils/device-info";
 import { externalNativeId } from "../utils/external-devices";
@@ -213,7 +214,8 @@ const PAUSE_BEFORE_FORGET_TIMEOUT_MS = 1_000;
  * recording, and the next start would list the old requests again. A runtime
  * that does not answer in time is left as it is, also one whose debugger is
  * still connecting, and so is the JS runtime of an app other than the entry's.
- * With `atExit`, a capture that another tool-server still holds stays as it is.
+ * With `atExit`, a capture that another tool-server still holds stays as it is,
+ * unless that tool-server's process on this host has exited.
  * Returns the payloads whose runtime answered the pause.
  */
 export async function pauseJsCapturesOf(
@@ -234,12 +236,17 @@ export async function pauseJsCapturesOf(
         // Another app's runtime on the port is left as it is, as network-capture-stop leaves it.
         const appId = dbg.runtimeApp?.appId;
         if (appId !== undefined && appId !== bundleId) return false;
-        await dbg.cdp.evaluate(
-          atExit ? NETWORK_CAPTURE_RELEASE_SCRIPT : NETWORK_CAPTURE_END_SCRIPT,
-          {
-            timeout: PAUSE_BEFORE_FORGET_TIMEOUT_MS,
-          }
-        );
+        const options = { timeout: PAUSE_BEFORE_FORGET_TIMEOUT_MS };
+        if (!atExit) {
+          await dbg.cdp.evaluate(NETWORK_CAPTURE_END_SCRIPT, options);
+          return true;
+        }
+        // A tool-server that exited without its own exit still holds the capture: release it too.
+        const left = await dbg.cdp.evaluate(makeNetworkCaptureReleaseScript([]), options);
+        const exited = exitedHolders(left);
+        if (exited.length > 0) {
+          await dbg.cdp.evaluate(makeNetworkCaptureReleaseScript(exited), options);
+        }
         return true;
       })();
       // The timeout counts from here, so it also covers a connect in flight.

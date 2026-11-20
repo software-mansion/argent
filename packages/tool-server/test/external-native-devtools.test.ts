@@ -880,9 +880,10 @@ describe("a provider that lends its native-devtools agent", () => {
             })
           ).header,
         stopAll: (devices: string[]) =>
-          registry.invokeTool<{ unmatched?: string[] }>("stop-all-simulator-servers", {
-            devices,
-          }),
+          registry.invokeTool<{ stopped: string[]; unmatched?: string[] }>(
+            "stop-all-simulator-servers",
+            { devices }
+          ),
         liveNativeUrns: () =>
           [...registry.getSnapshot().services]
             .filter(
@@ -931,6 +932,8 @@ describe("a provider that lends its native-devtools agent", () => {
 
         expect(result.unmatched).toBeUndefined();
         expect(tools.liveNativeUrns()).toEqual([]);
+        // Argent closed only its client connection: the provider's agent still runs.
+        expect(result.stopped).toEqual([]);
 
         await tools.registry.dispose();
         await agent.close();
