@@ -16,6 +16,7 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
+import { settleWithin } from "../../../utils/timing";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -28,7 +29,7 @@ export function makeIosImpl(
 ): PlatformImpl<Record<string, unknown>, LaunchAppParams, LaunchAppResult> {
   return {
     requires: ["xcrun"],
-    handler: async (_services, params, device) => {
+    handler: async (_services, params, device, options) => {
       /**
        * native-devtools injection needs a grant most providers withhold, as it
        * loads Argent's dylib into an app somebody else launched. Resolving
@@ -102,7 +103,16 @@ export function makeIosImpl(
           { cause: err instanceof Error ? err : new Error(String(err)) }
         );
       }
-      const networkCapture = await nativeDevtools?.networkCaptureAfterLaunch(params.bundleId);
+      // A cancelled call stops waiting for the new process to be armed.
+      const capture = nativeDevtools
+        ? await settleWithin(
+            nativeDevtools.networkCaptureAfterLaunch(params.bundleId),
+            undefined,
+            options?.signal
+          )
+        : undefined;
+      if (capture?.type === "error") throw capture.cause;
+      const networkCapture = capture?.type === "value" ? capture.value : undefined;
       return {
         launched: true,
         bundleId: params.bundleId,

@@ -565,6 +565,32 @@ describe.each(iosTools)(
       });
     });
 
+    it("stops waiting for the new process to be armed when the call is cancelled", async () => {
+      await withService(async (api) => {
+        // Capture is on, and the launched process never connects.
+        await api.activateNetworkInspection(APP);
+        const controller = new AbortController();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        const result = impl(registryFor(api)).handler(
+          {},
+          { udid: IOS_UDID, bundleId: APP },
+          resolveDevice(IOS_UDID),
+          { signal: controller.signal }
+        );
+        await launchWaitStarted();
+        controller.abort();
+
+        // The fake clock never reaches the 5 s, so only the abort can end the wait.
+        const settled = await Promise.race([
+          result.then((value) => ({ result: value })),
+          new Promise((resolve) => setImmediate(() => resolve("still waiting"))),
+        ]);
+        expect(settled).toEqual({ result: ok });
+        expect(launchCalls()).toHaveLength(1);
+      });
+    });
+
     it("still launches when the simulator cannot say which process was launched", async () => {
       await withService(async (api) => {
         await api.activateNetworkInspection(APP);
