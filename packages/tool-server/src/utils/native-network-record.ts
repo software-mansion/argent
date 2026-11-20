@@ -90,7 +90,9 @@ export function isOpen(record: NativeNetworkRecord): boolean {
   return record.state === "pending" || record.state === "headers";
 }
 
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "10.0.2.2", "[::1]"]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+/** The Android emulator's address for the host's loopback; a real address anywhere else. */
+const ANDROID_EMULATOR_HOST = "10.0.2.2";
 /** `URL.port` is empty for the protocol's default port, even when the URL names it. */
 const DEFAULT_PORTS: Record<string, number> = {
   "http:": 80,
@@ -101,9 +103,14 @@ const DEFAULT_PORTS: Record<string, number> = {
 
 /**
  * Metro's own traffic on `metroPort`: the bundle, HMR, symbolication, the
- * inspector socket. Keyed on the caller's port.
+ * inspector socket. Keyed on the caller's port. `androidEmulatorHost` also
+ * counts 10.0.2.2 as the host, for Android callers only.
  */
-export function isMetroTraffic(url: string, metroPort: number): boolean {
+export function isMetroTraffic(
+  url: string,
+  metroPort: number,
+  { androidEmulatorHost = false }: { androidEmulatorHost?: boolean } = {}
+): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -111,7 +118,10 @@ export function isMetroTraffic(url: string, metroPort: number): boolean {
     return false;
   }
   const port = parsed.port === "" ? DEFAULT_PORTS[parsed.protocol] : Number(parsed.port);
-  return LOOPBACK_HOSTS.has(parsed.hostname) && port === metroPort;
+  const host = parsed.hostname;
+  const isHost =
+    LOOPBACK_HOSTS.has(host) || (androidEmulatorHost && host === ANDROID_EMULATOR_HOST);
+  return isHost && port === metroPort;
 }
 
 /** Keeps the start of an absurdly long value and says how much was left out. */
