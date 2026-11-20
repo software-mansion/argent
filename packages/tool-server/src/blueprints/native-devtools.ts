@@ -1183,9 +1183,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       },
 
       activateNetworkInspection(bundleId) {
+        const alreadyCapturingThrottled =
+          activatedBundleIds.has(bundleId) && networkConditions.has(bundleId);
         activatedBundleIds.add(bundleId);
         const conn = connections.get(bundleId);
-        if (conn) sendNetworkSetup(bundleId, conn.socket);
+        if (conn && !alreadyCapturingThrottled) sendNetworkSetup(bundleId, conn.socket);
       },
 
       async setNetworkConditions(bundleId, throttle) {
