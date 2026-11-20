@@ -42,6 +42,7 @@ import {
   findAndroidNativeRecord,
   handshakeProof,
   liveAndroidNetworkCaptureDevices,
+  liveAndroidNetworkCaptureSerials,
   liveAndroidNetworkCaptures,
   openFrame,
   sealFrame,
@@ -2255,6 +2256,8 @@ describe("device identity", () => {
     // Looked up by app, the device is named by its adb serial.
     expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([SERIAL]);
     expect(liveAndroidNetworkCaptureDevices(OTHER)).toEqual([]);
+    // So are the serials with capture for any app.
+    expect(liveAndroidNetworkCaptureSerials()).toEqual([SERIAL]);
   });
 
   it("refuses a second adb serial of the same device for the same app, naming the serial in use", async () => {
@@ -2463,6 +2466,7 @@ describe("attaching and the app's lifecycle", () => {
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBeUndefined();
     expect(device.commands).toEqual([]);
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+    expect(liveAndroidNetworkCaptureSerials()).toEqual([]);
   });
 
   it("waits for the agent of the launched process, and says capture is attached", async () => {
@@ -2677,6 +2681,7 @@ describe("attaching and the app's lifecycle", () => {
     await expect(api.ensureAttached(8081)).rejects.toThrow(/error: closed/);
 
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+    expect(liveAndroidNetworkCaptureSerials()).toEqual([]);
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBeUndefined();
     expect(attachCommands()).toEqual([]);
     // The next call that goes through turns it on.

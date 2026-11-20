@@ -91,7 +91,7 @@ afterEach(() => {
 describe("file-panel", () => {
   it("is hidden behind the macos-apps flag and declared for Mac apps only", async () => {
     expect(filePanelTool.featureFlag).toBe("macos-apps");
-    expect(filePanelTool.capability).toEqual({ macos: { app: true } });
+    expect(filePanelTool.capability).toEqual({ macos: { app: true, catalyst: true } });
     expect(() =>
       assertSupported("file-panel", filePanelTool.capability, resolveDevice("emulator-5554"))
     ).toThrow(UnsupportedOperationError);

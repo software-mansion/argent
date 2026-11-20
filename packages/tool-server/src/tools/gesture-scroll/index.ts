@@ -24,7 +24,7 @@ function scrollDirection(params: Params): string {
 // through its in-app library, so touch platforms use `gesture-swipe` instead.
 const capability: ToolCapability = {
   chromium: { app: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 const zodSchema = z
