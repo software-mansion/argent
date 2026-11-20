@@ -646,9 +646,9 @@ function inDeclaredCharset(text: string, contentType: string, truncated: boolean
 }
 
 /**
- * A request body that came with the request, which the host holds. It has no
- * base64 flag, so a body of a binary type, which would read as base64, is
- * omitted by its type.
+ * A request body that came with the request, which the host holds. The agent
+ * sends a body this way only when it is UTF-8 text, so a body of a binary type
+ * is omitted by its type.
  */
 function inlineBody(
   text: string,
