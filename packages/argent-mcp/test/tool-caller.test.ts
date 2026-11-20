@@ -457,6 +457,33 @@ describe("createToolCaller", () => {
     }
   });
 
+  it("ends a call that carried an upload when the caller cancels it", async () => {
+    const slow = await startStub({ installMs: 3_000 });
+    try {
+      const { callTool } = caller({
+        getHandle: () => ({ url: slow.url, token: "tok" }),
+        remote: true,
+      });
+      const controller = new AbortController();
+      const started = Date.now();
+
+      const pending = callTool(
+        "reinstall-app",
+        { udid: "u", bundleId: "x", appPath },
+        { signal: controller.signal }
+      );
+      await vi.waitFor(() =>
+        expect(slow.requests.filter((r) => r.url === "/tools/reinstall-app")).toHaveLength(1)
+      );
+      controller.abort(new Error("stopped in the editor"));
+
+      await expect(pending).rejects.toThrow("stopped in the editor");
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      await slow.close();
+    }
+  });
+
   it("sends a call that carried an upload once, even when its connection drops", async () => {
     const dropping = await startStub({ dropFirst: ["/tools/reinstall-app"] });
     try {
