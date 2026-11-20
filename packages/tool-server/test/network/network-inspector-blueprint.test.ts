@@ -3,7 +3,6 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { Registry, ServiceState, TypedEventEmitter } from "@argent/registry";
 import {
   networkInspectorBlueprint,
-  NETWORK_INSPECTOR_NAMESPACE,
   findJsCapture,
   forgetJsCapture,
   forgetJsCapturesOf,
