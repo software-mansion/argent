@@ -12,7 +12,11 @@ import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
-import { deviceNameMatcher } from "../utils/debugger/device-name";
+import {
+  deviceNameMatcher,
+  nameMatchedLogicalDeviceId,
+  rememberNameMatch,
+} from "../utils/debugger/device-name";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
@@ -236,18 +240,26 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     });
     // A udid or serial never matches a logicalDeviceId, so on a Metro shared by
     // several devices it is resolved by the device's name. The lookup shells
-    // out, so it runs only when there is more than one device to choose from
-    // and the id is not already one of their logicalDeviceIds.
+    // out, so it runs only when there is more than one device to choose from,
+    // or when this id was matched by name before and the device it led to has
+    // left (see device-name.ts), and never for an id Metro lists itself.
     const logicalIds = new Set(metro.targets.map((t) => t.reactNative?.logicalDeviceId));
-    const deviceNameMatches =
-      logicalIds.size > 1 && !logicalIds.has(deviceId)
-        ? await deviceNameMatcher(deviceId)
-        : undefined;
+    const pinnedLogicalDeviceId = nameMatchedLogicalDeviceId(deviceId);
+    const needsName =
+      !logicalIds.has(deviceId) &&
+      (pinnedLogicalDeviceId !== undefined
+        ? !logicalIds.has(pinnedLogicalDeviceId)
+        : logicalIds.size > 1);
+    const deviceNameMatches = needsName ? await deviceNameMatcher(deviceId) : undefined;
     const selected = selectTarget(metro.targets, port, {
       ...options,
       deviceId,
       deviceNameMatches,
+      pinnedLogicalDeviceId,
     });
+    if (selected.matchedByName) {
+      rememberNameMatch(deviceId, selected.target.reactNative?.logicalDeviceId);
+    }
 
     /**
      * React Native's inspector-proxy keeps one debugger per device and

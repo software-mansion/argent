@@ -16,6 +16,8 @@ interface SelectedTarget {
    */
   legacyInspector: boolean;
   deviceName: string;
+  /** The device was found by its name (`deviceNameMatches`), not by its id. */
+  matchedByName: boolean;
 }
 
 /**
@@ -171,6 +173,7 @@ export function selectTarget(
     if (id) seenLogicalDeviceIds.add(id);
   }
   let candidates = pool;
+  let matchedByName = false;
 
   // By the prefix alone, as the capability gate classifies the id, so that a
   // Mac app id with a bundle id macOS does not accept takes no fallback either.
@@ -182,7 +185,15 @@ export function selectTarget(
     candidates = macosAppTargets(pool, macosBundleId, port);
   } else if (typeof options?.deviceId === "string" && options.deviceId) {
     const deviceId = options.deviceId;
-    const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === deviceId);
+    // The logicalDeviceId this udid or serial was matched to by name before.
+    // It stands for the device, so a Metro listing it needs no name, and one
+    // that does not must not fall back to another device.
+    const pinned =
+      typeof options.pinnedLogicalDeviceId === "string" ? options.pinnedLogicalDeviceId : undefined;
+    const filtered = candidates.filter((t) => {
+      const id = t.reactNative?.logicalDeviceId;
+      return id === deviceId || (pinned !== undefined && id === pinned);
+    });
     if (filtered.length) {
       candidates = filtered;
     } else {
@@ -199,9 +210,12 @@ export function selectTarget(
         if (key && !distinctDevices.has(key)) distinctDevices.set(key, describeDevice(t));
       }
       const named =
-        distinctDevices.size > 1 ? targetsNamedFor(pool, options.deviceNameMatches) : undefined;
+        distinctDevices.size > 1 || pinned !== undefined
+          ? targetsNamedFor(pool, options.deviceNameMatches)
+          : undefined;
       if (named) {
         candidates = named;
+        matchedByName = true;
       } else if (distinctDevices.size > 1) {
         // Only a logicalDeviceId is a usable device_id; a legacy device's
         // internal key would read like one without being one.
@@ -235,15 +249,20 @@ export function selectTarget(
       // under a new id, since iOS derives the id from identifierForVendor, which
       // a reinstall can reset. None of these can be told apart here, so the
       // message covers them all.
-      const seen = seenLogicalDeviceIds.has(deviceId);
-      if (!named && (seen || LOGICAL_DEVICE_ID_SHAPE.test(deviceId))) {
+      const missingId = pinned ?? deviceId;
+      const seen = seenLogicalDeviceIds.has(missingId);
+      if (!named && (seen || LOGICAL_DEVICE_ID_SHAPE.test(missingId))) {
         const state = seen
           ? `is no longer attached to Metro on port ${port} — ` +
             `its app likely exited or reloaded onto another Metro. `
           : `is not attached to Metro on port ${port} — its app is not running, ` +
             `is still starting, or uses another Metro. `;
         throw new FailureError(
-          `Device with logicalDeviceId "${deviceId}" ${state}` +
+          `Device with logicalDeviceId "${missingId}"` +
+            (pinned !== undefined
+              ? `, which device_id "${deviceId}" was matched to by name,`
+              : "") +
+            ` ${state}` +
             `Not falling back to the remaining device: ${[...distinctDevices.values()].join(", ")}. ` +
             `If the app exited, relaunch it on the target device (launch-app / restart-app), then ` +
             `retry with the same id: a relaunched app keeps its logicalDeviceId. If it was ` +
@@ -267,13 +286,13 @@ export function selectTarget(
   const fusebox = candidates.find(
     (t) => t.reactNative?.capabilities?.prefersFuseboxFrontend === true
   );
-  if (fusebox) return makeResult(fusebox, port, true, false);
+  if (fusebox) return makeResult(fusebox, port, true, false, matchedByName);
 
   const cppConn = candidates.find((t) => t.description?.endsWith("[C++ connection]"));
-  if (cppConn) return makeResult(cppConn, port, true, false);
+  if (cppConn) return makeResult(cppConn, port, true, false, matchedByName);
 
   const bridge = candidates.find((t) => t.title?.startsWith("React Native Bridge"));
-  if (bridge) return makeResult(bridge, port, false, false);
+  if (bridge) return makeResult(bridge, port, false, false, matchedByName);
 
   // The legacy inspector also lists worklet runtimes (Reanimated's "Reanimated
   // UI runtime", or one named by `createWorkletRuntime`), in any order. They are
@@ -282,9 +301,9 @@ export function selectTarget(
   const hermes = candidates.find((t) =>
     LEGACY_APP_RUNTIME_TITLES.has(t.title?.replace(CXX_CONNECTION_SUFFIX, ""))
   );
-  if (hermes) return makeResult(hermes, port, false, true);
+  if (hermes) return makeResult(hermes, port, false, true, matchedByName);
 
-  return makeResult(candidates[0]!, port, false, true);
+  return makeResult(candidates[0]!, port, false, true, matchedByName);
 }
 
 /** The bridge's (`HermesExecutorFactory`) and bridgeless (`HermesInstance`) names. */
@@ -300,7 +319,8 @@ function makeResult(
   target: CDPTarget,
   port: number,
   isNewDebugger: boolean,
-  legacyInspector: boolean
+  legacyInspector: boolean,
+  matchedByName: boolean
 ): SelectedTarget {
   return {
     target,
@@ -308,6 +328,7 @@ function makeResult(
     isNewDebugger,
     legacyInspector,
     deviceName: target.deviceName ?? target.title ?? "unknown",
+    matchedByName,
   };
 }
 

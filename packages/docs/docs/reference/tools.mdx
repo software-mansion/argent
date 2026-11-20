@@ -179,13 +179,15 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 
 Give `debugger-connect` the device ID from `list-devices`. When several devices share one Metro, Argent finds the device by its name:
 
-| Device         | Name that Argent compares with the name that Metro reports |
-| -------------- | ---------------------------------------------------------- |
-| iOS simulator  | The name of the simulator                                  |
-| Android device | The model, `ro.product.model`                              |
-| Other devices  | No name. Use the `logicalDeviceId`.                        |
+| Device         | Name that Argent compares with the name that Metro reports                         | Other devices that must not have the same name |
+| -------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------- |
+| iOS simulator  | The name of the simulator                                                          | The other booted simulators                    |
+| Android device | `<model> - <release> - API <level>`, from `ro.product.model` and the build version | The other devices that adb lists               |
+| Other devices  | No name. Use the `logicalDeviceId`.                                                | Not applicable                                 |
 
-When two devices on the Metro have the same name, `debugger-connect` fails. Two emulators made from one system image have the same name. The error lists the `logicalDeviceId` of each device. Give that `logicalDeviceId` to `debugger-connect`.
+When another device has the same name, `debugger-connect` fails. The error lists the `logicalDeviceId` of each device on the Metro. Give that `logicalDeviceId` to `debugger-connect`.
+
+After Argent finds a device by its name, the device ID stays bound to the app on that device. When that app exits, the `debugger-*` tools fail and do not use the other device. After the app starts again, the tools use it again.
 
 ## Native devtools
 

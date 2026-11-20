@@ -344,6 +344,52 @@ describe("selectTarget", () => {
       });
       expect(result.target.id).toBe("dev3");
     });
+
+    it("says when the device was found by name, and only then", () => {
+      const byName = selectTarget([iphone, named], 9001, {
+        deviceId: UDID,
+        deviceNameMatches: is("iPhone 17 [ink-and-quill]"),
+      });
+      expect(byName.matchedByName).toBe(true);
+      expect(selectTarget([iphone, named], 9001, { deviceId: "d4d1e970" }).matchedByName).toBe(
+        false
+      );
+    });
+
+    describe("once the udid is pinned to the logicalDeviceId its name led to", () => {
+      const pinnedTo = (logicalDeviceId: string) => ({
+        deviceId: UDID,
+        deviceNameMatches: is("iPhone 17 [ink-and-quill]"),
+        pinnedLogicalDeviceId: logicalDeviceId,
+      });
+
+      it("picks the pinned device without asking for its name", () => {
+        const result = selectTarget([iphone, named], 9001, {
+          deviceId: UDID,
+          pinnedLogicalDeviceId: "27fb9b61",
+        });
+        expect(result.target.id).toBe("dev3");
+        expect(result.matchedByName).toBe(false);
+      });
+
+      it("refuses the only other device after the pinned one left", () => {
+        // Seen on Metro first, as the connect that pinned it saw it.
+        selectTarget([iphone, named], 9001, pinnedTo("27fb9b61"));
+        const err = thrownBy(() => selectTarget([iphone], 9001, pinnedTo("27fb9b61")));
+        expect(getFailureSignal(err)).toMatchObject({
+          error_code: FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS,
+        });
+        expect(err.message).toMatch(/"27fb9b61", which device_id "B7D5711C-[^"]+" was matched/);
+        expect(err.message).toMatch(/no longer attached/);
+      });
+
+      it("finds the device again by name when its app came back under a new id", () => {
+        const reinstalled = device("dev5", "iPhone 17 [ink-and-quill]", "0f0f0f0f");
+        const result = selectTarget([iphone, reinstalled], 9001, pinnedTo("27fb9b61"));
+        expect(result.target.id).toBe("dev5");
+        expect(result.matchedByName).toBe(true);
+      });
+    });
   });
 
   it("the ambiguous-mismatch error carries the DEBUGGER_TARGET_DEVICE_MISMATCH signal", () => {
