@@ -39,8 +39,9 @@ import { renderFlagGated } from "./utils/flag-gated-text";
 const PROCESS_TIMEOUT_MS = 5_000;
 /**
  * How long the exit waits for a network capture start or stop under way, so
- * the teardown after it still ends within PROCESS_TIMEOUT_MS, the time a stop
- * of the tool-server gives it before it kills the process.
+ * the teardown after it can still end before a stop of the tool-server kills
+ * the process: the launcher sends SIGTERM, then SIGKILL after its
+ * SIGTERM_GRACE_MS (6 s, this file's PROCESS_TIMEOUT_MS plus a buffer).
  */
 const EXIT_CAPTURE_WAIT_MS = 2_000;
 const DEFAULT_PORT = "3001";

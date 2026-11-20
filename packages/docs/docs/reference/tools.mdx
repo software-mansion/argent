@@ -310,6 +310,8 @@ The device can have a JS runtime capture for an app on a different Metro port. T
 
 After a `network-capture-start` that found the JS runtime layer unavailable, for example because Metro did not run on the port, `view-network-logs` gives the reason of that start: `Network capture is not started on the JS layer: network-capture-start for <bundleId> found it unavailable (<reason>). native-network-logs lists the requests of the native layer. Once the JS layer can start, call network-capture-start again, repeat the action, then call view-network-logs again.` For an ID from `view-network-logs`, `view-network-request-details` gives `Request <id> not found.` and the same text. `stop-all-simulator-servers` removes the reason. A later start or stop that stores a capture on the port also removes it.
 
+After a `network-capture-start` that found the `ios-native` layer unavailable, for example because native devtools failed to initialize, `native-network-logs` gives the reason of that start. The result contains `status: "ok"` and `started: false`, and the header is `ios-native: unavailable, 0 requests (<reason>)`. After a stop, the header state stays `stopped`, and the header also gives the reason. `stop-all-simulator-servers` removes the reason. A later start that turns on the capture also removes it.
+
 #### A started capture that lost the app
 
 A read does not start the capture again, also when the capture lost the app. The read tells the state instead:
@@ -488,7 +490,7 @@ A body that Argent cannot read shows `[unavailable: <reason>]`, for example when
 
 For each app on each device, Argent keeps a copy of the 64 bodies that the agent read most recently. These copies contain a maximum of 67,108,864 characters together. If one body is longer, Argent keeps a copy of only that body until the agent reads the next body. A later read of a body with a copy uses the copy. After the app process ends, a body is available only if Argent has a copy of it. The `HTTPBody` of an `NSURLConnection` request is an exception. Argent keeps this body with the request. It stays available after the app process ends, and it does not count toward these limits.
 
-When the connection of the app closes, Argent marks each request that still runs as `failed`. The `errorText` field gives one of these errors:
+On a simulator without a device provider, when the connection of the app closes, Argent marks each request that still runs as `failed`. The `errorText` field gives one of these errors:
 
 | `errorText`                                                                                              | Cause                                                                             |
 | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |

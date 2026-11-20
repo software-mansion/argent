@@ -1478,6 +1478,24 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       });
     });
 
+    it("arms the build boot-device starts after a start while Spotlight's copy of the app is a hardened Release build", async () => {
+      const release = writeBundle(path.join(root, `release-${Date.now()}`), BUNDLE_ID);
+      execFileSync("codesign", ["--force", "--sign", "-", "--options", "runtime", release], {
+        stdio: "ignore",
+      });
+      searched.spotlight = { [BUNDLE_ID]: release };
+      // argent has not started the app, so which copy runs next is not known.
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      expect(await request("https://example.com/x")).toEqual({ active: true, activations: 1 });
+      expect(await readLog()).toMatchObject({
+        armed: true,
+        header: `macos-native: armed, 1 request (pid ${pid})`,
+      });
+    });
+
     it("arms the app when restart-app starts it after a start that found it not running", async () => {
       await quit((await run("boot-device", { macosAppPath: appPath })).pid);
       expect((await start()).layers).toEqual([
@@ -1550,6 +1568,32 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
             "the app did not acknowledge Network.disable within 5 s; argent records none of its new requests, and its next process starts without capture",
         },
       ]);
+    }, 20_000);
+
+    it("arms the app when it acknowledges Network.enable after the start stopped waiting", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // Held suspended past the 5 s wait, as Instruments or a debugger does.
+      process.kill(pid, "SIGSTOP");
+      try {
+        expect((await start()).layers).toEqual([
+          {
+            layer: "macos-native",
+            armed: false,
+            reason:
+              "the app did not acknowledge Network.enable within 5 s; network-capture-start asks again",
+          },
+        ]);
+      } finally {
+        process.kill(pid, "SIGCONT");
+      }
+      expect((await readUntil((log) => log.armed)).header).toMatch(
+        `macos-native: armed, 0 requests (pid ${pid}`
+      );
+      expect(await request("https://example.com/late")).toEqual({ active: true, activations: 1 });
+      expect(await readLog()).toMatchObject({
+        armed: true,
+        header: `macos-native: armed, 1 request (pid ${pid})`,
+      });
     }, 20_000);
 
     it("records no new request after a stop that the app did not acknowledge", async () => {

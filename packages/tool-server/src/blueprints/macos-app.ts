@@ -296,11 +296,14 @@ function catalystRefusal(bundleId: string): string {
  * Why argent refuses to start the app, so that no launch arms its capture: a
  * Mac Catalyst app, an Electron app or a build that the hardened runtime keeps
  * the library out of. Undefined while argent's own copy runs, and when argent
- * cannot tell, for example when Spotlight does not know the app.
+ * cannot tell, for example when Spotlight does not know the app. Before argent
+ * started the app, Spotlight's copy is only a guess at the build that runs
+ * next, so its hardened runtime does not refuse: a Debug build can still run.
  */
 export async function macosLaunchRefusal(bundleId: string): Promise<string | undefined> {
   if (await runningTrackedApp(bundleId)) return undefined;
-  const appPath = getTrackedMacosApp(bundleId)?.appPath ?? (await findMacosAppByBundleId(bundleId));
+  const tracked = getTrackedMacosApp(bundleId)?.appPath;
+  const appPath = tracked ?? (await findMacosAppByBundleId(bundleId));
   if (!appPath) return undefined;
   let info: MacosAppInfo;
   try {
@@ -311,7 +314,7 @@ export async function macosLaunchRefusal(bundleId: string): Promise<string | und
   if (info.bundleId !== bundleId) return undefined;
   return (
     (info.catalyst ? catalystRefusal(bundleId) : chromiumRefusal(info)) ??
-    hardenedRuntimeRefusal(info) ??
+    (tracked ? hardenedRuntimeRefusal(info) : undefined) ??
     undefined
   );
 }
@@ -460,6 +463,8 @@ interface ChannelNetworkSink {
   event(method: string, params: unknown, pid: number): void;
   /** The channel closed, for whatever reason. */
   closed(channel: LibraryChannel): void;
+  /** The library acknowledged the channel's last Network.enable, also after its timeout. */
+  enabled(channel: LibraryChannel): void;
 }
 
 /**
@@ -477,6 +482,8 @@ class LibraryChannel {
   enabling?: Promise<boolean>;
   /** Why the last Network.enable did not arm this channel. */
   enableFailure?: string;
+  /** The CDP id of the last Network.enable sent on this channel. */
+  private enableId?: number;
   private readonly pending = new Map<number, PendingCall>();
   /** The requester's id of each CDP request this channel sent, by its id on the wire. */
   private readonly cdpIds = new Map<number, number>();
@@ -504,7 +511,11 @@ class LibraryChannel {
   ) {
     this.cdp = createNdjsonCdpRequester(socket, {
       label: `macos-app ${bundleId}`,
-      send: (frame) => this.sendCdp(frame as { type: string; payload: { id: number } }),
+      send: (frame) => {
+        const p = (frame as { payload: { id: number; method: string } }).payload;
+        if (p.method === "Network.enable") this.enableId = p.id;
+        return this.sendCdp(frame as { type: string; payload: { id: number } });
+      },
     });
     this.ready.catch(() => undefined);
     attachNdjsonReader(socket, {
@@ -616,6 +627,9 @@ class LibraryChannel {
       const p = msg.payload;
       if (p?.id !== undefined) {
         const id = typeof p.id === "number" ? this.cdpIds.get(p.id) : undefined;
+        // An app held suspended (Instruments, a debugger) acknowledges after the
+        // request timed out, and from then on it captures.
+        if (id !== undefined && id === this.enableId && "result" in p) this.network.enabled(this);
         if (id !== undefined && this.cdp.handleResponse({ ...p, id })) {
           this.cdpIds.delete(p.id as number);
         }
@@ -942,29 +956,26 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         }
       });
     },
+    enabled(ch) {
+      if (!captureStarted) return;
+      ch.armed = true;
+      delete ch.enableFailure;
+    },
   };
 
   /**
    * Sends Network.enable unless the channel is armed or already waiting for
    * the reply. The reply arms the channel as its frame is read, before the
    * events after it, unless capture was stopped meanwhile. A channel that does
-   * not answer in time stays open and unarmed: the next start asks again.
+   * not answer in time stays unarmed until its late reply comes: the next
+   * start asks again.
    */
   const enableOn = (ch: LibraryChannel): Promise<boolean> => {
     if (ch.armed) return Promise.resolve(true);
     if (ch.enabling) return ch.enabling;
     delete ch.enableFailure;
     const enabling = ch.cdp
-      .request(
-        "Network.enable",
-        {},
-        {
-          timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS,
-          onResult: () => {
-            if (captureStarted) ch.armed = true;
-          },
-        }
-      )
+      .request("Network.enable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS })
       .then(
         () => ch.armed,
         (err: unknown) => {

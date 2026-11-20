@@ -1101,22 +1101,26 @@ export const NETWORK_CAPTURE_MARK_SCRIPT = `(function() {
 
 /**
  * This tool-server's key in `__argent_network_holders` of an app's JS context. Every tool-server
- * attached to the app shares that context, so a start adds the key, and the tool-server's exit
- * ends the capture there only when no other tool-server's key is left.
+ * attached to the app shares that context, so a start adds the key as `true`, and a stop sets it
+ * to `false`: that tool-server still reads the log, but no longer captures. The tool-server's exit
+ * ends the capture there only when no other tool-server's key is `true`, and empties the log only
+ * when no other tool-server's key is left.
  */
 const HOLDER = JSON.stringify(randomUUID());
 
 /**
  * Pauses or resumes recording in the app's JS context. Says whether this script is installed
  * there: the flag stays in the context either way, and a later install reads it. A resume adds
- * this tool-server to the context's holders.
+ * this tool-server to the context's holders, and a pause keeps it there as a reader only.
  */
 export function makeNetworkCaptureControlScript(paused: boolean): string {
   return `(function() {
   var g = globalThis;
   g.__argent_network_paused = ${paused ? "true" : "false"};${
     paused
-      ? ""
+      ? `
+  var holders = g.__argent_network_holders;
+  if (holders && Object.prototype.hasOwnProperty.call(holders, ${HOLDER})) holders[${HOLDER}] = false;`
       : `
   (g.__argent_network_holders = g.__argent_network_holders || {})[${HOLDER}] = true;`
   }
@@ -1138,19 +1142,23 @@ export const NETWORK_CAPTURE_END_SCRIPT = `(function() {
 
 /**
  * The tool-server's exit: as {@link NETWORK_CAPTURE_END_SCRIPT}, but a capture that another
- * tool-server still holds stays as it is, with its log.
+ * tool-server still captures stays as it is, with its log, and the log of a capture that another
+ * tool-server only stopped stays for it to read.
  */
 export const NETWORK_CAPTURE_RELEASE_SCRIPT = `(function() {
   var g = globalThis;
   var holders = g.__argent_network_holders;
+  var readers = false;
   if (holders) {
     delete holders[${HOLDER}];
     for (var key in holders) {
-      if (Object.prototype.hasOwnProperty.call(holders, key)) return;
+      if (!Object.prototype.hasOwnProperty.call(holders, key)) continue;
+      if (holders[key]) return;
+      readers = true;
     }
   }
   g.__argent_network_paused = true;
-  if (typeof g.__argent_network_clear === 'function') g.__argent_network_clear();
+  if (!readers && typeof g.__argent_network_clear === 'function') g.__argent_network_clear();
 })()`;
 
 /**
