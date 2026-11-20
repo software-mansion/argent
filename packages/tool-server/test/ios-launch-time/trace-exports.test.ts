@@ -75,9 +75,8 @@ const CPU = `<?xml version="1.0"?>
 
 describe("truncateCpuXml", () => {
   it("keeps rows up to the launch end as XML the CPU parser still reads", () => {
-    const { xml, keptRows, laterRows } = truncateCpuXml(CPU, 305_000_000);
+    const { xml, keptRows } = truncateCpuXml(CPU, 305_000_000);
     expect(keptRows).toBe(2);
-    expect(laterRows).toBe(0);
     expect(xml).not.toContain("AfterFirstFrame");
     expect(xml.endsWith("</node></trace-query-result>")).toBe(true);
     const samples = parseCpuXml(xml);
@@ -88,34 +87,27 @@ describe("truncateCpuXml", () => {
   });
 
   it("returns the input unchanged when every row is inside the window", () => {
-    expect(truncateCpuXml(CPU, 500_000_000)).toEqual({ xml: CPU, keptRows: 3, laterRows: 0 });
+    expect(truncateCpuXml(CPU, 500_000_000)).toEqual({ xml: CPU, keptRows: 3 });
   });
 
-  it("drops no launch sample when rows are out of time order", () => {
-    // A late in-window row after a post-launch row: cutting at the first
-    // post-launch row would lose it, so the cut moves past it instead.
+  it("excludes out-of-order post-frame work and restores definitions used by launch samples", () => {
     const unsorted = CPU.replace(
       "</node>",
-      `<row><sample-time id="11">250000000</sample-time><thread ref="2"/><weight ref="3"/><tagged-backtrace ref="4"/></row>\n` +
-        `<row><sample-time id="12">500000000</sample-time><thread ref="2"/><weight ref="3"/><tagged-backtrace ref="9"/></row>\n</node>`
+      // Both the frame and the enclosing backtrace are first defined at 400 ms.
+      '<row><sample-time id="11">240000000</sample-time><thread ref="2"/><weight ref="3"/><tagged-backtrace id="12"><frame ref="10"/></tagged-backtrace></row>' +
+        '<row><sample-time id="13">250000000</sample-time><thread ref="2"/><weight ref="3"/><tagged-backtrace ref="9"/></row></node>'
     );
-    const { xml, keptRows, laterRows } = truncateCpuXml(unsorted, 305_000_000);
-    expect(keptRows).toBe(3);
-    expect(laterRows).toBe(1);
-    expect(parseCpuXml(xml).map((s) => s.timestampNs)).toEqual([
-      100_000_000, 200_000_000, 400_000_000, 250_000_000,
+    const { xml, keptRows } = truncateCpuXml(unsorted, 305_000_000);
+    const samples = parseCpuXml(xml);
+    expect(keptRows).toBe(4);
+    expect(samples.map((s) => s.timestampNs)).toEqual([
+      100_000_000, 200_000_000, 240_000_000, 250_000_000,
     ]);
-  });
-
-  it("counts only the post-launch samples kept before the last in-window row", () => {
-    const row = (id: number, ns: number) =>
-      `<row><sample-time id="${id}">${ns}</sample-time><thread ref="2"/><weight ref="3"/><tagged-backtrace ref="4"/></row>\n`;
-    const xml = CPU.replace(
-      /<row><sample-time id="7">.*<\/node>/s,
-      row(20, 900) + row(21, 200) + row(22, 950) + row(23, 300) + "</node>"
-    ).replace(">100000000<", ">100<");
-    // Rows at 100, 900, 200, 950, 300 ns: the cut keeps all, 900 and 950 are after the launch.
-    expect(truncateCpuXml(xml, 500)).toMatchObject({ keptRows: 3, laterRows: 2 });
+    expect(samples.slice(2).map((s) => s.stack.map((f) => f.name))).toEqual([
+      ["AfterFirstFrame()"],
+      ["AfterFirstFrame()", "main"],
+    ]);
+    expect(xml.match(/<frame id="10"/g)).toHaveLength(1);
   });
 
   it("counts the samples the CPU parser reads, not rows with a sample-time ref", () => {
@@ -127,9 +119,8 @@ describe("truncateCpuXml", () => {
         `<row><sample-time id="14">250000000</sample-time><thread ref="11"/><weight ref="3"/><tagged-backtrace ref="12"/></row>\n</node>`
     );
     const cut = truncateCpuXml(xml, 305_000_000);
-    // 100, 200 and 250 ms; the 400 ms row stays because it comes before the 250 ms one.
-    expect(cut).toMatchObject({ keptRows: 3, laterRows: 1 });
-    expect(parseCpuXml(cut.xml)).toHaveLength(cut.keptRows + cut.laterRows);
+    expect(cut.keptRows).toBe(3);
+    expect(parseCpuXml(cut.xml)).toHaveLength(cut.keptRows);
     expect(
       parseCpuXml(cut.xml)
         .at(-1)!
@@ -138,7 +129,7 @@ describe("truncateCpuXml", () => {
   });
 
   it("only counts with an endless window", () => {
-    expect(truncateCpuXml(CPU, Infinity)).toEqual({ xml: CPU, keptRows: 3, laterRows: 0 });
+    expect(truncateCpuXml(CPU, Infinity)).toEqual({ xml: CPU, keptRows: 3 });
   });
 
   it("keeps no rows when every sample is after the launch", () => {
@@ -174,7 +165,7 @@ function ticks(gapNs: number, count: number, threads = ["Main Thread"]): string 
 
 describe("weighSamplesByPeriod", () => {
   it("weighs each sample at the interval of a 5 ms recording", () => {
-    const { xml, periodNs } = weighSamplesByPeriod(ticks(5_000_000, 30, ["Main Thread", "JS"]));
+    const { xml, periodNs } = weighSamplesByPeriod(ticks(5_000_000, 30, ["Main Thread", "JS"]), "");
     expect(periodNs).toBe(5_000_000);
     const samples = parseCpuXml(xml);
     expect(samples).toHaveLength(60);
@@ -183,12 +174,22 @@ describe("weighSamplesByPeriod", () => {
 
   it("leaves a 1 ms recording as it is", () => {
     const input = ticks(1_000_000, 30);
-    expect(weighSamplesByPeriod(input)).toEqual({ xml: input, periodNs: 1_000_000 });
+    expect(weighSamplesByPeriod(input, "")).toEqual({ xml: input, periodNs: 1_000_000 });
+  });
+
+  it("preserves the exported weight for a thread waking once per display frame", () => {
+    const input = ticks(16_700_000, 60);
+    expect(weighSamplesByPeriod(input, "")).toEqual({ xml: input, periodNs: null });
+  });
+
+  it("rejects a dominant 5 ms gap when the same thread demonstrably ran at 1 ms", () => {
+    const input = ticks(5_000_000, 45).replace(">105000000<", ">101000000<");
+    expect(weighSamplesByPeriod(input, "")).toEqual({ xml: input, periodNs: null });
   });
 
   it("leaves the weights when there are too few samples to tell the interval", () => {
     const input = ticks(5_000_000, 10);
-    expect(weighSamplesByPeriod(input)).toEqual({ xml: input, periodNs: null });
+    expect(weighSamplesByPeriod(input, "")).toEqual({ xml: input, periodNs: null });
   });
 
   it("leaves the weights when they differ between samples", () => {
@@ -196,7 +197,7 @@ describe("weighSamplesByPeriod", () => {
       '<weight ref="1"/>',
       '<weight id="999" fmt="300.00 ms">300000000</weight>'
     );
-    expect(weighSamplesByPeriod(input)).toEqual({ xml: input, periodNs: 5_000_000 });
+    expect(weighSamplesByPeriod(input, "")).toEqual({ xml: input, periodNs: null });
   });
 });
 

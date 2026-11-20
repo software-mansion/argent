@@ -7,7 +7,7 @@ import {
   FAILURE_CODES,
   getFailureSignal,
   Registry,
-  ServiceState,
+  type DeviceInfo,
   type FailureSignal,
   type ToolContext,
 } from "@argent/registry";
@@ -15,7 +15,7 @@ import { parseCpuXml } from "../../src/utils/ios-profiler/pipeline/xml-parser";
 import { profileLaunch } from "../../src/tools/profiler/native-profiler/launch-analysis/profile";
 import { measureLaunch } from "../../src/tools/profiler/native-profiler/launch-analysis/measure";
 import {
-  createNativeProfilerLaunchAnalysisTool,
+  nativeProfilerLaunchAnalysisTool,
   type NativeProfilerLaunchAnalysisParams,
 } from "../../src/tools/profiler/native-profiler/native-profiler-launch-analysis";
 import {
@@ -25,7 +25,8 @@ import {
   runLogged,
   terminateLaunchedApp,
 } from "../../src/utils/ios-launch-time/workflow";
-import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../src/blueprints/ios-device-runner";
+import { reserveInteractionRunner } from "../../src/utils/ios-device/runner-reservation";
+import { iosDeviceRunnerBlueprint } from "../../src/blueprints/ios-device-runner";
 
 // Pins what each mode's execute() passes to xcodebuild / xctrace and how it
 // turns the exports into a result. Device steps are stubbed.
@@ -70,8 +71,10 @@ vi.mock("../../src/utils/ios-launch-time/workflow", async (importOriginal) => {
   return {
     ...actual,
     prepareLaunch: vi.fn(
-      async (request: { checkDevice?: (d: { simulator: boolean }) => Promise<void> }) => {
-        await request.checkDevice?.({ simulator: state.simulator });
+      async (request: {
+        checkDevice?: (d: { id: string; simulator: boolean }) => void | Promise<void>;
+      }) => {
+        await request.checkDevice?.({ id: "UDID-1", simulator: state.simulator });
         return {
           runDir: state.runDir,
           deviceId: "UDID-1",
@@ -93,10 +96,8 @@ vi.mock("../../src/utils/ios-launch-time/workflow", async (importOriginal) => {
     xcodeVersion: vi.fn(async () => state.xcodeVersion),
     runLogged: vi.fn(async (_command: string, args: string[], options: { logPath: string }) => {
       if (args[0] === "xctrace" && args[1] === "record") {
-        if (state.recordError) {
-          await writeFile(options.logPath, state.recordLog);
-          throw state.recordError;
-        }
+        await writeFile(options.logPath, state.recordLog);
+        if (state.recordError) throw state.recordError;
         if (state.writeTrace) await mkdir(args[args.indexOf("--output") + 1]!, { recursive: true });
         return;
       }
@@ -272,6 +273,15 @@ describe('mode "profile" on a simulator', () => {
     expect(new Set(parseCpuXml(session).map((sample) => sample.weightNs))).toEqual(
       new Set([5_000_000])
     );
+    expect(result.warning).toContain("xctrace sampled the CPU every 5 ms");
+  });
+
+  it("uses the configured sampling period from xctrace even for a sparse launch", async () => {
+    state.recordLog =
+      "* [Warning] Warning while binding 'time-sample' table: requested sampling period (1000000ns) differs from configured (5000000ns)";
+    const result = await profile();
+    const samples = parseCpuXml(await readFile(result.profilerSession.cpuXml, "utf8"));
+    expect(samples.map((s) => s.weightNs)).toEqual([5_000_000, 5_000_000]);
     expect(result.warning).toContain("xctrace sampled the CPU every 5 ms");
   });
 
@@ -564,7 +574,7 @@ describe('mode "profile" on an iPhone', () => {
   it("reports the code and the xctrace metadata through the registry", async () => {
     state.recordError = new CommandExitError("xcrun exited with 1:\nxctrace failed", 1, null);
     const registry = new Registry();
-    registry.registerTool(createNativeProfilerLaunchAnalysisTool(registry));
+    registry.registerTool(nativeProfilerLaunchAnalysisTool);
     const failed = vi.fn();
     registry.events.on("toolFailed", failed);
     const { error, signal } = await failure(
@@ -615,7 +625,7 @@ describe('mode "measure"', () => {
   });
 
   it("runs the launch test with the app's bundle ID and reads the launch duration metric", async () => {
-    const result = (await measureLaunch(new Registry(), params({ mode: "measure" }))) as {
+    const result = (await measureLaunch(params({ mode: "measure" }))) as {
       averageMs: number;
       medianMs: number;
       samplesCollected: number;
@@ -632,11 +642,19 @@ describe('mode "measure"', () => {
         "CODE_SIGNING_ALLOWED=NO",
       ])
     );
-    expect(vi.mocked(prepareLaunch).mock.calls.at(-1)![0]).toEqual({
+    expect(vi.mocked(prepareLaunch).mock.calls.at(-1)![0]).toMatchObject({
       bundleId: "com.example.app",
       deviceId: undefined,
       allowSimulator: true,
     });
+    const derived = args[args.indexOf("-derivedDataPath") + 1]!;
+    expect(args).toEqual(
+      expect.arrayContaining([
+        `SYMROOT=${join(derived, "Build", "Products")}`,
+        `OBJROOT=${join(derived, "Build", "Intermediates.noindex")}`,
+        `SHARED_PRECOMPS_DIR=${join(derived, "Build", "Intermediates.noindex", "PrecompiledHeaders")}`,
+      ])
+    );
     expect(options.env?.TEST_RUNNER_ARGENT_LAUNCH_BUNDLE_ID).toBe("com.example.app");
     expect(options.cwd).toBe(state.runDir);
     expect(result).toMatchObject({
@@ -649,9 +667,7 @@ describe('mode "measure"', () => {
 
   it("fails when XCTest recorded no launch duration", async () => {
     state.stdout.set("metrics", "[]");
-    const { error, signal } = await failure(
-      measureLaunch(new Registry(), params({ mode: "measure" }))
-    );
+    const { error, signal } = await failure(measureLaunch(params({ mode: "measure" })));
     expect(error.message).toMatch(/recorded no launch measurements/);
     expect(signal).toEqual({
       error_code: FAILURE_CODES.LAUNCH_ANALYSIS_NO_SAMPLES,
@@ -665,7 +681,7 @@ describe('mode "measure"', () => {
     state.metricsError = Object.assign(new Error("Command failed: xcrun xcresulttool"), {
       code: 1,
     });
-    const { signal } = await failure(measureLaunch(new Registry(), params({ mode: "measure" })));
+    const { signal } = await failure(measureLaunch(params({ mode: "measure" })));
     expect(signal).toEqual({
       error_code: FAILURE_CODES.LAUNCH_ANALYSIS_NO_SAMPLES,
       failure_stage: "launch_analysis_read_results",
@@ -683,9 +699,7 @@ describe('mode "measure"', () => {
       null
     );
     state.runnerLog = "Testing failed:\n\tApp crashed";
-    const { error, signal } = await failure(
-      measureLaunch(new Registry(), params({ mode: "measure" }))
-    );
+    const { error, signal } = await failure(measureLaunch(params({ mode: "measure" })));
     expect(error.message).toBe("xcodebuild exited with 65:\nTesting failed");
     expect(signal).toEqual({
       error_code: FAILURE_CODES.LAUNCH_ANALYSIS_RUNNER_TEST_FAILED,
@@ -700,9 +714,7 @@ describe('mode "measure"', () => {
   it("reports the runner's free-profile cap", async () => {
     state.runnerError = new CommandExitError("xcodebuild exited with 65", 65, null);
     state.runnerLog = "maximum number of installed apps using a free developer profile";
-    const { error, signal } = await failure(
-      measureLaunch(new Registry(), params({ mode: "measure" }))
-    );
+    const { error, signal } = await failure(measureLaunch(params({ mode: "measure" })));
     expect(error.message).toContain("no slot for Argent's UI-test runner");
     expect(signal).toMatchObject({
       error_code: FAILURE_CODES.LAUNCH_ANALYSIS_FREE_PROFILE_LIMIT,
@@ -715,7 +727,7 @@ describe('mode "measure"', () => {
     state.simulator = false;
     state.runnerError = new CommandExitError("xcodebuild exited with 65", 65, null);
     state.runnerLog = "error: No profiles for 'com.argent.runner.tteam123456' were found";
-    const { signal } = await failure(measureLaunch(new Registry(), params({ mode: "measure" })));
+    const { signal } = await failure(measureLaunch(params({ mode: "measure" })));
     expect(signal).toMatchObject({
       error_code: FAILURE_CODES.LAUNCH_ANALYSIS_SIGNING_FAILED,
       failure_stage: "launch_analysis_runner_test",
@@ -727,7 +739,7 @@ describe('mode "measure"', () => {
     const controller = new AbortController();
     controller.abort();
     state.runnerError = controller.signal.reason as Error;
-    const error = await measureLaunch(new Registry(), params({ mode: "measure" }), {
+    const error = await measureLaunch(params({ mode: "measure" }), {
       signal: controller.signal,
     } as ToolContext).catch((e: unknown) => e);
     expect(error).toBe(controller.signal.reason);
@@ -735,23 +747,38 @@ describe('mode "measure"', () => {
   });
 
   it("stops when Argent's device runner is active on the device", async () => {
-    const registry = new Registry();
-    vi.spyOn(registry, "getSnapshot").mockReturnValue({
-      services: new Map([
-        [`${IOS_DEVICE_RUNNER_NAMESPACE}:UDID-1`, { state: ServiceState.RUNNING, dependents: [] }],
-      ]),
-      namespaces: [],
-      tools: [],
+    const release = reserveInteractionRunner("UDID-1");
+    try {
+      const { error, signal } = await failure(
+        measureLaunch(params({ mode: "measure", device_id: "UDID-1" }))
+      );
+      expect(error.message).toContain("Argent's device runner is active on UDID-1");
+      expect(signal.error_code).toBe(FAILURE_CODES.LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE);
+      expect(runLogged).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+
+  it("holds the iPhone runner through XCTest and releases it after a failed measurement", async () => {
+    state.simulator = false;
+    const device: DeviceInfo = { id: "UDID-1", platform: "ios", kind: "device" };
+    vi.mocked(runLogged).mockImplementationOnce(async () => {
+      await expect(iosDeviceRunnerBlueprint.factory({}, device, { device })).rejects.toThrow(
+        /measurement is in progress/
+      );
+      await expect(
+        measureLaunch(params({ mode: "measure", device_id: device.id }))
+      ).rejects.toThrow(/measurement is in progress/);
+      const releaseOther = reserveInteractionRunner("another-phone");
+      releaseOther();
+      throw new Error("interrupted XCTest");
     });
-    const { error, signal } = await failure(
-      measureLaunch(registry, params({ mode: "measure", device_id: "UDID-1" }))
+    await expect(measureLaunch(params({ mode: "measure", device_id: device.id }))).rejects.toThrow(
+      /interrupted XCTest/
     );
-    expect(error.message).toContain("Argent's device runner is active on UDID-1");
-    expect(signal).toEqual({
-      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE,
-      failure_stage: "launch_analysis_runner_active",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    });
+    await expect(
+      measureLaunch(params({ mode: "measure", device_id: device.id }))
+    ).resolves.toMatchObject({ samplesCollected: 5 });
   });
 });

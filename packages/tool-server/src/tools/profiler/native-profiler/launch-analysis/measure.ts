@@ -6,13 +6,10 @@ import { createHash } from "node:crypto";
 import {
   FAILURE_CODES,
   FailureError,
-  isLiveServiceState,
   subprocessFailureMetadata,
   wrapFailure,
-  type Registry,
   type ToolContext,
 } from "@argent/registry";
-import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../../../blueprints/ios-device-runner";
 import {
   commandFailureKind,
   ensureLaunchDeviceReady,
@@ -24,7 +21,11 @@ import {
   xcodeVersion,
 } from "../../../../utils/ios-launch-time/workflow";
 import { launchSampleStats } from "../../../../utils/ios-launch-time/results";
-import { resolveRunnerProjectPath } from "../../../../utils/ios-device/runner-artifact";
+import { reserveLaunchMeasurement } from "../../../../utils/ios-device/runner-reservation";
+import {
+  resolveRunnerProjectPath,
+  runnerBuildLocationArgs,
+} from "../../../../utils/ios-device/runner-artifact";
 import {
   resolveRunnerSigningConfig,
   resolveSigningHint,
@@ -37,18 +38,6 @@ const execFileAsync = promisify(execFile);
 // ArgentLaunchPerformanceTests.swift.
 const LAUNCH_ITERATIONS = 5;
 
-const runnerActive = (deviceId: string) =>
-  new FailureError(
-    `Argent's device runner is active on ${deviceId}. Run stop-simulator-server for this device ` +
-      "before native-profiler-launch-analysis, then retry.",
-    {
-      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE,
-      failure_stage: "launch_analysis_runner_active",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    }
-  );
-
 type MetricResult = Array<{
   testRuns?: Array<{
     metrics?: Array<{ identifier?: string; measurements?: number[] }>;
@@ -56,34 +45,31 @@ type MetricResult = Array<{
 }>;
 
 /** mode "measure": five launches measured by XCTApplicationLaunchMetric in Argent's UI test runner. */
-export async function measureLaunch(
-  registry: Registry,
-  params: NativeProfilerLaunchAnalysisParams,
+export async function measureLaunch(params: NativeProfilerLaunchAnalysisParams, ctx?: ToolContext) {
+  let release: (() => void) | undefined;
+  try {
+    const context = await prepareLaunch(
+      {
+        bundleId: params.bundle_id,
+        deviceId: params.device_id,
+        allowSimulator: params.allow_simulator,
+        checkDevice: ({ id }) => {
+          release = reserveLaunchMeasurement(id);
+        },
+      },
+      (message) => ctx?.emitProgress?.({ type: "device-action", message }),
+      ctx?.signal
+    );
+    return await measurePreparedLaunch(context, ctx);
+  } finally {
+    release?.();
+  }
+}
+
+async function measurePreparedLaunch(
+  context: Awaited<ReturnType<typeof prepareLaunch>>,
   ctx?: ToolContext
 ) {
-  if (params.device_id) {
-    const active = registry
-      .getSnapshot()
-      .services.get(`${IOS_DEVICE_RUNNER_NAMESPACE}:${params.device_id}`);
-    if (active && isLiveServiceState(active.state)) {
-      throw runnerActive(params.device_id);
-    }
-  }
-  const context = await prepareLaunch(
-    {
-      bundleId: params.bundle_id,
-      deviceId: params.device_id,
-      allowSimulator: params.allow_simulator,
-    },
-    (message) => ctx?.emitProgress?.({ type: "device-action", message }),
-    ctx?.signal
-  );
-  const runner = registry
-    .getSnapshot()
-    .services.get(`${IOS_DEVICE_RUNNER_NAMESPACE}:${context.deviceId}`);
-  if (!context.simulator && runner && isLiveServiceState(runner.state)) {
-    throw runnerActive(context.deviceId);
-  }
   const project = resolveRunnerProjectPath();
   await ensureLaunchDeviceReady(
     context,
@@ -121,8 +107,7 @@ export async function measureLaunch(
     "Release",
     "-destination",
     context.destination,
-    "-derivedDataPath",
-    runnerDerivedData,
+    ...runnerBuildLocationArgs(runnerDerivedData),
     "-resultBundlePath",
     resultPath,
     "-parallel-testing-enabled",

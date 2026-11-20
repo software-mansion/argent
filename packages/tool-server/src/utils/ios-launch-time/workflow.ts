@@ -46,12 +46,12 @@ export function withRunnerBuildLock<T>(derivedDataPath: string, fn: () => Promis
 
 /** A new run directory beside the other native-profiler traces. */
 async function createRunDir(): Promise<string> {
-  const runDir = path.join(
-    await getDebugDir(),
-    `launch-analysis-${new Date().toISOString().replace(/[-:.]/g, "")}`
+  return fsp.mkdtemp(
+    path.join(
+      await getDebugDir(),
+      `launch-analysis-${new Date().toISOString().replace(/[-:.]/g, "")}-`
+    )
   );
-  await fsp.mkdir(runDir);
-  return runDir;
 }
 
 interface LaunchRequest {
@@ -59,7 +59,7 @@ interface LaunchRequest {
   deviceId?: string;
   allowSimulator?: boolean;
   /** Runs once the device is selected, before the app is looked up; throw to stop early. */
-  checkDevice?: (device: { simulator: boolean }) => Promise<void>;
+  checkDevice?: (device: { id: string; simulator: boolean }) => void | Promise<void>;
 }
 
 interface LaunchContext {

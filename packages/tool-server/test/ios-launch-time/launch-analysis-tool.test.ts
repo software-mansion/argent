@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, getFailureSignal, Registry } from "@argent/registry";
 import {
-  createNativeProfilerLaunchAnalysisTool,
+  nativeProfilerLaunchAnalysisTool,
   type NativeProfilerLaunchAnalysisParams,
 } from "../../src/tools/profiler/native-profiler/native-profiler-launch-analysis";
 import { measureLaunch } from "../../src/tools/profiler/native-profiler/launch-analysis/measure";
@@ -24,7 +24,7 @@ const ID = "native-profiler-launch-analysis";
 
 function rig() {
   const registry = new Registry();
-  const tool = createNativeProfilerLaunchAnalysisTool(registry);
+  const tool = nativeProfilerLaunchAnalysisTool;
   registry.registerTool(tool);
   return { registry, tool };
 }
@@ -42,8 +42,7 @@ describe("native-profiler-launch-analysis", () => {
     const result = await registry.invokeTool(ID, { mode: "measure", bundle_id: BUNDLE_ID });
     expect(result).toEqual({ metric: "XCTApplicationLaunchMetric" });
     expect(measureLaunch).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(measureLaunch).mock.calls[0][0]).toBe(registry);
-    expect(vi.mocked(measureLaunch).mock.calls[0][1]).toEqual({
+    expect(vi.mocked(measureLaunch).mock.calls[0][0]).toEqual({
       mode: "measure",
       bundle_id: BUNDLE_ID,
       allow_simulator: false,
@@ -99,7 +98,7 @@ describe("native-profiler-launch-analysis", () => {
       workspace_path: "/app",
     });
     expect(result).toEqual({ metric: "XCTApplicationLaunchMetric" });
-    expect(vi.mocked(measureLaunch).mock.calls[0][1]).toEqual({
+    expect(vi.mocked(measureLaunch).mock.calls[0][0]).toEqual({
       mode: "measure",
       bundle_id: BUNDLE_ID,
       allow_simulator: false,

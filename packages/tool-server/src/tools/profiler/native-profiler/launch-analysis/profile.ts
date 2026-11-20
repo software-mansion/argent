@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -54,31 +55,16 @@ const execFileAsync = promisify(execFile);
 const TABLE_XPATH = (schema: string) =>
   `/trace-toc/run[@number="1"]/data/table[@schema="${schema}"]`;
 
-function profilerSessionId(): string {
-  // Same shape as native-profiler-start, so profiler-load lists and loads it.
-  return new Date()
-    .toISOString()
-    .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
-    .slice(0, 15);
-}
-
-// The ID has one-second resolution, so a session started in the same second
-// would share it. Write exclusively and take the next second's ID on a clash.
+/** A launch export can finish while a regular capture with the same timestamp is still running. */
 async function writeProfilerSession(
   xml: string
 ): Promise<{ sessionId: string; cpuXmlPath: string }> {
   const debugDir = await getDebugDir();
-  for (;;) {
-    const sessionId = profilerSessionId();
-    const cpuXmlPath = path.join(debugDir, `native-profiler-${sessionId}_raw_cpu.xml`);
-    try {
-      await fsp.writeFile(cpuXmlPath, xml, { flag: "wx" });
-      return { sessionId, cpuXmlPath };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
+  const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  const sessionId = `${timestamp}-launch-${randomUUID()}`;
+  const cpuXmlPath = path.join(debugDir, `native-profiler-${sessionId}_raw_cpu.xml`);
+  await fsp.writeFile(cpuXmlPath, xml, { flag: "wx" });
+  return { sessionId, cpuXmlPath };
 }
 
 const RECORD_TIMEOUT_MS = 180_000;
@@ -338,10 +324,10 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   let sessionId: string | null = null;
   let cpuXmlPath: string | null = null;
   let cpuSamples: number | null = null;
-  let laterRows = 0;
   if (exported.cpu) {
     const running = keepRunningRows(await fsp.readFile(exported.cpu, "utf8"));
-    const weighed = weighSamplesByPeriod(running.xml);
+    // Short launches may have too few samples to establish the period on their own.
+    const weighed = weighSamplesByPeriod(running.xml, await fsp.readFile(recordLog, "utf8"));
     if (weighed.periodNs !== null && weighed.periodNs > 1_000_000) {
       const period = weighed.periodNs / 1_000_000;
       notes.push(
@@ -355,7 +341,6 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     await fsp.rm(exported.cpu, { force: true });
     delete exported.cpu;
     cpuSamples = cut.keptRows;
-    laterRows = cut.laterRows;
   }
 
   const launchPhases = phases.filter((phase) => phase.startNs < endNs);
@@ -377,7 +362,6 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
         sessionId,
         cpuXml: cpuXmlPath,
         cpuSamples,
-        ...(laterRows > 0 && { postLaunchSamplesKept: laterRows }),
         next: `profiler-load mode=load_native session_id=${sessionId} device_id=${context.deviceId}, then profiler-stack-query mode=thread_breakdown thread="Main Thread" device_id=${context.deviceId}`,
       },
     }),

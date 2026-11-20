@@ -159,37 +159,17 @@ function isParsedSample(row: string): boolean {
   return !/<sample-time\s+ref="\d+"\s*\/>/.test(row);
 }
 
-/**
- * Keeps `time-profile` rows up to the last sample inside the launch. Refs only
- * point back, so cutting the tail keeps every ref resolvable. Cutting after the
- * last in-window row drops no launch sample if rows are out of time order;
- * `laterRows` counts the post-launch samples that keeps.
- */
-export function truncateCpuXml(
-  xml: string,
-  endNs: number
-): { xml: string; keptRows: number; laterRows: number } {
-  const registry = valueRegistry(xml, ["sample-time"]);
+/** Keep only launch samples, including out-of-order ones and their referenced definitions. */
+export function truncateCpuXml(xml: string, endNs: number): { xml: string; keptRows: number } {
+  const times = valueRegistry(xml, ["sample-time"]);
   let keptRows = 0;
-  let laterRows = 0;
-  let laterSinceLastKept = 0;
-  let cutAt: number | null = null;
-  for (const match of xml.matchAll(/<row>.*?<\/row>/gs)) {
-    cutAt ??= match.index!;
-    const counted = isParsedSample(match[0]) ? 1 : 0;
-    const time = rowValue(match[0], "sample-time", registry);
-    if (time !== null && Number(time) > endNs) {
-      laterSinceLastKept += counted;
-      continue;
-    }
-    keptRows += counted;
-    laterRows += laterSinceLastKept;
-    laterSinceLastKept = 0;
-    cutAt = match.index! + match[0].length;
-  }
-  if (cutAt === null || xml.indexOf("<row>", cutAt) === -1) return { xml, keptRows, laterRows };
-  const tail = xml.slice(xml.lastIndexOf("</row>") + "</row>".length);
-  return { xml: xml.slice(0, cutAt) + tail, keptRows, laterRows };
+  const cut = filterCpuRows(xml, (row) => {
+    const time = rowValue(row, "sample-time", times);
+    if (time !== null && Number(time) > endNs) return false;
+    if (isParsedSample(row)) keptRows++;
+    return true;
+  });
+  return { xml: cut, keptRows };
 }
 
 /**
@@ -199,30 +179,38 @@ export function truncateCpuXml(
  * that keeps running gets one sample per tick, so the most common gap between
  * a thread's consecutive samples is the interval. Null when too few gaps agree.
  */
-function samplePeriodNs(xml: string): number | null {
+function inferredSamplePeriodNs(xml: string): number | null {
   const registry = valueRegistry(xml, ["sample-time"]);
   const times = new Map<string, number[]>();
   for (const [row] of xml.matchAll(/<row>.*?<\/row>/gs)) {
     const thread = row.match(/<thread\s+(?:id|ref)="(\d+)"/)?.[1];
-    const time = Number(rowValue(row, "sample-time", registry));
-    if (thread === undefined || !Number.isFinite(time)) continue;
+    const value = rowValue(row, "sample-time", registry);
+    if (thread === undefined || value === null) continue;
+    const time = Number(value);
+    if (!Number.isFinite(time)) continue;
     const series = times.get(thread);
     if (series) series.push(time);
     else times.set(thread, [time]);
   }
-  const counts = new Map<number, number>();
+  let oneMs = 0;
+  let fiveMs = 0;
+  let hasShorterGap = false;
   let gaps = 0;
   for (const series of times.values()) {
     series.sort((a, b) => a - b);
     for (let i = 1; i < series.length; i++) {
       const gap = Math.round((series[i]! - series[i - 1]!) / 100_000) * 100_000;
       if (gap <= 0) continue;
-      counts.set(gap, (counts.get(gap) ?? 0) + 1);
+      if (gap === 1_000_000) oneMs++;
+      if (gap === 5_000_000) fiveMs++;
+      // Allow timestamp jitter, but a clearly shorter same-thread gap rules out 5 ms.
+      if (gap < 4_500_000) hasShorterGap = true;
       gaps++;
     }
   }
-  const [period, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [0, 0];
-  return gaps >= 20 && count * 2 >= gaps ? period : null;
+  if (gaps < 20) return null;
+  if (oneMs * 2 >= gaps) return 1_000_000;
+  return !hasShorterGap && fiveMs * 2 >= gaps ? 5_000_000 : null;
 }
 
 /**
@@ -230,11 +218,30 @@ function samplePeriodNs(xml: string): number | null {
  * XML as it is when the interval is unclear, or when the weights differ between
  * samples and so do not stand for one tick each.
  */
-export function weighSamplesByPeriod(xml: string): { xml: string; periodNs: number | null } {
-  const periodNs = samplePeriodNs(xml);
+export function weighSamplesByPeriod(
+  xml: string,
+  recordLog: string
+): { xml: string; periodNs: number | null } {
+  // Some Xcode versions report the actual period when the two time-sample tables
+  // request different rates. Even a sparse trace can then be weighed correctly.
+  const configured = new Set(
+    Array.from(
+      recordLog.matchAll(
+        /binding 'time-sample' table: requested sampling period \(\d+ns\) differs from configured \((\d+)ns\)/gi
+      ),
+      (match) => Number(match[1])
+    )
+  );
+  if (configured.size > 1) return { xml, periodNs: null };
+  const [reported] = configured;
+  const periodNs = reported ?? inferredSamplePeriodNs(xml);
+  if (periodNs !== 1_000_000 && periodNs !== 5_000_000) return { xml, periodNs: null };
   const weight = /<weight\s+id="(\d+)"[^>]*>(\d+)<\/weight>/g;
   const weights = new Set([...xml.matchAll(weight)].map((match) => Number(match[2])));
-  if (periodNs === null || weights.size !== 1 || weights.has(periodNs)) return { xml, periodNs };
+  if (weights.size !== 1) return { xml, periodNs: null };
+  if (weights.has(periodNs)) return { xml, periodNs };
+  // Only the fixed 1 ms export weight needs correcting on a 5 ms recording.
+  if (periodNs !== 5_000_000 || !weights.has(1_000_000)) return { xml, periodNs: null };
   const fmt = `${(periodNs / 1_000_000).toFixed(2)} ms`;
   return {
     xml: xml.replace(
@@ -246,32 +253,56 @@ export function weighSamplesByPeriod(xml: string): { xml: string; periodNs: numb
 }
 
 /**
- * Every element in `text` that defines an id, with its full text. A nested
- * definition (a frame in a backtrace) is listed as well as its parent.
+ * Save each definition from a discarded row. In a saved parent, a nested
+ * definition becomes a ref so it can be emitted exactly once, even when a
+ * later row uses the child before it uses the parent.
  */
-function definitions(text: string): Map<string, string> {
-  const found = new Map<string, string>();
-  const open = /<([\w-]+)\s[^>]*?\bid="(\d+)"[^>]*?(\/?)>/g;
-  for (const match of text.matchAll(open)) {
-    const [element, tag, id, selfClosing] = match;
-    if (selfClosing) {
-      found.set(id!, element);
+function rememberDefinitions(row: string, pending: Map<string, string>): void {
+  const stack: Array<{ id?: string; parts: string[] }> = [];
+  for (const [token] of row.matchAll(/<[^>]+>|[^<]+/g)) {
+    if (token.startsWith("</")) {
+      const element = stack.pop()!;
+      element.parts.push(token);
+      const xml = element.parts.join("");
+      if (element.id) pending.set(element.id, xml);
+      else stack.at(-1)?.parts.push(xml);
       continue;
     }
-    // Same-tag nesting is counted so the matching close tag is found.
-    const tags = new RegExp(`<${tag}[\\s>/]|</${tag}>`, "g");
-    tags.lastIndex = match.index! + element.length;
-    let depth = 1;
-    for (let next = tags.exec(text); next; next = tags.exec(text)) {
-      if (next[0].startsWith("</")) depth--;
-      else if (!/\/>/.test(text.slice(next.index, text.indexOf(">", next.index) + 1))) depth++;
-      if (depth === 0) {
-        found.set(id!, text.slice(match.index, next.index + next[0].length));
-        break;
-      }
+    const parent = stack.at(-1);
+    if (!token.startsWith("<")) {
+      parent?.parts.push(token);
+      continue;
     }
+    const definition = token.match(/^<([\w-]+)\s+id="(\d+)"/);
+    const id = definition?.[2];
+    if (definition) parent?.parts.push(`<${definition[1]} ref="${id}"/>`);
+    if (!token.endsWith("/>")) stack.push({ id, parts: [token] });
+    else if (id) pending.set(id, token);
+    else parent?.parts.push(token);
   }
-  return found;
+}
+
+/** Keep refs readable when their defining row is removed. Ignore definitions in a discarded tail. */
+function filterCpuRows(xml: string, keep: (row: string) => boolean): string {
+  const pending = new Map<string, string>();
+  const rehome = (text: string): string =>
+    text.replace(/<[\w-]+\s+ref="(\d+)"\s*\/>/g, (ref, id: string) => {
+      const definition = pending.get(id);
+      if (definition === undefined) return ref;
+      pending.delete(id);
+      return rehome(definition);
+    });
+
+  const discarded: string[] = [];
+  return xml.replace(/<row>.*?<\/row>/gs, (row) => {
+    if (!keep(row)) {
+      discarded.push(row);
+      return "";
+    }
+    for (const skipped of discarded) rememberDefinitions(skipped, pending);
+    discarded.length = 0;
+    return pending.size ? rehome(row) : row;
+  });
 }
 
 /**
@@ -283,25 +314,12 @@ function definitions(text: string): Map<string, string> {
  */
 export function keepRunningRows(xml: string): { xml: string; droppedRows: number } {
   const states = valueRegistry(xml, ["thread-state"]);
-  const pending = new Map<string, string>();
-  const rehome = (text: string): string =>
-    pending.size === 0
-      ? text
-      : text.replace(/<[\w-]+\s+ref="(\d+)"\s*\/>/g, (ref, id: string) => {
-          const definition = pending.get(id);
-          if (definition === undefined) return ref;
-          for (const nested of definitions(definition).keys()) pending.delete(nested);
-          return rehome(definition);
-        });
   let droppedRows = 0;
-  const kept = xml.replace(/<row>.*?<\/row>/gs, (row) => {
+  const kept = filterCpuRows(xml, (row) => {
     const state = rowValue(row, "thread-state", states);
-    if (state === null || state === "Running") return rehome(row);
+    if (state === null || state === "Running") return true;
     droppedRows++;
-    for (const [id, definition] of definitions(rehome(row))) {
-      if (!pending.has(id)) pending.set(id, definition);
-    }
-    return "";
+    return false;
   });
   return {
     xml: kept.replace(/<thread-state\b[^>]*\/>|<thread-state\b[^>]*>[^<]*<\/thread-state>/g, ""),
