@@ -82,19 +82,21 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
       const device = resolveDevice(params.udid);
       // Only the HTTP gate checks the capability, and an e2e `tool:` step does not pass it.
       assertSupported("network-capture-start", CAPTURE_CAPABILITY, device);
-      await ensureDeps(
-        device.platform === "android"
-          ? ["adb"]
-          : device.platform === "ios-remote"
-            ? ["sim-remote"]
-            : ["xcrun"]
-      );
       const port = metroPort({ device_id: params.udid, port: params.port });
-      if (device.platform === "ios" && isInjectableBundleId(params.bundleId)) {
-        await refuseWhileXcodeInstalls(registry, device, params.bundleId);
-      }
-      const layers = await withCaptureLock(params.udid, params.bundleId, () =>
-        runLayers([
+      // The checks run under the lock too: a stop called while they run waits for
+      // this start, so the start cannot install capture after that stop.
+      const layers = await withCaptureLock(params.udid, params.bundleId, async () => {
+        await ensureDeps(
+          device.platform === "android"
+            ? ["adb"]
+            : device.platform === "ios-remote"
+              ? ["sim-remote"]
+              : ["xcrun"]
+        );
+        if (device.platform === "ios" && isInjectableBundleId(params.bundleId)) {
+          await refuseWhileXcodeInstalls(registry, device, params.bundleId);
+        }
+        return runLayers([
           device.platform !== "android" && !isInjectableBundleId(params.bundleId)
             ? Promise.resolve(
                 unavailable(
@@ -106,8 +108,8 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
           device.platform === "android"
             ? startAndroidLayer(registry, device, params.bundleId, port)
             : startIosLayer(registry, device, params.bundleId, port),
-        ])
-      );
+        ]);
+      });
       if (layers.every((layer) => layer.unavailable)) {
         throw new FailureError(
           `Network capture cannot start for ${params.bundleId} on ${params.udid}: ` +
