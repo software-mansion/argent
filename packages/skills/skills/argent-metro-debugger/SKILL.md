@@ -14,7 +14,7 @@ Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`
 
 ## 2. Tools
 
-Pass the same `device_id`, the id from `list-devices`, to every call. With two or more devices on one Metro, `debugger-connect` refuses a udid or serial and returns a `logicalDeviceId`: use that as `device_id` from then on, and include it in `stop-all-simulator-servers`' `devices` at teardown, or the debugger session outlives yours. `network-capture-start` and `network-capture-stop` take a `udid`, not a `device_id`: always pass them the id from `list-devices`, never a `logicalDeviceId`.
+Pass the same `device_id`, the id from `list-devices`, to every call. With two or more devices on one Metro, `debugger-connect` refuses a udid or serial and returns a `logicalDeviceId`: use that as `device_id` from then on, and include it in `stop-all-simulator-servers`' `devices` at teardown, or the debugger session outlives yours. `network-capture-start` and `network-capture-stop` take a `udid`, not a `device_id`: always pass them the id from `list-devices`, never a `logicalDeviceId`. On a shared Metro, their JS layer is unavailable until you also pass the device's `logicalDeviceId` in their own `logicalDeviceId` parameter; then read with that id as `device_id`.
 
 | Tool                                                 | Use for                                                                                                                                                                                    |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

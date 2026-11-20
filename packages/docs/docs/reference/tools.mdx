@@ -189,11 +189,12 @@ The two tools do not support Chromium and Vega. There, Argent starts the capture
 - Chromium: Argent starts the capture when it attaches to the page. Each Chromium tool attaches Argent to the page.
 - Vega: a read starts the capture of the JS runtime layer. Each call of `view-network-logs` or `view-network-request-details` installs the capture in the JS runtime of the app, also after a reload.
 
-| Parameter  | Effect                                                                                                                                                                                                                      |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `udid`     | The UDID of the iOS simulator, the serial of the Android device, or the device ID of the Mac app (`macos-app-<bundle id>`)                                                                                                  |
-| `bundleId` | The bundle ID of the app on iOS and on a Mac app, or the package name of the app on Android                                                                                                                                 |
-| `port`     | The Metro port of the app. Argent reaches the JS runtime of the app through this port. The native layers remove the requests to this port on a local address from their lists. The default is the Metro port of the device. |
+| Parameter         | Effect                                                                                                                                                                                                                      |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`            | The UDID of the iOS simulator, the serial of the Android device, or the device ID of the Mac app (`macos-app-<bundle id>`)                                                                                                  |
+| `bundleId`        | The bundle ID of the app on iOS and on a Mac app, or the package name of the app on Android                                                                                                                                 |
+| `port`            | The Metro port of the app. Argent reaches the JS runtime of the app through this port. The native layers remove the requests to this port on a local address from their lists. The default is the Metro port of the device. |
+| `logicalDeviceId` | Only for a Metro server that two or more devices use. The `logicalDeviceId` of the device on this Metro server. See [Several devices on one Metro server](#several-devices-on-one-metro-server).                            |
 
 #### Start
 
@@ -219,6 +220,7 @@ A native layer that is not armed often arms later without a new start. For examp
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | `js`             | Metro does not run on the port.                                                                                                              | `true`        |
 | `js`             | The JS runtime on the port belongs to a different app.                                                                                       | `true`        |
+| `js`             | Two or more devices use the Metro server on the port, and the call has no `logicalDeviceId` of a device on it.                               | `true`        |
 | `js`             | The device provider did not grant `js-debugger` for the device, or does not offer the device.                                                | `true`        |
 | `js`             | Argent did not reach the JS runtime of the app, but the capture that an earlier start installed there can still record.                      | absent        |
 | `js`             | No app is connected to Metro yet, or the JS runtime did not answer.                                                                          | absent        |
@@ -234,6 +236,16 @@ A native layer that is not armed often arms later without a new start. For examp
 | `macos-native`   | The app does not run. `boot-device`, `launch-app` or `restart-app` starts it, and Argent arms its process.                                   | absent        |
 
 On iOS, Argent cannot tell an app that does not run from an app that is not installed. Thus the `ios-native` reason that tells you to call `restart-app` also says this: if `restart-app` cannot start the app, the bundle ID is not installed on the simulator.
+
+#### Several devices on one Metro server
+
+When two or more devices use one Metro server, Argent cannot find the JS runtime of a device from its `udid`. Then the `js` layer is unavailable. Its `reason` lists each device on the Metro server, with its `logicalDeviceId` in parentheses. The native layer is not affected. To capture on the `js` layer:
+
+1. Call `network-capture-start` with `udid`, `bundleId` and the `logicalDeviceId` of the device.
+2. Call `view-network-logs` and `view-network-request-details` with this `logicalDeviceId` as `device_id`.
+3. Call `network-capture-stop` with the same `udid`, `bundleId` and `logicalDeviceId`.
+
+The `js` layer uses `logicalDeviceId`. The native layer always uses `udid`. A stop without `logicalDeviceId` does not stop the `js` layer that a start with `logicalDeviceId` started. `stop-all-simulator-servers` with `udid` in `devices` does not stop it either: also put the `logicalDeviceId` in `devices`. Alternatively, give each device its own Metro port.
 
 When all layers are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each layer. An Apple system app runs no React Native JS, so both of its layers are unavailable, and a start for it always fails.
 
