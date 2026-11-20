@@ -86,7 +86,7 @@ On a simulator where Argent uses the socket of a device provider, the provider c
 
 If the app was already running when Argent connected, the header line of the first result tells that Argent did not record the earlier requests. On this simulator, a relaunch ends the capture. Thus Argent cannot record the launch. Do not ask the agent to restart the app for the launch.
 
-The network log of this layer keeps the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the network log of this layer. A request that runs when the connection of the app closes shows as failed. The error of the request tells if the app process ended.
+The network log of this layer keeps the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the network log of this layer. On a simulator without a device provider, a request that runs when the connection of the app closes shows as failed. The error of the request tells if the app process ended.
 
 Each request has an ID such as `ios-3f9a-12`. The agent uses this ID to read headers and request or response bodies. An ID is valid only in the tool-server that listed it. An ID stays valid after the capture stops. An ID is not valid after `stop-all-simulator-servers` stops the services of the simulator, or after the tool-server stops.
 
