@@ -101,7 +101,7 @@ One screenshot and element tree are captured after the whole sequence, not per s
 On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
 
 Allowed tools, their args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles are in degrees, durations in ms.
-  gesture-tap: x, y, clickCount?<flag:macos-apps>, button? "left"|"right" (macos)</flag:macos-apps>  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
+  gesture-tap: x, y, clickCount?<flag:macos-apps>, button? "left"|"right" (macos), modifiers? array of "control"|"option"|"shift"|"command" (macos)</flag:macos-apps>  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
   gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
   gesture-scroll: x, y, deltaX?, deltaY? (signed; positive scrolls down), durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
   gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]

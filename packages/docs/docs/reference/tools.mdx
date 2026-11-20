@@ -379,7 +379,7 @@ Coordinates use the app window, including its title bar, with the origin at the 
 | `await-ui-element`, `await-screen-idle` | Wait for matching elements or a stable interface using the app tree.                                                            |
 | `screenshot`                            | Captures the app window and attached sheets, popovers, alerts, and menus. Other app windows are excluded.                       |
 | `screenshot-diff`                       | Captures at `scale: 1.0`. Save baselines at the same scale. No top band is masked.                                              |
-| `gesture-tap`                           | Clicks. Use `button: "right"` for a context menu or `clickCount: 2` for a double-click.                                         |
+| `gesture-tap`                           | Click, double-click (`clickCount: 2`), open a context menu (`button: "right"`), or [hold keys](#clicks-with-modifier-keys).     |
 | `gesture-drag`                          | Drags with the left button. Equal start and end points produce a long press.                                                    |
 | `gesture-scroll`                        | Scrolls the content under the point, like a mouse wheel. `durationMs` has no effect.                                            |
 | `keyboard`                              | Types Unicode text or sends keys and shortcuts, such as `command+a` or `shift+tab`.                                             |
@@ -387,6 +387,12 @@ Coordinates use the app window, including its title bar, with the origin at the 
 | `run-sequence`                          | Runs tap, scroll, drag, keyboard, paste, and await steps.                                                                       |
 | Native view tools                       | Require the device's `bundleId`. Their `x` and `y` use points, rather than fractions of the window.                             |
 | `native-network-logs`                   | Starts capturing `URLSession` requests on the first call. Startup requests can be missed. Each app restart begins a new record. |
+
+#### Clicks with modifier keys
+
+On a Mac app, pass `modifiers` to `gesture-tap` as a list of keys from `control`, `option`, `shift`, and `command`. For example, `["command"]` can toggle a row in a selection. The effect depends on the control. The keys are held for the entire gesture, including both clicks of a double-click. An empty list leaves the click unmodified. Other targets reject nonempty lists.
+
+`MACOS_APP_LIBRARY_OUTDATED` means the app's loaded Argent library lacks modifier-click support. The tool stops before clicking. Run `restart-app` to reload the library, then retry. If the error persists, use an Argent build that includes modifier-click support.
 
 #### Screenshots and scrolling
 
@@ -534,6 +540,7 @@ Use `describe` or `native-describe-screen` to inspect UIKit controls through the
 - **File dialogs.** [`file-panel`](#file-panel) works with the UIKit document picker and SwiftUI's `fileImporter` and `fileExporter`.
 - **Web views.** `describe` includes `WKWebView` content. Typing, paste, scrolling, and text selection work in it. `native-network-logs` captures the app's `URLSession` requests only. It does not capture `WKWebView` traffic.
 - **Password fields.** Focusing an empty password field can show the macOS Passwords AutoFill pop-up. Input still works.
+- **Modifier clicks.** UIKit controls can respond to modifier clicks. React Native `Pressable` handlers receive the press without modifier keys. SwiftUI `List` row selection stays single-select with Command-click or Shift-click.
 
 If typing, paste, or scrolling reports success without changing the app, check that your Argent build includes the native library with Mac Catalyst input support.
 

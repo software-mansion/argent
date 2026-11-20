@@ -20,6 +20,7 @@ import { ensureDep } from "../../utils/check-deps";
 import { InvalidToolInputError, isFlagOffered, MACOS_APPS_FLAG } from "../../utils/capability";
 import { FLAG_META_KEY, renderFlagGated } from "../../utils/flag-gated-text";
 import { macosAppServices, macosClick, requireMacosApp } from "../../utils/macos-input";
+import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -54,7 +55,10 @@ function tapDescription(params: Params, tense: "present" | "past"): string {
         : `${tense === "present" ? "Tapping" : "Tapped"} ${count} times`;
 
   const button = params.button === "right" ? " with the right button" : "";
-  return `${action} at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%)${button}`;
+  const modifiers = params.modifiers?.length
+    ? ` holding ${[...new Set(params.modifiers)].join("+")}`
+    : "";
+  return `${action} at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%)${button}${modifiers}`;
 }
 
 const capability: ToolCapability = {
@@ -157,13 +161,22 @@ const zodSchema = z.object({
         'any other device refuses it. Default "left".'
     )
     .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
+  modifiers: z
+    .array(z.enum(MACOS_MODIFIERS))
+    .max(MACOS_MODIFIERS.length)
+    .optional()
+    .describe(
+      "Keys held throughout a click or multi-click gesture. Mac apps only. An empty list leaves the click unmodified."
+    )
+    .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
 export const gestureTapTool: ToolDefinition<Params, Result> = {
   id: "gesture-tap",
-  description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app) at a point given as fractions of the screen width and height (not pixels): a Down event followed by an Up event at the same spot.<flag:macos-apps> On a Mac app it is a click, and x/y are fractions of the area describe reports, not of the window.</flag:macos-apps>
+  description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app) at a point given as fractions of the screen width and height (not pixels): a Down event followed by an Up event at the same spot.<flag:macos-apps> On a Mac app it is a click, and x/y are fractions of the area describe reports, not of the window.
+If a modifier click returns \`MACOS_APP_LIBRARY_OUTDATED\`, the tool stopped before clicking. Run \`restart-app\` to reload the library, then retry. If the error persists, use an Argent build with modifier-click support.</flag:macos-apps>
 Use when tapping a button, link, or any tappable element on the screen.
 Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the device backend (simulator-server / emulator / Chromium CDP<flag:harmonyos> / \`hdc\`</flag:harmonyos>) is unreachable.
 Before tapping, take the coordinates from \`describe\` on every platform (on Chromium it walks the DOM<flag:harmonyos>, on HarmonyOS it reads the \`uitest\` layout dump</flag:harmonyos>). More information in \`argent-device-interact\` skill`,
@@ -173,7 +186,7 @@ Before tapping, take the coordinates from \`describe\` on every platform (on Chr
   // whose abort replays the call: the gesture would land once per replay.
   longRunning: true,
   searchHint:
-    "tap press button element device simulator emulator chromium<flag:macos-apps> mac</flag:macos-apps> touch down up click<flag:macos-apps> right-click context menu</flag:macos-apps>",
+    "tap press button element device simulator emulator chromium<flag:macos-apps> mac</flag:macos-apps> touch down up click<flag:macos-apps> right-click context menu modifier command shift option control cmd-click shift-click multiple selection</flag:macos-apps>",
   interaction: {
     startedMsg: ({ params }) => tapDescription(params, "present"),
     completedMsg: ({ params }) => tapDescription(params, "past"),
@@ -187,7 +200,7 @@ Before tapping, take the coordinates from \`describe\` on every platform (on Chr
       return macosAppServices(device);
     }
     // Refused in `execute`, without starting a backend for a tap that never runs.
-    if (params.button === "right") return {};
+    if (params.button === "right" || params.modifiers?.length) return {};
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
@@ -204,7 +217,11 @@ Before tapping, take the coordinates from \`describe\` on every platform (on Chr
     const clickCount = params.clickCount ?? 1;
     if (device.platform === "macos") {
       const app = requireMacosApp(services, "gesture-tap", device);
-      await macosClick(app, params.x, params.y, { clickCount, button: params.button });
+      await macosClick(app, params.x, params.y, {
+        clickCount,
+        button: params.button,
+        modifiers: params.modifiers,
+      });
       return { tapped: true, timestampMs };
     }
     // The other backends would land a right-click as a plain tap.
@@ -223,6 +240,20 @@ Before tapping, take the coordinates from \`describe\` on every platform (on Chr
       throw new InvalidToolInputError(
         renderFlagGated(
           `gesture-tap button "right" is a mouse right-click${refusal}`,
+          isFlagOffered
+        )
+      );
+    }
+    if (params.modifiers?.length) {
+      const refusal =
+        device.platform === "chromium"
+          ? `<flag:macos-apps>, which argent sends only to a Mac app</flag:macos-apps>: argent ` +
+            `does not support modifier keys in a tap on a chromium app yet.`
+          : `<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>: ${device.platform} ` +
+            `${device.kind} takes no modifier keys in a tap.`;
+      throw new InvalidToolInputError(
+        renderFlagGated(
+          `gesture-tap modifiers hold keyboard keys through a mouse click${refusal}`,
           isFlagOffered
         )
       );
