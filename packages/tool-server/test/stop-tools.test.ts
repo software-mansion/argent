@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   forgetLogicalKeyedDevice,
@@ -814,6 +817,65 @@ describe("stop-all-simulator-servers device scoping", () => {
     expect(result).toEqual({ stopped: [`NativeDevtools:${MINE}`] });
     expect(registry.disposeService).toHaveBeenCalledOnce();
   });
+});
+
+describe("stop-all-simulator-servers on a device of a device provider", () => {
+  const CLAIMED = "1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809";
+  const EXT_ID = `ext:acme-3f2a9c:${CLAIMED}`;
+  let directory: string;
+
+  beforeEach(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "argent-stop-all-provider-"));
+    const descriptorPath = path.join(directory, "acme.json");
+    fs.writeFileSync(
+      descriptorPath,
+      JSON.stringify({
+        devices: [
+          {
+            capabilities: ["native-devtools"],
+            kind: "simulator",
+            name: "iPhone 16 Pro",
+            nativeDevtools: { socketPath: path.join(directory, "agent.sock") },
+            nativeId: CLAIMED,
+            platform: "ios",
+            state: "Booted",
+          },
+        ],
+        id: "acme-3f2a9c",
+        name: "Acme IDE",
+        schemaVersion: 1,
+      })
+    );
+    process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+  });
+
+  afterEach(() => {
+    delete process.env.ARGENT_DEVICE_PROVIDERS;
+    process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+    fs.rmSync(directory, { force: true, recursive: true });
+  });
+
+  // Both names of the device key one native devtools service by the udid, and
+  // that service only attaches to the agent the provider lends.
+  it.each([CLAIMED, EXT_ID])(
+    "disposes the provider's native devtools without reporting it stopped, scoped to %s",
+    async (scope) => {
+      const services = new Map([
+        [`NativeDevtools:${CLAIMED}`, { state: ServiceState.RUNNING, dependents: [] }],
+        [`NativeDevtools:${CLAIMED}:tcp`, { state: ServiceState.RUNNING, dependents: [] }],
+        [`NativeDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      ]);
+      const registry = createMockRegistry(services);
+      const tool = createStopAllSimulatorServersTool(registry);
+
+      expect(await tool.execute!({}, { devices: [scope, MINE] })).toEqual({
+        stopped: [`NativeDevtools:${MINE}`],
+      });
+      expect(registry.disposeService).toHaveBeenCalledWith(`NativeDevtools:${CLAIMED}`);
+      expect(registry.disposeService).toHaveBeenCalledWith(`NativeDevtools:${CLAIMED}:tcp`);
+    }
+  );
 });
 
 describe("stop-all-simulator-servers unmatched ids", () => {
