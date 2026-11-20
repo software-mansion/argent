@@ -57,7 +57,7 @@ describe("argent server start spawn failure", () => {
       server(["start", "--no-auth", "--port", "39871"], { paths })
     ).resolves.toBeUndefined();
 
-    expect(spawn).toHaveBeenCalledExactlyOnceWith("node", [paths.bundlePath, "start"], {
+    expect(spawn).toHaveBeenCalledExactlyOnceWith(process.execPath, [paths.bundlePath, "start"], {
       stdio: "inherit",
       env: expect.objectContaining({ ARGENT_PORT: "39871" }),
     });

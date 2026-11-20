@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import {
   killToolServer,
   findFreePort,
+  resolveToolsServerNode,
   spawnToolsServer,
   buildToolsServerEnv,
   isToolsServerHealthy,
@@ -399,7 +400,7 @@ async function runForeground(
   };
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn("node", [paths.bundlePath, "start"], {
+    child = spawn(resolveToolsServerNode(), [paths.bundlePath, "start"], {
       stdio: "inherit",
       env,
     });
