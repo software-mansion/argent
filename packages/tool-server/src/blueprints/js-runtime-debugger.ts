@@ -122,6 +122,15 @@ function createConsoleLogServer(
   });
 }
 
+async function openLogWriterOrDisconnect(port: number, cdp: CDPClient): Promise<LogFileWriter> {
+  try {
+    return new LogFileWriter(port);
+  } catch (error) {
+    await cdp.disconnect();
+    throw error;
+  }
+}
+
 /**
  * What a React Native runtime says about itself in
  * `ReactNativeApplication.metadataUpdated`, its answer to the enable sent at
@@ -269,7 +278,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     // Hermes replays its buffered console messages to a new client before it
     // answers `Runtime.enable`, so the listener must be in place before the
     // setup below, or the startup logs of an app that launched earlier are lost.
-    const logWriter = new LogFileWriter(port);
+    const logWriter = await openLogWriterOrDisconnect(port, cdp);
     const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
