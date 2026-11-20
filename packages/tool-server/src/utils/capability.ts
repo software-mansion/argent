@@ -1,4 +1,4 @@
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   withFailureSignal,
@@ -126,6 +126,33 @@ export const MACOS_APPS_FLAG = "macos-apps";
 export const MACOS_APPS_FLAG_OFF_REASON =
   "the macos-apps flag is off. Run: argent enable macos-apps";
 
+/**
+ * Why a Mac app cannot be driven here, or null when it can: the flag is off,
+ * or, with the flag on, the host is not a Mac. Read per call, so enabling the
+ * flag needs no restart.
+ */
+export function macosAppsUnavailableReason(): string | null {
+  if (!isFeatureEnabled(MACOS_APPS_FLAG)) return MACOS_APPS_FLAG_OFF_REASON;
+  if (process.platform !== "darwin") return "native Mac apps can only be driven on macOS";
+  return null;
+}
+
+/**
+ * Whether what a flag adds is offered to the agent: its tools, and its
+ * `<flag:...>` spans and properties in tool text and in errors. Mac apps run
+ * only on macOS, so elsewhere the macos-apps flag adds nothing, and no text
+ * points the agent at a Mac app the host refuses. Every `renderFlagGated` call
+ * that an agent reads passes this, not the bare flag read, and the e2e parse
+ * errors that list the platforms name `macos` only when this is true.
+ *
+ * This decides what text offers, not what a parser accepts: an e2e file can
+ * name `macos` on every host, because the files are shared between hosts.
+ */
+export function isFlagOffered(flag: string): boolean {
+  if (flag === MACOS_APPS_FLAG) return macosAppsUnavailableReason() === null;
+  return isFeatureEnabled(flag);
+}
+
 const MACOS_POINTER_ONLY =
   "a Mac app takes mouse input: use gesture-drag to drag and gesture-scroll to scroll";
 const MACOS_NO_TRACKPAD_GESTURES =
@@ -161,10 +188,9 @@ export function assertSupported(
   if (device.platform === "harmony" && !isHarmonyEnabled()) {
     throw new UnsupportedOperationError(toolId, device, HARMONY_DISABLED_REASON);
   }
-  // Before the matrix, so every tool names the flag; read per call, so enabling needs no restart.
-  if (device.platform === "macos" && !isFlagEnabled(MACOS_APPS_FLAG)) {
-    throw new UnsupportedOperationError(toolId, device, MACOS_APPS_FLAG_OFF_REASON);
-  }
+  // Before the matrix, so every tool names the flag or the host.
+  const macosRefusal = device.platform === "macos" ? macosAppsUnavailableReason() : null;
+  if (macosRefusal) throw new UnsupportedOperationError(toolId, device, macosRefusal);
   const matrix = platformMatrix(device.platform, capability);
   if (!matrix) {
     const reason =

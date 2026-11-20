@@ -2,8 +2,8 @@ import { PNG } from "pngjs";
 import { FAILURE_CODES } from "@argent/registry";
 import type { DeviceInfo, Registry, ServiceRef } from "@argent/registry";
 import { macosAppRef, type MacosAppApi } from "../blueprints/macos-app";
-import { InvalidToolInputError } from "./capability";
-import { assertMacosAppsEnabled, isMacosAppsEnabled } from "./macos-apps";
+import { InvalidToolInputError, macosAppsUnavailableReason } from "./capability";
+import { assertMacosAppsEnabled } from "./macos-apps";
 import { scaleDecodedPng } from "./png-scale";
 
 // Requests to the in-app library of a Mac app, and the click and typing
@@ -17,12 +17,13 @@ type MacosModifier = "command" | "shift" | "option" | "control";
 // ── Service plumbing ────────────────────────────────────────────────────────
 
 /**
- * The `services()` entry of a macOS branch. Empty while the flag is off, so a
- * flow sub-invocation (which skips the capability gate) starts no app
- * connection before the branch refuses.
+ * The `services()` entry of a macOS branch. Empty while a Mac app cannot be
+ * driven here (the flag is off, or the host is not a Mac), so a flow
+ * sub-invocation (which skips the capability gate) starts no app connection
+ * before the branch refuses.
  */
 export function macosAppServices(device: DeviceInfo): Record<string, ServiceRef> {
-  return isMacosAppsEnabled() ? { macosApp: macosAppRef(device) } : {};
+  return macosAppsUnavailableReason() === null ? { macosApp: macosAppRef(device) } : {};
 }
 
 /** First step of a macOS branch whose tool declares `macosAppServices`. */

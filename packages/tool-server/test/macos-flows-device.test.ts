@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
+import { unsetFlag } from "@argent/configuration-core";
 
 // The build argent recorded last for the bundle id; host state, faked here.
 const tracked: { appPath?: string } = {};
@@ -28,6 +29,13 @@ const flag = useMacosAppsFlag();
 const APP = "com.argent.probe";
 const MAC_DEVICE = `macos-app-${APP}`;
 const FLAG_OFF = "the macos-apps flag is off. Run: argent enable macos-apps";
+const HOST = "native Mac apps can only be driven on macOS";
+
+/** The flag at its default (on), on a Linux host; `useMacosAppsFlag` restores the platform. */
+function defaultFlagOnLinux(): void {
+  unsetFlag("macos-apps", "global");
+  Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+}
 
 interface Call {
   tool: string;
@@ -189,6 +197,17 @@ describe("resolveFlowDevice with Mac app rows", () => {
       /No booted macos device found\..*The macos-apps flag is off, so no Mac app is listed\. Run: argent enable macos-apps\./
     );
   });
+
+  it("names the host when --platform macos finds nothing off macOS", async () => {
+    defaultFlagOnLinux();
+    const { registry } = makeRegistry();
+    const err = await resolveFlowDevice(registry, undefined, { platform: "macos" }).catch(
+      (e: unknown) => e
+    );
+    expect(String(err)).toMatch(
+      /No booted macos device found\..*No Mac app is listed: native Mac apps can only be driven on macOS\./
+    );
+  });
 });
 
 describe("the device of a flow led by a macOS launch", () => {
@@ -246,6 +265,25 @@ describe("the device of a flow led by a macOS launch", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_DEVICE_RESOLUTION);
     expect(calls).toEqual([]);
   });
+
+  it.each([
+    ["the hoisted device", {}],
+    ["an explicit --device Mac app", { device: MAC_DEVICE }],
+  ])(
+    "refuses %s off macOS with the flag at its default, before any tool runs",
+    async (_l, extra) => {
+      defaultFlagOnLinux();
+      await writeFlow("linux", {
+        executionPrerequisite: "",
+        steps: [{ kind: "launch", app: { macos: APP } }],
+      });
+      const { registry, calls } = makeRegistry();
+      const err = await run(registry, "linux", extra).catch((e: unknown) => e);
+      expect(String(err)).toContain(HOST);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_DEVICE_RESOLUTION);
+      expect(calls).toEqual([]);
+    }
+  );
 
   it("refuses a macos launch that is not a bundle id instead of building a device from it", async () => {
     await writeFlow("bad", {

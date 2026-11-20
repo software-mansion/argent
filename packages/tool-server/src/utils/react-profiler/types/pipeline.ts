@@ -1,3 +1,4 @@
+import type { RnPlatform } from "./input.js";
 import type { ReRenderReason, HotCommitSummary, ComponentFinding } from "./output.js";
 
 export interface SessionContext {
@@ -5,7 +6,7 @@ export interface SessionContext {
   buildMode: "dev" | "prod";
   rnArchitecture: "bridge" | "bridgeless";
   projectRoot: string;
-  platform: "ios" | "android";
+  platform: RnPlatform;
 }
 
 /** Accumulated root cause data for a single parent candidate */

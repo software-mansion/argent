@@ -104,6 +104,7 @@ import {
   otherWorktreeOfBuild,
   parseCodesignDisplay,
   processRunsExecutable,
+  readCodeSignature,
   recordTrackedMacosApp,
   removeUnusedLibraries,
   runningTrackedApp,
@@ -494,6 +495,76 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(deadline).toBeGreaterThanOrEqual(sent + 5_000);
     expect(deadline).toBeLessThanOrEqual(Date.now() + 5_000);
     await expect(app.call("Echo", {}, { runLate: true })).resolves.not.toHaveProperty("deadline");
+  });
+
+  it("while it watches suspensions, a call waits for a suspended app, and a timeout says it was suspended", async () => {
+    const { pid } = await run("boot-device", { macosAppPath: appPath });
+    const app = await macosApp();
+    // The fake helper suspends the app with SIGSTOP 100 ms after the start for
+    // 900 ms, and again 1.5 s after the start for 800 ms.
+    vi.stubEnv(
+      "FAKE_SUSPENSIONS",
+      JSON.stringify([
+        [100, 900],
+        [1_500, 800],
+      ])
+    );
+    const watch = await app.watchSuspensions(pid);
+    expect(watch).not.toBeNull();
+
+    // Sent during the first suspension: it waits for the app, and then gets its
+    // whole deadline, as the library starts its clock when it gets the request.
+    await new Promise((r) => setTimeout(r, 300));
+    const asked = Date.now();
+    const { deadline } = await app.call<{ deadline: number }>("Echo", {}, { timeoutMs: 400 });
+    expect(Date.now() - asked).toBeGreaterThan(500);
+    expect(deadline - 400).toBeGreaterThanOrEqual(asked + 500);
+
+    // In flight when the second suspension starts: the library drops a request
+    // that is past its deadline when the app runs again, so the call does not wait
+    // longer than its timeout, and it says that the app was suspended.
+    await new Promise((r) => setTimeout(r, Math.max(0, asked + 1_100 - Date.now())));
+    const slowAt = Date.now();
+    const slow = await app.call("Slow", { ms: 500 }, { timeoutMs: 600 }).catch((e: unknown) => e);
+    expect(codeOf(slow)).toBe(FAILURE_CODES.MACOS_APP_RPC_TIMEOUT);
+    expect((slow as Error).message).toMatch(/held it suspended for \d+ ms of that time.*describe/);
+    expect(Date.now() - slowAt).toBeLessThan(900);
+
+    // A request that gets no answer still times out, and says the app was suspended.
+    vi.stubEnv("FAKE_SUSPENSIONS", JSON.stringify([[50, 400]]));
+    const again = await app.watchSuspensions(pid);
+    const hung = await app.call("Hang", {}, { timeoutMs: 300 }).catch((e: unknown) => e);
+    expect(codeOf(hung)).toBe(FAILURE_CODES.MACOS_APP_RPC_TIMEOUT);
+    expect((hung as Error).message).toMatch(/held it suspended for \d+ ms of that time.*describe/);
+
+    // After the end, nothing waits: a stopped app times out at once. The end comes
+    // after the 400 ms suspension, as the fake helper continues an app it stopped
+    // when it is stopped itself, which could undo the SIGSTOP below.
+    await new Promise((r) => setTimeout(r, 300));
+    const windows = again!.end();
+    expect(windows.length).toBeGreaterThanOrEqual(1);
+    process.kill(pid, "SIGSTOP");
+    try {
+      const timedOut = await app.call("Echo", {}, { timeoutMs: 200 }).catch((e: unknown) => e);
+      expect((timedOut as Error).message).toBe(`${BUNDLE_ID} did not answer Echo within 200 ms.`);
+    } finally {
+      process.kill(pid, "SIGCONT");
+    }
+    // The first watch was replaced by the second: its end returns what it saw.
+    expect(watch!.end().length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("watches no suspensions with a helper that lacks the command", async () => {
+    const { pid } = await run("boot-device", { macosAppPath: appPath });
+    const app = await macosApp();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    vi.stubEnv("FAKE_HELPER_NO_WATCH", "1");
+    try {
+      await expect(app.watchSuspensions(pid)).resolves.toBeNull();
+    } finally {
+      stderr.mockRestore();
+    }
+    await expect(app.call("Echo")).resolves.toMatchObject({ params: {} });
   });
 
   it("tells a call cut off by argent's own close apart from an app that quit", async () => {
@@ -1281,6 +1352,53 @@ describe.skipIf(process.platform !== "darwin")("process checks outside a UTF-8 l
     async () => {
       // launchd is root's: signalling it fails with EPERM.
       expect(await processRunsExecutable(1, "/sbin/launchd")).toBe(true);
+    }
+  );
+});
+
+describe.skipIf(process.platform !== "darwin")("readCodeSignature of a running process", () => {
+  let dir = "";
+  let running: ReturnType<typeof spawn> | undefined;
+  beforeEach(() => {
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-sig-")));
+    fs.writeFileSync(
+      path.join(dir, "gta.plist"),
+      '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>' +
+        `<key>${GTA}</key><true/></dict></plist>`
+    );
+  });
+  afterEach(() => {
+    running?.kill("SIGKILL");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A copy of this Node binary, signed ad hoc with or without get-task-allow. */
+  const build = (file: string, getTaskAllow: boolean) => {
+    fs.copyFileSync(process.execPath, file, fs.constants.COPYFILE_FICLONE);
+    const entitlements = getTaskAllow ? ["--entitlements", path.join(dir, "gta.plist")] : [];
+    execFileSync("codesign", ["--force", "--sign", "-", ...entitlements, file], {
+      stdio: "ignore",
+    });
+  };
+
+  it.each([true, false])(
+    "reads the process's own entitlements (get-task-allow %s) after the file at its path is replaced",
+    async (launchedWith) => {
+      const executable = path.join(dir, "app");
+      build(executable, launchedWith);
+      running = spawn(executable, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      const pid = running.pid!;
+      await waitUntil(() => pidAlive(pid));
+      // A rebuild: the process keeps its old file.
+      build(path.join(dir, "next"), !launchedWith);
+      fs.renameSync(path.join(dir, "next"), executable);
+
+      expect(await readCodeSignature(pid)).toMatchObject({
+        entitlements: { getTaskAllow: launchedWith },
+      });
+      expect(await readCodeSignature(executable)).toMatchObject({
+        entitlements: { getTaskAllow: !launchedWith },
+      });
     }
   );
 });
