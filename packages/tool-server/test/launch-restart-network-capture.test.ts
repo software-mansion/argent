@@ -1160,7 +1160,7 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
      */
     it("says so after waiting 5 s when the launched process exits before it connects", async () => {
       await withService(async (api) => {
-        await api.activateNetworkInspection(APP);
+        await api.startNetworkCapture(APP, METRO_PORT);
 
         const note = await afterTheLaunchWait(async () => {
           const result = api.networkCaptureAfterLaunch(APP);
@@ -1176,7 +1176,7 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
 
     it("says the new process has not connected yet when the host cannot list the running apps at the end of the wait", async () => {
       await withService(async (api) => {
-        await api.activateNetworkInspection(APP);
+        await api.startNetworkCapture(APP, METRO_PORT);
 
         const note = await afterTheLaunchWait(async () => {
           const result = api.networkCaptureAfterLaunch(APP);
