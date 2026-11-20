@@ -218,26 +218,8 @@ class ShapedSocket extends Duplex {
     socket.on("close", () => this.destroy());
   }
 
-  get remoteAddress(): string | undefined {
-    return this.socket.remoteAddress;
-  }
-
-  get remotePort(): number | undefined {
-    return this.socket.remotePort;
-  }
-
-  setTimeout(ms: number, callback?: () => void): this {
-    this.socket.setTimeout(ms, callback);
-    return this;
-  }
-
   setNoDelay(noDelay?: boolean): this {
     this.socket.setNoDelay(noDelay);
-    return this;
-  }
-
-  setKeepAlive(enable?: boolean, delayMs?: number): this {
-    this.socket.setKeepAlive(enable, delayMs);
     return this;
   }
 
@@ -344,7 +326,8 @@ export function requestLineTarget(line: string): ProxyTarget | null {
 
 function parseAuthority(authority: string): { host: string; port: number } | null {
   const match = /^\[?([^\]]+?)\]?:(\d+)$/.exec(authority);
-  return match ? { host: match[1]!, port: Number(match[2]) } : null;
+  const port = Number(match?.[2]);
+  return match && port <= 65535 ? { host: match[1]!, port } : null;
 }
 
 function forwardedHeaders(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
@@ -405,7 +388,12 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
       });
       upstream.on("response", (response) => {
         const headers = forwardedHeaders(response.headers);
-        res.writeHead(response.statusCode ?? 502, response.statusMessage, headers);
+        try {
+          res.writeHead(response.statusCode ?? 502, response.statusMessage, headers);
+        } catch {
+          res.destroy();
+          return;
+        }
         response.pipe(res);
         response.on("close", () => {
           if (!response.complete) res.destroy();
@@ -467,10 +455,15 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
     };
   };
 
+  const refuse = (client: Duplex, response: string): void => {
+    client.on("error", () => client.destroy());
+    client.end(response);
+  };
+
   const onConnect = (req: http.IncomingMessage, client: Duplex, head: Buffer): void => {
     const authority = parseAuthority(req.url ?? "");
     if (!authority) {
-      client.end(BAD_GATEWAY);
+      refuse(client, BAD_GATEWAY);
       return;
     }
     const start = (upstream: net.Socket): void => {
@@ -486,7 +479,7 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
     const target = requestLineTarget(`GET ${req.url ?? ""}`);
     const url = URL.parse(req.url ?? "");
     if (!target || !url) {
-      client.end(BAD_REQUEST);
+      refuse(client, BAD_REQUEST);
       return;
     }
     const start = (upstream: net.Socket): void => {

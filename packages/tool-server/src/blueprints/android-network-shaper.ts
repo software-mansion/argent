@@ -9,7 +9,7 @@ import {
 } from "../utils/android-global-proxy";
 import { withKeyedLock } from "../utils/keyed-lock";
 
-const ANDROID_NETWORK_SHAPER_NAMESPACE = "AndroidNetworkShaper";
+export const ANDROID_NETWORK_SHAPER_NAMESPACE = "AndroidNetworkShaper";
 
 export function androidNetworkShaperRef(serial: string): string {
   return `${ANDROID_NETWORK_SHAPER_NAMESPACE}:${serial}`;
@@ -45,7 +45,7 @@ async function resolveDeviceTarget(
   if (host === EMULATOR_HOST_ALIAS) return { host: "127.0.0.1", port };
   if (!isLoopback(host)) return { host, port };
   const hostPort = (await listAdbReverses(serial)).get(port);
-  return hostPort === undefined ? null : { host: "127.0.0.1", port: hostPort };
+  return hostPort === undefined ? null : { host: "localhost", port: hostPort };
 }
 
 export const androidNetworkShaperBlueprint: ServiceBlueprint<AndroidNetworkShaperApi, string> = {

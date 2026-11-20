@@ -279,6 +279,7 @@ describe("requestLineTarget", () => {
     ["POST http://example.com/ HTTP/1.1", { host: "example.com", port: 80 }],
     ["GET /index.bundle HTTP/1.1", null],
     ["CONNECT example.com HTTP/1.1", null],
+    ["CONNECT example.com:99999 HTTP/1.1", null],
   ])("reads %j", (line, target) => {
     expect(requestLineTarget(line)).toEqual(target);
   });
@@ -796,6 +797,30 @@ describe("the shaping proxy", () => {
 
     expect(plain.status).toBe(502);
     expect(tunnel.status).toBe(502);
+  });
+
+  it("drops a response whose status line it cannot forward and keeps serving", async () => {
+    const malformed = await listenOrigin(
+      net.createServer((socket) => socket.end("HTTP/1.1 000 Weird\r\nContent-Length: 0\r\n\r\n"))
+    );
+    const origin = await startOrigin();
+    const proxy = await startProxy();
+
+    await expect(
+      viaProxy(proxy, deviceAgent(), `http://127.0.0.1:${malformed.port}/`)
+    ).rejects.toThrow();
+    const next = await viaProxy(proxy, deviceAgent(), `http://127.0.0.1:${origin.port}/`);
+
+    expect(next.status).toBe(200);
+  });
+
+  it("survives a device that resets a tunnel request it refused", async () => {
+    const proxy = await startProxy();
+    const { socket } = await rawDeviceSocket(proxy);
+
+    socket.write("CONNECT no-port HTTP/1.1\r\nHost: x\r\n\r\n");
+    socket.resetAndDestroy();
+    await new Promise((resolve) => setTimeout(resolve, 200));
   });
 
   it("closes the device's connections when it closes", async () => {

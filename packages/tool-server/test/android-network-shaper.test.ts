@@ -109,7 +109,7 @@ describe("the Android network shaper", () => {
       const options = await proxyOptions();
 
       await expect(options.resolveTarget("localhost", 3000)).resolves.toEqual({
-        host: "127.0.0.1",
+        host: "localhost",
         port: 4000,
       });
       await expect(options.resolveTarget("127.0.0.1", 3000)).resolves.toMatchObject({

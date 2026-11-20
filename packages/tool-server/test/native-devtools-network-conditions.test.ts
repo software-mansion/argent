@@ -203,9 +203,9 @@ describe("native devtools network conditions", () => {
     );
     const unanswered = { ...SLOW, conditions: { ...SLOW_CONDITIONS, latency: 900 } };
 
-    const first = api.setNetworkConditions(BUNDLE, unanswered);
+    const first = expect(api.setNetworkConditions(BUNDLE, unanswered)).rejects.toThrow(/timed out/);
     await api.setNetworkConditions(BUNDLE, SLOW);
-    await expect(first).rejects.toThrow(/timed out/);
+    await first;
     const relaunched = await connectAgent();
     agents.push(relaunched);
 

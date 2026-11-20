@@ -149,7 +149,7 @@ Requests from an app to `localhost` go to the proxy too. The proxy sends a reque
 
 Argent does not throttle an emulator that already has an HTTP proxy that Argent did not set. The call fails, and the proxy stays. Argent does not throttle an emulator from a device provider.
 
-A removal sets the proxy of the emulator back to none. When the tool-server stops, Argent also removes its proxy from the emulator. After a crash of the tool-server, the emulator keeps the proxy, and apps that use it cannot connect. A removal from the next tool-server removes it. Argent keeps a record of its proxy on the emulator, so the removal does not change a proxy that the user set.
+A removal sets the proxy of the emulator back to none. When the tool-server stops or `stop-all-simulator-servers` stops the services of the emulator, Argent also removes its proxy from the emulator. After a crash of the tool-server, the emulator keeps the proxy, and apps that use it cannot connect. A removal from the next tool-server removes it. Argent keeps a record of its proxy on the emulator, so the removal does not change a proxy that the user set.
 
 `offline: true` removes the proxy and turns off Wi-Fi and mobile data with `svc`. If the emulator still has a network after 5 seconds, the call fails with `error_kind: "unsupported"` and turns Wi-Fi and mobile data on again. An Android TV emulator connects over Ethernet, so `offline` fails there. A call without conditions removes the proxy, and does nothing more when the emulator has a network. Otherwise it turns on Wi-Fi and mobile data, and fails with `error_kind: "timeout"` when no network comes up within 15 seconds. The emulator stays offline after the tool-server stops.
 
