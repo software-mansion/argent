@@ -219,7 +219,8 @@ type Opts = {
   rect?: Rect;
   // client{Left,Top,Width,Height}: border-left/top and the padding box minus scrollbars
   client?: { left: number; top: number; width: number; height: number };
-  // Untransformed border-box size, and position from the padding edge of offsetParent.
+  // Untransformed border-box size (by default the rect's), and position from the padding
+  // edge of offsetParent.
   offset?: { width: number; height: number; left?: number; top?: number };
   scrollSize?: { width: number; height: number }; // scrollWidth / scrollHeight
   scrolled?: { left: number; top: number }; // scrollLeft / scrollTop
@@ -276,12 +277,10 @@ function el(opts: Opts = {}): MockElement {
     node.__clientWidth = opts.client.width;
     node.__clientHeight = opts.client.height;
   }
-  if (opts.offset) {
-    node.__offsetWidth = opts.offset.width;
-    node.__offsetHeight = opts.offset.height;
-    node.__offsetLeft = opts.offset.left;
-    node.__offsetTop = opts.offset.top;
-  }
+  node.__offsetWidth = opts.offset?.width ?? rect.w;
+  node.__offsetHeight = opts.offset?.height ?? rect.h;
+  node.__offsetLeft = opts.offset?.left;
+  node.__offsetTop = opts.offset?.top;
   if (opts.scrollSize) {
     node.__scrollWidth = opts.scrollSize.width;
     node.__scrollHeight = opts.scrollSize.height;
@@ -4427,6 +4426,19 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       style: { display: "inline" },
       children: [laidOut(row("link", { x: 600, y: 150, w: 80, h: 20 }))],
     });
+    // Mirrored by its parent: its overflow runs left, to x 450.
+    const mirrored = el({
+      rect: { x: 600, y: 600, w: 100, h: 50 },
+      style: { transform: "matrix(-1, 0, 0, 1, 0, 0)" },
+      children: [
+        clipper(
+          { x: 600, y: 600, w: 100, h: 50 },
+          { x: 0, y: 0, w: 100, h: 50 },
+          { width: 250, height: 50 },
+          [laidOut(row("mirrored", { x: 450, y: 600, w: 250, h: 40 }))]
+        ),
+      ],
+    });
     const page = [
       scroller(rows, {
         rect: { x: 0, y: 100, w: 300, h: 100 },
@@ -4471,6 +4483,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
         { width: 150, height: 100 },
         [laidOut(row("scaled", { x: 600, y: 450, w: 300, h: 40 }))]
       ),
+      mirrored,
     ];
     const proto = MockDocument.prototype;
     const hitTest = proto.elementsFromPoint;
@@ -4488,6 +4501,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       expect(pxFrame(tree, "moved")).toEqual({ x: 400, y: 200, w: 100, h: 20 });
       expect(pxFrame(tree, "link")).toEqual({ x: 600, y: 150, w: 40, h: 20 });
       expect(pxFrame(tree, "bordered")).toEqual({ x: 4, y: 454, w: 292, h: 50 });
+      expect(pxFrame(tree, "mirrored")).toEqual({ x: 600, y: 600, w: 100, h: 40 });
     } finally {
       proto.elementsFromPoint = hitTest;
     }
@@ -5673,6 +5687,14 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
         pad,
         { x: 20, y: 50, w: 260, h: 100 },
       ],
+      // Flipped, the legend paints at the bottom, and so does the edge it sets.
+      [
+        { overflow: "auto", transform: "matrix(2, 0, 0, -2, 0, 0)" },
+        { x: 0, y: 160, w: 300, h: 80 },
+        { marginBottom: "6px" },
+        pad,
+        { x: 20, y: 50, w: 260, h: 98 },
+      ],
     ];
     for (const [style, legendRect, legendStyle, client, want] of cases) {
       const { tree } = run([
@@ -5899,6 +5921,122 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "lower")).toEqual({ x: 2, y: 150, w: 400, h: 40 });
   });
 
+  it("maps the padding box through a transform that mirrors or turns it, its own or an ancestor's", () => {
+    // Laid out 220x40 with an 80px left border, which a mirror paints at x 140..220.
+    const band = { x: 0, y: 0, w: 220, h: 40 };
+    const mirror = "matrix(-1, 0, 0, 1, 0, 0)";
+    const clipper = (style: Record<string, string>, kids: MockElement[], rect = band) =>
+      el({
+        rect,
+        client: { left: 80, top: 0, width: 140, height: 40 },
+        offset: { width: 220, height: 40 },
+        style,
+        children: kids,
+      });
+    const wrap = (opts: Opts, kid: MockElement) => el({ rect: band, ...opts, children: [kid] });
+    // A host that slots its light children into its shadow tree round a slot.
+    const host = (around: (slot: MockElement) => MockElement, light: MockElement[]) => {
+      const slot = el({ tag: "slot", rect: ZERO, style: { display: "contents" } });
+      for (const n of light) (n as Record<string, unknown>).assignedSlot = slot;
+      return el({ tag: "x-host", rect: band, children: light, shadow: [around(slot)] });
+    };
+    const rows = (shown: Rect, under: Rect) => [row("shown", shown), row("under", under)];
+    const flipped = () => rows({ x: 0, y: 0, w: 42, h: 32 }, { x: 160, y: 0, w: 42, h: 32 });
+    const upright = () => rows({ x: 178, y: 0, w: 42, h: 32 }, { x: 20, y: 0, w: 42, h: 32 });
+    const hidden = { overflow: "hidden" };
+    const cases: [string, MockElement, Rect][] = [
+      ["own", clipper({ ...hidden, transform: mirror }, flipped()), { x: 0, y: 0, w: 42, h: 32 }],
+      [
+        "an ancestor's",
+        wrap({ style: { transform: mirror } }, clipper(hidden, flipped())),
+        { x: 0, y: 0, w: 42, h: 32 },
+      ],
+      [
+        "its slot's",
+        host((slot) => wrap({ style: { transform: mirror } }, slot), [clipper(hidden, flipped())]),
+        { x: 0, y: 0, w: 42, h: 32 },
+      ],
+      // The slot sits in a fixed clipper that escapes a pruned box's clips.
+      [
+        "one above a pruned box round its slot",
+        host(
+          (slot) =>
+            wrap(
+              { style: { transform: mirror } },
+              el({
+                rect: { ...band, h: 0 },
+                client: { left: 0, top: 0, width: 220, height: 0 },
+                style: hidden,
+                children: [wrap({ style: { position: "fixed" } }, clipper(hidden, [slot]))],
+              })
+            ),
+          flipped()
+        ),
+        { x: 0, y: 0, w: 42, h: 32 },
+      ],
+      // The left border's clip margin is mirrored with it.
+      [
+        "own, with overflow-clip-margin",
+        clipper(
+          {
+            overflow: "clip",
+            overflowClipMargin: "border-box",
+            borderLeftWidth: "80px",
+            transform: mirror,
+          },
+          rows({ x: 160, y: 0, w: 42, h: 32 }, { x: 230, y: 0, w: 42, h: 32 })
+        ),
+        { x: 160, y: 0, w: 42, h: 32 },
+      ],
+      [
+        "two that cancel",
+        wrap(
+          { style: { transform: mirror } },
+          clipper({ ...hidden, transform: mirror }, upright())
+        ),
+        { x: 178, y: 0, w: 42, h: 32 },
+      ],
+      [
+        "one a top-layer box escapes",
+        wrap(
+          { style: { transform: mirror } },
+          wrap(
+            { topLayer: ":popover-open", style: { position: "fixed" } },
+            clipper(hidden, upright())
+          )
+        ),
+        { x: 178, y: 0, w: 42, h: 32 },
+      ],
+      [
+        "an inline box's, which Chromium ignores",
+        wrap({ style: { display: "inline", transform: mirror } }, clipper(hidden, upright())),
+        { x: 178, y: 0, w: 42, h: 32 },
+      ],
+      [
+        "a display:contents box's, which has no box to move",
+        wrap({ style: { display: "contents", transform: mirror } }, clipper(hidden, upright())),
+        { x: 178, y: 0, w: 42, h: 32 },
+      ],
+      // A quarter turn clips layout x along the viewport's y. The rotate property's cosine
+      // is not quite 0, which must not unbound y.
+      [
+        "a quarter turn",
+        clipper(
+          { overflowX: "clip", overflowY: "visible", rotate: "90deg" },
+          rows({ x: 0, y: 178, w: 32, h: 42 }, { x: 0, y: 20, w: 32, h: 42 }),
+          { x: 0, y: 0, w: 40, h: 220 }
+        ),
+        { x: 0, y: 178, w: 32, h: 42 },
+      ],
+    ];
+    for (const [name, page, shown] of cases) {
+      const { tree } = run([page]);
+      expect(pxFrame(tree, "shown"), name).toEqual(shown);
+      const under = pxFrame(tree, "under");
+      expect(under.w * under.h, name).toBe(0);
+    }
+  });
+
   it("reports a scroll container's content window as its clipFrame", () => {
     const { tree } = run([scroller([], { scrollSize: { width: 285, height: 400 } })]);
     const sc = findById(tree, "sc")!;
@@ -5918,6 +6056,8 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
         style: {
           display: "inline",
           overflow: "hidden",
+          width: "100px",
+          height: "40px",
           paddingLeft: "20px",
           paddingTop: "20px",
           paddingRight: "20px",

@@ -1500,17 +1500,89 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       top: Math.min(...ys),
       right: Math.max(...xs),
       bottom: Math.max(...ys),
-      sx: 1,
-      sy: 1,
     };
   }
 
-  // Padding box in viewport px, scrollbars excluded, and the scale (sx, sy) from layout
-  // px to the rendered (transformed) box. A non-HTML clipper has no offset* to scale by:
-  // an outer <svg> clips at its content box, a <foreignObject> at its rect.
+  const IDENTITY = [1, 0, 0, 1, 0, 0];
+
+  // The 2D linear part of the transforms an element renders under, its own included: style
+  // is its own, and base its flat parent's when the caller has it. An HTML inline box
+  // ignores its own, a top-layer box its ancestors'. Memoized, and climbed without
+  // recursion: display: contents chains can nest thousands deep.
+  const linears = nodeMap();
+  function linearTransform(el, style, base) {
+    if (linears.has(el)) return linears.get(el);
+    const chain = [el];
+    let t = base;
+    let n = base ? null : flatParent(el);
+    while (!t) {
+      if (!n || getNodeType.call(n) !== 1) t = IDENTITY;
+      else if (linears.has(n)) t = linears.get(n);
+      else {
+        chain.push(n);
+        n = flatParent(n);
+      }
+    }
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const n = chain[i];
+      const st = n === el ? style : window.getComputedStyle(n);
+      if (t !== IDENTITY && inTopLayer(n, st)) t = IDENTITY;
+      if (
+        (isSet(st.transform) || isSet(st.rotate) || isSet(st.scale)) &&
+        st.display !== "contents" &&
+        !(n instanceof HTMLElement && isInlineBox(st))
+      ) {
+        t = multiply(t, transformMatrix(st));
+      }
+      linears.set(n, t);
+    }
+    return t;
+  }
+
+  // The map from layout px, measured from el's w x h border box's top-left, to viewport
+  // px: el's linear transform, sized and placed to fill its rendered rect r.
+  function boxMap(el, style, r, w, h) {
+    // A quarter turn's computed cosine (about 6e-17) would carry an infinite edge across.
+    const [a, b, c, d] = linearTransform(el, style).map((v) => (Math.abs(v) < 1e-9 ? 0 : v));
+    const spanX = Math.abs(a) * w + Math.abs(c) * h;
+    const spanY = Math.abs(b) * w + Math.abs(d) * h;
+    const kx = spanX > 0 ? r.width / spanX : 1;
+    const ky = spanY > 0 ? r.height / spanY : 1;
+    const m = [a * kx, b * ky, c * kx, d * ky];
+    return m.concat([
+      r.left - Math.min(0, m[0] * w) - Math.min(0, m[2] * h),
+      r.top - Math.min(0, m[1] * w) - Math.min(0, m[3] * h),
+    ]);
+  }
+
+  // The viewport bounds of a layout rect under boxMap's m. An infinite edge stays
+  // infinite on whichever axis it maps to.
+  function mapRect(m, rect) {
+    const term = (k, v) => (k ? k * v : 0);
+    const xs = [];
+    const ys = [];
+    for (const x of [rect.left, rect.right]) {
+      for (const y of [rect.top, rect.bottom]) {
+        xs.push(term(m[0], x) + term(m[2], y) + m[4]);
+        ys.push(term(m[1], x) + term(m[3], y) + m[5]);
+      }
+    }
+    return {
+      left: Math.min(...xs),
+      top: Math.min(...ys),
+      right: Math.max(...xs),
+      bottom: Math.max(...ys),
+    };
+  }
+
+  // Padding box, scrollbars excluded, in layout px from the border box's top-left, and
+  // boxMap's m from those to viewport px. A non-HTML clipper has no offset* to measure by:
+  // an outer <svg> clips at its content box, a <foreignObject> at its rect. That rect, a
+  // nested <svg>'s viewport and a quirks-mode body's box come in viewport px, with the
+  // identity.
   function paddingBox(el, style) {
     const vp = nestedSvgViewport(el, style);
-    if (vp) return vp;
+    if (vp) return { ...vp, m: IDENTITY };
     const r = getBCR.call(el);
     // A quirks-mode body reports the viewport's client size, so its own borders measure it.
     if (htmlTag(el) === "BODY" && getOwnerDocument.call(el).compatMode === "BackCompat") {
@@ -1520,50 +1592,41 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         top: r.top + border("Top"),
         right: r.right - border("Right"),
         bottom: r.bottom - border("Bottom"),
-        sx: 1,
-        sy: 1,
+        m: IDENTITY,
       };
     }
     if (!(el instanceof HTMLElement)) {
       if (!(el instanceof SVGSVGElement)) {
-        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, sx: 1, sy: 1 };
+        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, m: IDENTITY };
       }
       const px = (prop) => parseFloat(style[prop]) || 0;
       const inset = (side) => px("border" + side + "Width") + px("padding" + side);
       const borderBox = style.boxSizing === "border-box";
       const lw = px("width") + (borderBox ? 0 : inset("Left") + inset("Right"));
       const lh = px("height") + (borderBox ? 0 : inset("Top") + inset("Bottom"));
-      const sx = px("width") > 0 && lw > 0 ? r.width / lw : 1;
-      const sy = px("height") > 0 && lh > 0 ? r.height / lh : 1;
       return {
-        left: r.left + inset("Left") * sx,
-        top: r.top + inset("Top") * sy,
-        right: r.right - inset("Right") * sx,
-        bottom: r.bottom - inset("Bottom") * sy,
-        sx,
-        sy,
+        left: inset("Left"),
+        top: inset("Top"),
+        right: lw - inset("Right"),
+        bottom: lh - inset("Bottom"),
+        m: boxMap(el, style, r, lw, lh),
       };
     }
-    const ow = getOffsetWidth.call(el);
-    const oh = getOffsetHeight.call(el);
-    const sx = ow > 0 ? r.width / ow : 1;
-    const sy = oh > 0 ? r.height / oh : 1;
-    const left = r.left + getClientLeft.call(el) * sx;
-    const top = r.top + getClientTop.call(el) * sy;
+    const left = getClientLeft.call(el);
+    const top = getClientTop.call(el);
     return {
       left,
       top,
-      right: left + getClientWidth.call(el) * sx,
-      bottom: top + getClientHeight.call(el) * sy,
-      sx,
-      sy,
+      right: left + getClientWidth.call(el),
+      bottom: top + getClientHeight.call(el),
+      m: boxMap(el, style, r, getOffsetWidth.call(el), getOffsetHeight.call(el)),
     };
   }
 
-  // How far overflow-clip-margin moves a clip edge out of the clip box (the padding box,
-  // or an outer <svg>'s content box). It applies only where the axis clips by
+  // How far, in layout px, overflow-clip-margin moves a clip edge out of the clip box (the
+  // padding box, or an outer <svg>'s content box). It applies only where the axis clips by
   // overflow: clip or by paint containment, and to overflow: clip only when both axes do.
-  function clipMargin(el, style, overflow, side, scale) {
+  function clipMargin(el, style, overflow, side) {
     if (overflow !== "clip" && overflow !== "visible") return 0;
     if (!paintContained(style) && (style.overflowX !== "clip" || style.overflowY !== "clip")) {
       return 0;
@@ -1574,7 +1637,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     let box = el instanceof SVGSVGElement ? padding : 0;
     if (v.startsWith("content-box")) box -= padding;
     if (v.startsWith("border-box")) box += parseFloat(style["border" + side + "Width"]) || 0;
-    return (box + len) * scale;
+    return box + len;
   }
 
   // The root's overflow clips the viewport, not its box, and so does the body's unless
@@ -1618,12 +1681,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         if (legend) belowLegend(el, p, style, legend);
         const ox = style.overflowX;
         const oy = style.overflowY;
-        const own = {
-          left: cx ? p.left - clipMargin(el, style, ox, "Left", p.sx) : -Infinity,
-          top: cy ? p.top - clipMargin(el, style, oy, "Top", p.sy) : -Infinity,
-          right: cx ? p.right + clipMargin(el, style, ox, "Right", p.sx) : Infinity,
-          bottom: cy ? p.bottom + clipMargin(el, style, oy, "Bottom", p.sy) : Infinity,
-        };
+        const own = mapRect(p.m, {
+          left: cx ? p.left - clipMargin(el, style, ox, "Left") : -Infinity,
+          top: cy ? p.top - clipMargin(el, style, oy, "Top") : -Infinity,
+          right: cx ? p.right + clipMargin(el, style, ox, "Right") : Infinity,
+          bottom: cy ? p.bottom + clipMargin(el, style, oy, "Bottom") : Infinity,
+        });
         inner = intersect(clip, own);
         // inner.scrollers lists, outermost first, the clippers on the chain that a user
         // can scroll content past, with the axes they scroll along and the part of their
@@ -1718,7 +1781,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // legend's border box at the fieldset's block-start edge, centred on a thicker border. A
   // relative or sticky offset or a transform moves only where the legend paints.
   function belowLegend(el, p, style, legend) {
-    const f = getBCR.call(el);
     const ls = window.getComputedStyle(legend);
     const px = (st, prop) => parseFloat(st[prop]) || 0;
     // How far past the border-box edge the legend's margin box ends, unscaled.
@@ -1728,13 +1790,16 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (wm === "horizontal-tb") {
       if (style.overflowY === "visible") return;
       const h = getOffsetHeight.call(legend);
-      p.top = Math.max(p.top, f.top + end("borderTopWidth", h, "marginBottom") * p.sy);
+      p.top = Math.max(p.top, end("borderTopWidth", h, "marginBottom"));
     } else if (style.overflowX !== "visible") {
       const w = getOffsetWidth.call(legend);
       if (wm.endsWith("rl")) {
-        p.right = Math.min(p.right, f.right - end("borderRightWidth", w, "marginLeft") * p.sx);
+        p.right = Math.min(
+          p.right,
+          getOffsetWidth.call(el) - end("borderRightWidth", w, "marginLeft")
+        );
       } else {
-        p.left = Math.max(p.left, f.left + end("borderLeftWidth", w, "marginRight") * p.sx);
+        p.left = Math.max(p.left, end("borderLeftWidth", w, "marginRight"));
       }
     }
   }
@@ -1887,14 +1952,20 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (style.position === "static" && !containsFixed(box, style)) {
       const p = paddingBox(box, style);
       const b = getBCR.call(box);
-      const left = p.left - getScrollLeft.call(box) * p.sx;
-      const top = p.top - getScrollTop.call(box) * p.sy;
+      const left = p.left - getScrollLeft.call(box);
+      const top = p.top - getScrollTop.call(box);
+      const s = mapRect(p.m, {
+        left,
+        top,
+        right: left + getScrollWidth.call(box),
+        bottom: top + getScrollHeight.call(box),
+      });
       // Integer scroll sizes, like client sizes, put an edge up to a pixel short.
       found.overflow = {
-        left: Math.min(b.left, left) - 1,
-        top: Math.min(b.top, top) - 1,
-        right: Math.max(b.right, left + getScrollWidth.call(box) * p.sx) + 1,
-        bottom: Math.max(b.bottom, top + getScrollHeight.call(box) * p.sy) + 1,
+        left: Math.min(b.left, s.left) - 1,
+        top: Math.min(b.top, s.top) - 1,
+        right: Math.max(b.right, s.right) + 1,
+        bottom: Math.max(b.bottom, s.bottom) + 1,
       };
     }
     parentBoxes.set(n, found);
@@ -2004,11 +2075,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return { x: minX, y: minY, width: maxRight - minX, height: maxBottom - minY };
   }
 
-  function walk(el, depth, clips = NO_CLIP, unseenSlot = false) {
+  function walk(el, depth, clips = NO_CLIP, unseenSlot = false, base = IDENTITY) {
     if (truncated) return null;
     if (depth > MAX_DEPTH) return null;
     if (!(el instanceof Element)) return null;
     const style = window.getComputedStyle(el);
+    const t = linearTransform(el, style, base);
     if (hidden(el, style)) {
       pruned.set(el, clips);
       return null;
@@ -2053,7 +2125,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const shadow = getShadowRoot.call(el);
     if (shadow) {
       for (const child of shadow.children) {
-        const c = walk(child, depth + 1, legendClips.has(child) ? legendClips.get(child) : inner);
+        const kidClips = legendClips.has(child) ? legendClips.get(child) : inner;
+        const c = walk(child, depth + 1, kidClips, false, t);
         if (c) shadowResults.push(c);
       }
     }
@@ -2086,7 +2159,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
               : slot && slotClips.has(slot)
                 ? slotClips.get(slot)
                 : unwalked || inner;
-      const c = walk(kids[i], depth + 1, kidClips, closedHost && !slot);
+      const kidBase = slot ? linears.get(slot) : t;
+      const c = walk(kids[i], depth + 1, kidClips, closedHost && !slot, kidBase);
       if (c) childResults.push(c);
     }
     childResults.push(...shadowResults);

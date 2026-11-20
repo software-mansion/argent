@@ -33,6 +33,21 @@
         width: 100%;
         height: 50px;
       }
+      #mirrorlist {
+        position: fixed;
+        left: 8px;
+        top: 66px;
+        width: 140px;
+        height: 40px;
+        border-left: 80px solid gray;
+        overflow: hidden;
+        transform: scaleX(-1);
+      }
+      #mirrorlist button {
+        float: right;
+        width: 42px;
+        height: 32px;
+      }
     </style>
   </head>
   <body>
@@ -56,6 +71,13 @@
         ArgentVisibleRow
       </button>
       <button id="clippedrow">ArgentClippedRow</button>
+    </div>
+    <!-- Mirrored, so its left border paints on the right and the row floated right
+         paints on the left, clear of it. -->
+    <div id="mirrorlist">
+      <button id="mirroredrow" onclick="this.textContent = 'ArgentMirrorClicked'">
+        ArgentMirroredRow
+      </button>
     </div>
   </body>
 </html>

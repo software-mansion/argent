@@ -97,11 +97,12 @@ async function main() {
   }
   console.log("✓ describe surfaced the DOM (found ArgentTapTarget)");
 
-  // 4) A row clipped by its overflow ancestor is hidden; its painted sibling is
-  // visible at a frame the click really hits.
+  // 4) A row clipped by its overflow ancestor is hidden; its painted sibling, and a
+  // row in a mirrored overflow box, are visible at frames the click really hits.
   for (const [text, condition] of [
     ["ArgentClippedRow", "hidden"],
     ["ArgentVisibleRow", "visible"],
+    ["ArgentMirroredRow", "visible"],
   ]) {
     const wait = await callTool("await-ui-element", {
       udid,
@@ -112,22 +113,27 @@ async function main() {
     if (wait?.success !== true) fail(`await-ui-element ${condition} ${text} did not succeed`, wait);
     console.log(`✓ ${text} is ${condition}`);
   }
-  const rowLine = beforeText.split("\n").find((line) => line.includes("ArgentVisibleRow"));
-  const rowFrame = rowLine
-    ?.match(/\(([\d.]+),([\d.]+),([\d.]+),([\d.]+)\)\s*$/)
-    ?.slice(1)
-    .map(Number);
-  if (!rowFrame) fail("describe printed no frame for ArgentVisibleRow", rowLine);
-  const [rx, ry, rw, rh] = rowFrame;
-  await callTool("gesture-tap", { udid, x: rx + rw / 2, y: ry + rh / 2 });
-  const rowTapped = await callTool("await-ui-element", {
-    udid,
-    condition: "exists",
-    selector: { text: "ArgentRowClicked" },
-    timeoutMs: 5000,
-  });
-  if (rowTapped?.success !== true) fail("tap at ArgentVisibleRow's frame missed it", rowTapped);
-  console.log("✓ tap at the visible row's frame centre clicked it");
+  for (const [row, clicked] of [
+    ["ArgentVisibleRow", "ArgentRowClicked"],
+    ["ArgentMirroredRow", "ArgentMirrorClicked"],
+  ]) {
+    const rowLine = beforeText.split("\n").find((line) => line.includes(row));
+    const rowFrame = rowLine
+      ?.match(/\(([\d.]+),([\d.]+),([\d.]+),([\d.]+)\)\s*$/)
+      ?.slice(1)
+      .map(Number);
+    if (!rowFrame) fail(`describe printed no frame for ${row}`, rowLine);
+    const [rx, ry, rw, rh] = rowFrame;
+    await callTool("gesture-tap", { udid, x: rx + rw / 2, y: ry + rh / 2 });
+    const rowTapped = await callTool("await-ui-element", {
+      udid,
+      condition: "exists",
+      selector: { text: clicked },
+      timeoutMs: 5000,
+    });
+    if (rowTapped?.success !== true) fail(`tap at ${row}'s frame missed it`, rowTapped);
+    console.log(`✓ tap at ${row}'s frame centre clicked it`);
+  }
 
   // 5) gesture-tap dispatches a real click.
   const tap = await callTool("gesture-tap", { udid, x: 0.5, y: 0.5 });
