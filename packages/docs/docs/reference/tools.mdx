@@ -132,6 +132,21 @@ Through the MCP server, an interaction tool and `await-ui-element` return a scre
 - Argent waits at most 15 seconds for the screenshot and the element tree together. If a capture takes longer, the result does not include it.
 - Argent does not send a capture call again after a timeout.
 
+Argent does not repeat an element tree that the agent already has. Each full element tree starts with a `Tree id` line. Argent compares the element tree with the last full element tree that the MCP server returned for the same device. That element tree comes from an earlier action or from a `describe` call. When the two are identical, the result contains a note in place of the element tree. The note gives the id of the full element tree and the tool that returned it. The screenshot is not affected.
+
+The note does not show that the action had no effect. The element tree does not contain all state. For example, text that the agent types in a field can be absent from it.
+
+All agents on one MCP connection share this comparison. An agent that does not have the element tree with the id in the note calls `describe`.
+
+Argent sends the full element tree again in these cases:
+
+- The element tree or the hint of `describe` changed.
+- Argent sent the note 3 times in a row.
+- The last full element tree is more than 5 minutes old.
+- The client cancelled the call that returned the last full element tree.
+
+A `describe` call always returns the full element tree, with its `Tree id`. With the `disable-auto-describe` flag, a `describe` result has no `Tree id`.
+
 Call `screenshot` or `describe` to read the screen again.
 
 ## Audio
@@ -298,7 +313,7 @@ Argent cannot attach to a copy launched outside Argent. Save your work and quit 
 
 Argent refuses to replace a different build with the same bundle identifier, even with `force`. Quit that build or use [distinct bundle identifiers](#run-builds-from-separate-worktrees).
 
-Restarts and e2e `launch` steps stop if the app asks whether to save changes. Answer the prompt before retrying or restarting the tool-server. Use [`file-panel`](#file-panel) for a new document's Delete or Don't Save prompt.
+Restarts, e2e `launch` steps, and `native-profiler-start` with `malloc_stack_logging: true` stop if the app asks whether to save changes. Answer the prompt before retrying or restarting the tool-server. Use [`file-panel`](#file-panel) for a new document's Delete or Don't Save prompt.
 
 An unresponsive app can be force-quit after five seconds. Check the result's `note` for possible loss of unsaved changes.
 
@@ -514,23 +529,64 @@ If a command is disabled, focus the relevant control or dismiss the current aler
 
 The menu list stops at 2000 items or eight submenu levels. Check `truncated` and `hint` if the result is incomplete.
 
+### Profiling a Mac app
+
+Pass the Mac app's `device_id` to `native-profiler-start`, `native-profiler-stop`, `native-profiler-analyze`, and `profiler-stack-query`. Use `profiler-load` with `mode: "load_native"` to reopen a saved native session. See [Profiling](#profiling) for shared behavior.
+
+- **Start.** Launch the app through Argent first and omit `app_process`. The bundled Instruments template captures CPU samples, UI hangs, and memory leaks. In a desktop session, Argent requires `com.apple.security.get-task-allow` on signed builds to avoid an administrator prompt that blocks recording. If you get `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`, use a development-signed build. In a background session such as SSH, pass `template_path: "Time Profiler"` to profile CPU and hangs on a signed build without that entitlement.
+- **WebKit and leak checks.** With malloc stack logging off, Argent refuses the bundled template if it detects a WebKit heap (`NATIVE_PROFILER_APP_HAS_WEBKIT_HEAP`) or the check fails (`NATIVE_PROFILER_APP_HEAP_CHECK_FAILED`). The check applies only to the bundled template. With logging off, any template that uses the Allocations instrument, including `Leaks` and `Allocations`, can freeze an affected app until you force-quit it.
+
+  To record CPU and hangs without restarting or checking for leaks, use `template_path: "Time Profiler"`. To record leaks, keep the bundled template and set `malloc_stack_logging: true`.
+
+- **Trace older allocations.** The bundled template can capture allocation stacks for objects allocated during recording. To trace allocations from launch, set `malloc_stack_logging: true`. This restarts the app and clears its current state. If start reports that it restarted the app, malloc stack logging stays active even if Instruments fails to attach. Use `restart-app` to remove the overhead before measuring CPU or hangs.
+- **Stop and recover.** Check `warning` and `exportDiagnostics` for an incomplete trace or skipped exports. If Instruments failed to attach or exited during startup, confirm the app is running and start a new recording. If the app ended or Instruments stalled during stop, repeat the scenario when you need a complete trace.
+
+#### Interpret pauses and leak results
+
+During capture, Argent can wait up to 25 seconds before sending an action to a suspended app. If an action times out with `MACOS_APP_RPC_TIMEOUT`, check the app with `describe` before retrying. An action that was already sent may have taken effect.
+
+When suspension timing is available, the report keeps the duration Instruments recorded and shows how much of the hang overlapped a pause. The overlap can extend a hang when the app has work to finish. A wait for something like a timer or I/O can continue through the pause. Repeat the same actions with `template_path: "Time Profiler"` to measure hangs without leak checks.
+
+A short recording may end before a leak check finishes. Follow the report's warning and [allow time for a leak check](/docs/features/profiling#limits). With `Time Profiler`, the report says that memory leaks were not checked.
+
+#### React profiler on react-native-macos
+
+Start a [supported Debug build](/docs/features/mac-apps#profile-a-react-native-macos-app) through Argent.
+Pass the Mac app's ID from `list-devices` as `device_id`, even on a shared Metro. The profiler
+connects directly to Metro. The `debugger-*` tools are unavailable for Mac apps.
+
+Use the same `device_id` and Metro `port` for the React profiler and query tools. The default port
+is 8081. To reopen a saved React profile, use `profiler-load` with `mode: "load_react"`. To compare
+React commits with native hangs, record both profiles during the same interaction. Analyze both
+profiles before calling `profiler-combined-report`.
+
+If Metro lists other runtimes but cannot find the Mac app, tools that need the runtime return
+`DEBUGGER_TARGET_DEVICE_MISMATCH` and list the available targets. If Metro lists no runtimes, they
+return `DEBUGGER_METRO_NO_TARGETS`. In either case, `react-profiler-status` returns
+`session_status: "no_react_runtime"` with the reason in `note`. Check that the app is running,
+wait for it to load its JavaScript, and verify the Metro port before retrying.
+
+For `react-profiler-analyze`, pass `platform: "macos"` if the recording lacks platform information.
+The report prefers `.macos.*` source files, then `.native.*` files, then files without a platform suffix.
+If the recording lacks architecture information, the tool checks `macos/Podfile`.
+
 ### Additional limitations
 
 See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types and features.
 
-| Area                      | Limitation or workaround                                                                                                                                                                                                                                                                                              |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Background windows        | Hiding the app does not pause automation. The next action shows it again without activating it.                                                                                                                                                                                                                       |
-| Multiple windows          | Input and menu commands target the agent's current window. Panels beside that window may be inaccessible; panels over it can be controlled.                                                                                                                                                                           |
-| Menus                     | Context and pop-up menus can bring the window forward temporarily. Only one menu can stay open on the Mac; another click can close it.                                                                                                                                                                                |
-| Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                                                                                                                     |
-| Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                                                                                                                |
-| Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                                                                                                                     |
-| Keyboard layout           | Apps that inspect key codes receive US-layout codes regardless of your keyboard layout.                                                                                                                                                                                                                               |
-| SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                                                                                                        |
-| SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                                                                                                                   |
-| Protected windows         | Capture protection blocks screenshots, screenshot diffs, and e2e snapshots. Inspection and input still work.                                                                                                                                                                                                          |
-| Other tools               | Hardware buttons, device rotation, shake, fold, TV remote, permission settings, screen recording, profiling, JavaScript debugger tools, and Chromium tools are unsupported. Use `native-network-logs` for traffic; `view-network-logs`, `view-network-request-details`, and `native-devtools-status` are unavailable. |
+| Area                      | Limitation or workaround                                                                                                                                                                                                                                                                                   |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Background windows        | Hiding the app does not pause automation. The next action shows it again without activating it.                                                                                                                                                                                                            |
+| Multiple windows          | Input and menu commands target the agent's current window. Panels beside that window may be inaccessible; panels over it can be controlled.                                                                                                                                                                |
+| Menus                     | Context and pop-up menus can bring the window forward temporarily. Only one menu can stay open on the Mac; another click can close it.                                                                                                                                                                     |
+| Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                                                                                                          |
+| Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                                                                                                     |
+| Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                                                                                                          |
+| Keyboard layout           | Apps that inspect key codes receive US-layout codes regardless of your keyboard layout.                                                                                                                                                                                                                    |
+| SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                                                                                             |
+| SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                                                                                                        |
+| Protected windows         | Capture protection blocks screenshots, screenshot diffs, and e2e snapshots. Inspection and input still work.                                                                                                                                                                                               |
+| Other tools               | Hardware buttons, device rotation, shake, fold, TV remote, permission settings, screen recording, JavaScript debugger tools, and Chromium tools are unsupported. Use `native-network-logs` for traffic; `view-network-logs`, `view-network-request-details`, and `native-devtools-status` are unavailable. |
 
 ## Profiling
 
@@ -541,7 +597,7 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 | `react-profiler-status`     | Check if a React profiler run records, was saved, was lost or taken over     |
 | `react-profiler-analyze`    | Analyze stored profiling data into a markdown performance report             |
 | `react-profiler-fiber-tree` | Inspect the React fiber tree as JSON                                         |
-| `native-profiler-start`     | Start native profiling: Instruments on iOS, Perfetto on Android              |
+| `native-profiler-start`     | Start native profiling: Instruments on iOS and Mac apps, Perfetto on Android |
 | `native-profiler-stop`      | Stop native profiling and export the trace                                   |
 | `native-profiler-analyze`   | Analyze an exported native trace into a markdown report                      |
 | `profiler-combined-report`  | Cross-correlate React Profiler and native profiler data                      |
@@ -549,6 +605,12 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 | `profiler-commit-query`     | Query React commit data, or the render counts of each component              |
 | `profiler-cpu-query`        | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`      | Query native trace data for iterative native investigation                   |
+
+Argent caps Instruments recordings at 10 minutes on iOS simulators and [Mac apps](#profiling-a-mac-app). Call `native-profiler-stop` to recover the available trace after the cap or an unexpected exit.
+
+While stop is saving and exporting on the same target, a second stop joins the first. Start and analyze wait for it to finish. Retry `profiler-load` or `profiler-combined-report` after stop completes if the tool reports that the capture is still in progress.
+
+Instruments reports exclude CPU time attributed to Argent and Instruments from app hotspots. Percentages still use all sampled CPU time with call stacks. Hang reports label suspect functions from either tool. If the report says the main thread likely waited, treat those functions as context for the wait.
 
 In the `top_functions` and `time_window` modes, `profiler-cpu-query` gives the self time of each call-tree node as a share of the sampled time. A function that runs on several call paths has one row for each path, and `top_n` counts rows. With `react_only`, `profiler-cpu-query` lists only the functions with a PascalCase name, which is the name format of a React component.
 
@@ -566,13 +628,15 @@ When a session has no hot commits, the other modes of `profiler-commit-query` re
 
 While a profiler that `react-profiler-start` or `native-profiler-start` started records on a device, interaction tools on that device return no automatic screenshot or element tree. The tool-server sets `profiling: true` on the tool-call response, and the MCP server returns a note in place of the capture. An explicit `describe` call returns its tree and no note. Call `screenshot` or `describe` to see the screen. Through the MCP server, an interaction tool still waits until the screen stops changing before it returns, so a `screenshot` or `describe` called next shows the screen after the interaction. The skip ends when the profiler stops, when the 10-minute recording cap ends the capture, when the app reloads its JavaScript during a React profile, or when the profiler session ends. On an Android emulator or device, Argent also sets the simulator-server of the device to on-demand screenshots while a profiler records. On an emulator, a `screenshot` then takes one frame in about 100 ms. On a physical device, a `screenshot` takes about 150 ms to 200 ms. It starts the screen capture for a short time. Interaction tools do not start the screen capture. When the last profiler on the device stops, Argent sets the simulator-server back to the default mode. An older simulator-server ignores the setting and keeps the default mode.
 
-When two or more devices use one Metro, `react-profiler-start` takes the `logicalDeviceId` of Metro, not the device id. Interaction tools take the device id. Thus Argent finds the device of the React profile:
+On a shared Metro, `react-profiler-start` may ask for Metro's `logicalDeviceId` to select an iOS or Android target. Interaction tools still take the device ID. Argent matches a recording that uses a `logicalDeviceId` to a device in three steps.
 
 1. The app writes a marker line to the device log.
 2. Argent reads the logs of the connected Android devices and the booted iOS simulators.
 3. The device whose log contains the marker is the device of the React profile.
 
 When Argent finds no device, interaction tools on the device keep the automatic screenshot and element tree. `react-profiler-start` then returns a note. Argent cannot read the log of a physical iPhone or of a device from a provider.
+
+For a Mac app, use the [Mac app ID](#react-profiler-on-react-native-macos) even when several devices share Metro.
 
 One React profiler run at a time can record in an app. `react-profiler-status` returns one of these `session_status` values:
 

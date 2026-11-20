@@ -157,6 +157,7 @@ describe("printInstallerHelp", () => {
     expect(init).toContain("Options:");
     expect(init).toContain("--yes, -y");
     expect(init).toContain("--no-telemetry");
+    expect(init).toContain("--no-allowlist");
     expect(init).toContain("--from <path>");
     expect(init).toContain("--global");
     expect(init).toContain("--local");

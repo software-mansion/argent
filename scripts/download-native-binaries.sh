@@ -6,7 +6,9 @@ set -euo pipefail
 # the Android helper APK and network inspector consumed by packages/native-devtools-android.
 #
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
-#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
+#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to the
+#                newest argent-private main build (argent-main-<sha>, see
+#                scripts/resolve-main-binaries-tag.sh).
 #
 # Requires:
 #   - gh CLI, logged in with `gh auth login` (the repo is public, but the
@@ -14,7 +16,7 @@ set -euo pipefail
 
 REPO="software-mansion-labs/argent-private-releases"
 
-TAG="${1:-argent-main}"
+TAG="${1:-$(bash "$(dirname "$0")/resolve-main-binaries-tag.sh")}"
 
 if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
   echo "Error: release '${TAG}' not found in ${REPO}, or gh is not logged in (gh auth login)." >&2
