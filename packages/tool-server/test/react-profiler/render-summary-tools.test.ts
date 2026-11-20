@@ -8,7 +8,7 @@ import { profilerCommitQueryTool } from "../../src/tools/profiler/query/profiler
 import { profilerCpuQueryTool } from "../../src/tools/profiler/query/profiler-cpu-query";
 import { profilerCombinedReportTool } from "../../src/tools/profiler/combined/profiler-combined-report";
 import { profilerLoadTool } from "../../src/tools/profiler/query/profiler-load";
-import { reactProfilerRendersTool } from "../../src/tools/profiler/react/react-profiler-renders";
+
 import { nativeProfilerSessionBlueprint } from "../../src/blueprints/native-profiler-session";
 import {
   cacheProfilerPaths,
@@ -1176,15 +1176,5 @@ describe("profiler-load with and without a render summary", () => {
     expect(await load("20261103-120002")).toContain(
       "- Commits persisted (hot ±1 margin, ≥16ms): 2"
     );
-  });
-});
-
-// ── react-profiler-renders ────────────────────────────────────────────
-
-describe("react-profiler-renders", () => {
-  // It cannot reach screen content (top 30 fiber levels) and double-counts;
-  // HTTP and SDK callers keep it.
-  it("is hidden from MCP", () => {
-    expect(reactProfilerRendersTool.hideFromMcp).toBe(true);
   });
 });

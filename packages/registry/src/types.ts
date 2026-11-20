@@ -174,7 +174,12 @@ export interface ToolContext extends InvokeToolOptions {
 
 export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega" | "harmony" | "macos";
 
-export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
+/**
+ * `catalyst` is a Mac Catalyst app, an iPad (UIKit) app built for the Mac. It is
+ * a `macos` device with a `macos-app-` id, as an AppKit app (`app`) is.
+ */
+export type DeviceKind =
+  "simulator" | "emulator" | "vvd" | "device" | "app" | "catalyst" | "unknown";
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
@@ -215,9 +220,14 @@ export interface ToolCapability {
   chromium?: {
     app?: boolean;
   };
-  /** A native Mac app that argent drives from inside the app. Behind the macos-apps flag. */
+  /**
+   * A native Mac app that argent drives from inside the app. Behind the macos-apps
+   * flag. `app` is an AppKit app (also SwiftUI for macOS and react-native-macos),
+   * `catalyst` a Mac Catalyst app. A tool with a `macos` block names both.
+   */
   macos?: {
     app?: boolean;
+    catalyst?: boolean;
   };
   vega?: {
     vvd?: boolean;

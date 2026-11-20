@@ -1,5 +1,5 @@
 import { Registry, type ToolDefinition } from "@argent/registry";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { iosDeviceRunnerBlueprint } from "../blueprints/ios-device-runner";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
@@ -71,8 +71,11 @@ import { reactProfilerFiberTreeTool } from "../tools/profiler/react/react-profil
 import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/native-profiler-start";
 import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
 import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
+import { nativeProfilerLaunchAnalysisTool } from "../tools/profiler/native-profiler/native-profiler-launch-analysis";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
+import { createAudioInputTool } from "../tools/audio/audio-input";
 import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
+import { iosAudioSessionBlueprint } from "../blueprints/ios-audio-session";
 import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
 import { screenRecordingStopTool } from "../tools/screen-recording/screen-recording-stop";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
@@ -109,7 +112,7 @@ export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
   // just the HTTP edge in http.ts. Re-read per invocation, so `argent
   // enable/disable <flag>` needs no tool-server restart.
-  const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
+  const registry = new Registry({ isFlagEnabled: (flag) => isFeatureEnabled(flag) });
 
   // The panel a foldable renders to is asked of the ax-service before every
   // touch and capture (`utils/foldable.ts`); that daemon is a service of this
@@ -125,6 +128,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(nativeProfilerSessionBlueprint);
   registry.registerBlueprint(screenRecordingSessionBlueprint);
+  registry.registerBlueprint(iosAudioSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
@@ -147,6 +151,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createScreenshotDiffTool(registry));
   registry.registerTool(createScreenRecordingStartTool(registry));
   registry.registerTool(screenRecordingStopTool);
+  registry.registerTool(createAudioInputTool(registry));
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);
   registry.registerTool(chromiumCookiesTool);
@@ -193,6 +198,7 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeProfilerStartTool);
   registry.registerTool(nativeProfilerStopTool);
   registry.registerTool(nativeProfilerAnalyzeTool);
+  registry.registerTool(nativeProfilerLaunchAnalysisTool);
   registry.registerTool(profilerCpuQueryTool);
   registry.registerTool(profilerCommitQueryTool);
   registry.registerTool(profilerStackQueryTool);

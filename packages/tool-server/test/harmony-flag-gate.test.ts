@@ -3,10 +3,14 @@ import request from "supertest";
 import { z } from "zod";
 import { FAILURE_CODES, Registry, getFailureSignal } from "@argent/registry";
 
-vi.mock("@argent/configuration-core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@argent/configuration-core")>()),
-  isFlagEnabled: vi.fn(),
-}));
+vi.mock("@argent/configuration-core", async (importOriginal) => {
+  const isFlagEnabled = vi.fn();
+  return {
+    ...(await importOriginal<typeof import("@argent/configuration-core")>()),
+    isFlagEnabled,
+    isFeatureEnabled: (name: string) => isFlagEnabled(name),
+  };
+});
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   listAndroidDevices: vi.fn(async () => []),

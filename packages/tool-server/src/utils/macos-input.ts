@@ -2,8 +2,9 @@ import { PNG } from "pngjs";
 import { FAILURE_CODES } from "@argent/registry";
 import type { DeviceInfo, Registry, ServiceRef } from "@argent/registry";
 import { macosAppRef, type MacosAppApi } from "../blueprints/macos-app";
-import { InvalidToolInputError } from "./capability";
-import { assertMacosAppsEnabled, isMacosAppsEnabled } from "./macos-apps";
+import { InvalidToolInputError, macosAppsUnavailableReason } from "./capability";
+import { assertMacosAppsEnabled, macosFailure } from "./macos-apps";
+import type { MacosModifier } from "./macos-modifiers";
 import { scaleDecodedPng } from "./png-scale";
 
 // Requests to the in-app library of a Mac app, and the click and typing
@@ -12,17 +13,16 @@ import { scaleDecodedPng } from "./png-scale";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type MacosModifier = "command" | "shift" | "option" | "control";
-
 // ── Service plumbing ────────────────────────────────────────────────────────
 
 /**
- * The `services()` entry of a macOS branch. Empty while the flag is off, so a
- * flow sub-invocation (which skips the capability gate) starts no app
- * connection before the branch refuses.
+ * The `services()` entry of a macOS branch. Empty while a Mac app cannot be
+ * driven here (the flag is off, or the host is not a Mac), so a flow
+ * sub-invocation (which skips the capability gate) starts no app connection
+ * before the branch refuses.
  */
 export function macosAppServices(device: DeviceInfo): Record<string, ServiceRef> {
-  return isMacosAppsEnabled() ? { macosApp: macosAppRef(device) } : {};
+  return macosAppsUnavailableReason() === null ? { macosApp: macosAppRef(device) } : {};
 }
 
 /** First step of a macOS branch whose tool declares `macosAppServices`. */
@@ -80,6 +80,8 @@ type MacosMouseEvent = {
   y: number;
   button?: "left" | "right";
   clickCount?: number;
+  /** The modifier keys held during the event. */
+  modifiers?: MacosModifier[];
 };
 
 export async function macosMouse(app: MacosAppApi, event: MacosMouseEvent): Promise<void> {
@@ -94,17 +96,33 @@ export async function macosMouse(app: MacosAppApi, event: MacosMouseEvent): Prom
 
 /**
  * Move, then `clickCount` down/up pairs with an escalating click count (a
- * double-click is counts 1 then 2), then the settle wait.
+ * double-click is counts 1 then 2), then the settle wait. Apply `modifiers` to
+ * the move and every press and release.
  */
 export async function macosClick(
   app: MacosAppApi,
   x: number,
   y: number,
-  opts: { clickCount?: number; button?: "left" | "right" } = {}
+  opts: { clickCount?: number; button?: "left" | "right"; modifiers?: MacosModifier[] } = {}
 ): Promise<void> {
-  await macosMouse(app, { type: "move", x, y });
+  const modifiers = opts.modifiers?.length ? [...new Set(opts.modifiers)] : undefined;
+  // Older libraries ignore modifiers. Check the move reply before pressing a button.
+  const moved = await app.call<{ modifiers?: unknown } | undefined>(
+    "Input.mouse",
+    insideMaxEdges({ type: "move", x, y, modifiers })
+  );
+  if (modifiers && !Array.isArray(moved?.modifiers)) {
+    throw macosFailure(
+      `The argent library running in ${app.bundleId} is older than this argent and cannot hold ` +
+        `modifier keys, so nothing was clicked. Restart the app with restart-app to load the ` +
+        `current library, then tap again.`,
+      FAILURE_CODES.MACOS_APP_LIBRARY_OUTDATED,
+      "macos_click_modifiers",
+      "unsupported"
+    );
+  }
   for (let i = 1; i <= (opts.clickCount ?? 1); i++) {
-    const event = { x, y, button: opts.button, clickCount: i };
+    const event = { x, y, button: opts.button, clickCount: i, modifiers };
     await macosMouse(app, { ...event, type: "down" });
     await macosMouse(app, { ...event, type: "up" });
   }

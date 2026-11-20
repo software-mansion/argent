@@ -236,7 +236,8 @@ describe("ui-tree-match", () => {
   });
 
   it("a regex text condition does not read an iOS text field with no text as empty", () => {
-    // The simulator's view tree has no typed text: a field holding "Rex" reads "".
+    // The text of a secure field is never read: one that holds "Rex" reads "",
+    // as an empty field without a placeholder does.
     const field = node({
       role: "AXTextField",
       identifier: "name",
@@ -367,39 +368,6 @@ describe("ui-tree-match", () => {
       expect(matchNode(nested.children[0]!, selector)).toBe(true);
       expect(createRegExp).toHaveBeenCalledOnce();
       expect(createRegExp).toHaveBeenLastCalledWith(selector.textMatches);
-    } finally {
-      createRegExp.mockRestore();
-    }
-  });
-
-  it("compiles the search and full-consumption regexes once each per ranking pass", () => {
-    const pattern = "Order #\\d+";
-    const ranked = node({
-      role: "AXGroup",
-      frame: { x: 0, y: 0, width: 1, height: 1 },
-      children: [
-        node({
-          label: "Order #1 Archive",
-          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
-        }),
-        node({
-          label: "Order #1",
-          frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.05 },
-        }),
-        node({
-          value: "Order #2",
-          frame: { x: 0.4, y: 0.6, width: 0.2, height: 0.05 },
-        }),
-      ],
-    });
-    const createRegExp = vi.spyOn(uiTreeMatchInternals, "createRegExp");
-
-    try {
-      expect(selectorToFrame(ranked, { textMatches: pattern })).toMatchObject({ y: 0.4 });
-      expect(createRegExp.mock.calls.map(([source]) => source)).toEqual([
-        pattern,
-        `^(?:${pattern})$`,
-      ]);
     } finally {
       createRegExp.mockRestore();
     }

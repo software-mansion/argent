@@ -21,7 +21,7 @@ Living document tracking the reasoning behind pipeline architecture decisions.
 
 ### XML parser: id/ref deduplication
 
-xctrace XML uses an id/ref scheme for deduplication — a `<backtrace id="42">` element defines a backtrace once, then later rows reference it with `<backtrace ref="42"/>`. Same for `<binary>`, `<frame>`, and hang field values. The parser maintains registries for each element type and resolves refs on the fly. Without this, most rows would have empty fields since xctrace only emits the full definition once.
+xctrace XML uses an id/ref scheme for deduplication — a `<backtrace id="42">` element defines a backtrace once, then later rows reference it with `<backtrace ref="42"/>`. Same for `<binary>`, `<frame>`, and hang field values. Xcode 26 and later wrap each sample's stack in a `<tagged-backtrace>`, which 26.x fills with a `<backtrace>` and 27 fills with the frames themselves; later rows then reference the `<tagged-backtrace>`. The parser maintains registries for each element type and resolves refs on the fly. Without this, most rows would have empty fields since xctrace only emits the full definition once.
 
 ### Regex-based XML extraction
 
@@ -46,6 +46,12 @@ Frames from binaries whose paths start with `/usr/lib/`, `/System/Library/`, or 
 Each hang has a `startNs` and `durationNs`. The correlator filters CPU samples whose timestamps fall within `[startNs, startNs + durationNs]`, then aggregates dominant functions and app call chains from those samples. This answers "what was the app doing while the UI was frozen" — the most actionable question for hang debugging.
 
 Top 5 suspected functions and top 3 call chains (ranked by sample frequency within the window) are attached to each hang.
+
+The correlator sets `hangThreadRanMs` when the hang thread ran for less than 10% of the hang after subtracting suspended time and the trace contains samples from that thread. When a report shows this wait alongside activity from Argent or Instruments, it presents that activity as context for the wait.
+
+### Mac app suspensions
+
+At stop, Argent aligns suspension intervals to the trace using the trace's start date. In `app-suspensions.ts`, overlaps under 20 ms are ignored because the watcher polls every 10 ms. Each hang keeps its recorded duration, label, and severity. The report uses `suspendedMs` to show the overlap because a pause can delay work in the app, while an external wait can continue through it.
 
 ### Call chain extraction
 

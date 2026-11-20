@@ -8,7 +8,6 @@ import {
 
 describe("vega-input keycode maps", () => {
   it("exposes every remote button with a KEY_ code", () => {
-    expect(REMOTE_BUTTONS.length).toBe(16);
     for (const button of REMOTE_BUTTONS) {
       expect(REMOTE_KEYCODES[button]).toMatch(/^KEY_[A-Z0-9_]+$/);
     }

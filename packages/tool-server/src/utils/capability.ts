@@ -1,4 +1,4 @@
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   withFailureSignal,
@@ -126,6 +126,33 @@ export const MACOS_APPS_FLAG = "macos-apps";
 export const MACOS_APPS_FLAG_OFF_REASON =
   "the macos-apps flag is off. Run: argent enable macos-apps";
 
+/**
+ * Why a Mac app cannot be driven here, or null when it can: the flag is off,
+ * or, with the flag on, the host is not a Mac. Read per call, so enabling the
+ * flag needs no restart.
+ */
+export function macosAppsUnavailableReason(): string | null {
+  if (!isFeatureEnabled(MACOS_APPS_FLAG)) return MACOS_APPS_FLAG_OFF_REASON;
+  if (process.platform !== "darwin") return "native Mac apps can only be driven on macOS";
+  return null;
+}
+
+/**
+ * Whether what a flag adds is offered to the agent: its tools, and its
+ * `<flag:...>` spans and properties in tool text and in errors. Mac apps run
+ * only on macOS, so elsewhere the macos-apps flag adds nothing, and no text
+ * points the agent at a Mac app the host refuses. Every `renderFlagGated` call
+ * that an agent reads passes this, not the bare flag read, and the e2e parse
+ * errors that list the platforms name `macos` only when this is true.
+ *
+ * This decides what text offers, not what a parser accepts: an e2e file can
+ * name `macos` on every host, because the files are shared between hosts.
+ */
+export function isFlagOffered(flag: string): boolean {
+  if (flag === MACOS_APPS_FLAG) return macosAppsUnavailableReason() === null;
+  return isFeatureEnabled(flag);
+}
+
 const MACOS_POINTER_ONLY =
   "a Mac app takes mouse input: use gesture-drag to drag and gesture-scroll to scroll";
 const MACOS_NO_TRACKPAD_GESTURES =
@@ -147,6 +174,22 @@ const MACOS_REFUSAL_REASONS: Readonly<Record<string, string>> = {
     "then run restart-app (or boot-device with macosAppPath for a .app at another path)",
 };
 
+const CATALYST_NO_APPKIT_VIEWS =
+  "a Mac Catalyst app's UIKit views are not in its AppKit view tree: use describe, which " +
+  "lists them with their identifiers and frames";
+
+/**
+ * Why a tool whose `macos` block leaves out `catalyst` refuses a Mac Catalyst
+ * app: those tools return a Mac app's AppKit view tree, and a Catalyst app
+ * draws its UIKit views inside one AppKit view.
+ */
+const MACOS_CATALYST_REFUSAL_REASONS: Readonly<Record<string, string>> = {
+  "native-find-views": CATALYST_NO_APPKIT_VIEWS,
+  "native-full-hierarchy": CATALYST_NO_APPKIT_VIEWS,
+  "native-view-at-point": CATALYST_NO_APPKIT_VIEWS,
+  "native-user-interactable-view-at-point": CATALYST_NO_APPKIT_VIEWS,
+};
+
 /**
  * Throws if the tool's `capability` declaration doesn't include the given
  * device. No `capability` means universally supported — for system / workspace
@@ -161,10 +204,9 @@ export function assertSupported(
   if (device.platform === "harmony" && !isHarmonyEnabled()) {
     throw new UnsupportedOperationError(toolId, device, HARMONY_DISABLED_REASON);
   }
-  // Before the matrix, so every tool names the flag; read per call, so enabling needs no restart.
-  if (device.platform === "macos" && !isFlagEnabled(MACOS_APPS_FLAG)) {
-    throw new UnsupportedOperationError(toolId, device, MACOS_APPS_FLAG_OFF_REASON);
-  }
+  // Before the matrix, so every tool names the flag or the host.
+  const macosRefusal = device.platform === "macos" ? macosAppsUnavailableReason() : null;
+  if (macosRefusal) throw new UnsupportedOperationError(toolId, device, macosRefusal);
   const matrix = platformMatrix(device.platform, capability);
   if (!matrix) {
     const reason =
@@ -174,11 +216,13 @@ export function assertSupported(
   }
   const supported = matrix[device.kind] === true;
   if (!supported) {
+    const catalystReason =
+      device.kind === "catalyst" ? MACOS_CATALYST_REFUSAL_REASONS[toolId] : undefined;
     const reason =
       device.platform === "harmony" && device.kind === "emulator"
         ? "a `harmony-emulator-` id names an instance only boot-device starts; drive the " +
           '`harmony-<connectKey>` id of its `kind: "device"` entry in list-devices'
-        : `kind '${device.kind}' not supported`;
+        : (catalystReason ?? `kind '${device.kind}' not supported`);
     throw new UnsupportedOperationError(toolId, device, reason);
   }
   if (capability.supports && !capability.supports(device)) {

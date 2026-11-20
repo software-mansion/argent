@@ -8,6 +8,7 @@ import {
   type ServiceEvents,
   type ServiceInstance,
 } from "@argent/registry";
+import { reserveInteractionRunner } from "../utils/ios-device/runner-reservation";
 import { ensureDeviceReady } from "../utils/ios-device/devicectl";
 import {
   ensureRunnerArtifact,
@@ -155,6 +156,9 @@ export function iosDeviceRunnerRef(device: DeviceInfo): {
 /** Startup budget for install, launch, the runner's port line, and the first ready envelope. */
 const RUNNER_READY_TIMEOUT_MS = 120_000;
 
+/** How long dispose waits for xcodebuild to exit on its own after an accepted shutdown. */
+const RUNNER_CLEAN_EXIT_TIMEOUT_MS = 10_000;
+
 /**
  * Launch the runner from a built artifact, read the port it bound from the
  * launch log, and wait for its first ready envelope. On failure the child is
@@ -208,6 +212,14 @@ async function startRunner(
       exited,
     ]);
   } catch (error) {
+    // A failed start can return (or retry) before SIGTERM takes effect.
+    if (
+      launched.child.pid &&
+      launched.child.exitCode === null &&
+      launched.child.signalCode === null
+    ) {
+      launched.child.once("exit", reserveInteractionRunner(udid));
+    }
     killRunnerProcess(launched.child);
 
     const logText = await fs.readFile(launched.logPath, "utf8").catch(() => "");
@@ -297,13 +309,17 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
       );
     }
 
-    await ensureDeviceReady(udid);
-    await killStaleRunnersForDevice(udid);
-
-    const { launched, client } = await buildAndStartRunner(
-      udid,
-      await resolveRunnerSigningConfig(udid)
-    );
+    const release = reserveInteractionRunner(udid);
+    let runner: Awaited<ReturnType<typeof buildAndStartRunner>>;
+    try {
+      await ensureDeviceReady(udid);
+      await killStaleRunnersForDevice(udid);
+      runner = await buildAndStartRunner(udid, await resolveRunnerSigningConfig(udid));
+    } catch (error) {
+      release();
+      throw error;
+    }
+    const { launched, client } = runner;
 
     const events = new TypedEventEmitter<ServiceEvents>();
     let disposed = false;
@@ -311,7 +327,9 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
     let exitCode: number | null | undefined;
     const exitWaiters: Array<() => void> = [];
 
-    launched.child.on("exit", (code) => {
+    launched.child.once("exit", (code) => {
+      // dispose may signal a child that takes a few seconds to exit.
+      release();
       exitCode = code;
 
       for (const wake of exitWaiters.splice(0)) {
@@ -370,13 +388,18 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
         disposed = true;
 
         try {
-          // shutdown is mutating. Send it once. The child is killed below either way.
+          // shutdown is mutating. Send it once.
           await client.run({ command: "shutdown" }, { timeoutMs: 3_000 });
+          // Let the test end as passed, so XCTest cleans up its on-device
+          // attachments instead of leaving them behind a killed session.
+          await settleExit(RUNNER_CLEAN_EXIT_TIMEOUT_MS);
         } catch {
           /* best-effort graceful stop */
         }
 
-        killRunnerProcess(launched.child);
+        if (exitCode === undefined) {
+          killRunnerProcess(launched.child);
+        }
       },
     };
   },

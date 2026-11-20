@@ -8,6 +8,9 @@
 // the app's own from the start. Its one window appears
 // 200 ms after the handshake, as a real app's first window comes after its launch.
 //
+// `--identifier-for-vendor=<id>` puts that identifierForVendor in the handshake,
+// as the library does in a Mac Catalyst app.
+//
 // Network capture: like the real library, it reports requests as CDP events
 // only after a `Control` activateNetworkInspection. `Net.request` sends one
 // request, and `--launch-request` sends one 150 ms after the start.
@@ -16,6 +19,9 @@ const fs = require("node:fs");
 const net = require("node:net");
 
 const mode = (process.argv.find((a) => a.startsWith("--mode=")) ?? "--mode=ok").slice(7);
+const identifierForVendor = process.argv
+  .find((a) => a.startsWith("--identifier-for-vendor="))
+  ?.slice("--identifier-for-vendor=".length);
 const startedAt = Date.now();
 const network = { active: false, activations: 0 };
 const clients = new Set();
@@ -44,6 +50,8 @@ function serve(socket) {
         platform: "macos",
         protocol: mode === "bad-protocol" ? 2 : 1,
         libraryVersion: "fake",
+        // A Mac Catalyst library reports the app's UIDevice.identifierForVendor.
+        ...(identifierForVendor ? { identifierForVendor } : {}),
       },
     }) + "\n"
   );
@@ -108,6 +116,10 @@ function handle(socket, msg) {
       return reply({ error: { message: params.message ?? "boom from the library" } });
     case "Hang":
       return;
+    case "Slow":
+      // Answers params.ms after the request, or as soon as the app runs again
+      // after a suspension that lasted past that, as a busy handler does.
+      return setTimeout(() => reply({ result: { params } }), params.ms ?? 0);
     case "Window.list":
       return reply({ result: { windows: windows() } });
     case "Application.terminate":

@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   FailureError,
@@ -16,8 +16,8 @@ import { macosArtifacts } from "@argent/native-devtools-ios";
 import {
   InvalidToolInputError,
   MACOS_APPS_FLAG,
-  MACOS_APPS_FLAG_OFF_REASON,
   UnsupportedOperationError,
+  macosAppsUnavailableReason,
 } from "./capability";
 import {
   MACOS_APP_ID_PREFIX,
@@ -25,24 +25,27 @@ import {
   macosAppIdFromBundleId,
   parseMacosAppBundleId,
 } from "./device-info";
+import { trackedMacosAppsFile, type MacosAppKind } from "./macos-app-kind";
 import { PS_BIN } from "./vega-process";
 
 const execFileAsync = promisify(execFile);
 
 export function isMacosAppsEnabled(): boolean {
-  return isFlagEnabled(MACOS_APPS_FLAG);
+  return isFeatureEnabled(MACOS_APPS_FLAG);
 }
 
 /**
  * For the Mac branches the capability gate does not cover: `boot-device` with
- * `macosAppPath` has no device id for it to read.
+ * `macosAppPath` has no device id for it to read. Refuses as that gate does, so
+ * off macOS nothing reads the bundle.
  */
 export function assertMacosAppsEnabled(toolId: string, device?: DeviceInfo): void {
-  if (isMacosAppsEnabled()) return;
+  const reason = macosAppsUnavailableReason();
+  if (!reason) return;
   throw new UnsupportedOperationError(
     toolId,
     device ?? { id: MACOS_APP_ID_PREFIX, platform: "macos", kind: "app" },
-    MACOS_APPS_FLAG_OFF_REASON
+    reason
   );
 }
 
@@ -384,10 +387,21 @@ interface TrackedMacosApp {
   args: string[];
   /** Epoch ms. */
   startedAt: number;
+  /**
+   * A Mac Catalyst app; `resolveDevice` reads it as the device kind. Absent in
+   * a record of an argent that refused Catalyst apps: an AppKit app.
+   */
+  catalyst?: boolean;
+  /**
+   * A Mac Catalyst app's `UIDevice.identifierForVendor`, from the library's
+   * handshake. The React profiler finds the app's JS runtime in Metro by it.
+   */
+  identifierForVendor?: string;
 }
 
-function trackedAppsFile(): string {
-  return path.join(os.homedir(), ".argent", "macos-apps.json");
+/** The kind of a tracked app, as `resolveDevice` reports it. */
+export function trackedAppKind(app: TrackedMacosApp): MacosAppKind {
+  return app.catalyst === true ? "catalyst" : "app";
 }
 
 function isTrackedMacosApp(value: unknown): value is TrackedMacosApp {
@@ -408,7 +422,9 @@ function isTrackedMacosApp(value: unknown): value is TrackedMacosApp {
     typeof v.logPath === "string" &&
     Array.isArray(v.args) &&
     v.args.every((a) => typeof a === "string") &&
-    typeof v.startedAt === "number"
+    typeof v.startedAt === "number" &&
+    (v.catalyst === undefined || typeof v.catalyst === "boolean") &&
+    (v.identifierForVendor === undefined || typeof v.identifierForVendor === "string")
   );
 }
 
@@ -416,7 +432,7 @@ function isTrackedMacosApp(value: unknown): value is TrackedMacosApp {
 function readTrackedApps(): TrackedMacosApp[] {
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(trackedAppsFile(), "utf8"));
+    raw = JSON.parse(fs.readFileSync(trackedMacosAppsFile(), "utf8"));
   } catch {
     return [];
   }
@@ -425,7 +441,7 @@ function readTrackedApps(): TrackedMacosApp[] {
 
 /** Adds or replaces the record for `app.bundleId`. */
 export function recordTrackedMacosApp(app: TrackedMacosApp): void {
-  const file = trackedAppsFile();
+  const file = trackedMacosAppsFile();
   const others = readTrackedApps().filter((a) => a.bundleId !== app.bundleId);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   // tmp+rename so a reader never sees a torn file, also after a crash mid-write.
@@ -480,6 +496,25 @@ export async function processRunsExecutable(pid: number, executable: string): Pr
     return stdout.trim() === executable;
   } catch {
     // `ps` exits 1 for a pid that does not exist.
+    return false;
+  }
+}
+
+/**
+ * True when the process `pid` was started with `assignment` (`NAME=value`) in
+ * its environment. `ps e` shows the environment that a process of the same
+ * user was started with, also of a hardened or a sandboxed app. False when the
+ * process is gone or `ps` fails.
+ */
+export async function processStartedWithEnv(pid: number, assignment: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      PS_BIN,
+      ["eww", "-o", "command=", "-p", String(pid)],
+      psOptions()
+    );
+    return stdout.trim().split(/\s+/).includes(assignment);
+  } catch {
     return false;
   }
 }
@@ -639,11 +674,23 @@ function chromiumKind(appPath: string): MacosAppInfo["chromium"] {
 }
 
 const FAT_MAGIC = 0xcafebabe;
+/** A universal binary whose slice offsets and sizes are 64-bit. */
+const FAT_MAGIC_64 = 0xcafebabf;
 const MH_MAGIC_64 = 0xfeedfacf;
 const LC_BUILD_VERSION = 0x32;
 const PLATFORM_MACCATALYST = 6;
+/** More slices than a real universal binary has: the rest of a damaged table is not read. */
+const MAX_FAT_SLICES = 16;
+/** More than the load commands of a real executable take: a damaged size is not allocated. */
+const MAX_LOAD_COMMANDS_BYTES = 1024 * 1024;
 
-/** Whether the platform in the executable's LC_BUILD_VERSION (of its first slice) is Mac Catalyst. */
+/**
+ * Whether the executable is built for Mac Catalyst: the platform in the
+ * LC_BUILD_VERSION of a slice. A universal binary (32- or 64-bit fat header)
+ * counts when any of its slices does, so the answer is the same on Apple
+ * silicon, on Intel and under Rosetta; a universal Catalyst app is Catalyst in
+ * every slice. Anything unreadable counts as no.
+ */
 function isCatalystExecutable(executable: string): boolean {
   let fd: number | undefined;
   try {
@@ -652,21 +699,18 @@ function isCatalystExecutable(executable: string): boolean {
       const buffer = Buffer.alloc(length);
       return buffer.subarray(0, fs.readSync(fd!, buffer, 0, length, position));
     };
-    let slice = 0;
-    let header = read(32, 0);
-    if (header.length === 32 && header.readUInt32BE(0) === FAT_MAGIC) {
-      slice = header.readUInt32BE(16);
-      header = read(32, slice);
-    }
-    if (header.length < 32 || header.readUInt32LE(0) !== MH_MAGIC_64) return false;
-    const commands = read(header.readUInt32LE(20), slice + 32);
-    for (let at = 0; at + 12 <= commands.length;) {
-      if (commands.readUInt32LE(at) === LC_BUILD_VERSION) {
-        return commands.readUInt32LE(at + 8) === PLATFORM_MACCATALYST;
-      }
-      const size = commands.readUInt32LE(at + 4);
-      if (size < 8) break;
-      at += size;
+    const header = read(8, 0);
+    if (header.length < 8) return false;
+    const magic = header.readUInt32BE(0);
+    if (magic !== FAT_MAGIC && magic !== FAT_MAGIC_64) return isCatalystSlice(read, 0);
+    // fat_arch: cputype, cpusubtype, offset, size, align (4 bytes each); fat_arch_64:
+    // the same with an 8-byte offset and size, and 4 reserved bytes. Big-endian.
+    const wide = magic === FAT_MAGIC_64;
+    const entry = wide ? 32 : 20;
+    const table = read(Math.min(header.readUInt32BE(4), MAX_FAT_SLICES) * entry, 8);
+    for (let at = 0; at + entry <= table.length; at += entry) {
+      const offset = wide ? Number(table.readBigUInt64BE(at + 8)) : table.readUInt32BE(at + 8);
+      if (isCatalystSlice(read, offset)) return true;
     }
     return false;
   } catch {
@@ -674,6 +718,25 @@ function isCatalystExecutable(executable: string): boolean {
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
+}
+
+/** Whether the 64-bit Mach-O at `offset` names Mac Catalyst in its first LC_BUILD_VERSION. */
+function isCatalystSlice(
+  read: (length: number, position: number) => Buffer,
+  offset: number
+): boolean {
+  const header = read(32, offset);
+  if (header.length < 32 || header.readUInt32LE(0) !== MH_MAGIC_64) return false;
+  const commands = read(Math.min(header.readUInt32LE(20), MAX_LOAD_COMMANDS_BYTES), offset + 32);
+  for (let at = 0; at + 12 <= commands.length;) {
+    if (commands.readUInt32LE(at) === LC_BUILD_VERSION) {
+      return commands.readUInt32LE(at + 8) === PLATFORM_MACCATALYST;
+    }
+    const size = commands.readUInt32LE(at + 4);
+    if (size < 8) break;
+    at += size;
+  }
+  return false;
 }
 
 async function plistValue(plist: string, key: string): Promise<string | null> {
@@ -731,6 +794,80 @@ export function parseCodesignDisplay(
 }
 
 /**
+ * The wrapper macOS puts around an iOS app that runs on the Mac ("Designed for
+ * iPad"): the iOS bundle in `Wrapper/`, the link `WrappedBundle` to it, and no
+ * `Contents/`.
+ */
+function isIosAppWrapper(dir: string): boolean {
+  try {
+    return (
+      fs.statSync(path.join(dir, "Wrapper")).isDirectory() &&
+      fs.lstatSync(path.join(dir, "WrappedBundle")).isSymbolicLink()
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The code signature of a running process (by pid), which can differ from its
+ * bundle's after a rebuild, or of an app bundle (by path). Null when `codesign`
+ * cannot read it, for example because the process has quit.
+ */
+export async function readCodeSignature(
+  target: number | string
+): Promise<ReturnType<typeof parseCodesignDisplay> | null> {
+  // `+<pid>` reads the signature that the kernel holds for the process. A bare
+  // number reads the file that is now at the process's path.
+  const operand = typeof target === "number" ? `+${target}` : target;
+  try {
+    return parseCodesignDisplay(
+      await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", operand], {
+        timeout: 10_000,
+        maxBuffer: 4 * 1024 * 1024,
+      })
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether this process runs in a Background launchd session, for example over
+ * SSH: `launchctl managername` prints "Background" there and "Aqua" in the
+ * user's desktop session. False when it cannot tell.
+ */
+export async function inBackgroundSession(): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("launchctl", ["managername"], { timeout: 5_000 });
+    return stdout.trim() === "Background";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Match JavaScriptCore's `WebKit Malloc` zone and its address suffix in `vmmap`
+ * output. `WebKit Using System Malloc` is a separate zone.
+ */
+export function listsWebKitMallocZone(vmmapOutput: string): boolean {
+  return /^WebKit Malloc_0x[0-9a-f]+\s/m.test(vmmapOutput);
+}
+
+/**
+ * Check for JavaScriptCore's malloc zone. `vmmap` briefly suspends the app
+ * during the check and resumes it on exit, including after a timeout.
+ * Reject if `vmmap` fails or times out so the caller can handle an unknown heap.
+ */
+export async function processHasWebKitMallocZone(pid: number): Promise<boolean> {
+  const { stdout } = await execFileAsync("vmmap", ["-summary", String(pid)], {
+    timeout: 10_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  return listsWebKitMallocZone(stdout);
+}
+
+/**
  * Reads what a launch needs from the bundle: `Info.plist` (bundle id,
  * executable, name) and the code signature. An unsigned app is neither
  * hardened nor sandboxed.
@@ -751,6 +888,16 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
   }
   const plist = path.join(resolved, "Contents", "Info.plist");
   if (!fs.statSync(resolved).isDirectory() || !fs.existsSync(plist)) {
+    if (isIosAppWrapper(resolved)) {
+      throw invalid(
+        `${appPath} is an iPad or iPhone app that runs on the Mac ("Designed for iPad"). ` +
+          `macOS does not let argent load its library into such an app, so argent cannot ` +
+          `drive it. Build the app's Mac Catalyst target and boot that, or test the app on an ` +
+          `iOS simulator.`,
+        FAILURE_CODES.MACOS_APP_BUNDLE_INVALID,
+        "unsupported"
+      );
+    }
     throw invalid(
       `${appPath} is not a Mac app bundle: expected a .app directory with Contents/Info.plist.`,
       FAILURE_CODES.MACOS_APP_PATH_INVALID
@@ -778,17 +925,9 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
     throw badBundle(`The executable ${executable} named by ${plist} does not exist.`);
   }
 
-  let codesign: { stdout: string; stderr: string } | null;
-  try {
-    codesign = await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", resolved], {
-      timeout: 10_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-  } catch {
-    // Not signed at all, or a signature codesign cannot read: neither carries
-    // the runtime flag nor entitlements that dyld would honour.
-    codesign = null;
-  }
+  // Not signed at all, or a signature codesign cannot read: neither carries the
+  // runtime flag nor entitlements that dyld would honour.
+  const signature = (await readCodeSignature(resolved)) ?? parseCodesignDisplay(null);
 
   const chromium = chromiumKind(resolved);
   return {
@@ -796,7 +935,7 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
     bundleId,
     name: bundleName ?? path.basename(resolved, ".app"),
     executable,
-    ...parseCodesignDisplay(codesign),
+    ...signature,
     ...(chromium ? { chromium } : {}),
     catalyst: isCatalystExecutable(executable),
     uiElement: [uiElement, backgroundOnly].some((v) => v !== null && /^(true|yes|1)$/i.test(v)),

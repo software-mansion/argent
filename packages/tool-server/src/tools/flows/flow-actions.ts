@@ -1,5 +1,4 @@
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
-import { isFlagEnabled } from "@argent/configuration-core";
 import {
   getDescribeTapPoint,
   type DescribeFrame,
@@ -29,8 +28,10 @@ import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosSimulator } from "../../utils/device-info";
 import { renderFlagGated } from "../../utils/flag-gated-text";
+import { isFlagOffered } from "../../utils/capability";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { quotedText } from "../../utils/typed-secrets";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -955,8 +956,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
           : "rotate is unsupported on HarmonyOS — `uinput -T -m` is the platform's only multi-contact injection and it moves each finger along ONE straight line per call, with no way to chain segments into an arc; drive the app's own rotate control with `tap`, or `pinch`, which is a straight-line gesture and does run here",
     };
   }
-  // Only a Mac app takes a right-click; the others refuse it before the auto-wait too,
-  // rather than after it with gesture-tap's own error.
+  // Reject Mac-only tap options before waiting for the target.
   if (step.kind === "tap" && step.button === "right" && env.device.platform !== "macos") {
     const platform = env.device.platform;
     return {
@@ -971,7 +971,21 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
               (platform === "harmony"
                 ? ""
                 : ". On a touch screen, open a context menu with long-press"),
-        isFlagEnabled
+        isFlagOffered
+      ),
+    };
+  }
+  if (step.kind === "tap" && step.modifiers !== undefined && env.device.platform !== "macos") {
+    const platform = env.device.platform;
+    return {
+      ok: false,
+      reason: renderFlagGated(
+        platform === "chromium"
+          ? `tap with modifiers holds keyboard keys through a mouse click<flag:macos-apps>, which argent sends only to a Mac app</flag:macos-apps>; ` +
+              `argent does not support it on chromium yet`
+          : `tap with modifiers holds keyboard keys through a mouse click<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>; ` +
+              `${platform} takes none`,
+        isFlagOffered
       ),
     };
   }
@@ -1156,8 +1170,8 @@ function targetPointFromFrame(
 /**
  * Tap a resolved target point. `times` rides the gesture-tap tool's
  * `clickCount`: one dispatched multi-tap gesture, never N separate calls, whose
- * RPC gaps could fall outside the OS double-tap window. `button` rides the
- * tool's `button` unchanged.
+ * RPC gaps could fall outside the OS double-tap window. Pass `button` and
+ * `modifiers` through to `gesture-tap`.
  */
 async function runTap(
   env: ActionEnv,
@@ -1169,6 +1183,7 @@ async function runTap(
     ...resolved.point,
     ...(target.times !== undefined ? { clickCount: target.times } : {}),
     ...(target.button !== undefined ? { button: target.button } : {}),
+    ...(target.modifiers !== undefined ? { modifiers: target.modifiers } : {}),
   });
   return { ok: true, ...warnedBy(resolved.warning, toolWarning(sent)) };
 }
@@ -1742,6 +1757,8 @@ async function waitForCondition(
   const deadline = Date.now() + timeoutMs;
 
   let lastMatches: ReturnType<typeof findAll> = [];
+  // The read `lastMatches` came from, for the reason that quotes its text.
+  let lastData: DescribeTreeData | undefined;
   let fetchError: string | undefined;
   let everMatched = false;
   // Date.now() of the most recent TRUSTED read — undefined until one lands.
@@ -1761,6 +1778,7 @@ async function waitForCondition(
     try {
       const data = await readFlowTree(env);
       lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
+      lastData = data;
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
       const blind = isBlindRead(data, everMatched, step.condition);
@@ -1878,7 +1896,10 @@ async function waitForCondition(
         // The read `lastMatches` came from is the last one that answered, and
         // only a read that answers writes the orientation.
         readingOrientation(env),
-        env.device.platform === "macos"
+        env.device.platform === "macos",
+        // The text of an element is the only part of a reason that comes off
+        // the screen, where a field shows a typed secret.
+        (node, read) => (lastData ? quotedText(lastData, env.device.id, node, read) : read(node))
       ) + blipNote,
   };
 }
@@ -2461,7 +2482,8 @@ function assertReason(
   textMatch: TextMatchMode | undefined,
   matches: ReturnType<typeof findAll>,
   orientation: UiOrientation | undefined,
-  macos: boolean
+  macos: boolean,
+  quoted: (node: DescribeNode, read: (node: DescribeNode) => string) => string
 ): string {
   const sel = describeSelector(selector);
   switch (condition) {
@@ -2485,9 +2507,8 @@ function assertReason(
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted
       // subtree text (see evaluateCondition), so quote both when they differ.
-      const field = macFieldText(first, macos);
-      const shown = field ?? assertText(first);
-      const own = field ?? nodeText(first);
+      const shown = quoted(first, (node) => macFieldText(node, macos) ?? assertText(node));
+      const own = quoted(first, (node) => macFieldText(node, macos) ?? nodeText(node));
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
       return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;
     }

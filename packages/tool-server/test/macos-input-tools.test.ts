@@ -12,6 +12,7 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
 }));
 
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { ensureDeps } from "../src/utils/check-deps";
 import { MACOS_CLICK_SETTLE_MS } from "../src/utils/macos-input";
 import { RESULT_NOTE_KEY } from "../src/tools/screenshot/dropped-geometry";
@@ -36,6 +37,7 @@ import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-ful
 import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { renderFlagGated } from "../src/utils/flag-gated-text";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import {
   MAC_BUNDLE_ID,
@@ -153,6 +155,55 @@ describe("gesture-tap on a Mac app", () => {
       { type: "up", x: 0.3, y: 0.4, clickCount: 1 },
     ]);
     expect(calls.every((c) => !("button" in c.params) || c.params.button === undefined)).toBe(true);
+  });
+});
+
+describe("gesture-tap modifiers on a Mac app", () => {
+  // A current library echoes the modifier keys it held in its reply to the move.
+  const echoModifiers = {
+    "Input.mouse": (params: Record<string, unknown>) =>
+      params.modifiers !== undefined ? { modifiers: params.modifiers } : {},
+  };
+
+  it("holds the modifier keys through the move, each press and each release, without repeats", async () => {
+    const { invoke, calls, urns } = harness(echoModifiers);
+    await expect(
+      invoke("gesture-tap", {
+        x: 0.3,
+        y: 0.4,
+        clickCount: 2,
+        modifiers: ["shift", "command", "shift"],
+      })
+    ).resolves.toMatchObject({ tapped: true });
+    const modifiers = ["shift", "command"];
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["Input.mouse", { type: "move", x: 0.3, y: 0.4, modifiers }],
+      ...[1, 2].flatMap((clickCount) =>
+        (["down", "up"] as const).map((type) => [
+          "Input.mouse",
+          { type, x: 0.3, y: 0.4, clickCount, modifiers },
+        ])
+      ),
+    ]);
+    expect(urns).toEqual([MAC_URN]);
+  });
+
+  it("refuses with MACOS_APP_LIBRARY_OUTDATED and presses nothing when the library does not echo them", async () => {
+    // An older library answers the move without the modifier keys it dropped.
+    const { invoke, calls } = harness();
+    const err = await errorOf(invoke("gesture-tap", { x: 0.3, y: 0.4, modifiers: ["command"] }));
+    expect(err?.message).toContain("cannot hold modifier keys, so nothing was clicked");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.MACOS_APP_LIBRARY_OUTDATED);
+    expect(calls.map((c) => c.params.type)).toEqual(["move"]);
+  });
+
+  it("sends no modifier keys for an empty list, a plain click", async () => {
+    const { invoke, calls } = harness();
+    await expect(invoke("gesture-tap", { x: 0.3, y: 0.4, modifiers: [] })).resolves.toMatchObject({
+      tapped: true,
+    });
+    expect(calls.map((c) => c.params.type)).toEqual(["move", "down", "up"]);
+    expect(calls.every((c) => c.params.modifiers === undefined)).toBe(true);
   });
 });
 
@@ -545,6 +596,49 @@ describe("native-* view tools on a Mac app", () => {
     }
   );
 
+  it("native-view-at-point with hitTest sends the hit-test request, without the flag", async () => {
+    const reply = { view: { className: "NSButton" } };
+    const { invoke, calls } = harness({
+      "ViewHierarchy.userInteractableViewAtPoint": () => reply,
+    });
+    const result = await invoke("native-view-at-point", {
+      bundleId: MAC_BUNDLE_ID,
+      x: 50,
+      y: 50,
+      hitTest: true,
+    });
+    expect(result).toEqual({ status: "ok", ...reply });
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["ViewHierarchy.userInteractableViewAtPoint", { x: 50, y: 50 }],
+    ]);
+  });
+
+  it("native-view-at-point with hitTest: false sends the plain request", async () => {
+    const { invoke, calls } = harness({ "ViewHierarchy.viewAtPoint": () => ({ view: null }) });
+    const result = await invoke("native-view-at-point", {
+      bundleId: MAC_BUNDLE_ID,
+      x: 50,
+      y: 50,
+      hitTest: false,
+    });
+    expect(result).toEqual({ status: "ok", view: null });
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["ViewHierarchy.viewAtPoint", { x: 50, y: 50 }],
+    ]);
+  });
+
+  it("a failed hit-test through native-view-at-point keeps the hit-test error code", async () => {
+    const { invoke } = harness({
+      "ViewHierarchy.userInteractableViewAtPoint": () => ({ error: "no window" }),
+    });
+    const err = await errorOf(
+      invoke("native-view-at-point", { bundleId: MAC_BUNDLE_ID, x: 1, y: 1, hitTest: true })
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_DEVTOOLS_USER_INTERACTABLE_VIEW_AT_POINT_ERROR
+    );
+  });
+
   it("fails on an error in the library's result", async () => {
     const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ error: "no window" }) });
     const err = await errorOf(
@@ -564,4 +658,76 @@ describe("native-* view tools on a Mac app", () => {
       expect(calls).toEqual([]);
     }
   );
+});
+
+describe("native-find-views with no match", () => {
+  // SwiftUI controls are accessibility elements, which the library's NSView
+  // search cannot see. An empty list alone reads as "the control is gone".
+  it("on a Mac app, notes that SwiftUI controls are not NSViews and points to describe", async () => {
+    const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ matches: [] }) });
+    await expect(
+      invoke("native-find-views", { bundleId: MAC_BUNDLE_ID, identifier: "suiIncrement" })
+    ).resolves.toEqual({
+      status: "ok",
+      matches: [],
+      note: expect.stringMatching(/^No NSView matched\. SwiftUI .*: describe lists them/),
+    });
+  });
+
+  it("on a Mac app, notes the same for a label search", async () => {
+    const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ matches: [] }) });
+    await expect(
+      invoke("native-find-views", { bundleId: MAC_BUNDLE_ID, label: "Increment" })
+    ).resolves.toEqual({
+      status: "ok",
+      matches: [],
+      note: expect.stringMatching(/^No NSView matched\. SwiftUI /),
+    });
+  });
+
+  // A className search can match the NSView that backs a SwiftUI control, and
+  // SwiftUI sets no tag or nativeID, so the SwiftUI note does not apply there.
+  it("on a Mac app, adds no note to an empty className, tag or nativeID search", async () => {
+    const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ matches: [] }) });
+    for (const search of [{ className: "NoSuchClass" }, { tag: 4242 }, { nativeID: "none" }]) {
+      await expect(
+        invoke("native-find-views", { bundleId: MAC_BUNDLE_ID, ...search })
+      ).resolves.toEqual({ status: "ok", matches: [] });
+    }
+  });
+
+  it("is described, for Mac apps, as not finding SwiftUI controls, with describe to use instead", () => {
+    const text = (on: boolean) => renderFlagGated(nativeFindViewsTool.description, () => on);
+    expect(text(true)).toMatch(
+      /an identifier or label search does not find SwiftUI controls: describe lists them/
+    );
+    expect(text(false)).not.toMatch(/SwiftUI/);
+  });
+
+  it("on a Mac app, adds no note to a search that found a view", async () => {
+    const matches = [{ className: "NSButton", identifier: "tapButton" }];
+    const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ matches }) });
+    await expect(
+      invoke("native-find-views", { bundleId: MAC_BUNDLE_ID, identifier: "tapButton" })
+    ).resolves.toEqual({ status: "ok", matches });
+  });
+
+  it("on a simulator, returns the empty result with no note", async () => {
+    const api = {
+      getInitFailure: () => null,
+      ensureEnvReady: async () => {},
+      appConnectionState: async () => "connected",
+      queryViewHierarchy: async () => ({ matches: [] }),
+    } as unknown as NativeDevtoolsApi;
+    await expect(
+      nativeFindViewsTool.execute(
+        { nativeDevtools: api },
+        {
+          udid: "AAAAAAAA-1111-2222-3333-444444444444",
+          bundleId: "com.example.app",
+          identifier: "x",
+        }
+      )
+    ).resolves.toEqual({ status: "ok", matches: [] });
+  });
 });

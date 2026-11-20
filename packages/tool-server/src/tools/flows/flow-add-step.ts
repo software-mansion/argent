@@ -62,9 +62,9 @@ import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
-import { assertSupported } from "../../utils/capability";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
+import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
 import {
   MACOS_DESCRIBE_LIMITS,
   MACOS_JUDGING_LIMITS,
@@ -73,6 +73,7 @@ import {
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { IOS_TEXT_INPUT_ROLE } from "./flow-ios-tree";
 import {
   getDescribeTapPoint,
   type DescribeFrame,
@@ -745,6 +746,19 @@ function innermostTreeReason(message: string): string {
 }
 
 /**
+ * The node a recorded selector is derived from. On an iOS simulator the value
+ * of a text input is the text typed into it, and that text never becomes a
+ * selector: it does not name the field, and it can be the value of a
+ * `{{secret:…}}` placeholder, which must not reach the YAML. Without it the
+ * field records by its label, then by its role.
+ */
+function withoutTypedText(node: DescribeNode, { source }: DescribeTreeData): DescribeNode {
+  return source === "native-devtools" && node.role === IOS_TEXT_INPUT_ROLE
+    ? { ...node, value: undefined }
+    : node;
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -781,7 +795,7 @@ async function captureTapSelector(
     const { tree, uiOrientation } = data;
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
-    const selector = deriveSelector(node);
+    const selector = deriveSelector(withoutTypedText(node, data));
     if (!selector)
       return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
     // Replay resolves through selectorToFrame, whose ranking (exact match →
@@ -955,7 +969,7 @@ export function directiveCommandHint(command: string): string | undefined {
         `gesture-swipe is not supported) through e2e-add-step. ` +
         `It is stored as the raw \`tool:\` step for whichever one you called; converting it to ` +
         `\`swipe:\` is part of the polish pass.`,
-      isFlagEnabled
+      isFlagOffered
     );
   }
   if (command === "echo") {
@@ -990,7 +1004,7 @@ export function directiveCommandHint(command: string): string | undefined {
         `<flag:macos-apps> and macOS</flag:macos-apps>) if the path ` +
         `needs it, then add the \`scroll-to:\` step by hand during polish and prove it with the ` +
         `replay.`,
-      isFlagEnabled
+      isFlagOffered
     );
   }
   if (command === "snapshot") {
@@ -1768,11 +1782,21 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A right-click must survive it as `button`, or replay would left-click.
       // Left is the default (absent).
       const tapButton = isTap && args.button === "right" ? { button: "right" as const } : {};
+      const heldKeys = Array.isArray(args.modifiers)
+        ? MACOS_MODIFIERS.filter((m) => (args.modifiers as unknown[]).includes(m))
+        : [];
+      const tapModifiers = isTap && heldKeys.length > 0 ? { modifiers: heldKeys } : {};
 
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
-        step = { kind: "tap", selector: captured.selector, ...tapTimes, ...tapButton };
+        step = {
+          kind: "tap",
+          selector: captured.selector,
+          ...tapTimes,
+          ...tapButton,
+          ...tapModifiers,
+        };
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
@@ -1783,6 +1807,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           y: args.y as number,
           ...tapTimes,
           ...tapButton,
+          ...tapModifiers,
         };
         warning = captured?.warning;
       } else if (isLaunch) {

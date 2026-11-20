@@ -35,6 +35,7 @@ export const DEVICE_KINDS = [
   "vvd",
   "device",
   "app",
+  "catalyst",
 ] as const satisfies readonly DeviceKind[];
 export type TelemetryDeviceKind = (typeof DEVICE_KINDS)[number];
 
@@ -80,6 +81,8 @@ interface InstallationEditorsSelectProps {
 
 interface InstallationAllowlistDecisionProps {
   is_enabled: boolean;
+  /** `flag` = --no-allowlist, `default` = no prompt shown (-y, or no editor supports it). */
+  decided_by: "flag" | "default" | "prompt";
 }
 
 // Post-write sweep in init/update: argent config in other scopes that would

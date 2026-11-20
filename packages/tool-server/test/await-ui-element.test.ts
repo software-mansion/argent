@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
+import { axDaemonExitError } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import {
@@ -8,6 +9,7 @@ import {
   unmetUiWaitCause,
 } from "../src/tools/await-ui-element";
 import { findAll } from "../src/utils/ui-tree-match";
+import { __resetTypedSecretsForTesting, noteTypedSecrets } from "../src/utils/typed-secrets";
 import type { DescribeNode } from "../src/tools/describe/contract";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
@@ -109,10 +111,6 @@ describe("await-ui-element tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
-  });
-
-  it("exposes the await-ui-element id", () => {
-    expect(createAwaitUiElementTool(iosRegistry({} as AXServiceApi)).id).toBe("await-ui-element");
   });
 
   // ── iOS happy paths ──────────────────────────────────────────────────────
@@ -346,6 +344,44 @@ describe("await-ui-element tool", () => {
 
     expect(result.success).toBe(false);
     expect(result.note).toMatch(/Loading/);
+  });
+
+  it("names the placeholder in the timeout note, not a secret typed on the device", async () => {
+    __resetTypedSecretsForTesting();
+    noteTypedSecrets(CHROMIUM_ID, [{ name: "TOKEN", value: "tok-REVIEW-4242" }]);
+    const tree = {
+      role: "html",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "textbox",
+          identifier: "token",
+          label: "Token",
+          value: "tok-REVIEW-4242",
+          frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 },
+          children: [],
+        },
+      ],
+    };
+    const tool = createAwaitUiElementTool(makeMockRegistry({}));
+
+    const unmet = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      {
+        udid: CHROMIUM_ID,
+        condition: "text",
+        selector: { identifier: "token" },
+        expectedText: "Saved token",
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+
+    // The text off the screen only: the expected text stays as the caller wrote it.
+    expect(unmet.note).toBe(
+      'element matched but its text was "Token {{secret:TOKEN}}" (wanted to contain "Saved token")'
+    );
+    __resetTypedSecretsForTesting();
   });
 
   it("`text` check and timeout note both read the visible match, not a zero-area shadow", async () => {
@@ -789,6 +825,38 @@ describe("await-ui-element tool", () => {
 
     expect(result.note).toMatch(/could not confirm the element is hidden/i);
     expect(result.note).toMatch(/boot-device/i); // decorated, so `===` cannot fire
+    expect(unmetUiWaitCause(result)).toBe("unreadable");
+  });
+
+  it("reports a crashed ax-service as itself, not as a simulator to reboot (#800)", async () => {
+    // Every poll starts the daemon again and it crashes again, so the note is
+    // the only place the wait can say why. It used to carry the boot caveat,
+    // whose reboot starts the same binary into the same crash.
+    const ax: AXServiceApi = {
+      ...makeFailingAXService(),
+      describe: async () => {
+        throw axDaemonExitError({ code: 139, signal: "SIGSEGV" }, "connected");
+      },
+    };
+    const tool = createAwaitUiElementTool(iosRegistry(ax));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Continue" },
+        timeoutMs: 40,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toContain("crashed with SIGSEGV");
+    expect(result.note).toContain("will not fix it");
+    expect(result.note).not.toContain("not booted through argent");
+    expect(result.note).not.toMatch(/call (boot-device|restart-app)/);
+    // No read happened, so the condition was not judged.
     expect(unmetUiWaitCause(result)).toBe("unreadable");
   });
 

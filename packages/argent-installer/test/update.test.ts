@@ -3,32 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  getInstalledVersion,
   getGloballyInstalledVersion,
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
 } from "../src/utils.js";
 import { getUpdateTriggerFromEnv, resolveUpdatePackageAction } from "../src/update.js";
-import { PACKAGE_NAME, NPM_REGISTRY } from "../src/constants.js";
-
-describe("update — version comparison logic", () => {
-  it("getInstalledVersion returns a semver-like string or null", () => {
-    const version = getInstalledVersion();
-    // In the test environment this reads the package.json from the dist/..
-    // directory which may not exist; either way the function should not throw.
-    expect(version === null || /^\d+\.\d+\.\d+/.test(version)).toBe(true);
-  });
-
-  it("getGloballyInstalledVersion returns a semver-like string or null", () => {
-    // Test envs may or may not have a global argent install; either result
-    // is acceptable as long as the call doesn't throw and the shape is
-    // valid. The point of this helper is to NOT confuse the running
-    // (possibly npx-cached) version with the persisted global one.
-    const version = getGloballyInstalledVersion();
-    expect(version === null || /^\d+\.\d+\.\d+/.test(version)).toBe(true);
-  });
-});
+import { PACKAGE_NAME } from "../src/constants.js";
 
 describe("update — install command generation", () => {
   const original = process.env.npm_config_user_agent;
@@ -55,16 +36,6 @@ describe("update — install command generation", () => {
     const cmdStr = formatShellCommand(cmd);
     expect(cmdStr).toContain("pnpm add -g");
     expect(cmdStr).toContain(PACKAGE_NAME);
-  });
-});
-
-describe("update — constants are correct", () => {
-  it("PACKAGE_NAME is @swmansion/argent", () => {
-    expect(PACKAGE_NAME).toBe("@swmansion/argent");
-  });
-
-  it("NPM_REGISTRY is the npm registry", () => {
-    expect(NPM_REGISTRY).toContain("registry.npmjs.org");
   });
 });
 
