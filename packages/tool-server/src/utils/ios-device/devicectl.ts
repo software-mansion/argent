@@ -58,6 +58,10 @@ class IosDeviceControlError extends Error {
   }
 }
 
+/** The hint for a devicectl failure that matches no specific cause. */
+export const GENERIC_DEVICECTL_HINT =
+  "Ensure the device is unlocked, trusted, and visible in Xcode > Devices, then retry.";
+
 /**
  * Map devicectl failure output to an actionable hint. `bundleId` is the app a
  * `process launch` targeted, when the command targeted one; it enables the
@@ -108,7 +112,7 @@ function resolveDevicectlHint(output: string, bundleId?: string): string {
     return "Reconnect the cable, unlock the device, and retry; restarting Xcode's device services can help.";
   }
 
-  return "Ensure the device is unlocked, trusted, and visible in Xcode > Devices, then retry.";
+  return GENERIC_DEVICECTL_HINT;
 }
 
 interface RunDevicectlOptions {
@@ -297,6 +301,21 @@ export async function installApp(udid: string, installablePath: string): Promise
       timeoutMs: DEVICECTL_INSTALL_TIMEOUT_MS,
     }
   );
+}
+
+/** The file URL of the installed app's bundle, or null when the app is not installed. */
+export async function installedAppUrl(udid: string, bundleId: string): Promise<string | null> {
+  const { json } = await runDevicectl(
+    ["device", "info", "apps", "--device", udid, "--bundle-id", bundleId],
+    `look up ${bundleId}`,
+    { json: true }
+  );
+  const result = (
+    json as { result?: { apps?: Array<{ bundleIdentifier?: string; url?: string }> } } | null
+  )?.result;
+  // A list with no match means not installed; no list at all is not a verdict.
+  if (!result?.apps) throw new Error(`devicectl returned no app list for ${bundleId}.`);
+  return result.apps.find((app) => app.bundleIdentifier === bundleId)?.url ?? null;
 }
 
 /** Uninstall by bundle id. Missing apps count as success. */

@@ -22,6 +22,10 @@ import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/scre
 import { captureHarmonyScreenshotPng } from "../src/utils/harmony-screen";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
+import {
+  __resetUiOrientationForTests,
+  setUiOrientationSourceProvider,
+} from "../src/utils/ios-ui-orientation";
 
 const tempDirs: string[] = [];
 
@@ -595,7 +599,7 @@ describe("a live capture of a foldable", () => {
     resolveLivePanelMock.mockResolvedValue({ screen: 3, source: "ax-service" });
     const { result, captureScreenshot } = await diffLive(foldable);
     expect(captureScreenshot).toHaveBeenCalledWith(foldable, undefined, undefined, 1.0, 3);
-    expect(result.summary).not.toContain("- panel:");
+    expect(result.summary).not.toContain("- capture:");
   });
 
   it("says in the summary when nothing resolved the panel, so it is of the cover panel", async () => {
@@ -607,19 +611,35 @@ describe("a live capture of a foldable", () => {
     const { result, captureScreenshot } = await diffLive(foldable);
     expect(captureScreenshot).toHaveBeenCalledWith(foldable, undefined, undefined, 1.0, 1);
     expect(result.summary).toContain(
-      "- panel: The panel this foldable simulator renders to could not be resolved"
+      "- capture: The panel this foldable simulator renders to could not be resolved"
     );
     expect(result.summary).toContain("this capture is of screen 1 (cover panel, 1398x2034)");
     // Once, even though the diff reads the summary line per warning.
-    expect(result.summary.split("- panel:")).toHaveLength(2);
+    expect(result.summary.split("- capture:")).toHaveLength(2);
   });
 
   it("asks nothing and adds nothing for a device that is not foldable", async () => {
     const plain = { apiUrl: "http://localhost:4949", deviceId: DUO };
     const { result, captureScreenshot } = await diffLive(plain);
     expect(captureScreenshot).toHaveBeenCalledWith(plain, undefined, undefined, 1.0);
-    expect(result.summary).not.toContain("- panel:");
+    expect(result.summary).not.toContain("- capture:");
     expect(resolveLivePanelMock).not.toHaveBeenCalled();
+  });
+
+  it("says in the summary when the interface orientation could not be read", async () => {
+    __resetUiOrientationForTests();
+    setUiOrientationSourceProvider(async () => ({
+      orientation: async () => {
+        throw new Error("down");
+      },
+    }));
+    try {
+      const plain = { apiUrl: "http://localhost:4949", deviceId: DUO };
+      const { result } = await diffLive(plain);
+      expect(result.summary).toContain("- capture: The interface orientation could not be read");
+    } finally {
+      setUiOrientationSourceProvider(undefined);
+    }
   });
 });
 

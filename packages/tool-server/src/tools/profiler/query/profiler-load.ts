@@ -70,7 +70,7 @@ async function listSessions(debugDir: string): Promise<string> {
       continue;
     }
 
-    const nativeMatch = entry.match(/^native-profiler-(\d{8}-?\d{6})/);
+    const nativeMatch = entry.match(/^native-profiler-(\d{8}-?\d{6}(?:-launch-[a-f0-9-]{36})?)/);
     if (nativeMatch) {
       const sid = nativeMatch[1];
       if (!nativeSessions.has(sid)) nativeSessions.set(sid, []);
@@ -442,7 +442,7 @@ async function loadNativeSession(
     `Loaded native profiler session \`${sessionId}\`.`,
     "",
     `- CPU samples: ${cpuSamples.length}`,
-    `- UI hangs: ${uiHangs.length}`,
+    `- UI hangs: ${files.hangs ? uiHangs.length : "not recorded"}`,
     `- CPU hotspots: ${cpuHotspots.length}`,
     `- Memory leaks: ${files.leaks ? memoryLeaks.length : "not recorded"}`,
     "",
@@ -520,7 +520,8 @@ Fails if the session_id is not found or the session's trace files are missing fr
   },
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
-  capability: REACT_PROFILER_TOOL_CAPABILITY,
+  // Physical iPhones load the xctrace sessions native-profiler-launch-analysis writes.
+  capability: { ...REACT_PROFILER_TOOL_CAPABILITY, apple: { simulator: true, device: true } },
   // load_native re-parses the whole export, which can outlast the 30s MCP fetch
   // timeout; an aborted call is replayed, not cancelled.
   longRunning: true,

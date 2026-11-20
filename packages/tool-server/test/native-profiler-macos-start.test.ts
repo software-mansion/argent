@@ -164,6 +164,7 @@ function fakeMacosApp(
     pid,
     platform: "macos",
     protocol: 1,
+    kind: "app",
     args: [],
     appPath: "/Applications/Example.app",
     sandboxed: false,
