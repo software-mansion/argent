@@ -65,7 +65,8 @@ export interface NativeNetworkBody {
   /**
    * Set on a request body that came with the request itself and that the host
    * holds: the whole body's length in chars, of which `body` keeps the start.
-   * Such a body carries no base64 flag, so a binary one reads as base64 text.
+   * The agent sends a body this way only when it is UTF-8 text, as this field
+   * has no base64 flag; it gives any other body by Network.getRequestPostData.
    */
   inlineChars?: number;
 }
