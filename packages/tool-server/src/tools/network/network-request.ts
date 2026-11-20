@@ -97,8 +97,12 @@ function maskedPostData(
 
 /** A request body cut to MAX_BODY_SIZE; `truncated` says the interceptor kept only its start. */
 function truncatePostData(postData: string | undefined, truncated?: boolean): string | undefined {
-  // A body the interceptor cut is always longer than MAX_BODY_SIZE.
-  if (postData == null || postData.length <= MAX_BODY_SIZE) return postData;
+  if (postData == null) return postData;
+  if (postData.length <= MAX_BODY_SIZE) {
+    return truncated
+      ? `${cutMarker(`more than ${postData.length} chars`, undefined, postData.length)}\n${postData}`
+      : postData;
+  }
   const fullSize = truncated ? `more than ${postData.length} chars` : `${postData.length} chars`;
   return `${cutMarker(fullSize)}\n${postData.slice(0, MAX_BODY_SIZE)}...`;
 }

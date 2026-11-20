@@ -82,11 +82,36 @@ describe("maskBodySecrets", () => {
     );
   });
 
+  it("masks a JSON key written with unicode escapes", () => {
+    const body = `{"\\u0070assword":"hunter2","pass\\u0077ord":"hunter2","bad\\u00zz":"keep"}`;
+    expect(maskBodySecrets(body, JSON_TYPE)).toBe(
+      `{"\\u0070assword":"[REDACTED]","pass\\u0077ord":"[REDACTED]","bad\\u00zz":"keep"}`
+    );
+  });
+
+  it("masks form array fields", () => {
+    expect(maskBodySecrets("password[]=x&user%5Bpassword%5D%5B%5D=y&tags[]=z", FORM_TYPE)).toBe(
+      "password[]=[REDACTED]&user%5Bpassword%5D%5B%5D=[REDACTED]&tags[]=z"
+    );
+  });
+
+  it("reads the first media type of a Content-Type header that was set twice", () => {
+    const twice = "application/x-www-form-urlencoded, application/x-www-form-urlencoded";
+    expect(maskBodySecrets("user=a&password=x", twice)).toBe("user=a&password=[REDACTED]");
+  });
+
   it("scans a large crafted body in linear time", () => {
-    const body = "[" + `{"password":"\\"","a":`.repeat(100_000) + '"\\'.repeat(100_000);
-    const started = performance.now();
-    maskBodySecrets(body, JSON_TYPE);
-    maskBodySecrets(body, FORM_TYPE);
-    expect(performance.now() - started).toBeLessThan(1000);
+    const crafted = (repeats: number) =>
+      "[" + `{"password":"\\"","a":`.repeat(repeats) + '"\\'.repeat(repeats);
+    const scanMs = (body: string) => {
+      const started = performance.now();
+      maskBodySecrets(body, JSON_TYPE);
+      maskBodySecrets(body, FORM_TYPE);
+      return performance.now() - started;
+    };
+    scanMs(crafted(10_000));
+    const small = scanMs(crafted(20_000));
+    const large = scanMs(crafted(200_000));
+    expect(large).toBeLessThan(Math.max(small, 1) * 100);
   });
 });

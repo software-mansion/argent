@@ -35,7 +35,7 @@ function isSecretField(name: string): boolean {
 export function maskBodySecrets(body: string, contentType: string): string {
   const first = body.trimStart()[0];
   if (first === "{" || first === "[") return maskJsonBody(body);
-  const mimeType = contentType.split(";")[0]!.trim().toLowerCase();
+  const mimeType = contentType.split(/[;,]/)[0]!.trim().toLowerCase();
   return mimeType === "application/x-www-form-urlencoded" ? maskFormBody(body) : body;
 }
 
@@ -54,7 +54,7 @@ function maskFormBody(body: string): string {
 
 /** The last part of a form field name, as in Rails' `user[password]` or ASP.NET's `Input.Password`. */
 function formFieldName(rawKey: string): string {
-  const key = decodeFormKey(rawKey);
+  const key = decodeFormKey(rawKey).replace(/(\[\])+$/, "");
   const open = key.lastIndexOf("[");
   const name = open !== -1 && key.endsWith("]") ? key.slice(open + 1, -1) : key;
   return name.slice(name.lastIndexOf(".") + 1);
@@ -90,13 +90,22 @@ function maskJsonBody(body: string): string {
       continue;
     }
     const valueClose = closingQuote(body, valueOpen);
-    if (valueClose > valueOpen + 1 && isSecretField(body.slice(i + 1, keyClose))) {
+    if (valueClose > valueOpen + 1 && isSecretField(jsonKeyName(body.slice(i + 1, keyClose)))) {
       masked += body.slice(copied, valueOpen + 1) + MASK;
       copied = valueClose;
     }
     i = valueClose + 1;
   }
   return masked + body.slice(copied);
+}
+
+function jsonKeyName(rawKey: string): string {
+  if (!rawKey.includes("\\")) return rawKey;
+  try {
+    return String(JSON.parse(`"${rawKey}"`));
+  } catch {
+    return rawKey;
+  }
 }
 
 /** The index of the quote that closes the string opened at `open`, or past the text's end. */

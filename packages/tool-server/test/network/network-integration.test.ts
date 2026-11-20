@@ -576,6 +576,38 @@ describe("NetworkInspector integration (mock server)", () => {
     }
   });
 
+  it("view-network-request-details keeps the cut marker when masking shortens a cut body", async () => {
+    networkLog.push({
+      id: networkLog.length,
+      requestId: "rn-net-cut-secret",
+      state: "finished",
+      request: {
+        url: "https://api.example.com/login",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        postData: `{"password":"${"x".repeat(1_048_576)}`,
+        postDataTruncated: true,
+      },
+      resourceType: "Fetch",
+      timestamp: Date.now() / 1000,
+    });
+    try {
+      const result = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-cut-secret",
+      })) as { request: { postData?: string } };
+      expect(result.request.postData).toBe(
+        `[TRUNCATED: first 23 chars shown, full size: more than 23 chars]\n{"password":"[REDACTED]`
+      );
+    } finally {
+      networkLog.splice(
+        networkLog.findIndex((e) => e.requestId === "rn-net-cut-secret"),
+        1
+      );
+    }
+  });
+
   it("view-network-request-details returns error for unknown requestId", async () => {
     const result = (await registry.invokeTool("view-network-request-details", {
       port: mockPort,
