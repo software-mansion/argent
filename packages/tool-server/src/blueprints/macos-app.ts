@@ -19,6 +19,7 @@ import {
   attachNdjsonReader,
   createNdjsonCdpRequester,
   reportDroppedFrameToStderr,
+  writeNdjsonFrame,
   type NdjsonCdpRequester,
 } from "../utils/ndjson-socket";
 import { macosAppIdFromBundleId, parseMacosAppBundleId } from "../utils/device-info";
@@ -451,6 +452,8 @@ interface ChannelNetworkSink {
   event(method: string, params: unknown, pid: number): void;
   /** The channel closed, for whatever reason. */
   closed(channel: LibraryChannel): void;
+  /** The library acknowledged the channel's last Network.enable, also after its timeout. */
+  enabled(channel: LibraryChannel): void;
 }
 
 /**
@@ -468,6 +471,8 @@ class LibraryChannel {
   enabling?: Promise<boolean>;
   /** Why the last Network.enable did not arm this channel. */
   enableFailure?: string;
+  /** The CDP id of the last Network.enable sent on this channel. */
+  private enableId?: number;
   private readonly pending = new Map<number, PendingCall>();
   private nextId = 1;
   private hello: MacosLibraryHandshake | null = null;
@@ -491,7 +496,14 @@ class LibraryChannel {
     private readonly expectedPid: number | null,
     private readonly network: ChannelNetworkSink
   ) {
-    this.cdp = createNdjsonCdpRequester(socket, { label: `macos-app ${bundleId}` });
+    this.cdp = createNdjsonCdpRequester(socket, {
+      label: `macos-app ${bundleId}`,
+      send: (frame) => {
+        const p = (frame as { payload: { id: number; method: string } }).payload;
+        if (p.method === "Network.enable") this.enableId = p.id;
+        return writeNdjsonFrame(socket, frame);
+      },
+    });
     this.ready.catch(() => undefined);
     attachNdjsonReader(socket, {
       onDropped: reportDroppedFrameToStderr(`macos-app ${bundleId}`),
@@ -588,6 +600,9 @@ class LibraryChannel {
       // A frame with an id answers a CDP request of this channel, before the
       // events after it are read. A network event has a method and no id.
       const p = msg.payload;
+      // An app held suspended (Instruments, a debugger) acknowledges after the
+      // request timed out, and from then on it captures.
+      if (p && p.id === this.enableId && "result" in p) this.network.enabled(this);
       if (this.cdp.handleResponse(p)) return;
       if (p && typeof p.method === "string" && p.id === undefined) {
         this.network.event(p.method, p.params, this.hello.pid);
@@ -907,29 +922,26 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         }
       });
     },
+    enabled(ch) {
+      if (!captureStarted) return;
+      ch.armed = true;
+      delete ch.enableFailure;
+    },
   };
 
   /**
    * Sends Network.enable unless the channel is armed or already waiting for
    * the reply. The reply arms the channel as its frame is read, before the
    * events after it, unless capture was stopped meanwhile. A channel that does
-   * not answer in time stays open and unarmed: the next start asks again.
+   * not answer in time stays unarmed until its late reply comes: the next
+   * start asks again.
    */
   const enableOn = (ch: LibraryChannel): Promise<boolean> => {
     if (ch.armed) return Promise.resolve(true);
     if (ch.enabling) return ch.enabling;
     delete ch.enableFailure;
     const enabling = ch.cdp
-      .request(
-        "Network.enable",
-        {},
-        {
-          timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS,
-          onResult: () => {
-            if (captureStarted) ch.armed = true;
-          },
-        }
-      )
+      .request("Network.enable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS })
       .then(
         () => ch.armed,
         (err: unknown) => {

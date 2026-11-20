@@ -1339,6 +1339,32 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
     }, 20_000);
 
+    it("arms the app when it acknowledges Network.enable after the start stopped waiting", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      // Held suspended past the 5 s wait, as Instruments or a debugger does.
+      process.kill(pid, "SIGSTOP");
+      try {
+        expect((await start()).layers).toEqual([
+          {
+            layer: "macos-native",
+            armed: false,
+            reason:
+              "the app did not acknowledge Network.enable within 5 s; network-capture-start asks again",
+          },
+        ]);
+      } finally {
+        process.kill(pid, "SIGCONT");
+      }
+      expect((await readUntil((log) => log.armed)).header).toMatch(
+        `macos-native: armed, 0 requests (pid ${pid}`
+      );
+      expect(await request("https://example.com/late")).toEqual({ active: true, activations: 1 });
+      expect(await readLog()).toMatchObject({
+        armed: true,
+        header: `macos-native: armed, 1 request (pid ${pid})`,
+      });
+    }, 20_000);
+
     it("records no new request after a stop that the app did not acknowledge", async () => {
       await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=disable-silent"] });
       await start();
