@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import {
   killToolServer,
   findFreePort,
+  resolveToolsServerNode,
   spawnToolsServer,
   buildToolsServerEnv,
   isToolsServerHealthy,
@@ -392,10 +393,21 @@ async function runForeground(
     token,
   });
 
-  const child = spawn("node", [paths.bundlePath, "start"], {
-    stdio: "inherit",
-    env,
-  });
+  const cannotStart = (err: unknown): never => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`argent server start: failed to spawn tool-server: ${message}`);
+    process.exit(1);
+  };
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(resolveToolsServerNode(), [paths.bundlePath, "start"], {
+      stdio: "inherit",
+      env,
+    });
+  } catch (err) {
+    // Some spawn failures (e.g. ENOEXEC, ELOOP) throw instead of emitting `error`.
+    return cannotStart(err);
+  }
 
   // The child has its own SIGINT/SIGTERM handlers that drain HTTP and dispose the
   // registry, so forwarding lets a supervisor stop us cleanly.
@@ -451,8 +463,7 @@ async function runForeground(
     // them as a message rather than an unhandled stack trace.
     child.on("error", (err) => {
       cleanup();
-      console.error(`argent server start: failed to spawn tool-server: ${err.message}`);
-      process.exit(1);
+      cannotStart(err);
     });
     child.on("exit", (code, signal) => {
       cleanup();
