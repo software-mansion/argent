@@ -3596,7 +3596,7 @@ describe("the layer option", () => {
       expect(rt.paused).not.toBe(true);
     });
 
-    it("says the JS layer was not started on a JS stop after a start of the native layer alone, and stores nothing", async () => {
+    it("says the JS layer was not started on a JS stop after a start of the native layer alone, pauses the runtime it reaches, and leaves native capture on", async () => {
       await start(p.udid, APP, undefined, "native");
 
       const result = await stop(p.udid, APP, undefined, "js");
@@ -3605,7 +3605,18 @@ describe("the layer option", () => {
         status: "ok",
         layers: [{ layer: "js", armed: false, total: 0, reason: NOT_STARTED }],
       });
+      // A reachable runtime is paused, also for an interceptor an earlier tool-server left there.
+      expect(rt.paused).toBe(true);
+      expect(findJsCapture(p.udid, APP)).toMatchObject({
+        intent: "stopped",
+        installed: false,
+        paused: true,
+      });
+      expect(await read(p.udid)).toContain(
+        `Network capture is stopped for ${APP} (network-capture-stop)`
+      );
       expect(p.nativeStarted()).toBe(true);
+      expect(p.nativeStopped()).toBe(false);
     });
   });
 
