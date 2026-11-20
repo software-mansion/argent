@@ -63,6 +63,7 @@ import { assertSupported, UnsupportedOperationError } from "../src/utils/capabil
 import { resolveDevice } from "../src/utils/device-info";
 import { readAppProcesses } from "../src/blueprints/android-network-inspector-device";
 import { localIosHost, remoteIosHost } from "../src/utils/ios-host";
+import { proxyStart } from "../src/utils/sim-remote";
 
 // The device's process table, which a stop reads when it cannot reach the app's JS runtime.
 vi.mock("../src/blueprints/android-network-inspector-device", async (importOriginal) => ({
@@ -78,6 +79,31 @@ vi.mock("../src/utils/ios-host", async (importOriginal) => {
   };
 });
 
+// A lookup of adb that a test holds open, a host without it, or the real one.
+const adbLookup = vi.hoisted(() => ({
+  hold: undefined as Promise<void> | undefined,
+  reached: false,
+}));
+vi.mock("../src/utils/android-binary", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/android-binary")>();
+  return {
+    ...actual,
+    resolveAndroidBinary: async (name: "adb" | "emulator") => {
+      if (hostTools.missing) return null;
+      if (!adbLookup.hold) return actual.resolveAndroidBinary(name);
+      adbLookup.reached = true;
+      await adbLookup.hold;
+      return `/fake/${name}`;
+    },
+  };
+});
+
+// The sim-remote tunnel from a remote simulator to this host's Metro.
+vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
+  proxyStart: vi.fn(async () => {}),
+}));
+
 // Whether Xcode's component install is pending. The suite-wide setup answers no.
 const xcode = vi.hoisted(() => ({ pending: false }));
 vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
@@ -87,14 +113,6 @@ vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
 
 // Whether the host lacks adb, xcrun and sim-remote. The suite-wide setup marks them present.
 const hostTools = vi.hoisted(() => ({ missing: false }));
-vi.mock("../src/utils/android-binary", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/utils/android-binary")>();
-  return {
-    ...actual,
-    resolveAndroidBinary: (name: "adb" | "emulator") =>
-      hostTools.missing ? Promise.resolve(null) : actual.resolveAndroidBinary(name),
-  };
-});
 vi.mock("../src/utils/command-on-path", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/command-on-path")>();
   return {
@@ -510,6 +528,8 @@ beforeEach(() => {
   androidFactoryCalls = 0;
   xcode.pending = false;
   hostTools.missing = false;
+  adbLookup.hold = undefined;
+  adbLookup.reached = false;
   __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
 });
 
@@ -2893,6 +2913,28 @@ describe("a Metro that several devices share", () => {
     ).toMatchObject({ armed: false });
   });
 
+  it("opens a remote simulator's sim-remote tunnel by its udid, and finds the runtime by logicalDeviceId", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, REMOTE_UDID, FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH);
+    serve(PORT, SHARED_ID, rt);
+    vi.mocked(proxyStart).mockClear();
+
+    const result = await start(REMOTE_UDID, APP, undefined, undefined, SHARED_ID);
+    expect(layer(result, "js")).toEqual({ layer: "js", armed: true });
+    expect(vi.mocked(proxyStart).mock.calls).toEqual([[REMOTE_UDID, PORT]]);
+
+    expect(
+      layer(await stop(REMOTE_UDID, APP, undefined, undefined, SHARED_ID), "js")
+    ).toMatchObject({
+      armed: false,
+    });
+    expect(vi.mocked(proxyStart).mock.calls).toEqual([
+      [REMOTE_UDID, PORT],
+      [REMOTE_UDID, PORT],
+    ]);
+    expect(rt.paused).toBe(true);
+  });
+
   it("refuses an empty logicalDeviceId before any layer runs", async () => {
     shared();
 
@@ -3091,6 +3133,28 @@ describe("a start and a stop of one app", () => {
       });
     return { release: () => release?.() };
   }
+
+  it("run one after the other also when the stop comes while the start looks up adb, so the JS layer ends paused", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    let release!: () => void;
+    adbLookup.hold = new Promise((resolve) => (release = resolve));
+    __resetDepCacheForTests();
+
+    const starting = start(SERIAL, APP);
+    await vi.waitFor(() => expect(adbLookup.reached).toBe(true));
+    const stopping = stop(SERIAL, APP);
+    await settle();
+    expect(rt.evaluated).toEqual([]);
+
+    release();
+    await starting;
+    const stopped = await stopping;
+
+    expect(layer(stopped, "js")).toEqual({ layer: "js", armed: false, total: 0 });
+    expect(rt.paused).toBe(true);
+    expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped" });
+  });
 
   it("run one after the other", async () => {
     const rt = new FakeRuntime(APP);
