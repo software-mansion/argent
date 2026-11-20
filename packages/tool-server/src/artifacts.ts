@@ -128,6 +128,8 @@ function streamDirectoryAsArchive(
       res.destroy();
     }
   });
+  // EMFILE leaves no pipe. The spawn error handler above answers the request.
+  if (!child.stdout) return;
   const compressor = createCompressor(format);
   // On a client abort, stop tar and the compressor, which would otherwise stay
   // alive undrained with its buffers; `writableFinished` tells an abort apart

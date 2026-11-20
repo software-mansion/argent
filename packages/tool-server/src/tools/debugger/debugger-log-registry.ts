@@ -36,7 +36,7 @@ interface LogRegistryResponse extends LogStats {
 const DEFAULT_TAIL = 20;
 
 /** `Runtime.consoleAPICalled.type`, the level names the writer records. */
-export const CONSOLE_LEVELS = [
+const CONSOLE_LEVELS = [
   "log",
   "debug",
   "info",

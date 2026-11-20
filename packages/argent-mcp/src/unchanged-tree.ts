@@ -71,7 +71,7 @@ export function treeIdLine(id: string): string {
  * placeholder, a password), so the note must not say that nothing changed.
  */
 export function unchangedTreeNote(id: string, tool: string): string {
-  return `Identical to element tree \`${id}\`, which an earlier \`${tool}\` result returned, so it is not repeated here: take elements and frames from that tree. The action can still have had an effect that the tree does not show, such as text typed in a field. Call \`describe\` if you do not have tree \`${id}\`.`;
+  return `Element tree matches \`${id}\` from an earlier \`${tool}\` result. Actions may have effects the tree omits. Call \`describe\` if you lack that tree.`;
 }
 
 /** Tells the ids of this process from those of an earlier one in the same conversation. */

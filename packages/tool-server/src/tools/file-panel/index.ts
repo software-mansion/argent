@@ -33,7 +33,7 @@ type Result =
   | { armed: boolean; mode: "answer" | "cancel" | "off"; panelKind?: MacosPanel["kind"] };
 
 const capability: ToolCapability = {
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 const invalid = (message: string, stage: string) =>

@@ -7,6 +7,7 @@ import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   countStepsOnDisk,
   serializeFlow,
+  flowFormatVersion,
   parseFlow,
   describeSelector,
   assertValidProjectRoot,
@@ -33,7 +34,7 @@ import { scopeTempFlags } from "../helpers/macos-apps-flag";
 
 describe("serializeFlow", () => {
   it("writes the format version as the first key", async () => {
-    expect(serializeFlow({ executionPrerequisite: "", steps: [] })).toBe("version: 1\nsteps: []\n");
+    expect(serializeFlow({ executionPrerequisite: "", steps: [] })).toBe("version: 2\nsteps: []\n");
   });
 
   it("serializes an empty flow with prerequisite", async () => {
@@ -42,7 +43,7 @@ describe("serializeFlow", () => {
       steps: [],
     };
     expect(serializeFlow(flow)).toBe(
-      "version: 1\nsteps: []\nexecutionPrerequisite: App on home screen\n"
+      "version: 2\nsteps: []\nexecutionPrerequisite: App on home screen\n"
     );
   });
 
@@ -847,6 +848,10 @@ describe("parseFlow", () => {
       "\t\n",
       "  hi  ",
       "plain single line",
+      // Long enough to be written over several lines: a line of one space must
+      // still come back as a space, not a backslash.
+      "x".repeat(78) + "\n \nb",
+      "x".repeat(30) + " " + "y".repeat(60) + "\n \n z",
     ];
     for (const value of values) {
       const flow: FlowFile = {
@@ -901,10 +906,21 @@ describe("parseFlow", () => {
       expect(parseFlow(`version: 1\n${body}`)).toEqual(parseFlow(body));
     });
 
-    it.each([[2], [3]])("refuses a version %i file and says to update", async (v) => {
+    it("reads a version 1 file as version 1, and a version 2 one, or one built in memory, as 2", () => {
+      const body = "steps:\n  - tap: { x: 0.2, y: 0.3 }\n";
+      expect(flowFormatVersion(parseFlow(body))).toBe(1);
+      expect(flowFormatVersion(parseFlow(`version: 1\n${body}`))).toBe(1);
+      expect(flowFormatVersion(parseFlow(`version: 2\n${body}`))).toBe(2);
+      expect(flowFormatVersion({ executionPrerequisite: "", steps: [] })).toBe(2);
+      // Re-serialized, a version 1 flow is written as version 2: only the
+      // runner turns its points, so a recording never appends to one.
+      expect(serializeFlow(parseFlow(body))).toMatch(/^version: 2\n/);
+    });
+
+    it.each([[3], [4]])("refuses a version %i file and says to update", async (v) => {
       const err = thrown(`version: ${v}\nsteps:\n  - echo: hi\n`);
       expect((err as Error).message).toBe(
-        `The e2e test file is version ${v}, but this Argent reads up to version 1. Update Argent to run it.`
+        `The e2e test file is version ${v}, but this Argent reads up to version 2. Update Argent to run it.`
       );
       // `validation` is what lets `argent e2e run <dir>` move on to the next file.
       expect(getFailureSignal(err)).toMatchObject({
@@ -914,11 +930,11 @@ describe("parseFlow", () => {
     });
 
     it.each([
-      ["adds a top-level key", "version: 2\nmetadata: x\nsteps: []\n"],
-      ["reshapes steps", "version: 2\nsteps:\n  main: []\n"],
+      ["adds a top-level key", "version: 3\nmetadata: x\nsteps: []\n"],
+      ["reshapes steps", "version: 3\nsteps:\n  main: []\n"],
     ])("refuses a newer file that %s as newer, not as malformed", async (_, file) => {
       expect(() => parseFlow(file)).toThrow(
-        "The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it."
+        "The e2e test file is version 3, but this Argent reads up to version 2. Update Argent to run it."
       );
     });
 
@@ -1293,6 +1309,9 @@ describe("output references", () => {
       "`tap.on.id`"
     );
     expect(
+      locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, modifiers: [command] }\n')
+    ).toBe("`tap.on.id`");
+    expect(
       locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
     ).toBe("`long-press.on.id`");
     expect(locatorNamed('steps:\n  - pinch: { on: { id: "{{output:map}}" }, scale: 2 }\n')).toBe(
@@ -1326,6 +1345,9 @@ describe("output references", () => {
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, button: left }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, modifiers: [] }\n')).toBe(
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n')).toBe(

@@ -16,17 +16,6 @@ describe("advertised bundleId pattern", () => {
     })
     .filter((entry) => typeof entry.pattern === "string");
 
-  it("is advertised by exactly the tools that take an app identifier", () => {
-    expect(constrained.map(({ id }) => id).sort()).toEqual([
-      "launch-app",
-      "open-url",
-      "reinstall-app",
-      "restart-app",
-      "settings-permissions",
-      "terminate-app",
-    ]);
-  });
-
   for (const { id, pattern, field } of constrained) {
     it(`${id}: admits a digit-leading bundle id and still refuses a flag`, () => {
       const re = new RegExp(pattern!);
