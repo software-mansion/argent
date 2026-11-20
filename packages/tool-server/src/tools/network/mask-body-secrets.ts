@@ -54,7 +54,7 @@ function maskFormBody(body: string): string {
 
 /** The last part of a form field name, as in Rails' `user[password]` or ASP.NET's `Input.Password`. */
 function formFieldName(rawKey: string): string {
-  const key = decodeFormKey(rawKey).replace(/(\[\])+$/, "");
+  const key = decodeFormKey(rawKey).replace(/(\[\d*\])+$/, "");
   const open = key.lastIndexOf("[");
   const name = open !== -1 && key.endsWith("]") ? key.slice(open + 1, -1) : key;
   return name.slice(name.lastIndexOf(".") + 1);

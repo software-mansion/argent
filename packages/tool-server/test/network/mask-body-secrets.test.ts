@@ -90,8 +90,10 @@ describe("maskBodySecrets", () => {
   });
 
   it("masks form array fields", () => {
-    expect(maskBodySecrets("password[]=x&user%5Bpassword%5D%5B%5D=y&tags[]=z", FORM_TYPE)).toBe(
-      "password[]=[REDACTED]&user%5Bpassword%5D%5B%5D=[REDACTED]&tags[]=z"
+    expect(
+      maskBodySecrets("password[]=x&user%5Bpassword%5D%5B%5D=y&password[0]=w&tags[]=z", FORM_TYPE)
+    ).toBe(
+      "password[]=[REDACTED]&user%5Bpassword%5D%5B%5D=[REDACTED]&password[0]=[REDACTED]&tags[]=z"
     );
   });
 
