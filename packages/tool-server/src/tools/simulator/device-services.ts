@@ -262,3 +262,26 @@ export async function isBorrowedSimulatorServer(registry: Registry, urn: string)
     return false;
   }
 }
+
+/**
+ * Of `urns`, the simulator-servers that are borrowed (see
+ * {@linkcode isBorrowedSimulatorServer}). Call it right after taking the
+ * snapshot the URNs come from, before awaiting any disposal: tool calls are not
+ * serialized, so another call can dispose a borrowed server while this one
+ * waits. Its node is then IDLE and a later check would count it as Argent's own
+ * and report it stopped although it keeps running. A RUNNING node resolves
+ * without yielding to another request, so this reads the same moment as the
+ * snapshot.
+ */
+export async function borrowedSimulatorServers(
+  registry: Registry,
+  urns: Iterable<string>
+): Promise<Set<string>> {
+  const borrowed = new Set<string>();
+
+  for (const urn of urns) {
+    if (await isBorrowedSimulatorServer(registry, urn)) borrowed.add(urn);
+  }
+
+  return borrowed;
+}

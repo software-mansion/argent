@@ -5,7 +5,7 @@ import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
   deviceIdOwningUrn,
-  isBorrowedSimulatorServer,
+  borrowedSimulatorServers,
   isDeviceServiceUrn,
   unnameableSessionUrns,
 } from "./device-services";
@@ -82,6 +82,7 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
       // machine-wide sweep, which would tear down other agents' services.
       const scoped = devices !== undefined;
       const snapshot = registry.getSnapshot();
+      const borrowedUrns = await borrowedSimulatorServers(registry, snapshot.services.keys());
       const stopped: string[] = [];
       const matchedIds = new Set<string>();
       // Live port-keyed services this scope did NOT claim; unclaimed services
@@ -111,9 +112,8 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
           // is disposed too, but was never a running server, so it is not
           // reported stopped.
           const wasLive = isLiveServiceState(entry.state);
-          const borrowed = await isBorrowedSimulatorServer(registry, urn);
           await registry.disposeService(urn);
-          if (wasLive && !borrowed) stopped.push(urn);
+          if (wasLive && !borrowedUrns.has(urn)) stopped.push(urn);
         } else if (
           scoped &&
           isLiveServiceState(entry.state) &&

@@ -1163,6 +1163,45 @@ describe("stop tools — a provider's device under its plain UDID", () => {
     await second.release();
     expect(single).toEqual({ stopped: false, udid: ext });
   });
+
+  it("keeps a borrowed server out of stopped when another call drops it mid-sweep", async () => {
+    const OTHER = "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0";
+    let openDispose!: () => void;
+    const disposeGate = new Promise<void>((resolve) => (openDispose = resolve));
+    let disposeStarted!: () => void;
+    const disposing = new Promise<void>((resolve) => (disposeStarted = resolve));
+
+    registry.registerBlueprint<object, string>({
+      factory: async () => ({
+        api: {},
+        dispose: async () => {
+          disposeStarted();
+          await disposeGate;
+        },
+        events: new TypedEventEmitter<ServiceEvents>(),
+      }),
+      getURN: (id) => `NativeProfilerSession:${id}`,
+      namespace: "NativeProfilerSession",
+    });
+
+    publishClaim();
+    // Inserted first, so the sweep waits on its slow dispose before it reaches
+    // the borrowed server.
+    await registry.resolveService(`NativeProfilerSession:${OTHER}`);
+    await startSimulatorServer(CLAIMED, true);
+
+    const all = createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [OTHER, CLAIMED] }
+    );
+
+    await disposing;
+    const single = await createStopSimulatorServerTool(registry).execute!({}, { udid: CLAIMED });
+    openDispose();
+
+    expect(single).toEqual({ stopped: false, udid: CLAIMED });
+    expect(await all).toEqual({ stopped: [`NativeProfilerSession:${OTHER}`] });
+  });
 });
 
 describe("stop-all-simulator-servers unmatched ids", () => {
