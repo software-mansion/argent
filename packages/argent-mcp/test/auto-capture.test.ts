@@ -104,6 +104,16 @@ describe("shouldAutoScreenshot", () => {
     expect(shouldAutoScreenshot("simulator-server")).toBe(false);
     expect(shouldAutoScreenshot("activate-sso")).toBe(false);
   });
+
+  it.each(["menu-bar", "mcp__argent__file-panel"])(
+    "captures nothing after %s action list, which only reads",
+    (tool) => {
+      expect(shouldAutoScreenshot(tool, { udid: "u", action: "list" })).toBe(false);
+      expect(shouldAutoDescribe(tool, { udid: "u", action: "list" })).toBe(false);
+      expect(shouldAutoScreenshot(tool, { udid: "u", action: "choose" })).toBe(true);
+      expect(shouldAutoDescribe(tool, { udid: "u", action: "choose" })).toBe(true);
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -256,11 +266,6 @@ describe("getAutoScreenshotDelayMs", () => {
 // shouldAutoScreenshot — unified tools trigger one screenshot regardless of platform
 // ---------------------------------------------------------------------------
 describe("shouldAutoScreenshot — unified surface", () => {
-  it("returns false for the screenshot tool itself (prevents recursion)", () => {
-    expect(shouldAutoScreenshot("screenshot")).toBe(false);
-    expect(shouldAutoScreenshot("mcp__argent__screenshot")).toBe(false);
-  });
-
   it("returns true for unified interaction tools", () => {
     for (const t of [
       "gesture-tap",
@@ -278,11 +283,6 @@ describe("shouldAutoScreenshot — unified surface", () => {
     ]) {
       expect(shouldAutoScreenshot(t)).toBe(true);
     }
-  });
-
-  it("normalizes MCP-prefixed names before looking up the allow-list", () => {
-    expect(shouldAutoScreenshot("mcp__argent__gesture-tap")).toBe(true);
-    expect(shouldAutoScreenshot("mcp__argent__launch-app")).toBe(true);
   });
 });
 

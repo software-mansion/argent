@@ -65,6 +65,15 @@ export const keyboardPatchDylibPath = () => {
   requireDarwin("keyboardPatchDylibPath");
   return requireDylibIn(DYLIB_DIR, "libKeyboardPatch.dylib");
 };
+/**
+ * The audio mock, inserted into every process of a locally armed simulator at
+ * arming time (the `ios-audio-always-inserted` flag, on by default; off, only
+ * once an audio tool is used). Local iOS only: no tvOS or TCP variant.
+ */
+export const audioDylibPath = () => {
+  requireDarwin("audioDylibPath");
+  return requireDylibIn(DYLIB_DIR, "libArgentAudio.dylib");
+};
 
 export const bootstrapDylibPathTcp = () => {
   return requireTcpArtifact(
@@ -200,4 +209,24 @@ export function tvosAxServiceBinaryPath(): string {
 export function tvosHidDaemonBinaryPath(): string {
   requireDarwin("tvos-hid-daemon");
   return requireBinIn(platformBinDir(), "tvos-hid-daemon");
+}
+
+// Native Mac apps. The macOS bootstrap shares its basename with the iOS one, so
+// both dylibs live in dylibs/macos/, where the bootstrap loads the library from
+// its own directory; the helper is a host binary in bin/darwin/.
+export function macosArtifacts(): { bootstrap: string; library: string; helper: string } {
+  const files = {
+    bootstrap: path.join(DYLIB_DIR, "macos", "libArgentInjectionBootstrap.dylib"),
+    library: path.join(DYLIB_DIR, "macos", "libNativeDevtoolsMacos.dylib"),
+    helper: path.join(BIN_DIR, "darwin", "argent-macos-helper"),
+  };
+  const missing = Object.values(files).filter((p) => !fs.existsSync(p));
+  if (missing.length > 0) {
+    throw new Error(
+      `macOS app artifact not found: ${missing.join(", ")}. They ship in the argent package ` +
+        `under dylibs/macos/ and bin/darwin/; ARGENT_NATIVE_DEVTOOLS_DIR and ` +
+        `ARGENT_SIMULATOR_SERVER_DIR point the lookup at a local build.`
+    );
+  }
+  return files;
 }

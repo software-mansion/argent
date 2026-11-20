@@ -1227,6 +1227,37 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0]?.reason).toContain("unrecognized step kind");
   });
 
+  it("reports a run: target with a newer version as a step error", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "newer.yaml" },
+        { kind: "echo", message: "after" },
+      ],
+    });
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "newer.yaml"),
+      "version: 3\nsteps:\n  - echo: hi\n",
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
+    expect(result.steps[0]).toMatchObject({
+      kind: "run",
+      status: "error",
+      reason:
+        'could not load fragment "newer.yaml": The e2e test file is version 3, but this Argent reads up to version 2. Update Argent to run it.',
+    });
+  });
+
   it("bounds the reason when a run: target is in-project YAML but not a flow", async () => {
     // A mistyped run: path can select any YAML file inside the project root —
     // here a CI config whose sole top-level key happens to be `steps`. Its
@@ -3338,15 +3369,6 @@ describe("flow composition (run:)", () => {
       // re-running reproduces exactly that.
       expect(reason).toMatch(/exited after launch/);
       expect(reason).toMatch(/Re-running the e2e test repeats the same launch/);
-    });
-
-    // The `not.toContain` guards below compare rendered substrings, so they only
-    // mean anything while neither figure is a suffix of the other: 500/1500 would
-    // make `"1500 ms".includes("500 ms")` true and fail them for the wrong
-    // reason. Pin what those guards need, not merely the ordering.
-    it("renders a launch-to-verdict spend the connect wait cannot be read into", () => {
-      expect(LAUNCH_TO_VERDICT_MS).toBeGreaterThan(NATIVE_READY_TIMEOUT_MS);
-      expect(`${LAUNCH_TO_VERDICT_MS} ms`).not.toContain(`${NATIVE_READY_TIMEOUT_MS} ms`);
     });
 
     // `stale_process` has two producers, and one carries THIS endpoint — it

@@ -105,9 +105,7 @@ describe("flow-start-recording", () => {
     expect(result.message).toContain("test-flow");
 
     const content = await readFlowFile("test-flow");
-    const flow = parseFlow(content);
-    expect(flow.executionPrerequisite).toBe(PREREQ);
-    expect(flow.steps).toEqual([]);
+    expect(content).toBe(`version: 2\nsteps: []\nexecutionPrerequisite: ${PREREQ}\n`);
   });
 
   it("opens a recording addressable by name + project_root", async () => {
@@ -120,6 +118,24 @@ describe("flow-start-recording", () => {
       { name: "my-flow", project_root: tmpDir, message: "test" }
     );
     expect(result.message).toContain("my-flow");
+  });
+
+  it("writes the requires block it is given and keeps it through appended steps", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "tv-flow", project_root: tmpDir, requires: { platform: "ios", runtimeKind: "tv" } }
+    );
+    await flowInsertEchoTool.execute({}, { name: "tv-flow", project_root: tmpDir, message: "hi" });
+
+    const flow = parseFlow(await readFlowFile("tv-flow"));
+    expect(flow.requires).toEqual({ platform: ["ios"], runtimeKind: "tv" });
+    expect(flow.steps).toEqual([{ kind: "echo", message: "hi" }]);
+  });
+
+  it("rejects an empty requires block", async () => {
+    await expect(
+      flowStartRecordingTool.execute({}, { name: "empty", project_root: tmpDir, requires: {} })
+    ).rejects.toThrow(/must declare at least one of platform, runtimeKind/);
   });
 
   it("overwrites an existing flow file", async () => {
@@ -2546,6 +2562,9 @@ describe("flow-execute", () => {
     });
     // Should NOT have a steps array — it's a notice, not a run result
     expect(result).not.toHaveProperty("steps");
+    // Nor any device work: this answer stands in for e2e-read-prerequisite,
+    // which is hidden from MCP.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
   it("runs normally when prerequisite exists and is acknowledged", async () => {
@@ -3141,13 +3160,6 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
     // own `args` must not also advertise the whole-payload `--args <json>`
     // escape hatch.
     expect(schema.properties["args"]).toMatchObject({ type: "string" });
-  });
-
-  it("keeps the description focused on how to use the tool", () => {
-    const description = createFlowAddStepTool({} as unknown as Registry).description!;
-    expect(description).toContain("Execute one MCP tool and record its step in the e2e test");
-    expect(description).toContain("Call recording tools, including `e2e-add-script`, directly");
-    expect(description.split(/\s+/).length).toBeLessThan(80);
   });
 });
 

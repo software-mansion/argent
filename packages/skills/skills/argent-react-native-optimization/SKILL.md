@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-optimization
-description: Optimizes a React Native app by profiling first to find real bottlenecks, then sweeping for mechanical issues. Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup. Delegates to argent-react-native-profiler for measurement.
+description: Optimizes a React Native app by profiling first to find real bottlenecks, then sweeping for mechanical issues. Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup / TTI (including iOS launch time). Delegates to argent-react-native-profiler for measurement.
 ---
 
 ## Rules
@@ -39,10 +39,18 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 
 ### Phase 3: Profiling
 
-1. For a quick look without a session, `react-profiler-renders` lists how many instances of each component are mounted (not how often they re-render).
-2. Load the `argent-react-native-profiler` skill and follow its workflow (React and native profiling together) on the key user flows: the screens the user named, or all major flows. It covers analysis, drill-down, and re-profiling after each fix.
-3. Cross-reference the profiling results with the Phase 1–2 findings, and fix the highest-impact issues top-down. Re-profile after architectural changes; batch mechanical fixes.
+1. Load the `argent-react-native-profiler` skill and follow its workflow (React and native profiling together) on the key user flows: the screens the user named, or all major flows. It covers analysis, drill-down, and re-profiling after each fix.
+2. Cross-reference the profiling results with the Phase 1–2 findings, and fix the highest-impact issues top-down. Re-profile after architectural changes; batch mechanical fixes.
 
 ### Phase 4: Verify no regressions
 
 Navigate every screen and UI flow within scope (the entire app if no scope was given, via `argent-device-interact`) and confirm each renders without errors. Check `debugger-log-registry` for warnings and errors (`Grep` its log file). Argent hides LogBox toasts once a `debugger-*` tool connects, so screenshots catch only full-screen red errors. Look for regressions the fixes introduced (e.g. fewer re-renders but higher CPU, or new jank on a different screen). Main agent only.
+
+## Startup time (TTI)
+
+TTI lasts until the first usable screen shows real content. The first native frame is often only the splash screen: bundle evaluation, startup data loading and the first screen's render usually come after it.
+
+1. **Up to the first frame (iOS)**: measure and profile it on a Release build as §4 of `argent-native-profiler` describes. Runtime creation and JS that runs before the first frame show up in this profile.
+2. **After the first frame**: `native-profiler-launch-analysis` does not cover it, so do not stop at the first frame. Find what the app waits for and renders before the first usable screen (what hides the splash, the startup data loading, the first screen) and measure it with the tools that fit. `react-profiler-*` cannot record startup: an app restart discards the JS runtime it attaches to.
+
+State exactly what was measured, and what comes only from reading the code.

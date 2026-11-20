@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { iosDeviceRunnerBlueprint } from "../../src/blueprints/ios-device-runner";
+import { reserveLaunchMeasurement } from "../../src/utils/ios-device/runner-reservation";
 import { IosDeviceTransportError } from "../../src/utils/ios-device/usbmux-protocol";
 import {
   createRunnerClient,
@@ -102,6 +103,18 @@ const recoverable = (error: unknown) => iosDeviceRunnerBlueprint.recoverable?.(e
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+it("reserves the phone from runner startup until its child exits", async () => {
+  const device: DeviceInfo = { id: "launch-reservation-test", platform: "ios", kind: "device" };
+  const { child } = stubLaunch();
+  const starting = iosDeviceRunnerBlueprint.factory({}, device, { device });
+  expect(() => reserveLaunchMeasurement(device.id)).toThrow(/device runner is active/);
+  await starting;
+  expect(() => reserveLaunchMeasurement(device.id)).toThrow(/device runner is active/);
+  child.emit("exit", 0);
+  const release = reserveLaunchMeasurement(device.id);
+  release();
 });
 
 describe("ios-device-runner blueprint: mid-command runner death", () => {
@@ -411,6 +424,11 @@ describe("ios-device-runner blueprint: dispose", () => {
   it("sends shutdown as the mutating command it is, so the send layer cannot resend it", async () => {
     const { child, clientRun } = stubLaunch();
     const instance = await callFactory();
+    // The runner ends its test after the shutdown reply, and xcodebuild exits.
+    clientRun.mockImplementationOnce(async () => {
+      setImmediate(() => child.emit("exit", 0));
+      return {};
+    });
 
     await instance.dispose();
 
@@ -418,7 +436,25 @@ describe("ios-device-runner blueprint: dispose", () => {
     // marking a mutating shutdown read-only both breaks the send-once contract
     // and turns the 3s into three attempts plus backoff.
     expect(clientRun).toHaveBeenCalledWith({ command: "shutdown" }, { timeoutMs: 3_000 });
-    expect(killRunnerProcess).toHaveBeenCalledWith(child);
+    // A clean exit lets the test pass, so XCTest deletes its on-device
+    // attachments; a kill would leave them on the phone.
+    expect(killRunnerProcess).not.toHaveBeenCalled();
+  });
+
+  it("kills the child when it accepts shutdown but does not exit in time", async () => {
+    vi.useFakeTimers();
+    try {
+      const { child } = stubLaunch();
+      const instance = await callFactory();
+
+      const disposed = instance.dispose();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await disposed;
+
+      expect(killRunnerProcess).toHaveBeenCalledWith(child);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("kills the child anyway when the graceful shutdown fails", async () => {

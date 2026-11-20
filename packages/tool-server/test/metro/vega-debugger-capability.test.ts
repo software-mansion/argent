@@ -84,7 +84,7 @@ const VEGA_ENABLED_TOOLS = [
  * Either way the gate turns a hang or an unknown into an immediate 400.
  */
 const VEGA_GATED_TOOLS = [
-  createDebuggerComponentTreeTool(registry),
+  createDebuggerComponentTreeTool(),
   debuggerInspectElementTool,
   debuggerReloadMetroTool,
   createReactProfilerStartTool(registry),

@@ -361,36 +361,39 @@ interface StartCaptureParams {
   server?: ServerRecordingControl;
   /** Set for a foldable: the capture then moves with the live panel. */
   followPanel?: PanelFollow;
+  /**
+   * Release whatever serves `streamUrl` (a cabled iPhone's capture helper).
+   * Called once, when the frame stream closes or the start fails.
+   */
+  releaseStreamSource?: () => void;
 }
 
-export async function startCapture(
-  api: ScreenRecordingSessionApi,
-  params: StartCaptureParams
-): Promise<StartRecordingResult> {
-  assertNoActiveRecording(api, "screen_recording_start");
-  // Set synchronously (no await between the assert and here) so an overlapping
-  // start or stop is rejected instead of racing this one through the async
-  // connect/spawn window; the finally clears it on every exit.
-  api.startPending = true;
-  const outputFile = path.join(
-    os.tmpdir(),
-    `argent-screen-recording-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
-  );
-  try {
-    if (params.server) {
-      return await startServerCapture(api, { ...params, server: params.server, outputFile });
-    }
-    return await startCaptureLocked(api, { ...params, outputFile });
-  } finally {
-    api.startPending = false;
-    api.pendingChild = null;
-  }
+/**
+ * Every teardown (stop, the time limit, an encoder crash, dispose) closes the
+ * frame stream, so closing it is where a stream's source is released too.
+ */
+function withCloseHook(stream: MjpegStream, onClose: (() => void) | undefined): MjpegStream {
+  if (!onClose) return stream;
+  return {
+    get latest() {
+      return stream.latest;
+    },
+    get frameCount() {
+      return stream.frameCount;
+    },
+    get error() {
+      return stream.error;
+    },
+    waitForFirstFrame: (timeoutMs) => stream.waitForFirstFrame(timeoutMs),
+    close() {
+      stream.close();
+      onClose();
+    },
+  };
 }
 
-async function startCaptureLocked(
-  api: ScreenRecordingSessionApi,
-  params: StartCaptureParams & { outputFile: string }
-): Promise<StartRecordingResult> {
+/** The ffmpeg path; throws the not-installed failure when there is none. */
+export async function requireFfmpeg(): Promise<string> {
   const ffmpeg = await resolveFfmpeg();
   if (!ffmpeg) {
     throw new FailureError(
@@ -404,9 +407,62 @@ async function startCaptureLocked(
       }
     );
   }
+  return ffmpeg;
+}
+
+export async function startCapture(
+  api: ScreenRecordingSessionApi,
+  params: StartCaptureParams
+): Promise<StartRecordingResult> {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    params.releaseStreamSource?.();
+  };
+  try {
+    assertNoActiveRecording(api, "screen_recording_start");
+  } catch (err) {
+    release();
+    throw err;
+  }
+  // Set synchronously (no await between the assert and here) so an overlapping
+  // start or stop is rejected instead of racing this one through the async
+  // connect/spawn window; the finally clears it on every exit.
+  api.startPending = true;
+  const outputFile = path.join(
+    os.tmpdir(),
+    `argent-screen-recording-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
+  );
+  try {
+    if (params.server) {
+      return await startServerCapture(api, { ...params, server: params.server, outputFile });
+    }
+    return await startCaptureLocked(api, {
+      ...params,
+      outputFile,
+      releaseStreamSource: params.releaseStreamSource && release,
+    });
+  } catch (err) {
+    release();
+    throw err;
+  } finally {
+    api.startPending = false;
+    api.pendingChild = null;
+  }
+}
+
+async function startCaptureLocked(
+  api: ScreenRecordingSessionApi,
+  params: StartCaptureParams & { outputFile: string }
+): Promise<StartRecordingResult> {
+  const ffmpeg = await requireFfmpeg();
 
   const outputFile = params.outputFile;
-  const stream = await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS);
+  const stream = withCloseHook(
+    await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS),
+    params.releaseStreamSource
+  );
   let logoFile: string | null = null;
   let watermarkSkipped: string | null = null;
   let child: ReturnType<typeof spawn>;

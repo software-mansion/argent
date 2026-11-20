@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import type {
   HermesProfileNode,
@@ -102,7 +102,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device ID used to record or load the React profile<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>."
     ),
   top_n: z.coerce
     .number()
@@ -125,6 +125,11 @@ Use when you specifically need to investigate JS CPU hotspots that are NOT tied 
 Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
   zodSchema,
   readOnly: true,
+  // Agents use profiler-cpu-query mode top_functions, which reads the same
+  // profile with per-sample intervals and idle filtered out, and has the same
+  // react_only filter and Self % column. The SDK and the e2e-full suite still
+  // call it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: () => "Summarizing React CPU profile",
     completedMsg: () => "Summarized React CPU profile",
@@ -132,7 +137,7 @@ Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
       `Failed to summarize React CPU profile: ${failureSignal.error_code}`,
   },
   // RN-only: reads a Hermes CPU profile; Chromium's V8 sample format differs.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  capability: REACT_PROFILER_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const sessionPaths = getCachedProfilerPaths(metroPort(params), params.device_id);

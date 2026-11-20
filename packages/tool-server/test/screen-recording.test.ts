@@ -785,6 +785,70 @@ describe("screen recording capture", () => {
   });
 });
 
+describe("stream source release (cabled iPhone helper)", () => {
+  const start = (api: ScreenRecordingSessionApi, release: () => void) => {
+    const promise = startCapture(api, {
+      streamUrl: STREAM_URL,
+      timeLimitSeconds: 5,
+      watermark: false,
+      trimStatic: false,
+      releaseStreamSource: release,
+    });
+    promise.catch(() => {});
+    return promise;
+  };
+
+  it("releases the source once, when the time limit closes the stream", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream();
+    fakeChild().exitOnStdinEnd();
+    const release = vi.fn();
+    const promise = start(api, release);
+    await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+    await promise;
+    expect(release).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(stream.close).toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+    await stopCapture(api).catch(() => {});
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the source when the start is refused before the stream opens", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    fakeChild();
+    const first = start(api, vi.fn());
+    await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+    await first;
+
+    const release = vi.fn();
+    await expect(start(api, release)).rejects.toThrow(/already/i);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the source when the stream cannot be opened", async () => {
+    const api = await makeSession(iosDevice);
+    mockOpenStream.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    const release = vi.fn();
+    await expect(start(api, release)).rejects.toThrow("ECONNREFUSED");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the source when ffmpeg dies inside the fail-fast grace", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    const release = vi.fn();
+    const promise = start(api, release);
+    await vi.advanceTimersByTimeAsync(1);
+    child.exit(1);
+    await expect(promise).rejects.toThrow();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("frame pump", () => {
   it("tops the encoder up to the frame count the elapsed time calls for", () => {
     expect(framesDue(1_000, 1_000)).toBe(0);

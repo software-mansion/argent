@@ -31,7 +31,12 @@ import {
 import { constants, tmpdir } from "node:os";
 import * as path from "node:path";
 
-import { createTarGzFile } from "@argent/archive";
+import {
+  ARCHIVE_CONTENT_TYPES,
+  createArchiveFile,
+  pickArchiveFormat,
+  type ArchiveFormat,
+} from "@argent/archive";
 import {
   FAILURE_CODES,
   FLOW_FILE_NAME_PATTERN,
@@ -115,10 +120,11 @@ export interface PrepareFileInputsOptions {
   includeContent: boolean;
   /**
    * Set only when routed to a remote tool-server: `kind: "tar-upload"` inputs
-   * are tarballed and streamed to `POST <url>/upload` before the tool call.
-   * Absent for co-located sessions (the server reads the path in place).
+   * are archived and streamed to `POST <url>/upload` before the tool call, in
+   * the best of `formats` (the server's `GET /tools` `uploadFormats`). Absent
+   * for co-located sessions (the server reads the path in place).
    */
-  uploadEndpoint?: { url: string; token: string };
+  uploadEndpoint?: { url: string; token: string; formats?: readonly string[] };
   /**
    * Receives the `[e2e-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on,
    * one for each member a `collect` spec sends. Defaults to stderr.
@@ -242,10 +248,10 @@ function untrackArchive(archive: string): void {
   process.removeListener("exit", removePendingArchives);
 }
 
-function sha256File(filePath: string): Promise<string> {
+function sha256File(filePath: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash("sha256");
-    createReadStream(filePath)
+    createReadStream(filePath, { signal })
       .on("data", (chunk) => hash.update(chunk))
       .on("end", () => resolve(hash.digest("hex")))
       .on("error", reject);
@@ -298,23 +304,33 @@ function uploadFailure(
 
 async function uploadTar(
   tarPath: string,
+  format: ArchiveFormat,
   endpoint: { url: string; token: string },
   signal?: AbortSignal
 ): Promise<string> {
   const { size } = await stat(tarPath);
+  const stream = createReadStream(tarPath);
   // `duplex: "half"` is required to stream a Node Readable request body via
   // undici's fetch, but it isn't in the DOM RequestInit type.
   const init: RequestInit & { duplex: "half" } = {
     method: "POST",
     headers: {
-      "content-type": "application/gzip",
+      "content-type": ARCHIVE_CONTENT_TYPES[format],
       ...(endpoint.token ? { Authorization: `Bearer ${endpoint.token}` } : {}),
     },
-    body: createReadStream(tarPath) as unknown as BodyInit,
+    body: stream as unknown as BodyInit,
     duplex: "half",
     signal,
   };
-  const res = await fetch(`${endpoint.url}/upload`, init);
+  let res: Response;
+  try {
+    res = await fetch(`${endpoint.url}/upload`, init);
+  } catch (err) {
+    // A refused connection never reads the body; release its fd before the
+    // caller deletes the archive.
+    stream.destroy();
+    throw err;
+  }
   if (!res.ok) {
     let text = "";
     try {
@@ -331,15 +347,16 @@ async function uploadTar(
 /** Tar `sourcePath`, stream it to `POST /upload`, and return what the wire names it by. */
 export async function uploadFile(
   sourcePath: string,
-  endpoint: { url: string; token: string },
+  endpoint: { url: string; token: string; formats?: readonly string[] },
   signal?: AbortSignal
 ): Promise<{ uploadId: string; contentHash: string }> {
+  const format = pickArchiveFormat(endpoint.formats);
   const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
   trackArchive(tarPath);
   try {
-    await createTarGzFile(await realpath(sourcePath), tarPath);
-    const contentHash = await sha256File(tarPath);
-    return { uploadId: await uploadTar(tarPath, endpoint, signal), contentHash };
+    await createArchiveFile(await realpath(sourcePath), tarPath, format, signal);
+    const contentHash = await sha256File(tarPath, signal);
+    return { uploadId: await uploadTar(tarPath, format, endpoint, signal), contentHash };
   } finally {
     untrackArchive(tarPath);
     await rm(tarPath, { force: true }).catch(() => {});

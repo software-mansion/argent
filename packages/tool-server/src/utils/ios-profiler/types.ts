@@ -8,11 +8,15 @@ export type {
   NativeProfilerAnalyzeResult,
 } from "../profiler-shared/types";
 
+import type { ToolingOwner } from "./config";
+
 // Raw rows produced by pipeline/xml-parser.ts from the xctrace XML export.
 
 export interface StackFrame {
   name: string;
   isSystemLibrary: boolean;
+  /** Set for a frame in a library that argent or Instruments loads into the app (TOOLING_LIBRARIES). */
+  tooling?: ToolingOwner;
 }
 
 export interface CpuSample {

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { promises as fs } from "fs";
 import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { astLookupCandidates } from "../../../utils/react-profiler/component-names";
 
 /**
@@ -30,6 +30,11 @@ Returns found: false if the component is not found in user-owned code (e.g. live
 When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col). Check it before assuming the returned file is the one you meant.`,
   zodSchema,
   readOnly: true,
+  // react-profiler-analyze runs the same AST lookup for each component in its
+  // table (file, line and other matches) and adds the source of the located ones
+  // among the top five; agents read any other file themselves. The SDK still
+  // calls it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: ({ params }) => `Finding source for ${params.component_name}`,
     completedMsg: ({ params, result }) =>
@@ -40,7 +45,7 @@ When several files define a component with the same name (e.g. platform variants
   // Declared so the tool catalogue groups this with the other react-profiler-*
   // tools; the HTTP gate itself is a no-op here, as there is no device arg to
   // inspect.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  capability: REACT_PROFILER_TOOL_CAPABILITY,
   fileInputs,
   services: () => ({}),
   async execute(_services, params) {

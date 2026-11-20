@@ -12,8 +12,21 @@
  * emit, which contradicted the analyze report and masqueraded benign
  * allocations as confirmed app leaks.
  */
-import { describe, it, expect } from "vitest";
-import { renderCombinedMemoryLeaks } from "../src/tools/profiler/combined/profiler-combined-report";
+import { describe, it, expect, afterEach } from "vitest";
+import { promises as fs } from "fs";
+import * as os from "os";
+import * as path from "path";
+import {
+  profilerCombinedReportTool,
+  renderCombinedMemoryLeaks,
+} from "../src/tools/profiler/combined/profiler-combined-report";
+import { nativeProfilerSessionBlueprint } from "../src/blueprints/native-profiler-session";
+import {
+  cacheProfilerPaths,
+  clearCachedProfilerPaths,
+} from "../src/blueprints/react-profiler-session";
+import { resolveDevice } from "../src/utils/device-info";
+import { MAC_UNATTRIBUTED_LEAKS } from "../src/utils/ios-profiler/render";
 import type { MemoryLeak } from "../src/utils/profiler-shared/types";
 
 function leak(partial: Partial<MemoryLeak> & Pick<MemoryLeak, "objectType">): MemoryLeak {
@@ -163,5 +176,72 @@ describe("renderCombinedMemoryLeaks", () => {
 
   it("returns nothing for an empty leak list", () => {
     expect(renderCombinedMemoryLeaks([], new Set())).toEqual([]);
+  });
+});
+
+describe("the combined report's leaks on a Mac app", () => {
+  const MAC = "macos-app-com.example.leaks";
+  const PORT = 8081;
+  let dir: string | null = null;
+  afterEach(async () => {
+    clearCachedProfilerPaths(PORT, MAC);
+    if (dir) await fs.rm(dir, { recursive: true, force: true });
+    dir = null;
+  });
+
+  it("gives the Mac note of analyze, not the iOS inference from the attributed count", async () => {
+    const device = resolveDevice(MAC);
+    const api = (await nativeProfilerSessionBlueprint.factory({}, device, { device })).api;
+    // A recording without malloc stack logging: on a Mac app, a leak of an object
+    // allocated after the start is attributed all the same.
+    api.parsedData = {
+      cpuSamples: [],
+      uiHangs: [],
+      cpuHotspots: [],
+      memoryLeaks: [ATTRIBUTED, UNATTRIBUTED],
+      leaksRecorded: true,
+      mallocStackLogging: false,
+      wallClockStartMs: 1_000_000,
+    };
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "combined-mac-leaks-"));
+    const commitsPath = path.join(dir, "commits.json");
+    const commit = {
+      commitIndex: 0,
+      timestamp: 1000,
+      componentName: "MyComp",
+      actualDuration: 30,
+      selfDuration: 30,
+      commitDuration: 30,
+      didRender: true,
+      changeDescription: null,
+    };
+    await fs.writeFile(
+      commitsPath,
+      JSON.stringify({ commits: [commit], meta: { profileStartWallMs: 1_000_000 } })
+    );
+    cacheProfilerPaths(
+      PORT,
+      {
+        sessionId: "s",
+        debugDir: dir,
+        cpuProfilePath: null,
+        commitsPath,
+        cpuSampleIndexPath: null,
+        detectedArchitecture: null,
+        anyCompilerOptimized: null,
+        hotCommitIndices: [0],
+        totalReactCommits: 1,
+      },
+      MAC
+    );
+
+    const report = (await profilerCombinedReportTool.execute({ nativeSession: api } as never, {
+      port: PORT,
+      device_id: MAC,
+    })) as string;
+
+    expect(report).toContain("**`MyModel`**");
+    expect(report).toContain(MAC_UNATTRIBUTED_LEAKS);
+    expect(report).not.toContain("malloc stack logging was active");
   });
 });
