@@ -149,6 +149,20 @@ A `describe` call always returns the full element tree, with its `Tree id`. With
 
 Call `screenshot` or `describe` to read the screen again.
 
+## Audio
+
+| Tool          | Description                                                                               |
+| ------------- | ----------------------------------------------------------------------------------------- |
+| `audio-input` | Choose what apps in an iOS simulator hear as microphone input: a file, a tone, or the mic |
+
+The audio tool needs an iOS simulator on the same Mac as the tool-server. These rules apply:
+
+- Argent loads the audio hook into each app that starts after Argent arms the simulator. Restart an app that started before that.
+- The `ios-audio-always-inserted` flag is on by default. When it is off, Argent loads the hook at the first `audio-input` call. See [feature flags](/docs/reference/configuration#available-flags).
+- A remote (`remote:`) simulator, a tvOS simulator, a physical device, Android and Chromium fail before Argent starts a service.
+- The simulator must be booted. For a shut-down or unknown simulator, `audio-input` fails with `AUDIO_SIMULATOR_NOT_BOOTED`. Boot it with `boot-device` first.
+- Without `libArgentAudio.dylib` in the install, `audio-input` fails with `AUDIO_HOOK_UNAVAILABLE`. The other tools work.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |
@@ -397,6 +411,20 @@ On a Mac app, pass `modifiers` to `gesture-tap` as a list of keys from `control`
 #### Screenshots and scrolling
 
 Use `scale: 1.0` for one pixel per point. By default, screenshots downscale windows larger than 768 points on the longest side, to at least 0.6 pixels per point. The minimum explicit scale is `0.1`. Mac apps ignore `ARGENT_SCREENSHOT_SCALE` and `rotation`.
+
+#### Rotated devices
+
+All coordinates use the UI as the user sees it, also when the UI is landscape or upside down. On an iOS simulator, Argent turns these surfaces to the orientation of the UI:
+
+- Screenshots
+- `describe` frames
+- The points of the native view tools
+- The tap points of `debugger-component-tree`
+- The coordinates of the gesture tools
+
+Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `button`, `launch-app`, `restart-app`, `open-url`, `terminate-app` and `reinstall-app`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
+
+If Argent cannot read the orientation, the tool result has a note. For a live capture of `screenshot-diff`, the note is in the summary. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
 
 Scrolling targets the nearest scrollable content under the point. Web content scrolls first; an enclosing native scroll view can take over at the page boundary. The call fails if no eligible content can scroll.
 

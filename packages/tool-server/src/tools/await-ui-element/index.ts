@@ -211,7 +211,6 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
     params.expectedText,
     matches,
     params.textMatch,
-    undefined,
     isMacos(params)
   );
 }
@@ -262,7 +261,7 @@ function timeoutNote(
       // Visible-first, mirroring evaluateCondition, so the note quotes the
       // element the check read, and the text it read (a Mac app's container
       // is checked against its subtree text).
-      const first = textCheckTarget(matches, undefined, isMacos(params));
+      const first = textCheckTarget(matches, isMacos(params));
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
       // The text comes off the screen, where a field shows a typed secret.
       const shown = first

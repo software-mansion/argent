@@ -9,6 +9,7 @@ import {
   type ToolDefinition,
 } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { forgettingUiOrientation } from "../../utils/ios-ui-orientation";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import { simctlArgsForUdid } from "../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../utils/simctl-config";
@@ -67,7 +68,7 @@ Succeeds when the app is not running or not installed.`,
   execute: dispatchByPlatform({
     toolId: "terminate-app",
     capability,
-    ios: {
+    ios: forgettingUiOrientation({
       requires: ["xcrun"],
       handler: async (_services, { udid, bundleId }) => {
         // Built outside the tolerance so a provider's entitlement denial still throws.
@@ -92,8 +93,8 @@ Succeeds when the app is not running or not installed.`,
         const terminated = await tolerateNothingToTerminate(terminate, SIMCTL_NOTHING_TO_TERMINATE);
         return { terminated, bundleId };
       },
-    },
-    iosRemote: {
+    }),
+    iosRemote: forgettingUiOrientation({
       requires: ["sim-remote"],
       handler: async (_services, { udid, bundleId }) => {
         const terminated = await tolerateNothingToTerminate(
@@ -102,7 +103,7 @@ Succeeds when the app is not running or not installed.`,
         );
         return { terminated, bundleId };
       },
-    },
+    }),
     android: {
       requires: ["adb"],
       handler: async (_services, { udid, bundleId }) => {

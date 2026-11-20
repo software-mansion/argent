@@ -35,6 +35,7 @@ export const FAILURE_COMMANDS = [
   "ax_service",
   "simulator_server",
   "ffmpeg",
+  "afconvert",
   "cdp",
   "electron",
   "npm",
@@ -42,6 +43,9 @@ export const FAILURE_COMMANDS = [
   "unknown",
   "devicectl",
   "xcodebuild",
+  "swiftc",
+  // The host-side helper that captures a cabled iPhone's screen.
+  "ios_screen_stream",
   // `xcrun xcresulttool`, which reads an XCTest result bundle.
   "xcresulttool",
 ] as const;
