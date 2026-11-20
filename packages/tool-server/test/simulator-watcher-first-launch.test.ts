@@ -3,7 +3,8 @@
  * while Xcode's component install is pending, since every call would start the
  * install and leave another administrator-password request behind.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
 
 const pending = vi.hoisted(() => ({ value: false, devicectl: false }));
 const execSimctlMock = vi.fn();
@@ -68,6 +69,7 @@ import {
   type NativeDevtoolsInitFailure,
 } from "../src/blueprints/native-devtools";
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
+import { audioDir } from "../src/utils/ios-host";
 import { SimctlTimeoutError } from "../src/utils/simctl-exec";
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
@@ -281,6 +283,8 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
       "com.apple.CoreSimulator.SimRuntime.iOS-18-0": [{ udid: SIMULATOR.id, state: "Booted" }],
     },
   });
+  // Arming creates the simulator's audio control directory in /tmp: remove what this file's fake simulator left.
+  afterAll(() => fs.rmSync(audioDir(SIMULATOR.id), { recursive: true, force: true }));
 
   function xcrunCalls(): string[][] {
     return execFileMock.mock.calls.flatMap(([cmd, args]) => (cmd === "xcrun" ? [args] : []));

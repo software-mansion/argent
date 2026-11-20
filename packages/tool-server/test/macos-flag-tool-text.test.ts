@@ -127,6 +127,11 @@ describe("the React profiler tools' Mac app text", () => {
     expect(JSON.stringify(advertised(id, false))).not.toMatch(MAC_TEXT);
   });
 
+  it("includes Mac Catalyst setup guidance only when Mac apps are enabled", () => {
+    expect(advertised("react-profiler-start", true).description).toContain("Mac Catalyst");
+    expect(advertised("react-profiler-start", false).description).not.toContain("Mac Catalyst");
+  });
+
   it("react-profiler-analyze offers the macos platform only with the flag on", () => {
     expect(advertised("react-profiler-analyze", true).properties.platform).toMatchObject({
       type: "string",
