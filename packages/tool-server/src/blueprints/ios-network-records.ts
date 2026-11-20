@@ -110,7 +110,7 @@ export interface IosNetworkRecords {
   requestPostData(id: string): Promise<NativeNetworkBody>;
 }
 
-/** The app's side of the body reads, owned by the native-devtools service. */
+/** The app's side of the body reads, owned by the native-devtools service or a Mac app's service. */
 export interface IosAgentLink {
   /** The index of the app's live connection, if it has one. */
   liveConnection(): number | undefined;
