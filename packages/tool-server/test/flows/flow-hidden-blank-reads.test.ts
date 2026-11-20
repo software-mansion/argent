@@ -387,14 +387,13 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
 
   // Trusted reads of `nodes` until 950ms into the 1s assert window, then empty
   // trees: blind once the selector has matched, and inside the dark-tail
-  // tolerance.
-  function blankFrom950ms(nodes: DescribeNode[]): void {
+  // tolerance. `quotable` reads carry a quotableTree, as after a typed secret.
+  function blankFrom950ms(nodes: DescribeNode[], quotable = false): void {
     let firstReadAt: number | undefined;
     currentFetch = () => {
       firstReadAt ??= Date.now();
-      return Date.now() - firstReadAt >= 950
-        ? { tree: screen([]), source: "native-devtools" }
-        : { tree: screen(nodes), source: "native-devtools" };
+      const tree = Date.now() - firstReadAt >= 950 ? screen([]) : screen(nodes);
+      return { tree, ...(quotable ? { quotableTree: tree } : {}), source: "native-devtools" };
     };
   }
 
@@ -406,26 +405,32 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     return run("blank-blip");
   }
 
-  it("assert text: an empty final poll within the tolerance keeps the trusted text mismatch", async () => {
-    blankFrom950ms([
-      n({
-        identifier: "total",
-        label: "Total $41.50",
-        frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 },
-      }),
-    ]);
+  it.each([false, true])(
+    "assert text: an empty final poll within the tolerance keeps the trusted text mismatch (quotable tree: %s)",
+    async (quotable) => {
+      blankFrom950ms(
+        [
+          n({
+            identifier: "total",
+            label: "Total $41.50",
+            frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 },
+          }),
+        ],
+        quotable
+      );
 
-    const result = await assertOnce({
-      condition: "text",
-      expectedText: "Total $42.00",
-      textMatch: "equals",
-    });
+      const result = await assertOnce({
+        condition: "text",
+        expectedText: "Total $42.00",
+        textMatch: "equals",
+      });
 
-    expect(result.steps[0].status).toBe("fail");
-    expect(result.steps[0].reason).toBe(
-      'element matched id="total" but its text was "Total $41.50" (wanted to equal "Total $42.00")'
-    );
-  });
+      expect(result.steps[0].status).toBe("fail");
+      expect(result.steps[0].reason).toBe(
+        'element matched id="total" but its text was "Total $41.50" (wanted to equal "Total $42.00")'
+      );
+    }
+  );
 
   it("assert visible: an empty final poll within the tolerance keeps the trusted zero-area match", async () => {
     blankFrom950ms([
