@@ -18,8 +18,11 @@ const PROXY_KEYS = [
 ];
 
 const READ_STATE =
-  "settings get global global_http_proxy_host; settings get global global_http_proxy_port; " +
-  `cat ${MARKER_PATH} 2>/dev/null; true`;
+  "settings get global http_proxy; settings get global global_http_proxy_host; " +
+  `settings get global global_http_proxy_port; cat ${MARKER_PATH} 2>/dev/null; true`;
+
+const REMOVAL_TIMEOUT_MS = 5_000;
+const REMOVAL_POLL_MS = 100;
 
 interface GlobalProxyState {
   /** `host:port` of the proxy in effect, or `null` for none. */
@@ -29,9 +32,12 @@ interface GlobalProxyState {
 }
 
 export function parseGlobalProxyState(output: string): GlobalProxyState {
-  const [host = "", port = "", marker = ""] = output.split(/\r?\n/).map((line) => line.trim());
+  const [setting = "", host = "", port = "", marker = ""] = output
+    .split(/\r?\n/)
+    .map((line) => line.trim());
+  const requested = /^[^:\s]+:[1-9]\d*$/.test(setting) ? setting : null;
   const hasProxy = host !== "" && host !== "null" && port !== "" && port !== "null" && port !== "0";
-  return { active: hasProxy ? `${host}:${port}` : null, argent: marker || null };
+  return { active: requested ?? (hasProxy ? `${host}:${port}` : null), argent: marker || null };
 }
 
 async function readGlobalProxyState(serial: string): Promise<GlobalProxyState> {
@@ -70,10 +76,26 @@ export async function clearArgentProxy(serial: string): Promise<void> {
   const state = await readGlobalProxyState(serial);
   if (state.active && state.active === state.argent) {
     await runAdb(["-s", serial, "shell", "settings", "put", "global", "http_proxy", ":0"]);
+    if (!(await deviceDroppedProxy(serial))) return;
     const deletes = PROXY_KEYS.map((key) => `settings delete global ${key}`).join("; ");
     await adbShell(serial, deletes);
   }
   if (state.argent) await adbShell(serial, `rm -f ${MARKER_PATH}`);
+}
+
+/**
+ * Android applies a proxy change some time after the setting changes, and
+ * ignores a setting that is empty by then. It writes port 0 when it has applied
+ * the removal; only then may the settings be deleted.
+ */
+async function deviceDroppedProxy(serial: string): Promise<boolean> {
+  const deadline = Date.now() + REMOVAL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const port = await adbShell(serial, "settings get global global_http_proxy_port");
+    if (port.trim() === "0") return true;
+    await new Promise((resolve) => setTimeout(resolve, REMOVAL_POLL_MS));
+  }
+  return false;
 }
 
 /** Device port to host port, from `adb reverse --list` lines such as `host-15 tcp:8081 tcp:8081`. */
