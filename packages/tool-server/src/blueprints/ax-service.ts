@@ -16,6 +16,7 @@ import {
 } from "@argent/registry";
 import { assertExternalCapability } from "../utils/external-devices";
 import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
+import { asUiOrientation, type UiOrientation } from "../tools/describe/contract";
 
 // Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
 export { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../utils/ax-prefs";
@@ -61,6 +62,14 @@ export interface AXDescribeElement {
 export interface AXDescribeResponse {
   alertVisible: boolean;
   screenFrame?: { width: number; height: number };
+  /**
+   * The interface orientation the system gives the front app. It follows the
+   * app, not the device: a portrait-only app stays `portrait` on a rotated
+   * device. Frames stay in the screen's portrait-native space in every
+   * orientation. Undefined from a daemon that predates it, or when AX could
+   * not name it.
+   */
+  interfaceOrientation?: UiOrientation;
   elements: AXDescribeElement[];
 }
 
@@ -82,11 +91,20 @@ export interface AXTreeNode extends Omit<AXDescribeElement, "hint"> {
 export interface AXTreeResponse {
   alertVisible: boolean;
   screenFrame?: { width: number; height: number };
+  /** See {@link AXDescribeResponse.interfaceOrientation}; sent from `treeVersion` 3. */
+  interfaceOrientation?: UiOrientation;
   nodes: AXTreeNode[];
   truncated: boolean;
   foregroundApp?: string;
   /** 2 and up: nodes carry elementType, placeholder, hintShowing and root bundleId. */
   treeVersion?: number;
+}
+
+interface AXOrientationResponse {
+  /** See {@link AXDescribeResponse.interfaceOrientation}. */
+  interfaceOrientation?: UiOrientation;
+  /** The screen's size in points, on its portrait-native axes. */
+  screenFrame?: { width: number; height: number };
 }
 
 export interface AXForegroundAppResponse {
@@ -145,6 +163,14 @@ export interface AXServiceApi {
    * predates the command answers an error.
    */
   livePanel(): Promise<number | null>;
+  /**
+   * The front app's interface orientation and the screen's portrait-native
+   * size, without a tree walk, so they can be asked before every touch. A
+   * daemon that predates the `orientation` command answers from a `describe`
+   * instead, which walks the tree. The orientation is undefined when AX
+   * cannot name it, or the daemon predates both.
+   */
+  orientation(): Promise<AXOrientationResponse>;
 }
 
 /**
@@ -725,6 +751,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       });
     }
 
+    // Set once the daemon has answered `orientation` as an unknown command, so
+    // an old daemon is not asked again before every touch.
+    let lacksOrientationCommand = false;
     const api: AXServiceApi = {
       degraded: !entitlementBypassActive,
 
@@ -743,6 +772,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         return {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
+          interfaceOrientation: asUiOrientation(result.interfaceOrientation),
           elements: result.elements ?? [],
         };
       },
@@ -764,6 +794,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         return {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
+          interfaceOrientation: asUiOrientation(result.interfaceOrientation),
           nodes: result.nodes ?? [],
           truncated: result.truncated === true,
           foregroundApp: result.foregroundApp,
@@ -773,6 +804,35 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
 
       async foregroundApp(): Promise<AXForegroundAppResponse> {
         return (await query("foreground_app")) as AXForegroundAppResponse;
+      },
+
+      async orientation(): Promise<AXOrientationResponse> {
+        if (!lacksOrientationCommand) {
+          try {
+            const result = (await query("orientation", LIVE_PANEL_TIMEOUT_MS)) as {
+              interfaceOrientation?: unknown;
+              screenFrame?: { width: number; height: number };
+              error?: string;
+            };
+            if (result.error) {
+              throw new FailureError(`ax-service orientation error: ${result.error}`, {
+                error_code: FAILURE_CODES.AX_QUERY_FAILED,
+                failure_stage: "ax_service_orientation",
+                failure_area: "tool_server",
+                error_kind: "unknown",
+              });
+            }
+            return {
+              interfaceOrientation: asUiOrientation(result.interfaceOrientation),
+              screenFrame: result.screenFrame,
+            };
+          } catch (err) {
+            if (!(err instanceof Error) || err.message !== "unknown_command") throw err;
+            lacksOrientationCommand = true;
+          }
+        }
+        const { interfaceOrientation, screenFrame } = await api.describe();
+        return { interfaceOrientation, screenFrame };
       },
 
       async livePanel(): Promise<number | null> {

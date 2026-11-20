@@ -28,37 +28,13 @@ name: Device E2E smoke
 #     have no attached hardware on CI runners.
 #   Both would need a bare-metal Mac runner (HVF / wired-up devices).
 #
-# Manual + on-change trigger only — the macOS jobs are slow.
+# Reserve the macOS runners for manual runs and PRs touching the paths below.
 
 on:
   workflow_dispatch:
   pull_request:
     branches:
       - main
-    paths:
-      - "packages/tool-server/src/tools/devices/**"
-      - "packages/tool-server/src/tools/gesture-tap/**"
-      - "packages/tool-server/src/tools/screenshot/**"
-      # Transport layer that drives screenshot/gesture-tap for each platform —
-      # where the #391 screenshot regression lived, so changes here must re-run
-      # these smoke jobs too.
-      - "packages/tool-server/src/blueprints/simulator-server.ts"
-      - "packages/tool-server/src/blueprints/chromium-cdp.ts"
-      - "packages/tool-server/src/utils/simulator-client.ts"
-      # What a Chromium boot, screenshot and tap run through.
-      - "packages/tool-server/src/chromium-server/**"
-      - "packages/tool-server/src/utils/free-port.ts"
-      - "packages/tool-server/src/utils/debugger/cdp-client.ts"
-      - "packages/tool-server/src/utils/electron-env.ts"
-      - "packages/tool-server/src/utils/chromium-discovery.ts"
-      - "packages/tool-server/src/utils/device-info.ts"
-      - "packages/tool-server/src/utils/process-kill.ts"
-      - "packages/tool-server/src/utils/vega-process.ts"
-      - "packages/tool-server/test/fixtures/electron-smoke-app/**"
-      - "scripts/e2e/drive-device.sh"
-      - ".github/workflows/e2e-device-smoke.yml"
-      # The shared composite action is part of the test harness too.
-      - ".github/actions/start-tool-server/action.yml"
 
 # Cancel superseded runs on the same ref: rapid pushes to a PR would otherwise
 # stack up the slow macOS jobs (see header) with no cancellation.
@@ -67,19 +43,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Select Device E2E smoke paths
+    uses: ./.github/workflows/pr-check-paths.yml
+    with:
+      # Cover the transport behind screenshot/gesture-tap (#391), what a Chromium
+      # boot runs through, and the test harness.
+      paths: |-
+        packages/tool-server/src/tools/devices/**
+        packages/tool-server/src/tools/gesture-tap/**
+        packages/tool-server/src/tools/screenshot/**
+        packages/tool-server/src/blueprints/simulator-server.ts
+        packages/tool-server/src/blueprints/chromium-cdp.ts
+        packages/tool-server/src/utils/simulator-client.ts
+        packages/tool-server/src/chromium-server/**
+        packages/tool-server/src/utils/free-port.ts
+        packages/tool-server/src/utils/debugger/cdp-client.ts
+        packages/tool-server/src/utils/electron-env.ts
+        packages/tool-server/src/utils/chromium-discovery.ts
+        packages/tool-server/src/utils/device-info.ts
+        packages/tool-server/src/utils/process-kill.ts
+        packages/tool-server/src/utils/vega-process.ts
+        packages/tool-server/test/fixtures/electron-smoke-app/**
+        scripts/e2e/drive-device.sh
+        .github/workflows/e2e-device-smoke.yml
+        .github/actions/start-tool-server/action.yml
+
   # ── iOS simulator on macOS ────────────────────────────────────────────────
   ios-sim-macos:
     name: macOS + iOS E2E
+    needs: changes
+    if: ${{ !cancelled() }}
     # Argent's self-hosted tart VMs. Fork PRs get a GitHub-hosted runner so
     # untrusted code stays off them.
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","sand"]') }}
+    runs-on: ${{ needs.changes.outputs.relevant != 'true' && 'ubuntu-latest' || github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","sand"]') }}
     timeout-minutes: 30
     steps:
+      - name: Check path selection
+        if: needs.changes.result != 'success' || needs.changes.outputs.relevant != 'true'
+        shell: bash
+        run: |
+          test '${{ needs.changes.result }}:${{ needs.changes.outputs.relevant }}' = 'success:false'
+          echo "No matching files changed."
+
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.relevant == 'true'
 
       - uses: ./.github/actions/start-tool-server
+        if: needs.changes.outputs.relevant == 'true'
 
       - name: Download signed native binaries (darwin)
+        if: needs.changes.outputs.relevant == 'true'
         # iOS needs the simulator-server (screenshot/gesture-tap backend) AND the
         # dylibs + ax-service: bootIos() only returns booted:true when native-
         # devtools injection does NOT give up (boot-device.ts), so missing dylibs
@@ -94,18 +108,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pick an available simulator UDID
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           UDID=$(xcrun simctl list devices available --json | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(dev['udid'] for rt in d for dev in d[rt] if dev.get('isAvailable') and 'iPhone' in dev['name']))")
           echo "Chosen simulator: $UDID"
           echo "UDID=$UDID" >> "$GITHUB_ENV"
 
       - name: Boot + drive
+        if: needs.changes.outputs.relevant == 'true'
         run: bash scripts/e2e/drive-device.sh
         env:
           BOOT_JSON: '{"udid":"${{ env.UDID }}"}'
           DEVICE_ID: ${{ env.UDID }}
 
-      - if: always()
+      - if: always() && needs.changes.outputs.relevant == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-ios-sim-macos
@@ -119,12 +135,23 @@ jobs:
   # ── Chromium / Electron on Linux (Xvfb) ───────────────────────────────────
   chromium-linux:
     name: Linux + Chromium E2E
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Check path selection
+        if: needs.changes.result != 'success' || needs.changes.outputs.relevant != 'true'
+        shell: bash
+        run: |
+          test '${{ needs.changes.result }}:${{ needs.changes.outputs.relevant }}' = 'success:false'
+          echo "No matching files changed."
+
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.relevant == 'true'
 
       - name: Start Xvfb
+        if: needs.changes.outputs.relevant == 'true'
         # boot-electron spawns the Electron child inheriting the tool-server's
         # env, so DISPLAY must be set (in GITHUB_ENV) BEFORE the tool-server
         # starts in the start-tool-server action below.
@@ -135,8 +162,10 @@ jobs:
           echo "DISPLAY=:99" >> "$GITHUB_ENV"
 
       - uses: ./.github/actions/start-tool-server
+        if: needs.changes.outputs.relevant == 'true'
 
       - name: Vendor the fixture's electron
+        if: needs.changes.outputs.relevant == 'true'
         # The fixture brings its own electron (kept out of the root lockfile);
         # boot-electron resolves ./node_modules/.bin/electron from the app dir.
         # Standalone project (not a packages/* workspace member), so this ci is
@@ -146,12 +175,14 @@ jobs:
         working-directory: packages/tool-server/test/fixtures/electron-smoke-app
 
       - name: Boot + drive
+        if: needs.changes.outputs.relevant == 'true'
         run: bash scripts/e2e/drive-device.sh
         env:
           BOOT_JSON: '{"electronAppPath":"${{ github.workspace }}/packages/tool-server/test/fixtures/electron-smoke-app","electronPort":19222,"electronArgs":["--no-sandbox"]}'
           DEVICE_ID: chromium-cdp-19222
 
       - name: Boot + drive the runner's Chrome
+        if: needs.changes.outputs.relevant == 'true'
         # The runner image ships Google Chrome on PATH. The start URL paints a
         # gradient so the screenshot clears the blank-framebuffer floor.
         run: bash scripts/e2e/drive-device.sh
@@ -160,7 +191,7 @@ jobs:
           DEVICE_ID: chromium-cdp-19223
           ARTIFACT_DIR: ${{ runner.temp }}/browser
 
-      - if: always()
+      - if: always() && needs.changes.outputs.relevant == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-chromium-linux
@@ -177,19 +208,32 @@ jobs:
   # ── Chromium / Electron on macOS ──────────────────────────────────────────
   chromium-macos:
     name: macOS + Chromium E2E
+    needs: changes
+    if: ${{ !cancelled() }}
     # Same runner choice as ios-sim-macos.
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","sand"]') }}
+    runs-on: ${{ needs.changes.outputs.relevant != 'true' && 'ubuntu-latest' || github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","sand"]') }}
     timeout-minutes: 20
     steps:
+      - name: Check path selection
+        if: needs.changes.result != 'success' || needs.changes.outputs.relevant != 'true'
+        shell: bash
+        run: |
+          test '${{ needs.changes.result }}:${{ needs.changes.outputs.relevant }}' = 'success:false'
+          echo "No matching files changed."
+
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.relevant == 'true'
 
       - uses: ./.github/actions/start-tool-server
+        if: needs.changes.outputs.relevant == 'true'
 
       - name: Vendor the fixture's electron
+        if: needs.changes.outputs.relevant == 'true'
         run: npm ci
         working-directory: packages/tool-server/test/fixtures/electron-smoke-app
 
       - name: Boot + drive
+        if: needs.changes.outputs.relevant == 'true'
         # macOS runner has a window server and Electron's sandbox is fine there,
         # so no Xvfb and no --no-sandbox.
         run: bash scripts/e2e/drive-device.sh
@@ -198,11 +242,13 @@ jobs:
           DEVICE_ID: chromium-cdp-19222
 
       - name: Install Chrome
+        if: needs.changes.outputs.relevant == 'true'
         # The hosted image ships it; the self-hosted VMs do not.
         run: |
           [ -d "/Applications/Google Chrome.app" ] || brew install --cask google-chrome
 
       - name: Boot + drive the runner's Chrome
+        if: needs.changes.outputs.relevant == 'true'
         # Same start URL as on Linux; the /Applications lookup is macOS-only.
         run: bash scripts/e2e/drive-device.sh
         env:
@@ -210,7 +256,7 @@ jobs:
           DEVICE_ID: chromium-cdp-19223
           ARTIFACT_DIR: ${{ runner.temp }}/browser
 
-      - if: always()
+      - if: always() && needs.changes.outputs.relevant == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-chromium-macos

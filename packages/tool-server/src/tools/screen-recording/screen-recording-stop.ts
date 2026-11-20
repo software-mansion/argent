@@ -41,7 +41,7 @@ interface ScreenRecordingStopResult {
 }
 
 const capability = {
-  apple: { simulator: true },
+  apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
@@ -49,7 +49,9 @@ const capability = {
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
+    .describe(
+      "Target device id from `list-devices` (iOS Simulator UDID, cabled iPhone UDID, or Android serial)."
+    ),
 });
 
 export const screenRecordingStopTool: ToolDefinition<
