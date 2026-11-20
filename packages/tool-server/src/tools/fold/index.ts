@@ -324,11 +324,13 @@ export const foldTool: ToolDefinition<Params, Result> = {
 Use when you must see or test an app in a different posture. \`list-devices\` marks foldable devices with \`foldable: true\`. To turn a device without a fold, use \`rotate\`.
 All tools use the active panel (the panel that shows the UI), also after a fold made outside argent. The coordinates and the screenshot size change with the panel. Before you tap, read the element tree in this result or run \`describe\` again.
 iOS: unfolded, the UI is landscape, as on a rotated iPhone. A fold between two angles that are not closed or open can keep the current panel. To change panels, fold to closed or open.
+To put an app on half of the open iPhone Duo, long-press its Home Screen icon with \`gesture-custom\` and tap "Open in Split View".
 iOS returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAngle, warning? }. screen names the active panel and gives its size in pixels. posture is set only at 0°, 120° and 180°. warning is set when argent cannot find the active panel, or when the device did not change to the expected panel.
 Android returns { posture?, deviceState, hingeAngle?, warning? }. deviceState is the state Android committed (CLOSED, HALF_OPENED, OPENED), and posture is the matching preset. A lock screen the fold raises is dismissed; warning is set when it cannot be, or when a lock screen is showing or the screen is off after the fold. On a generic foldable AVD, closed shows only the left part of the display and describe frames do not match tap coordinates; use a Pixel Fold AVD to test the cover panel.
 Fails if the device is not foldable, is a remote simulator or a physical Android device.`,
   zodSchema,
-  searchHint: "fold unfold hinge foldable duo posture open closed half-open panel screen",
+  searchHint:
+    "fold unfold hinge foldable duo posture open closed half-open panel screen split view",
   interaction: {
     startedMsg: ({ params }) => `Folding device to ${targetLabel(params)}`,
     completedMsg: ({ params, result }) =>

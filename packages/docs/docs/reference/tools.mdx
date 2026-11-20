@@ -78,6 +78,13 @@ On an iOS simulator:
 - Unfolded, the UI is landscape. `rotate` sets the orientation of the device, not of the UI. `Portrait` gives a landscape UI.
 - If Argent cannot find the active panel, it uses the cover panel. The tool result then has a warning.
 
+To open an app in Split View on an iPhone Duo simulator:
+
+1. Set `fold` to `posture: "open"`. Make sure the UI is in landscape.
+2. Press the Home button if an app is open. Find the app icon with `describe`.
+3. Use `gesture-custom` to hold the icon. Send `Down` and then `Up` at the same point after 800 ms.
+4. Tap **Open in Split View**. The app occupies half of the screen. The Home Screen occupies the other half.
+
 On an Android emulator:
 
 - The result gives `deviceState` (`CLOSED`, `HALF_OPENED` or `OPENED`) and the matching `posture`.
