@@ -54,7 +54,11 @@ import {
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
 import { BUNDLE_ID_MESSAGE } from "../src/utils/bundle-id";
 import { forgetDeviceAlias, rememberDeviceAlias } from "../src/utils/debugger/device-alias";
-import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import {
+  __primeDepCacheForTests,
+  __resetDepCacheForTests,
+  DependencyMissingError,
+} from "../src/utils/check-deps";
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import { readAppProcesses } from "../src/blueprints/android-network-inspector-device";
@@ -80,6 +84,25 @@ vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/xcode-first-launch")>()),
   xcodeFirstLaunchPending: () => xcode.pending,
 }));
+
+// Whether the host lacks adb, xcrun and sim-remote. The suite-wide setup marks them present.
+const hostTools = vi.hoisted(() => ({ missing: false }));
+vi.mock("../src/utils/android-binary", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/android-binary")>();
+  return {
+    ...actual,
+    resolveAndroidBinary: (name: "adb" | "emulator") =>
+      hostTools.missing ? Promise.resolve(null) : actual.resolveAndroidBinary(name),
+  };
+});
+vi.mock("../src/utils/command-on-path", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/command-on-path")>();
+  return {
+    ...actual,
+    commandOnPath: (name: string) =>
+      hostTools.missing ? Promise.resolve(null) : actual.commandOnPath(name),
+  };
+});
 
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
 const REMOTE_UDID = "remote:66666666-7777-8888-9999-000000000000";
@@ -486,6 +509,7 @@ beforeEach(() => {
   android.clear();
   androidFactoryCalls = 0;
   xcode.pending = false;
+  hostTools.missing = false;
   __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
 });
 
@@ -3234,6 +3258,65 @@ describe("a device the capture tools do not cover", () => {
 });
 
 describe("the layer option", () => {
+  describe("on a host without adb, xcrun and sim-remote", () => {
+    beforeEach(() => {
+      hostTools.missing = true;
+      __resetDepCacheForTests();
+    });
+
+    it.each([
+      { platform: "Android", udid: SERIAL },
+      { platform: "a local iOS simulator", udid: IOS_UDID },
+    ])("starts the JS layer alone on $platform, which reaches Metro directly", async ({ udid }) => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, udid, rt);
+
+      const result = await start(udid, APP, undefined, "js");
+
+      expect(result).toEqual({ status: "ok", layers: [{ layer: "js", armed: true }] });
+      rt.send("/a");
+      expect(await read(udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+    });
+
+    it.each([
+      { platform: "Android", udid: SERIAL, tool: "adb", layer: "native" as const },
+      { platform: "Android", udid: SERIAL, tool: "adb", layer: undefined },
+      {
+        platform: "a local iOS simulator",
+        udid: IOS_UDID,
+        tool: "xcrun",
+        layer: "native" as const,
+      },
+      { platform: "a local iOS simulator", udid: IOS_UDID, tool: "xcrun", layer: undefined },
+      {
+        platform: "a remote iOS simulator",
+        udid: REMOTE_UDID,
+        tool: "sim-remote",
+        layer: "native" as const,
+      },
+      // Its JS runtime reaches Metro over a sim-remote tunnel.
+      {
+        platform: "a remote iOS simulator",
+        udid: REMOTE_UDID,
+        tool: "sim-remote",
+        layer: "js" as const,
+      },
+    ])(
+      "needs $tool for a start of layer $layer on $platform",
+      async ({ udid, tool, layer: captureLayer }) => {
+        serve(PORT, udid, new FakeRuntime(APP));
+
+        const err = await start(udid, APP, undefined, captureLayer).catch((e: unknown) => e);
+
+        // The registry wraps the tool's error.
+        const cause = (err as Error).cause;
+        expect(cause).toBeInstanceOf(DependencyMissingError);
+        expect((cause as DependencyMissingError).missing).toEqual([tool]);
+        expect(findJsCapture(udid, APP)).toBeUndefined();
+      }
+    );
+  });
+
   describe.each(PLATFORMS)("on $platform", (p) => {
     let rt: FakeRuntime;
 

@@ -83,15 +83,20 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer the call names can capture 
       const device = resolveDevice(params.udid);
       // Only the HTTP gate checks the capability, and an e2e `tool:` step does not pass it.
       assertSupported("network-capture-start", CAPTURE_CAPABILITY, device);
+      const run = requestedLayers(params.layer);
+      // The native layer needs the platform's device tool. The JS layer reaches
+      // Metro directly, except from a remote simulator, whose JS runtime reaches
+      // it over a sim-remote tunnel.
       await ensureDeps(
-        device.platform === "android"
-          ? ["adb"]
-          : device.platform === "ios-remote"
-            ? ["sim-remote"]
-            : ["xcrun"]
+        device.platform === "ios-remote"
+          ? ["sim-remote"]
+          : !run.native
+            ? []
+            : device.platform === "android"
+              ? ["adb"]
+              : ["xcrun"]
       );
       const port = metroPort({ device_id: params.udid, port: params.port });
-      const run = requestedLayers(params.layer);
       // Only the iOS native layer needs simctl to arm.
       if (run.native && device.platform === "ios" && isInjectableBundleId(params.bundleId)) {
         await refuseWhileXcodeInstalls(registry, device, params.bundleId);

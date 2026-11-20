@@ -212,6 +212,8 @@ With `layer`, a call starts or stops only that layer. The call does not change t
 
 One start or stop of an app runs at a time, also when the calls name different layers.
 
+A start with `layer: "js"` does not need `adb` or the Xcode command-line tools, because the JS runtime layer reaches Metro directly. On a remote iOS simulator, it needs `sim-remote`.
+
 #### Start
 
 `network-capture-start` starts the layers at the same time. Each layer waits until its capture is ready:
