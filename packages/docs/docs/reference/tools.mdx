@@ -310,7 +310,7 @@ A body that Argent cannot read shows `[unavailable: <reason>]`, for example when
 
 For each app on each device, Argent keeps a copy of the 64 bodies that the agent read most recently. These copies contain a maximum of 67,108,864 characters together. If one body is longer, Argent keeps a copy of only that body until the agent reads the next body. A later read of a body with a copy uses the copy. After the app process ends, a body is available only if Argent has a copy of it. The `HTTPBody` of an `NSURLConnection` request is an exception. Argent keeps this body with the request. It stays available after the app process ends, and it does not count toward these limits.
 
-When the connection of the app closes, Argent marks each request that still runs as `failed`. The `errorText` field gives one of these errors:
+On a simulator without a device provider, when the connection of the app closes, Argent marks each request that still runs as `failed`. The `errorText` field gives one of these errors:
 
 | `errorText`                                                                                              | Cause                                                                             |
 | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |

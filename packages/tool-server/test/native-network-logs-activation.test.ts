@@ -87,7 +87,7 @@ describe("native-network-logs before the app is instrumented", () => {
     expect(ok.header).toMatch(/were not recorded.*restart-app/);
   });
 
-  it("says capture is armed when the app is not connected yet", async () => {
+  it("says capture is on, and arms once the app connects, when the app is not connected yet", async () => {
     const { precheckNativeDevtools } = await import("../src/blueprints/native-devtools");
     vi.mocked(precheckNativeDevtools).mockResolvedValueOnce(null);
     const activateNetworkInspection = vi.fn();
@@ -102,7 +102,7 @@ describe("native-network-logs before the app is instrumented", () => {
         { nativeDevtools: api },
         { udid: UDID, bundleId: "com.example.app", limit: 50, clear: false }
       )
-    ).rejects.toThrow(/capture for it is armed.*call again/);
+    ).rejects.toThrow(/capture is on for it and arms once it connects.*call again/);
     expect(activateNetworkInspection).toHaveBeenCalledWith("com.example.app");
   });
 });
