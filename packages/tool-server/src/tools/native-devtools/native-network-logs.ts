@@ -218,7 +218,7 @@ When status is not_attachable, use view-network-logs and do not retry.`,
 
 function notConnected(api: NativeDevtoolsApi, bundleId: string): FailureError {
   const remedy = api.armsEnv
-    ? `Network capture for it is armed and starts once it connects, so call again in a few seconds. ` +
+    ? `Network capture is on for it and arms once it connects, so call again in a few seconds. ` +
       `Requests made before then are not recorded.`
     : `Native devtools here are an external provider's agent, which serves only the app that provider ` +
       `chose to lend. ${bundleId} is either not that app or its connection has not landed yet, so no ` +

@@ -501,6 +501,26 @@ describe("native-network-logs lists an iOS app's native requests", () => {
       second.close();
     });
   });
+
+  it("says capture is on, not armed, when the app's connection is gone at the call", async () => {
+    await withService(async (api) => {
+      const app = await connectApp(api.socketPath);
+      await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+      // The connection drops between the precheck and the read.
+      vi.spyOn(api, "isConnected").mockReturnValue(false);
+
+      const err = await list(api).catch((e: Error) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      const message = (err as Error).message;
+      expect(message).toMatch(/not connected/);
+      // Armed means the app acknowledged Network.enable, which an app that
+      // is not connected cannot have done.
+      expect(message).not.toMatch(/\bis armed\b/);
+      expect(message).toMatch(/Network capture is on for it and arms once it connects/);
+      app.close();
+    });
+  });
 });
 
 describe("native-network-logs limit", () => {
