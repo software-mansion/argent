@@ -245,6 +245,13 @@ describe("TabsManager", () => {
     expect(tabs.map((t) => t.targetId)).toEqual(["B"]);
   });
 
+  it("close() leaves out a closed tab that Chrome still lists", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("B")]);
+    await mgr.list();
+    const tabs = await mgr.close("t2");
+    expect(tabs.map((t) => t.tabId)).toEqual(["t1"]);
+  });
+
   it("close() falls back to a tab it can attach to", async () => {
     const detached = { ...tgt("B"), webSocketDebuggerUrl: undefined };
     listMock.mockResolvedValue([tgt("A"), detached, tgt("C")]);

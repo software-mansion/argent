@@ -260,7 +260,8 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       }
     }
 
-    return list();
+    const remaining = (await listTargets()).filter((t) => t.id !== targetId);
+    return remaining.map(toInfo);
   }
 
   return {
