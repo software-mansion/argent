@@ -384,8 +384,8 @@ interface PendingCall {
 /**
  * One NDJSON connection to the library: the inherited socket of a launch, or a
  * reconnect through the listening socket. The reader is attached at
- * construction, before the first await, so a handshake that arrives early is
- * never dropped.
+ * construction so a handshake that arrives before the helper reports the app's
+ * pid is never dropped.
  */
 class LibraryChannel {
   private readonly pending = new Map<number, PendingCall>();
@@ -610,16 +610,18 @@ function macosLaunchEnv(
   return env;
 }
 
+function helperLaunchFailure(executable: string, detail: string, cause?: unknown): FailureError {
+  return macosFailure(
+    `argent-macos-helper could not start ${executable}: ${detail}`,
+    FAILURE_CODES.MACOS_APP_SPAWN_FAILED,
+    "macos_app_helper_launch",
+    "subprocess",
+    cause
+  );
+}
+
 /** Waits for the `{"pid":N}` of `argent-macos-helper launch`, which exits once the app is spawned. */
 async function helperPid(child: ReturnType<typeof spawn>, executable: string): Promise<number> {
-  const failed = (detail: string, cause?: unknown) =>
-    macosFailure(
-      `argent-macos-helper could not start ${executable}: ${detail}`,
-      FAILURE_CODES.MACOS_APP_SPAWN_FAILED,
-      "macos_app_helper_launch",
-      "subprocess",
-      cause
-    );
   let stdout = "";
   let stderr = "";
   child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
@@ -640,12 +642,16 @@ async function helperPid(child: ReturnType<typeof spawn>, executable: string): P
       once(child.stderr!, "close"),
     ]);
   } catch (err) {
-    throw failed(errorMessage(err), err);
+    throw helperLaunchFailure(executable, errorMessage(err), err);
   } finally {
     clearTimeout(timer);
   }
-  if (timedOut) throw failed(`no answer within ${HELPER_TIMEOUT_MS} ms`);
-  if (code !== 0) throw failed(stderr.trim() || (signal ? `killed by ${signal}` : `exit ${code}`));
+  if (timedOut) throw helperLaunchFailure(executable, `no answer within ${HELPER_TIMEOUT_MS} ms`);
+  if (code !== 0)
+    throw helperLaunchFailure(
+      executable,
+      stderr.trim() || (signal ? `killed by ${signal}` : `exit ${code}`)
+    );
   const line = stdout.split("\n").find((l) => l.trim().startsWith("{"));
   let pid: unknown;
   try {
@@ -654,7 +660,7 @@ async function helperPid(child: ReturnType<typeof spawn>, executable: string): P
     // Reported below.
   }
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
-    throw failed(`unexpected output ${JSON.stringify(stdout.trim())}`);
+    throw helperLaunchFailure(executable, `unexpected output ${JSON.stringify(stdout.trim())}`);
   }
   return pid;
 }
@@ -1148,7 +1154,13 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         cwd: "/",
       }
     );
-    // Attached before the first await: the handshake may come before the helper's answer.
+    // A failed spawn may have no stdio at all. On success, attach the reader
+    // as soon as the pipes exist: the handshake can precede the helper's pid.
+    try {
+      await once(helper, "spawn");
+    } catch (err) {
+      throw helperLaunchFailure(info.executable, errorMessage(err), err);
+    }
     const ch = new LibraryChannel(
       helper.stdio[3] as net.Socket,
       bundleId,

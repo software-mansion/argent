@@ -1,13 +1,9 @@
-/**
- * When `spawn` fails (EMFILE, ENOMEM, ...), Node hands back a child with no
- * stdio streams and emits `error` on the next tick. Each long-lived spawn site
- * must turn that into a rejected call instead of throwing on the missing
- * stream and leaving `error` unlistened, which takes the whole process down.
- * (execSimctl has its own test: simctl-exec-spawn-failure.test.ts.)
- */
-import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
-import type { DeviceInfo } from "@argent/registry";
+import express from "express";
+import supertest from "supertest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Registry, type DeviceInfo } from "@argent/registry";
+
+import { failedSpawn } from "./helpers/failed-spawn";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -45,27 +41,38 @@ vi.mock("@argent/native-devtools-android", async (importOriginal) => ({
   helperManifest: () => ({ instrumentationRunner: "x/y.Runner" }),
 }));
 
-/** A child as Node returns it when spawn fails: no stdio, `error` next tick. */
-function failedSpawn() {
-  const child = new EventEmitter() as EventEmitter & {
-    stdout: null;
-    stderr: null;
-    stdin: null;
-    kill: () => void;
-  };
-  child.stdout = null;
-  child.stderr = null;
-  child.stdin = null;
-  child.kill = () => {};
-  process.nextTick(() =>
-    child.emit("error", Object.assign(new Error("spawn EMFILE"), { code: "EMFILE" }))
-  );
-  return child;
-}
-
-describe("spawn failure without stdio rejects instead of crashing", () => {
-  it("simulator-server (iOS)", async () => {
+describe("spawn failure without stdio", () => {
+  beforeEach(() => {
     spawnMock.mockImplementation(failedSpawn);
+  });
+
+  it("rejects simctl with the spawn error", async () => {
+    const { execSimctl } = await import("../src/utils/simctl-exec");
+    await expect(execSimctl(["simctl", "help"])).rejects.toMatchObject({ code: "EMFILE" });
+  });
+
+  it("disables suspension watching when its helper cannot start", async () => {
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    await expect(startSuspensionWatch("/fake/helper", 123)).resolves.toBeNull();
+  });
+
+  it("serves a JSON error when tar cannot start an artifact download", async () => {
+    const { makeArtifactRoute } = await import("../src/artifacts");
+    const registry = new Registry();
+    const artifact = await registry.artifacts.register({
+      hostPath: __dirname,
+      kind: "native-profile-trace",
+    });
+    const app = express().get("/artifacts/:id", makeArtifactRoute(registry));
+    const res = await supertest(app).get(`/artifacts/${artifact.id}`);
+    expect(res.status).toBe(500);
+    expect(res.headers["content-disposition"]).toBeUndefined();
+    expect(res.body).toEqual({
+      error: `Failed to archive artifact "${artifact.id}": spawn EMFILE`,
+    });
+  });
+
+  it("simulator-server (iOS)", async () => {
     const { __resetDepCacheForTests, __primeDepCacheForTests } =
       await import("../src/utils/check-deps");
     __resetDepCacheForTests();
@@ -82,16 +89,14 @@ describe("spawn failure without stdio rejects instead of crashing", () => {
   });
 
   it("android-devtools helper", async () => {
-    spawnMock.mockImplementation(failedSpawn);
     const { androidDevtoolsBlueprint } = await import("../src/blueprints/android-devtools");
     const device: DeviceInfo = { id: "emulator-5554", platform: "android", kind: "emulator" };
-    await expect(androidDevtoolsBlueprint.factory({}, device, { device })).rejects.toThrow(
-      /helper process error/
-    );
+    await expect(androidDevtoolsBlueprint.factory({}, device, { device })).rejects.toMatchObject({
+      cause: { code: "EMFILE" },
+    });
   });
 
   it("android profiler perfetto capture", async () => {
-    spawnMock.mockImplementation(failedSpawn);
     const { startPerfetto } = await import("../src/utils/android-profiler/capture");
     await expect(
       startPerfetto({ serial: "emulator-5554", appPackage: "com.example.app", timestamp: "t" })

@@ -42,13 +42,6 @@ export function execSimctl(
     let stdout = "";
     let stderr = "";
     let settled = false;
-    // A failed spawn (EMFILE, ENOMEM) returns a child with no stdio and emits
-    // `error` on the next tick: listen before touching the streams, or the
-    // unhandled event takes the process down.
-    child.on("error", (err) => settle(err));
-    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
-
     const settle = (err: Error | null): void => {
       if (settled) return;
       settled = true;
@@ -71,6 +64,13 @@ export function execSimctl(
     }, timeoutMs);
 
     options.signal?.addEventListener("abort", onAbort, { once: true });
+
+    // A failed spawn (EMFILE, ENOMEM) returns a child with no stdio and emits
+    // `error` on the next tick: listen before touching the streams, or the
+    // unhandled event takes the process down.
+    child.on("error", (err) => settle(err));
+    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
 
     child.on("close", (code, sig) => {
       if (code === 0) return settle(null);

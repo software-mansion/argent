@@ -100,16 +100,6 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
 
   let stdout = "";
   let stderr = "";
-  // A failed spawn (EMFILE, ENOMEM) returns a child without stdio and emits
-  // `error` on the next tick, so the streams are optional here and the `error`
-  // listener below is attached in the same tick.
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
-  });
-
   const pid = await new Promise<number>((resolve, reject) => {
     let settled = false;
 
@@ -201,7 +191,13 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
       succeed(parsed);
     };
 
-    child.stdout?.on("data", () => tryResolve());
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+      tryResolve();
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
     child.once("exit", (code, signal) => {
       if (settled) return;
       // A signal kill leaves code=null.

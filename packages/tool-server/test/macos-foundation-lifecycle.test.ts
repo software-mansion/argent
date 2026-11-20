@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { failedSpawn } from "./helpers/failed-spawn";
+
 // The macOS artifacts are stand-ins: a helper that runs a Node "app" speaking
 // the library protocol (test/fixtures/macos-fake-library). The real helper and
 // library are proven by the end-to-end run against a built app.
@@ -30,6 +32,7 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     spawn: (command: string, args: string[], options: SpawnOptions) => {
       spawned.push({ command, args, env: { ...(options?.env ?? {}) }, cwd: options?.cwd });
+      if (args.includes("--spawn-emfile")) return failedSpawn();
       return actual.spawn(command, args, options);
     },
   };
@@ -947,6 +950,13 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(pidAlive(second)).toBe(false);
     expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
   }, 20_000);
+
+  it("reports the spawn error when the helper has no library descriptor", async () => {
+    const app = await macosApp();
+    const err = await app.launch({ appPath, args: ["--spawn-emfile"] }).catch((e: unknown) => e);
+    expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_SPAWN_FAILED);
+    expect(err).toMatchObject({ cause: { code: "EMFILE" } });
+  });
 
   it.each([
     [
