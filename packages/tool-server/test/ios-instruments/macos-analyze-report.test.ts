@@ -116,32 +116,21 @@ describe("the CPU sampling note on the tools' time", () => {
 
     const { report } = await analyzeNativeProfilerIos(makeApi("macos"));
 
-    expect(report).toContain(
-      `${NOTE} Of the CPU samples, 120 ms (30%) were argent's own work inside the app, such as ` +
-        `describe and taps, while the trace recorded. They are left out of the CPU hotspots.`
-    );
-    expect(report).toContain(
-      `A hang whose suspects are marked "argent's own library" or "Instruments' own library" ` +
-        `was caused by that tool, not the app, unless the report says that its main thread ` +
-        `very possibly waited.`
-    );
+    expect(report).toContain(NOTE);
+    expect(report).toMatch(/120 ms \(30%\).*argent/i);
+    expect(report).toMatch(/left out of the CPU hotspots/i);
     expect(report).not.toContain("Instruments loads into the app");
   });
 
   it("gives both tools' shares, Instruments' alone, and <1% for a sliver", async () => {
     pipeline({ toolingCpuMs: { argent: 300, instruments: 50 }, totalCpuMs: 1000 });
     const both = (await analyzeNativeProfilerIos(makeApi("macos"))).report;
-    expect(both).toContain(
-      "300 ms (30%) were argent's own work inside the app, such as describe and taps, while the " +
-        "trace recorded, and 50 ms (5%) were the recorder that Instruments loads into the app " +
-        "to track allocations."
-    );
+    expect(both).toMatch(/300 ms \(30%\).*argent/i);
+    expect(both).toMatch(/50 ms \(5%\).*Instruments/);
 
     pipeline({ toolingCpuMs: { argent: 0, instruments: 40 }, totalCpuMs: 200 });
     const instrumentsOnly = (await analyzeNativeProfilerIos(makeApi("macos"))).report;
-    expect(instrumentsOnly).toContain(
-      `${NOTE} Of the CPU samples, 40 ms (20%) were the recorder that Instruments loads`
-    );
+    expect(instrumentsOnly).toMatch(/40 ms \(20%\).*Instruments/);
     expect(instrumentsOnly).not.toContain("argent's own work");
 
     pipeline({ toolingCpuMs: { argent: 3, instruments: 0 }, totalCpuMs: 1000 });

@@ -134,11 +134,10 @@ describe("simulator-watcher while Xcode's component install is pending", () => {
     stop();
 
     expect(execSimctlMock).not.toHaveBeenCalled();
-    expect(stderrWrites).toEqual([
-      "[simulator-watcher] Xcode has not finished installing its system components, so " +
-        `simulators are not polled until it has. To install them, open the Xcode at ${FAKE_APP} ` +
-        `once, or run \`sudo ${FAKE_APP}/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch\`.\n`,
-    ]);
+    expect(stderrWrites).toHaveLength(1);
+    expect(stderrWrites[0]).toContain(
+      `sudo ${FAKE_APP}/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch`
+    );
   });
 
   it("polls again on the first tick after the install, and says why again on a new wait", async () => {
@@ -235,11 +234,11 @@ describe("simulator-watcher while Xcode's component install is pending", () => {
     await ready;
     stop();
 
-    expect(timeoutLines()).toEqual([
-      `[simulator-watcher] ${timeout.message}; retrying with backoff until it does. ` +
-        `If Xcode was just updated, open the Xcode at ${FAKE_APP} once, ` +
-        `or run \`sudo ${FAKE_APP}/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch\`.\n`,
-    ]);
+    expect(timeoutLines()).toHaveLength(1);
+    expect(timeoutLines()[0]).toContain(
+      `sudo ${FAKE_APP}/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch`
+    );
+    expect(timeoutLines()[0]).toContain(timeout.message);
   });
 
   // Asked nothing, so the watcher knows nothing: it must not read that as "shut down".

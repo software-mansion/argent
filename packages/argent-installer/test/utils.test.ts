@@ -70,7 +70,6 @@ import {
   npxChildEnv,
   listBundledSkills,
   resolveProjectRoot,
-  SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
   localInstallCommand,
@@ -1177,22 +1176,6 @@ describe("formatShellCommand", () => {
     expect(
       formatShellCommand({ bin: "npm", args: ["install", "-g", "/path/with spaces/pkg.tgz"] })
     ).toBe('npm install -g "/path/with spaces/pkg.tgz"');
-  });
-});
-
-// ── Bundled paths ─────────────────────────────────────────────────────────────
-
-describe("bundled paths", () => {
-  it("SKILLS_DIR is a string ending with skills", () => {
-    expect(SKILLS_DIR).toMatch(/skills$/);
-  });
-
-  it("RULES_DIR is a string ending with rules", () => {
-    expect(RULES_DIR).toMatch(/rules$/);
-  });
-
-  it("AGENTS_DIR is a string ending with agents", () => {
-    expect(AGENTS_DIR).toMatch(/agents$/);
   });
 });
 

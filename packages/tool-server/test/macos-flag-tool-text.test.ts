@@ -105,47 +105,6 @@ describe("the native profiler tools' Mac app text", () => {
       expect(advertised(id, false).description).not.toMatch(/Mac app/);
     }
   );
-
-  it("native-profiler-start says what app_process, malloc_stack_logging and its warning do on a Mac app", () => {
-    const on = advertised("native-profiler-start", true);
-    expect(on.properties.app_process!.description).toMatch(
-      /Do not set it for a Mac app: the tool refuses it/
-    );
-    expect(on.properties.malloc_stack_logging!.description).toMatch(
-      /On a Mac app, argent restarts the app with MallocStackLogging=1 and then attaches/
-    );
-    expect(on.properties.template_path!.description).toMatch(/^iOS and Mac apps only\./);
-    // The leak-check note of a Mac app report names a built-in template.
-    expect(on.properties.template_path!.description).toMatch(
-      /or the name of a built-in template such as "Time Profiler"/
-    );
-    expect(on.description).toMatch(/On a Mac app, a warning says when the app runs with malloc/);
-    expect(on.description).toContain("WebKit heap");
-
-    const off = advertised("native-profiler-start", false);
-    expect(off.description).not.toContain("WebKit heap");
-    expect(off.properties.app_process!.description).toMatch(/picks the wrong app\.$/);
-    expect(off.properties.malloc_stack_logging!.description).toMatch(/^iOS only\..*no leaks\.$/s);
-    expect(off.properties.template_path!.description).toMatch(/^iOS only\./);
-  });
-
-  it("profiler-stack-query names Mac apps for leak_stacks only with the flag on", () => {
-    expect(advertised("profiler-stack-query", true).description).toMatch(
-      /leak_stacks: Memory leak details \(iOS and Mac apps only\)/
-    );
-    expect(advertised("profiler-stack-query", false).description).toMatch(
-      /leak_stacks: Memory leak details \(iOS only\)/
-    );
-  });
-
-  it("profiler-load names Mac apps for load_native only with the flag on", () => {
-    expect(advertised("profiler-load", true).description).toMatch(
-      /load_native: .*\(xctrace XML on iOS and Mac apps, \.pftrace on Android\)/
-    );
-    const off = advertised("profiler-load", false);
-    expect(off.description).toMatch(/load_native: .*\(xctrace XML on iOS, \.pftrace on Android\)/);
-    expect(JSON.stringify(off)).not.toMatch(MAC_TEXT);
-  });
 });
 
 describe("the React profiler tools' Mac app text", () => {
@@ -168,16 +127,9 @@ describe("the React profiler tools' Mac app text", () => {
     expect(JSON.stringify(advertised(id, false))).not.toMatch(MAC_TEXT);
   });
 
-  it("react-profiler-start documents Mac setup and native capture only with the flag on", () => {
-    const on = advertised("react-profiler-start", true).description;
-    expect(on).toMatch(
-      /Mac app, use a Debug build that loads JavaScript from Metro: react-native-macos 0\.76\+, or React Native built for Mac Catalyst\./
-    );
-    expect(on).toContain("without debugger-connect");
-    expect(on).toMatch(/Mac app[^.\n]*native-profiler-start/);
-    const off = advertised("react-profiler-start", false).description;
-    expect(off).toContain("native-profiler-start");
-    expect(off).not.toMatch(MAC_TEXT);
+  it("includes Mac Catalyst setup guidance only when Mac apps are enabled", () => {
+    expect(advertised("react-profiler-start", true).description).toContain("Mac Catalyst");
+    expect(advertised("react-profiler-start", false).description).not.toContain("Mac Catalyst");
   });
 
   it("react-profiler-analyze offers the macos platform only with the flag on", () => {

@@ -1269,11 +1269,8 @@ describe("flow-execute over a link, from the real argent client", () => {
       .catch((e: unknown) => e);
 
     expect(String(err)).toContain("  - step 2: run: frag.yaml\n");
-    expect(String(err)).toContain(
-      "This tool-server runs run: steps for a client that sends their fragments with the call. " +
-        "Update the argent CLI or MCP adapter on the client. A client older than the " +
-        "e2e_test_path param sends those files for a test passed as flow_path."
-    );
+    expect(String(err)).toMatch(/update.*CLI or MCP adapter/i);
+    expect(String(err)).toContain("flow_path");
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 

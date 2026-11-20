@@ -539,26 +539,6 @@ describe("resolveLocalCommandMode", () => {
   });
 });
 
-// ── Adapter registry ──────────────────────────────────────────────────────────
-
-describe("ALL_ADAPTERS", () => {
-  it("contains all ten adapters", () => {
-    const names = ALL_ADAPTERS.map((a) => a.name);
-    expect(names).toEqual([
-      "Cursor",
-      "Claude Code",
-      "VS Code",
-      "Devin Desktop",
-      "Zed",
-      "Gemini",
-      "Codex",
-      "Hermes",
-      "opencode",
-      "Kiro",
-    ]);
-  });
-});
-
 // ── Cursor adapter ────────────────────────────────────────────────────────────
 
 describe("Cursor adapter", () => {

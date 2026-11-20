@@ -18,9 +18,12 @@ vi.mock("child_process", () => ({
   },
 }));
 
-import { selectIosCaptureStrategy } from "../src/utils/ios-profiler/capture-strategy/select";
+import {
+  resolveIosCaptureStrategy,
+  selectIosCaptureStrategy,
+} from "../src/utils/ios-profiler/capture-strategy/select";
 
-describe("iOS capture-strategy: xcodebuild probe is shell-free", () => {
+describe("iOS capture strategy", () => {
   beforeEach(() => {
     rec.calls.length = 0;
     delete process.env.ARGENT_IOS_CAPTURE;
@@ -42,5 +45,11 @@ describe("iOS capture-strategy: xcodebuild probe is shell-free", () => {
     const probe = rec.calls.find((c) => c.file === "xcodebuild");
     expect(probe).toBeDefined();
     expect(probe?.args).toEqual(["-version"]);
+  });
+
+  it("treats Xcode 26.5 as degraded (a mid-band 26.x, not just 26.4 and 27+)", () => {
+    const decision = resolveIosCaptureStrategy();
+    expect(decision.reason).toEqual({ kind: "degraded-xcode", major: 26, minor: 5 });
+    expect(decision.strategy.name).toBe("all-processes");
   });
 });
