@@ -518,6 +518,25 @@ describe("iOS simulator flow tree projection", () => {
       frame(0.05, 0.5, 0.9, 0.06)
     );
   });
+
+  it("marks every leaf of the window holding the Keyboard element, none of the app's window", () => {
+    const tree = adaptIosUiTreeForFlows(
+      adaptAxTree(
+        reply([
+          app,
+          { index: 1, parentIndex: 0, elementType: 4, frame: frame(0, 0, 1, 1) },
+          { index: 2, parentIndex: 1, label: "Done", frame: frame(0, 0.1, 1, 0.1) },
+          { index: 3, parentIndex: 0, elementType: 4, frame: frame(0, 0.6, 1, 0.4) },
+          // A prediction cell beside the Keyboard element, not inside it.
+          { index: 4, parentIndex: 3, label: "The", frame: frame(0, 0.6, 0.3, 0.05) },
+          { index: 5, parentIndex: 3, elementType: 19, frame: frame(0, 0.65, 1, 0.35) },
+          { index: 6, parentIndex: 5, label: "q", elementType: 20, frame: frame(0, 0.9, 1, 0.1) },
+        ])
+      )
+    );
+    expect(leaves(tree)).toEqual(["Done", "The", "q"]);
+    expect(tree.children.map((c) => c.keyboard)).toEqual([undefined, true, true]);
+  });
 });
 
 describe("queryIosSimulatorFlowTree", () => {

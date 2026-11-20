@@ -8,10 +8,13 @@ import {
   findAll,
   firstInReadingOrder,
   identifierMatches,
+  keyboardDrawsAt,
   matchNode,
+  selectorToNode,
   textMatches,
   treeFingerprint,
   uiTreeMatchInternals,
+  underKeyboard,
   type Selector,
 } from "../../src/utils/ui-tree-match";
 
@@ -1905,5 +1908,73 @@ describe("reading order on a landscape UI", () => {
         ids(findAll(card, { role: "AXSwitch", within: { identifier: "card" } }, orientation))
       ).toEqual(["sw-airplane", "sw-wifi"]);
     }
+  });
+});
+
+describe("on-screen keyboard", () => {
+  // Portrait: two rows of keys (gap at y 0.82-0.86), a tip above the left keys,
+  // and a full-height input method container like Android's parentPanel.
+  const f = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+  const key = (label: string, frame: ReturnType<typeof f>) =>
+    node({ label, keyboard: true, frame });
+  const panel = node({ identifier: "parentPanel", keyboard: true, frame: f(0, 0, 1, 1) });
+  const tip = key("See more features", f(0.02, 0.6, 0.28, 0.08));
+  const keyQ = key("q", f(0.02, 0.72, 0.2, 0.1));
+  const keyGo = key("go", f(0.5, 0.72, 0.2, 0.1));
+  const keyShift = key("shift", f(0.26, 0.72, 0.2, 0.1));
+  const keys = [panel, tip, keyQ, keyShift, keyGo, key("done", f(0.74, 0.72, 0.24, 0.1))];
+  const done = node({ role: "AXButton", label: "Done", frame: f(0.7, 0.05, 0.28, 0.1) });
+  const google = node({ label: "Google", frame: f(0, 0.15, 1, 0.08) });
+  const field = node({ identifier: "field", frame: f(0.1, 0.3, 0.8, 0.08) });
+  const search = node({ label: "Search", frame: f(0.6, 0.6, 0.2, 0.08) });
+  const icon = node({ identifier: "icon", frame: f(0.05, 0.75, 0.05, 0.04) });
+  const row = node({ label: "Hearing devices", frame: f(0, 0.8, 1, 0.1) });
+  const app = [done, google, field, search, icon, row];
+  const screen = node({
+    frame: f(0, 0, 1, 1),
+    children: [...keys, key("space", f(0.2, 0.86, 0.6, 0.12)), ...app],
+  });
+
+  it("selectorToNode takes an app element over an as-exact key, but an exact key over a substring", () => {
+    // The key "done" has the smaller frame, which used to win the tie.
+    expect(selectorToNode(screen, { text: "Done" })).toBe(done);
+    expect(selectorToNode(screen, { text: "Go" })).toBe(keyGo);
+    expect(selectorToNode(screen, { text: "shift" })).toBe(keyShift);
+  });
+
+  it("nodeAtPoint takes the key over a smaller app element behind it, and nothing between keys", () => {
+    expect(nodeAtPoint(screen, { x: 0.075, y: 0.77 })).toBe(keyQ);
+    expect(nodeAtPoint(screen, { x: 0.4, y: 0.84 })).toBeUndefined();
+  });
+
+  it("nodeAtPoint passes a point above the keys to the app through the full-height container", () => {
+    expect(nodeAtPoint(screen, { x: 0.5, y: 0.34 })).toBe(field);
+    expect(nodeAtPoint(screen, { x: 0.7, y: 0.64 })).toBe(search);
+  });
+
+  it("underKeyboard covers an app element centred under a key or between keys, never a key", () => {
+    expect(underKeyboard(screen, icon)).toBe(true);
+    expect(underKeyboard(screen, row)).toBe(true);
+    expect(underKeyboard(screen, keyQ)).toBe(false);
+    expect(underKeyboard(screen, field)).toBe(false);
+  });
+
+  it("lets a tip above the keys cover only its own column", () => {
+    expect(keyboardDrawsAt(screen, { x: 0.16, y: 0.64 })).toBe(true);
+    expect(underKeyboard(screen, search)).toBe(false);
+  });
+
+  it("measures the keyboard's top in the UI's orientation", () => {
+    // The screen as a device held landscape right frames it (the inverse of nativeFrameToUi).
+    const turned = node({
+      frame: f(0, 0, 1, 1),
+      children: screen.children.map((n) => ({
+        ...n,
+        frame: f(1 - n.frame.y - n.frame.height, n.frame.x, n.frame.height, n.frame.width),
+      })),
+    });
+    const turnedSearch = turned.children.find((n) => n.label === "Search")!;
+    expect(underKeyboard(turned, turnedSearch, "landscapeRight")).toBe(false);
+    expect(underKeyboard(turned, turnedSearch)).toBe(true);
   });
 });

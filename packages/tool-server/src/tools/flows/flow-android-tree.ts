@@ -9,6 +9,7 @@ import {
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
 } from "../describe/platforms/android/uiautomator-parser";
+import { TYPE_INPUT_METHOD } from "../ui-tree/android";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
@@ -167,6 +168,12 @@ function projectAndroidNode(
  * flat-leaves-under-one-root shape the other describe adapters emit, keeping
  * only on-screen views with a `resource-id`, label or specific semantic role.
  * Layout scaffolding is dropped, its selectable descendants preserved.
+ *
+ * The helper dumps each window under its own root and writes `window-type` on
+ * that root. Every leaf of the input method's window is marked `keyboard`: the
+ * keys, the suggestion strip, the emoji and clipboard panels and the accent
+ * popup the keyboard draws inside it, and its own navigation bar. A dump with
+ * no `window-type` (the `active-window` capture, an older helper) marks none.
  */
 export function adaptFullAndroidHierarchyToDescribeResult(
   xml: string,
@@ -178,7 +185,11 @@ export function adaptFullAndroidHierarchyToDescribeResult(
     const root = parseUiAutomatorXml(xml);
     if (root) {
       for (const c of childNodes(root)) {
+        const first = children.length;
         flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH), children);
+        if (Number(c.attrs["window-type"]) === TYPE_INPUT_METHOD) {
+          for (let i = first; i < children.length; i++) children[i]!.keyboard = true;
+        }
       }
     }
   }

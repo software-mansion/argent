@@ -10,10 +10,13 @@ import type { DescribeNode, DescribeTreeData } from "../contract";
 /**
  * Describe the current screen on a physical iOS device.
  * Adapts the XCUITest runner snapshot into the describe contract tree.
+ * `markKeyboard`: copy the runner's `keyboard` mark onto the nodes, for the e2e
+ * runner's tree; the describe tool leaves it off.
  */
 export async function describeIosDevice(
   registry: Registry,
-  device: DeviceInfo
+  device: DeviceInfo,
+  { markKeyboard = false }: { markKeyboard?: boolean } = {}
 ): Promise<DescribeTreeData> {
   const bundleId = requireCurrentIosDeviceApp(device.id);
   const ref = iosDeviceRunnerRef(device);
@@ -27,7 +30,7 @@ export async function describeIosDevice(
     ({ nodes, quality } = await captureSnapshot(api, bundleId));
   }
 
-  const data = adaptRunnerSnapshot(nodes);
+  const data = adaptRunnerSnapshot(nodes, markKeyboard);
 
   if (quality?.state && quality.state !== "healthy") {
     const summary =
@@ -88,7 +91,7 @@ export const RUNNER_TYPE_TO_ROLE: Record<string, string> = {
  */
 export const SCROLL_CONTAINER_TYPES = new Set(["ScrollView", "Table", "CollectionView", "WebView"]);
 
-function adaptRunnerSnapshot(nodes: RunnerSnapshotNode[]): DescribeTreeData {
+function adaptRunnerSnapshot(nodes: RunnerSnapshotNode[], markKeyboard: boolean): DescribeTreeData {
   // Empty snapshot has no root rect. Return the same childless Application shape as a root-only tree.
   if (nodes.length === 0) {
     return {
@@ -124,6 +127,7 @@ function adaptRunnerSnapshot(nodes: RunnerSnapshotNode[]): DescribeTreeData {
       ...(node.selected ? { selected: true } : {}),
       ...(node.enabled === false ? { disabled: true } : {}),
       ...(SCROLL_CONTAINER_TYPES.has(node.type) ? { scrollable: true } : {}),
+      ...(markKeyboard && node.keyboard === true ? { keyboard: true } : {}),
     };
   };
 
