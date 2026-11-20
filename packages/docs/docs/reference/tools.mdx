@@ -86,9 +86,9 @@ On an Android emulator:
 - On a generic foldable profile, closed shows only the left part of the display, and `describe` frames do not match taps. Use a Pixel Fold profile to test the cover panel.
 - A physical device and an emulator without a hinge reject the call.
 
-Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
+Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent does not select a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
-With the `macos-apps` flag on, `list-devices` shows each native Mac app that Argent started and that still runs, as a `macos` entry with kind `app`. See [Mac apps](#mac-apps).
+With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started and that are still running. See [Mac app IDs and kinds](#start-and-restart-an-app).
 
 ## Inspecting the screen
 
@@ -170,9 +170,10 @@ Call `screenshot` or `describe` to read the screen again.
 On a Mac app, these tools read the app through the Argent library:
 
 - `native-describe-screen` reads the accessibility tree of the app, plus the views with an identifier that the tree does not contain. It does not take `skipClasses` or `skipClassPrefixes`.
-- `native-full-hierarchy`, `native-find-views` and `native-view-at-point` read the AppKit views of the app.
+- `native-full-hierarchy`, `native-find-views`, `native-view-at-point`, and `native-user-interactable-view-at-point` inspect AppKit views.
   - SwiftUI puts the identifier and the label of a control on an accessibility element, not on a view. Thus a `native-find-views` search by `identifier` or `label` does not find SwiftUI controls. `describe` shows them.
   - When a search by `identifier` or `label` finds no view, its result has a `note` that refers to `describe`.
+  - For Mac Catalyst, use [`describe`](#mac-catalyst-apps) to inspect UIKit controls.
 - `native-network-logs` reads the requests that the app sends through `NSURLSession`. With `stop: true`, it fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`. The capture stops when the tool-server disconnects from the app.
 
 The [Mac apps](#mac-apps) section contains the details.
@@ -253,7 +254,7 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 
 ## Mac apps
 
-Use these tools for native AppKit, SwiftUI, and react-native-macos apps on macOS 14.4 or later. See [Mac apps](/docs/features/mac-apps) for setup and supported workflows.
+Use these tools for native Mac apps, including [Mac Catalyst](#mac-catalyst-apps). See [Mac apps](/docs/features/mac-apps) for setup and supported workflows.
 
 The `macos-apps` [feature flag](/docs/reference/configuration#feature-flags) is on by default. When disabled, Mac apps disappear from `list-devices`, and tools reject Mac app IDs. The `file-panel` and `menu-bar` tools are available only on a macOS host with the flag enabled.
 
@@ -276,20 +277,22 @@ Argent returns a device ID such as `macos-app-com.example.notes`. Pass that ID a
 | `udid`                  | Device ID instead of a path. Reuses the last app path, or the newest matching build found by Spotlight. |
 | `force`                 | Restart the same build, including a copy started outside Argent. Never replaces a different build.      |
 
-The result contains `platform: "macos"`, `id`, `bundleId`, `pid`, `appPath`, `sandboxed`, `logPath`, `args`, and `booted: true`. A running app returns `alreadyRunning: true` without restarting. Check `appPath` to confirm which build runs and `logPath` for app output.
+The result contains `platform: "macos"`, `id`, `kind`, `bundleId`, `pid`, `appPath`, `sandboxed`, `logPath`, `args`, and `booted: true`. A running app returns `alreadyRunning: true` without restarting. Check `appPath` to confirm which build runs and `logPath` for app output.
+
+`boot-device`, `list-devices`, `launch-app`, and `restart-app` report `kind: "catalyst"` for Mac Catalyst and `kind: "app"` for other native Mac apps. The kind follows the last build Argent started for that bundle identifier and persists across tool-server restarts.
 
 A `note` reports conditions that need attention, such as no open window or arguments that differ from the request. Launch tools wait up to 10 seconds for a window. Use `force` to apply changed arguments to an already running app.
 
 | Tool                                                  | macOS behavior                                                                                      |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `list-devices`                                        | Lists running apps started by Argent, with `platform: "macos"` and `kind: "app"`.                   |
+| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                     |
 | `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                           |
 | `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                 |
 | `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                         |
 | `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                         |
 | `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent. The app keeps running; network capture stops and its recorded requests are lost. |
 
-For `launch-app` and `restart-app`, `bundleId` must match the device. Both accept `launchArgs` and otherwise reuse the previous arguments. Their results include `appPath` and `args`.
+For `launch-app` and `restart-app`, `bundleId` must match the device. Both accept `launchArgs` and otherwise reuse the previous arguments. Both report `appPath` and `args`.
 
 `open-url` accepts `http`, `https`, and `file` URLs. Other schemes must appear in the app's `CFBundleURLTypes`.
 
@@ -313,6 +316,7 @@ An unresponsive app can be force-quit after five seconds. Check the result's `no
 | The saved app path no longer exists                      | Call `boot-device` with the current `macosAppPath`.                                                    |
 | The app does not connect during launch                   | Check the log in the error. Make sure startup does not block the app's main thread.                    |
 | The app uses a launcher script                           | Point Argent at a bundle whose executable is the native app.                                           |
+| The app is a "Designed for iPad" app                     | Build the Mac Catalyst target of the app and start that build, or test the app on an iOS simulator.    |
 | The app has no supported window                          | Open a standard window. Apps with only panels, borderless windows, or a menu bar icon are unsupported. |
 | The launch result warns that reconnection is unavailable | After disconnecting, use `restart-app`. This can occur in sandboxed apps with long bundle identifiers. |
 | The Argent library files are missing                     | Update Argent and retry.                                                                               |
@@ -322,6 +326,8 @@ If the app does not connect within 20 seconds, Argent stops it and includes rece
 ### Configure code signing
 
 Argent loads a library into the app at launch. Code signing must permit that library. Use a Debug build; the standard Xcode macOS App and react-native-macos templates work without changes.
+
+For a Mac Catalyst Debug build, Xcode's **Sign to Run Locally** setting normally works as is. Development-team signing enables the hardened runtime by default. If library validation blocks launch, use one of the options below. Signing the Argent library with your team needs no provisioning profile.
 
 For a Debug build with the hardened runtime, choose one option:
 
@@ -375,7 +381,7 @@ Coordinates use the app window, including its title bar, with the origin at the 
 | `await-ui-element`, `await-screen-idle` | Wait for matching elements or a stable interface using the app tree.                                                            |
 | `screenshot`                            | Captures the app window and attached sheets, popovers, alerts, and menus. Other app windows are excluded.                       |
 | `screenshot-diff`                       | Captures at `scale: 1.0`. Save baselines at the same scale. No top band is masked.                                              |
-| `gesture-tap`                           | Clicks. Use `button: "right"` for a context menu or `clickCount: 2` for a double-click.                                         |
+| `gesture-tap`                           | Click, double-click (`clickCount: 2`), open a context menu (`button: "right"`), or [hold keys](#clicks-with-modifier-keys).     |
 | `gesture-drag`                          | Drags with the left button. Equal start and end points produce a long press.                                                    |
 | `gesture-scroll`                        | Scrolls the content under the point, like a mouse wheel. `durationMs` has no effect.                                            |
 | `keyboard`                              | Types Unicode text or sends keys and shortcuts, such as `command+a` or `shift+tab`.                                             |
@@ -383,6 +389,12 @@ Coordinates use the app window, including its title bar, with the origin at the 
 | `run-sequence`                          | Runs tap, scroll, drag, keyboard, paste, and await steps.                                                                       |
 | Native view tools                       | Require the device's `bundleId`. Their `x` and `y` use points, rather than fractions of the window.                             |
 | `native-network-logs`                   | Starts capturing `URLSession` requests on the first call. Startup requests can be missed. Each app restart begins a new record. |
+
+#### Clicks with modifier keys
+
+On a Mac app, pass `modifiers` to `gesture-tap` as a list of keys from `control`, `option`, `shift`, and `command`. For example, `["command"]` can toggle a row in a selection. The effect depends on the control. The keys are held for the entire gesture, including both clicks of a double-click. An empty list leaves the click unmodified. Other targets reject nonempty lists.
+
+`MACOS_APP_LIBRARY_OUTDATED` means the app's loaded Argent library lacks modifier-click support. The tool stops before clicking. Run `restart-app` to reload the library, then retry. If the error persists, use an Argent build that includes modifier-click support.
 
 #### Screenshots and scrolling
 
@@ -415,12 +427,14 @@ When several elements match, text checks prefer an open menu or combo box list, 
 
 Set identifiers in your app:
 
-| App type           | Identifier source                                                     |
-| ------------------ | --------------------------------------------------------------------- |
-| AppKit             | The control's accessibility identifier                                |
-| SwiftUI            | `.accessibilityIdentifier("save-button")`                             |
-| Web content        | `data-testid="save-button"`, or `id` when `data-testid` is absent     |
-| react-native-macos | `testID="save-button"`, including on plain `View` and `Text` elements |
+| App type                    | Identifier source                                                     |
+| --------------------------- | --------------------------------------------------------------------- |
+| AppKit                      | The control's accessibility identifier                                |
+| UIKit (Mac Catalyst)        | The view's `accessibilityIdentifier`                                  |
+| SwiftUI                     | `.accessibilityIdentifier("save-button")`                             |
+| Web content                 | `data-testid="save-button"`, or `id` when `data-testid` is absent     |
+| react-native-macos          | `testID="save-button"`, including on plain `View` and `Text` elements |
+| React Native (Mac Catalyst) | `testID="save-button"`                                                |
 
 Argent omits identifiers generated by AppKit or SwiftUI, such as `ListRow`. A view with an identifier can appear even if it is not an accessibility element.
 
@@ -517,6 +531,21 @@ If a command is disabled, focus the relevant control or dismiss the current aler
 
 The menu list stops at 2000 items or eight submenu levels. Check `truncated` and `hint` if the result is incomplete.
 
+### Mac Catalyst apps
+
+Use `describe` or `native-describe-screen` to inspect UIKit controls through the accessibility tree. The four [AppKit inspection tools](#native-devtools) return an unsupported-tool error on Mac Catalyst.
+
+- **Windows.** `describe` and `screenshot` show the front window. Use the Window menu with [`menu-bar`](#menu-bar) to switch windows. Tap the target field before typing so it has focus.
+- **Text and alerts.** Typed text replaces an active input method composition. Tap fields if SwiftUI's Tab order differs from the visible order. Tap the alert button if Return has no default action or Escape leaves a UIKit text-field alert open.
+- **Toolbar menus.** With **Optimize Interface for Mac**, some UIKit toolbar menu buttons have no identifier. Select them by label.
+- **Drag and drop.** Pan and drag gestures work. UIKit drag and drop between views is unsupported.
+- **File dialogs.** [`file-panel`](#file-panel) works with the UIKit document picker and SwiftUI's `fileImporter` and `fileExporter`.
+- **Web views.** `describe` includes `WKWebView` content. Typing, paste, scrolling, and text selection work in it. `native-network-logs` captures the app's `URLSession` requests only. It does not capture `WKWebView` traffic.
+- **Password fields.** Focusing an empty password field can show the macOS Passwords AutoFill pop-up. Input still works.
+- **Modifier clicks.** UIKit controls can respond to modifier clicks. React Native `Pressable` handlers receive the press without modifier keys. SwiftUI `List` row selection stays single-select with Command-click or Shift-click.
+
+If typing, paste, or scrolling reports success without changing the app, check that your Argent build includes the native library with Mac Catalyst input support.
+
 ### Profiling a Mac app
 
 Pass the Mac app's `device_id` to `native-profiler-start`, `native-profiler-stop`, `native-profiler-analyze`, and `profiler-stack-query`. Use `profiler-load` with `mode: "load_native"` to reopen a saved native session. See [Profiling](#profiling) for shared behavior.
@@ -537,10 +566,12 @@ When suspension timing is available, the report keeps the duration Instruments r
 
 A short recording may end before a leak check finishes. Follow the report's warning and [allow time for a leak check](/docs/features/profiling#limits). With `Time Profiler`, the report says that memory leaks were not checked.
 
-#### React profiler on react-native-macos
+<a id="react-profiler-on-react-native-macos" />
 
-Start a [supported Debug build](/docs/features/mac-apps#profile-a-react-native-macos-app) through Argent.
-Pass the Mac app's ID from `list-devices` as `device_id`, even on a shared Metro. The profiler
+#### React profiler on a Mac app
+
+Start a [supported Debug build](/docs/features/mac-apps#profile-a-react-native-app) through Argent.
+Pass `id` from the app's `list-devices` entry as `device_id`, even on a shared Metro. The profiler
 connects directly to Metro. The `debugger-*` tools are unavailable for Mac apps.
 
 Use the same `device_id` and Metro `port` for the React profiler and query tools. The default port
@@ -554,9 +585,15 @@ return `DEBUGGER_METRO_NO_TARGETS`. In either case, `react-profiler-status` retu
 `session_status: "no_react_runtime"` with the reason in `note`. Check that the app is running,
 wait for it to load its JavaScript, and verify the Metro port before retrying.
 
-For `react-profiler-analyze`, pass `platform: "macos"` if the recording lacks platform information.
-The report prefers `.macos.*` source files, then `.native.*` files, then files without a platform suffix.
-If the recording lacks architecture information, the tool checks `macos/Podfile`.
+If a Mac Catalyst error mentions a missing `identifierForVendor`, run `restart-app` and retry. If
+the error persists, update Argent. The profiler needs this value to identify the app on a shared
+Metro server.
+
+For `react-profiler-analyze` on a react-native-macos app, pass `platform: "macos"` if the recording
+lacks platform information. The report prefers `.macos.*` source files, then `.native.*` files, then
+files without a platform suffix. If the recording lacks architecture information, the tool checks
+`macos/Podfile`. A Mac Catalyst app runs the iOS bundle, so its report uses `.ios.*` files and
+`ios/Podfile`.
 
 ### Additional limitations
 
@@ -570,7 +607,7 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 | Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                                                                                                          |
 | Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                                                                                                     |
 | Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                                                                                                          |
-| Keyboard layout           | Apps that inspect key codes receive US-layout codes regardless of your keyboard layout.                                                                                                                                                                                                                    |
+| Keyboard layout           | Mac Catalyst uses the current keyboard layout for the key codes of typed characters. Other Mac apps receive US-layout codes.                                                                                                                                                                               |
 | SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                                                                                             |
 | SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                                                                                                        |
 | Protected windows         | Capture protection blocks screenshots, screenshot diffs, and e2e snapshots. Inspection and input still work.                                                                                                                                                                                               |
@@ -578,21 +615,22 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 
 ## Profiling
 
-| Tool                        | Description                                                                  |
-| --------------------------- | ---------------------------------------------------------------------------- |
-| `react-profiler-start`      | Start CPU profiling and React commit capture on the connected Hermes runtime |
-| `react-profiler-stop`       | Stop profiling and collect the CPU profile and commit tree                   |
-| `react-profiler-status`     | Check if a React profiler run records, was saved, was lost or taken over     |
-| `react-profiler-analyze`    | Analyze stored profiling data into a markdown performance report             |
-| `react-profiler-fiber-tree` | Inspect the React fiber tree as JSON                                         |
-| `native-profiler-start`     | Start native profiling: Instruments on iOS and Mac apps, Perfetto on Android |
-| `native-profiler-stop`      | Stop native profiling and export the trace                                   |
-| `native-profiler-analyze`   | Analyze an exported native trace into a markdown report                      |
-| `profiler-combined-report`  | Cross-correlate React Profiler and native profiler data                      |
-| `profiler-load`             | Restore a previously captured session from disk so query tools can use it    |
-| `profiler-commit-query`     | Query React commit data, or the render counts of each component              |
-| `profiler-cpu-query`        | Query Hermes CPU profile data with targeted modes                            |
-| `profiler-stack-query`      | Query native trace data for iterative native investigation                   |
+| Tool                              | Description                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime       |
+| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                         |
+| `react-profiler-status`           | Check if a React profiler run records, was saved, was lost or taken over           |
+| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report                   |
+| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                               |
+| `native-profiler-start`           | Start native profiling: Instruments on iOS and Mac apps, Perfetto on Android       |
+| `native-profiler-stop`            | Stop native profiling and export the trace                                         |
+| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                            |
+| `native-profiler-launch-analysis` | Measure iOS app launch times with XCTest or record a launch with Xcode Instruments |
+| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                            |
+| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it          |
+| `profiler-commit-query`           | Query React commit data, or the render counts of each component                    |
+| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                                  |
+| `profiler-stack-query`            | Query native trace data for iterative native investigation                         |
 
 Argent caps Instruments recordings at 10 minutes on iOS simulators and [Mac apps](#profiling-a-mac-app). Call `native-profiler-stop` to recover the available trace after the cap or an unexpected exit.
 
@@ -624,7 +662,7 @@ On a shared Metro, `react-profiler-start` may ask for Metro's `logicalDeviceId` 
 
 When Argent finds no device, interaction tools on the device keep the automatic screenshot and element tree. `react-profiler-start` then returns a note. Argent cannot read the log of a physical iPhone or of a device from a provider.
 
-For a Mac app, use the [Mac app ID](#react-profiler-on-react-native-macos) even when several devices share Metro.
+For a Mac app, use the [Mac app ID](#react-profiler-on-a-mac-app) even when several devices share Metro.
 
 One React profiler run at a time can record in an app. `react-profiler-status` returns one of these `session_status` values:
 
@@ -666,6 +704,51 @@ While `react-profiler-stop` collects a run, wait for its result:
 - `react-profiler-status` returns `active`.
 - `react-profiler-start` returns `already_running` with `mine: true`, also when you pass `force: true`.
 - A second `react-profiler-stop` fails with `REACT_PROFILER_STOP_IN_PROGRESS`.
+
+### iOS launch analysis
+
+`native-profiler-launch-analysis` measures launch times or records a launch trace to investigate startup work.
+
+| Parameter          | Description                                                                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`             | Required. `measure` for launch timings, or `profile` for an Instruments trace.                                                    |
+| `bundle_id`        | Required. Bundle ID of the installed Release app.                                                                                 |
+| `device_id`        | Required for an iPhone: its UDID. With `allow_simulator`, accepts a booted simulator UDID; omit to use the only booted simulator. |
+| `allow_simulator`  | Allow a booted simulator. Default `false`. Simulator timings reflect the host hardware.                                           |
+| `duration_seconds` | `profile` only. Recording length from 5 to 60 seconds. Default `8`.                                                               |
+
+#### Prerequisites
+
+- A Mac with Xcode. For an iPhone, connect it by USB cable and follow the [physical device requirements](/docs/features/physical-ios-devices#requirements).
+- A Release build installed on the selected device. Build and install it again after code changes; the tool does not build or install the app.
+- For simulator use, boot the simulator and set `allow_simulator: true`.
+
+#### Measure
+
+Use `mode: "measure"` to establish a baseline or compare launch times after a change. Argent's UI test runner collects five launches with `XCTApplicationLaunchMetric`. The metric includes the first frame and any extended launch tasks registered by the app.
+
+The result includes:
+
+- `averageMs`, `medianMs` and `samplesMs`: launch times in milliseconds.
+- `samplesCollected` and `samplesExpected`: how many measurements XCTest returned out of the five requested.
+- `resultPath`, `metricsPath` and `logPath`: the XCTest result bundle, exported metrics and runner log.
+- `warning`: notes about missing samples or simulator timings, or `null`.
+
+#### Profile
+
+Use `mode: "profile"` to find which phases and functions contribute to startup. Argent records one launch with the Instruments App Launch template and collects CPU samples up to the first frame.
+
+The result includes:
+
+- `launchMs`: on an iPhone, launch time through the first frame, excluding the Process Creation phase because it includes profiler attachment time. On a simulator, this is `null`; `simulatorLaunchEstimateMs` gives a rough estimate instead.
+- `phases` and `firstFrameEndMs`: lifecycle phases and the end of the first frame, in milliseconds from the start of the trace. On a simulator, `phases` is empty.
+- `tracePath` and `exports`: the Instruments trace and exported tables.
+- `profilerSession`: the CPU session, including its `cpuXml` path and suggested `next` tool calls.
+- `warning` and optional `exportErrors`: notes about the recording and unavailable exports.
+
+If the trace has no first frame of the app, the tool fails with `LAUNCH_ANALYSIS_NO_FIRST_FRAME`. This occurs when the app stops before its first frame, or when the launch takes longer than `duration_seconds`.
+
+Load the CPU session with `profiler-load` in `load_native` mode, then use `profiler-stack-query` to inspect functions and threads. The trace also opens in Instruments. See [iOS launch performance](/docs/features/ios-launch-performance).
 
 <a id="flows" />
 

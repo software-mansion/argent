@@ -38,7 +38,7 @@ interface Result {
 
 const capability: ToolCapability = {
   chromium: { app: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 type Point = { x: number; y: number };

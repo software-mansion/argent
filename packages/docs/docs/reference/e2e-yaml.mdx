@@ -187,7 +187,7 @@ Each step contains one directive. A failed directive stops the e2e test.
 | Directive    | Shape                                                              | Description                                                                                          |
 | ------------ | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `launch`     | `<app id>` or `{ native, ios, android, vega, chromium, macos }`    | Terminate and start the app, then wait until the app is ready                                        |
-| `tap`        | `<selector>`, `{ on: <selector>, times, button }` or `{ x, y }`    | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                          |
+| `tap`        | `<selector>`, `{ x, y }` or `{ on, times, button, modifiers }`     | Tap an element or point. `times: 2` double-taps. `x`, `y` are normalized coordinates                 |
 | `long-press` | `<selector>` or `{ on: <selector>, duration }`                     | Press and hold. `duration` in milliseconds                                                           |
 | `swipe`      | `<direction>` or `{ from, direction, to, by, momentum, duration }` | Move one finger across the screen. `direction` is the travel of the finger. See [Swipe](#swipe)      |
 | `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`                                     |
@@ -208,6 +208,10 @@ Each step contains one directive. A failed directive stops the e2e test.
 `tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
 
 The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a right-click, for example to open a context menu. Argent supports it only on a Mac app. On other platforms, the step fails before the runner reads the tree. To open a context menu on iOS or Android, use `long-press`. A recorded `gesture-tap` with `button: "right"` becomes a `tap` with `button: right`.
+
+With tap options, put the selector or `{ x, y }` under `on`. On a Mac app, `modifiers` can hold any combination of `control`, `option`, `shift`, and `command`. For example, `tap: { on: "Row 2", modifiers: [command] }` Command-clicks the row. You can combine `modifiers` with `times` or `button`.
+
+An empty list leaves the tap unmodified. On other platforms, a nonempty list makes the step fail before Argent looks for the target. Recording a `gesture-tap` preserves the keys for replay. See [Mac click behavior and troubleshooting](/docs/reference/tools#clicks-with-modifier-keys).
 
 A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
 
