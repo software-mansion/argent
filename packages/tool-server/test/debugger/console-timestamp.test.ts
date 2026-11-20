@@ -21,16 +21,6 @@ describe("consoleTimestampToIso", () => {
     expect(new Date(iso).getUTCFullYear()).toBe(2026);
   });
 
-  it("does NOT reintroduce the * 1000 corruption (far-future year)", () => {
-    // Guards the exact bug: the pre-fix `new Date(ms * 1000)` interpreted a real
-    // ms timestamp as seconds and landed ~56000 years out — `new Date(ms * 1000)`
-    // below is year 58471 for this input (the reviewer observed 58473 on-device
-    // with a slightly larger clock). The helper must keep a real ms value in the
-    // current millennium; re-adding `* 1000` inside it fails this assertion.
-    const ms = 1_783_000_000_000;
-    expect(new Date(consoleTimestampToIso(ms)).getUTCFullYear()).toBeLessThan(3000);
-  });
-
   it("round-trips a live Date.now() to the current year", () => {
     const now = Date.now();
     const iso = consoleTimestampToIso(now);

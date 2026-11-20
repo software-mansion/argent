@@ -11,6 +11,9 @@
 // request that much after the one before it, in order, as a busy app does. Its one window appears
 // 200 ms after the handshake, as a real app's first window comes after its launch.
 //
+// `--identifier-for-vendor=<id>` puts that identifierForVendor in the handshake,
+// as the library does in a Mac Catalyst app.
+//
 // Network capture: like the real library, it reports requests as CDP events
 // only after a CDP Network.enable, which it answers, until Network.disable or
 // until the client's connection closes. `Net.request` sends one request (with
@@ -28,6 +31,9 @@ const handshakeDelayMs = Number(
 const cdpDelayMs = Number(
   (process.argv.find((a) => a.startsWith("--cdp-delay=")) ?? "=0").split("=")[1]
 );
+const identifierForVendor = process.argv
+  .find((a) => a.startsWith("--identifier-for-vendor="))
+  ?.slice("--identifier-for-vendor=".length);
 const startedAt = Date.now();
 const network = { active: false, activations: 0 };
 /** Requests whose last events wait for `Net.finish`. */
@@ -63,6 +69,8 @@ function serve(socket) {
           platform: "macos",
           protocol: mode === "bad-protocol" ? 2 : 1,
           libraryVersion: "fake",
+          // A Mac Catalyst library reports the app's UIDevice.identifierForVendor.
+          ...(identifierForVendor ? { identifierForVendor } : {}),
         },
       }) + "\n"
     );

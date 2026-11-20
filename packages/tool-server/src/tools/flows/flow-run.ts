@@ -664,6 +664,15 @@ function networkCaptureWarning(
 }
 
 /**
+ * Re-resolve a Mac app device after a start of the app. Its kind, AppKit or Mac
+ * Catalyst, is the one that start recorded: the run resolved the device before
+ * it, possibly before the app's first start.
+ */
+function refreshMacosDeviceKind(state: ExecState): void {
+  if (state.device?.platform === "macos") state.device = resolveDevice(state.device.id);
+}
+
+/**
  * Execute a `launch` step: start the app from a clean state — terminate and
  * relaunch via `restart-app`, so a copy left running by a prior run can't leak
  * state in — then settle and wait for the platform's full-hierarchy tree source
@@ -726,6 +735,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   if (isNativeDevtoolsBlockResult("restart-app", restart)) {
     return { ok: false, reason: `restart-app did not start ${bundleId}: ${restart.message}` };
   }
+  refreshMacosDeviceKind(state);
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal, relaunchedAt);
   // The gate returns null (ready) on abort — check the signal before trusting
@@ -3197,9 +3207,15 @@ async function execLeafStep(
         // `Registry.invokeTool` does not assert capabilities (only the HTTP edge
         // does), and most tools pick their backend by elimination: on a Mac app
         // a raw `tool: gesture-pinch` would reach the simulator-server. Refuse it
-        // here with the tool's own capability message instead.
+        // here with the tool's own capability message instead. The kind is read
+        // again: any raw step can start the app (`tool: boot-device` does its
+        // first start), and the start records the kind.
         if (device?.platform === "macos") {
-          assertSupported(step.name, registry.getTool(step.name)?.capability, device);
+          assertSupported(
+            step.name,
+            registry.getTool(step.name)?.capability,
+            resolveDevice(device.id)
+          );
         }
         prepared = await prepareToolStepInputs(
           registry,
@@ -3243,6 +3259,10 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
           warning = networkCaptureWarning(state, launched, result);
+          refreshMacosDeviceKind(state);
+        } else if (FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))) {
+          // A launch in the nested run updates the record, not this run's device.
+          refreshMacosDeviceKind(state);
         }
         return {
           ...base,

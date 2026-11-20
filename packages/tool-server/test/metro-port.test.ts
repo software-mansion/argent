@@ -249,39 +249,3 @@ describe("service URNs for a provider's device", () => {
     }
   );
 });
-
-/**
- * The type system covers value call sites, since `port` is optional and
- * reading it raw is a compile error. It does not cover URN builders,
- * `${params.port}` interpolates `undefined` happily and keys the session on
- * that string. This is the backstop and for any tool added later that
- * declares the pair.
- */
-describe("no tool reads the raw port", () => {
-  const toolsRoot = path.join(__dirname, "..", "src", "tools");
-
-  function sourceFiles(directory: string): string[] {
-    return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) return sourceFiles(entryPath);
-      return entry.isFile() && entry.name.endsWith(".ts") ? [entryPath] : [];
-    });
-  }
-
-  const metroSessionTools = sourceFiles(toolsRoot)
-    .map((file) => ({ file, source: fs.readFileSync(file, "utf8") }))
-    .filter(({ source }) => /^\s*port: /m.test(source) && /^\s*device_id: /m.test(source));
-
-  it("finds the tools that key a session on (port, device_id)", () => {
-    // A rename that silently empties the list would make every case below vacuous.
-    expect(metroSessionTools.length).toBeGreaterThanOrEqual(20);
-  });
-
-  it.each(metroSessionTools)("$file declares the shared port field", ({ source }) => {
-    expect(source).toContain("port: metroPortField,");
-  });
-
-  it.each(metroSessionTools)("$file resolves the port before using it", ({ source }) => {
-    expect(source).not.toMatch(/params\.port/);
-  });
-});

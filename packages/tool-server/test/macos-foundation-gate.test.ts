@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { unsetFlag } from "@argent/configuration-core";
-import { FAILURE_CODES, Registry, ToolNotFoundError, type ToolCapability } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  Registry,
+  ToolNotFoundError,
+  type DeviceInfo,
+  type ToolCapability,
+} from "@argent/registry";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
@@ -84,6 +90,50 @@ describe("the macos-apps flag gate", () => {
     flag.off();
     expect(() => assertSupported("launch-app", MAC_CAPABLE, device)).toThrow(FLAG_MESSAGE);
     expect(() => assertMacosAppsEnabled("boot-device")).toThrow(FLAG_MESSAGE);
+  });
+});
+
+describe("Mac Catalyst apps", () => {
+  const catalyst: DeviceInfo = { id: MAC, platform: "macos", kind: "catalyst" };
+  const VIEW_TREE_TOOLS = [
+    "native-find-views",
+    "native-full-hierarchy",
+    "native-user-interactable-view-at-point",
+    "native-view-at-point",
+  ];
+
+  it("every tool with a macos block names catalyst, and only the tools that read the AppKit view tree refuse it, each with a next step", () => {
+    const registry = createRegistry();
+    const refused: string[] = [];
+    for (const id of registry.getSnapshot().tools) {
+      const { capability } = registry.getTool(id)!;
+      if (!capability?.macos) continue;
+      expect({ id, catalyst: typeof capability.macos.catalyst }).toEqual({
+        id,
+        catalyst: "boolean",
+      });
+      if (capability.macos.catalyst) {
+        expect(() => assertSupported(id, capability, catalyst)).not.toThrow();
+        continue;
+      }
+      refused.push(id);
+      expect(() => assertSupported(id, capability, catalyst)).toThrow(
+        `Tool '${id}' is not supported on macos catalyst (a Mac Catalyst app's UIKit views are ` +
+          "not in its AppKit view tree: use describe, which lists them with their identifiers " +
+          "and frames)."
+      );
+      // An AppKit app still gets them.
+      expect(() => assertSupported(id, capability, { ...catalyst, kind: "app" })).not.toThrow();
+    }
+    expect(refused.sort()).toEqual(VIEW_TREE_TOOLS);
+  });
+
+  it("a tool without a reason refuses the kind by name, and a tool without a macos block keeps the Mac reason", () => {
+    const appOnly: ToolCapability = { macos: { app: true } };
+    expect(() => assertSupported("some-tool", appOnly, catalyst)).toThrow(
+      "Tool 'some-tool' is not supported on macos catalyst (kind 'catalyst' not supported)."
+    );
+    expect(() => assertSupported("button", NOT_MAC_CAPABLE, catalyst)).toThrow("use keyboard");
   });
 });
 

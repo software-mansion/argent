@@ -16,6 +16,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
+import { deviceKeyOf } from "../utils/native-network-record";
 import { XcodeFirstLaunchPendingError } from "../utils/dependency-errors";
 import {
   pickIosHost,
@@ -436,7 +437,9 @@ export function nativeDevtoolsRef(
 } {
   const transportSuffix = transport === "tcp" ? ":tcp" : "";
   return {
-    urn: `${NATIVE_DEVTOOLS_NAMESPACE}:${device.id}${transportSuffix}`,
+    // A provider's `ext:` id and its raw udid name one app connection and one
+    // capture, so both key the service by the udid, as the simulator watcher does.
+    urn: `${NATIVE_DEVTOOLS_NAMESPACE}:${deviceKeyOf(device.id)}${transportSuffix}`,
     options: { device, transport },
   };
 }
@@ -674,7 +677,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
   namespace: NATIVE_DEVTOOLS_NAMESPACE,
 
   getURN(device: DeviceInfo) {
-    return `${NATIVE_DEVTOOLS_NAMESPACE}:${device.id}`;
+    return nativeDevtoolsRef(device).urn;
   },
 
   async factory(_deps, _payload, options) {

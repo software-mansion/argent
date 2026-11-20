@@ -43,8 +43,10 @@ import {
   recordTrackedMacosApp,
   runningTrackedApp,
   stageLibraryFor,
+  trackedAppKind,
   type MacosAppInfo,
 } from "../utils/macos-apps";
+import type { MacosAppKind } from "../utils/macos-app-kind";
 import {
   createIosNetworkRecords,
   type IosNetworkCaptureState,
@@ -73,7 +75,8 @@ const PROCESS_EXIT_WAIT_MS = 2_000;
  * started.
  *
  * Wire format: newline-delimited JSON. The first message on each connection is
- * the handshake `{"type":"Control","payload":{"bundleId","pid","platform":"macos","protocol","libraryVersion"}}`.
+ * the handshake `{"type":"Control","payload":{"bundleId","pid","platform":"macos","protocol","libraryVersion"}}`,
+ * with `identifierForVendor` too in a Mac Catalyst app.
  * A request is `{"type":"ViewInspector","payload":{"id","method","params","deadline"}}`;
  * its reply carries the same id with `result` or `error: {message}`. `deadline`
  * (ms since 1970) is when argent stops waiting: a request that has not run by
@@ -97,7 +100,16 @@ interface MacosLibraryHandshake {
   platform: "macos";
   protocol: number;
   libraryVersion?: string;
+  /**
+   * A Mac Catalyst app's `UIDevice.identifierForVendor`, which React Native
+   * hashes into the app's id in Metro's inspector. Absent in an AppKit app and
+   * from a library that predates it.
+   */
+  identifierForVendor?: string;
 }
+
+/** `NSUUID.UUIDString`: uppercase hex in the 8-4-4-4-12 groups. */
+const VENDOR_ID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/;
 
 interface MacosLaunchOptions {
   /**
@@ -140,6 +152,8 @@ interface MacosLaunchOptions {
 }
 
 export interface MacosLaunchResult extends MacosLibraryHandshake {
+  /** The device kind of the running build: an AppKit app or a Mac Catalyst app. */
+  kind: MacosAppKind;
   /** The arguments the running app was started with. */
   args: string[];
   appPath: string;
@@ -414,6 +428,9 @@ function parseHandshake(
     platform: "macos",
     protocol: p.protocol,
     ...(typeof p.libraryVersion === "string" ? { libraryVersion: p.libraryVersion } : {}),
+    ...(typeof p.identifierForVendor === "string" && VENDOR_ID_PATTERN.test(p.identifierForVendor)
+      ? { identifierForVendor: p.identifierForVendor }
+      : {}),
   };
 }
 
@@ -459,8 +476,8 @@ interface ChannelNetworkSink {
 /**
  * One NDJSON connection to the library: the inherited socket of a launch, or a
  * reconnect through the listening socket. The reader is attached at
- * construction, before the first await, so a handshake that arrives early is
- * never dropped.
+ * construction so a handshake that arrives before the helper reports the app's
+ * pid is never dropped.
  */
 class LibraryChannel {
   /** The CDP requests of the network capture, such as Network.enable. */
@@ -701,16 +718,18 @@ function macosLaunchEnv(
   return env;
 }
 
+function helperLaunchFailure(executable: string, detail: string, cause?: unknown): FailureError {
+  return macosFailure(
+    `argent-macos-helper could not start ${executable}: ${detail}`,
+    FAILURE_CODES.MACOS_APP_SPAWN_FAILED,
+    "macos_app_helper_launch",
+    "subprocess",
+    cause
+  );
+}
+
 /** Waits for the `{"pid":N}` of `argent-macos-helper launch`, which exits once the app is spawned. */
 async function helperPid(child: ReturnType<typeof spawn>, executable: string): Promise<number> {
-  const failed = (detail: string, cause?: unknown) =>
-    macosFailure(
-      `argent-macos-helper could not start ${executable}: ${detail}`,
-      FAILURE_CODES.MACOS_APP_SPAWN_FAILED,
-      "macos_app_helper_launch",
-      "subprocess",
-      cause
-    );
   let stdout = "";
   let stderr = "";
   child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
@@ -731,12 +750,16 @@ async function helperPid(child: ReturnType<typeof spawn>, executable: string): P
       once(child.stderr!, "close"),
     ]);
   } catch (err) {
-    throw failed(errorMessage(err), err);
+    throw helperLaunchFailure(executable, errorMessage(err), err);
   } finally {
     clearTimeout(timer);
   }
-  if (timedOut) throw failed(`no answer within ${HELPER_TIMEOUT_MS} ms`);
-  if (code !== 0) throw failed(stderr.trim() || (signal ? `killed by ${signal}` : `exit ${code}`));
+  if (timedOut) throw helperLaunchFailure(executable, `no answer within ${HELPER_TIMEOUT_MS} ms`);
+  if (code !== 0)
+    throw helperLaunchFailure(
+      executable,
+      stderr.trim() || (signal ? `killed by ${signal}` : `exit ${code}`)
+    );
   const line = stdout.split("\n").find((l) => l.trim().startsWith("{"));
   let pid: unknown;
   try {
@@ -745,7 +768,7 @@ async function helperPid(child: ReturnType<typeof spawn>, executable: string): P
     // Reported below.
   }
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
-    throw failed(`unexpected output ${JSON.stringify(stdout.trim())}`);
+    throw helperLaunchFailure(executable, `unexpected output ${JSON.stringify(stdout.trim())}`);
   }
   return pid;
 }
@@ -1223,6 +1246,21 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
             err
           );
         }
+        // The start's write of the vendor id is missing when that tool-server
+        // died before the handshake, or the write failed. This handshake has it.
+        const vendorId = ch.handshake?.identifierForVendor;
+        if (
+          own.catalyst &&
+          vendorId &&
+          ch.handshake?.pid === own.pid &&
+          own.identifierForVendor !== vendorId
+        ) {
+          try {
+            recordTrackedMacosApp({ ...own, identifierForVendor: vendorId });
+          } catch {
+            // Only the React profiler's lookup needs it; the next reconnect tries again.
+          }
+        }
         const { appPath, sandboxed, logPath, args } = own;
         const asked = opts.args && JSON.stringify(opts.args);
         const note = [
@@ -1236,6 +1274,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           .join(" ");
         return {
           ...ch.handshake!,
+          kind: trackedAppKind(own),
           args,
           appPath,
           sandboxed,
@@ -1280,9 +1319,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     const unsupported = !isInjectableBundleId(bundleId)
       ? `${bundleId} is an Apple app. argent drives only apps it can load its library into, ` +
         `such as your own builds.`
-      : info.catalyst
-        ? catalystRefusal(bundleId)
-        : chromiumRefusal(info);
+      : chromiumRefusal(info);
     if (unsupported) {
       throw macosFailure(
         unsupported,
@@ -1396,7 +1433,13 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         cwd: "/",
       }
     );
-    // Attached before the first await: the handshake may come before the helper's answer.
+    // A failed spawn may have no stdio at all. On success, attach the reader
+    // as soon as the pipes exist: the handshake can precede the helper's pid.
+    try {
+      await once(helper, "spawn");
+    } catch (err) {
+      throw helperLaunchFailure(info.executable, errorMessage(err), err);
+    }
     const ch = new LibraryChannel(helper.stdio[3] as net.Socket, bundleId, null, network);
     let pid: number;
     try {
@@ -1408,20 +1451,22 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
     // Recorded before the handshake: if this tool-server dies now, the next
     // one still knows which process to stop.
+    const record = {
+      bundleId,
+      appPath: info.appPath,
+      executable: info.executable,
+      name: info.name,
+      pid,
+      sandboxed: info.sandboxed,
+      userSelectedReadOnly: info.userSelectedReadOnly,
+      listenSocket: listen?.path ?? null,
+      logPath,
+      args,
+      startedAt: Date.now(),
+      catalyst: info.catalyst,
+    };
     try {
-      recordTrackedMacosApp({
-        bundleId,
-        appPath: info.appPath,
-        executable: info.executable,
-        name: info.name,
-        pid,
-        sandboxed: info.sandboxed,
-        userSelectedReadOnly: info.userSelectedReadOnly,
-        listenSocket: listen?.path ?? null,
-        logPath,
-        args,
-        startedAt: Date.now(),
-      });
+      recordTrackedMacosApp(record);
     } catch (err) {
       // A copy that no record names is one that argent never lists or stops.
       ch.close();
@@ -1464,8 +1509,19 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         err
       );
     }
+    if (hello.identifierForVendor) {
+      // For the React profiler, which finds a Mac Catalyst app's JS runtime in
+      // Metro by it, also after a tool-server restart. Without it only that
+      // lookup fails, so a failed write does not fail the launch.
+      try {
+        recordTrackedMacosApp({ ...record, identifierForVendor: hello.identifierForVendor });
+      } catch {
+        // The record of the first write stays.
+      }
+    }
     const result: MacosLaunchResult = {
       ...hello,
+      kind: info.catalyst ? "catalyst" : "app",
       args,
       appPath: info.appPath,
       sandboxed: info.sandboxed,

@@ -63,7 +63,7 @@ An Apple system app is rejected outright (terminal: never retry it).`,
   capability: {
     apple: { simulator: true },
     appleRemote: { simulator: true },
-    macos: { app: true },
+    macos: { app: true, catalyst: false },
   },
   services: nativeAppServices,
   execute: (services, params) =>

@@ -72,6 +72,8 @@ let temporaryDirectory: string;
  */
 type LentAgent = {
   close: () => Promise<void>;
+  /** How many connections argent opened to the agent so far. */
+  connections: () => number;
   hangUp: () => void;
   /** Sends the deferred `Control` frame of a `deferHandshake` agent. */
   handshake: () => void;
@@ -89,6 +91,7 @@ async function startLentAgent(
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
+  let connections = 0;
   let captureOn = options.captureOn ?? true;
 
   const sendHandshake = (socket: net.Socket) =>
@@ -96,6 +99,7 @@ async function startLentAgent(
 
   const server = net.createServer((socket) => {
     sockets.push(socket);
+    connections++;
     if (!options.deferHandshake) sendHandshake(socket);
 
     readline.createInterface({ input: socket }).on("line", (raw) => {
@@ -136,6 +140,7 @@ async function startLentAgent(
 
   return {
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    connections: () => connections,
     /** What a provider does when the app it was lending goes away. */
     hangUp: () => {
       for (const socket of sockets.splice(0)) socket.destroy();
@@ -828,5 +833,108 @@ describe("a provider that lends its native-devtools agent", () => {
 
       await expect(instantiate(IOS_UDID)).rejects.toThrow(/published none/);
     });
+  });
+
+  /**
+   * The `ext:` id and the raw udid name one app on one device, so both reach
+   * one lent connection and one capture: a start under one name, then a read
+   * or a stop under the other, sees what the start did.
+   */
+  describe("named by the ext: id and by the raw udid", () => {
+    type Layer = { layer: string; armed: boolean; reason?: string };
+
+    async function toolRegistry() {
+      const { Registry, ServiceState } = await import("@argent/registry");
+      const { createNetworkCaptureStartTool } =
+        await import("../src/tools/network/network-capture-start");
+      const { createNetworkCaptureStopTool } =
+        await import("../src/tools/network/network-capture-stop");
+      const { createNativeNetworkLogsTool } =
+        await import("../src/tools/native-devtools/native-network-logs");
+      const { createStopAllSimulatorServersTool } =
+        await import("../src/tools/simulator/stop-all-simulator-servers");
+
+      const registry = new Registry();
+      registry.registerBlueprint(nativeDevtoolsBlueprint);
+      registry.registerTool(createNetworkCaptureStartTool(registry));
+      registry.registerTool(createNetworkCaptureStopTool(registry));
+      registry.registerTool(createNativeNetworkLogsTool(registry));
+      registry.registerTool(createStopAllSimulatorServersTool(registry));
+
+      const nativeLayer = (result: { layers: Layer[] }) =>
+        result.layers.find((layer) => layer.layer === "ios-native");
+      const capture = async (tool: string, udid: string) =>
+        nativeLayer(
+          await registry.invokeTool<{ layers: Layer[] }>(tool, { udid, bundleId: BUNDLE_ID })
+        );
+
+      return {
+        registry,
+        start: (udid: string) => capture("network-capture-start", udid),
+        stop: (udid: string) => capture("network-capture-stop", udid),
+        header: async (udid: string) =>
+          (
+            await registry.invokeTool<{ header: string }>("native-network-logs", {
+              udid,
+              bundleId: BUNDLE_ID,
+            })
+          ).header,
+        stopAll: (devices: string[]) =>
+          registry.invokeTool<{ unmatched?: string[] }>("stop-all-simulator-servers", {
+            devices,
+          }),
+        liveNativeUrns: () =>
+          [...registry.getSnapshot().services]
+            .filter(
+              ([urn, entry]) =>
+                urn.startsWith("NativeDevtools:") && entry.state !== ServiceState.IDLE
+            )
+            .map(([urn]) => urn),
+      };
+    }
+
+    it.each([
+      { started: DEVICE_ID, other: IOS_UDID },
+      { started: IOS_UDID, other: DEVICE_ID },
+    ])(
+      "reads and stops under $other the capture started under $started, over one connection",
+      async ({ started, other }) => {
+        const agent = await startLentAgent();
+        publishDescriptor({ socketPath: agent.socketPath });
+        const tools = await toolRegistry();
+
+        expect(await tools.start(started)).toEqual({ layer: "ios-native", armed: true });
+        expect(await tools.header(other)).toMatch(/^ios-native: armed, 0 requests/);
+        // A start under the other name finds the capture on, over the same connection.
+        expect(await tools.start(other)).toEqual({ layer: "ios-native", armed: true });
+        expect(tools.liveNativeUrns()).toHaveLength(1);
+        expect(agent.connections()).toBe(1);
+
+        expect(await tools.stop(other)).toMatchObject({ layer: "ios-native", armed: false });
+        expect(await tools.header(started)).toMatch(/^ios-native: stopped, 0 requests/);
+
+        await tools.registry.dispose();
+        await agent.close();
+      }
+    );
+
+    it.each([DEVICE_ID, IOS_UDID])(
+      "drops the one service on a stop-all-simulator-servers scoped to %s",
+      async (scope) => {
+        const agent = await startLentAgent();
+        publishDescriptor({ socketPath: agent.socketPath });
+        const tools = await toolRegistry();
+
+        await tools.start(DEVICE_ID);
+        await tools.start(IOS_UDID);
+        const result = await tools.stopAll([scope]);
+
+        expect(result.unmatched).toBeUndefined();
+        expect(tools.liveNativeUrns()).toEqual([]);
+
+        await tools.registry.dispose();
+        await agent.close();
+      }
+    );
   });
 });

@@ -40,12 +40,13 @@ import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { macosAppRef, macosLaunchRefusal, type MacosAppApi } from "../../blueprints/macos-app";
 import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
-import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
+import { classifyNotConnected } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
   captureSchema,
   errorMessage,
   jsNotReached,
+  resolveJsRuntime,
   otherPortHint,
   runLayers,
   setIosUnavailable,
@@ -89,19 +90,21 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
         );
         return { status: "ok", layers: [layer] };
       }
-      await ensureDeps(
-        device.platform === "android"
-          ? ["adb"]
-          : device.platform === "ios-remote"
-            ? ["sim-remote"]
-            : ["xcrun"]
-      );
       const port = metroPort({ device_id: params.udid, port: params.port });
-      if (device.platform === "ios" && isInjectableBundleId(params.bundleId)) {
-        await refuseWhileXcodeInstalls(registry, device, params.bundleId);
-      }
-      const layers = await withCaptureLock(params.udid, params.bundleId, () =>
-        runLayers([
+      // The checks run under the lock too: a stop called while they run waits for
+      // this start, so the start cannot install capture after that stop.
+      const layers = await withCaptureLock(params.udid, params.bundleId, async () => {
+        await ensureDeps(
+          device.platform === "android"
+            ? ["adb"]
+            : device.platform === "ios-remote"
+              ? ["sim-remote"]
+              : ["xcrun"]
+        );
+        if (device.platform === "ios" && isInjectableBundleId(params.bundleId)) {
+          await refuseWhileXcodeInstalls(registry, device, params.bundleId);
+        }
+        return runLayers([
           device.platform !== "android" && !isInjectableBundleId(params.bundleId)
             ? Promise.resolve(
                 unavailable(
@@ -109,12 +112,12 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
                   `${params.bundleId} is an Apple system app, which runs no React Native JS`
                 )
               )
-            : startJsLayer(registry, params.logicalDeviceId ?? params.udid, params.bundleId, port),
+            : startJsLayer(registry, params.udid, params.logicalDeviceId, params.bundleId, port),
           device.platform === "android"
             ? startAndroidLayer(registry, device, params.bundleId, port)
             : startIosLayer(registry, device, params.bundleId, port),
-        ])
-      );
+        ]);
+      });
       if (layers.every((layer) => layer.unavailable)) throw unavailableError(params, layers);
       return { status: "ok", layers };
     },
@@ -200,11 +203,13 @@ async function refuseWhileXcodeInstalls(
  */
 async function startJsLayer(
   registry: Registry,
-  /** The device as Metro's runtimes name it: its udid, or its logicalDeviceId on a shared Metro. */
-  jsDeviceId: string,
+  udid: string,
+  /** The device's id on a Metro that several devices share. */
+  logicalDeviceId: string | undefined,
   bundleId: string,
   port: number
 ): Promise<StartedLayer> {
+  const jsDeviceId = logicalDeviceId ?? udid;
   const device = canonicalDeviceId(jsDeviceId) ?? jsDeviceId;
   const payload = jsCapturePayload(port, device);
   const found = findJsCapture(device, bundleId);
@@ -218,7 +223,7 @@ async function startJsLayer(
   const recording = installedHere && found.paused !== true;
   let dbg: JsRuntimeDebuggerApi;
   try {
-    dbg = await resolveDebuggerService(registry, { port, device_id: jsDeviceId });
+    dbg = await resolveJsRuntime(registry, udid, logicalDeviceId, port);
   } catch (err) {
     const reason = classifyNotConnected(err);
     const code = getFailureSignal(err)?.error_code;
