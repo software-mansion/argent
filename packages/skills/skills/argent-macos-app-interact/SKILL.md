@@ -1,6 +1,6 @@
 ---
 name: argent-macos-app-interact
-description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) through argent. Use when a list-devices entry has platform "macos", or the user names a Mac app, a macOS app or a native desktop app. Never for an iOS simulator, an iPhone, or an Electron or Chromium app (platform "chromium").
+description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Mac Catalyst) through argent. Use when a list-devices entry has platform "macos", or the user names a Mac app, a macOS app or a native desktop app. Never for an iOS simulator, an iPhone, or an Electron or Chromium app (platform "chromium").
 ---
 
 `argent-device-interact` still applies for everything not listed here (`run-sequence`, `await-ui-element`, secrets).
@@ -31,18 +31,27 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) throug
 
 ## Tree
 
-- Identifiers: AppKit accessibility identifier, SwiftUI `.accessibilityIdentifier()`, web `data-testid` (else `id`), React Native `testID` (also on a plain `View` or `Text`).
+- Identifiers: AppKit and UIKit `accessibilityIdentifier`, SwiftUI `.accessibilityIdentifier()`, web `data-testid` (else `id`), React Native `testID` (also on a plain `View` or `Text` in react-native-macos).
 - Hint `The Mac is locked` or `fallback walk`: clicks and typing still work, elements can be missing (an open context menu among them), and a `hidden` check cannot pass. Ask the user to unlock when a target is missing.
 - An action that fails or has no effect: a minimized window takes no input. Restore it by choosing it in the Window menu with `menu-bar`; without such an item, ask the user.
 
+## Mac Catalyst (kind `catalyst`)
+
+- Build with `xcodebuild -scheme <scheme> -destination 'platform=macOS,variant=Mac Catalyst' build`. Add `-workspace <name>.xcworkspace` for a workspace (React Native, CocoaPods), or `-project <name>.xcodeproj` to select a project. Without `-scheme`, xcodebuild ignores the destination and builds for iOS. A Debug build is in DerivedData under `Build/Products/Debug-maccatalyst/`, not `Debug-iphonesimulator/`. Pass that `.app` to `boot-device`. If it reports "Designed for iPad", ask for the Mac Catalyst build or suggest testing on an iOS simulator.
+- Use `describe` to find UIKit controls and their frames. AppKit view-tree tools are unavailable.
+- Switch to the intended window with `menu-bar` and the Window menu. Tap the target field before typing, since keyboard focus can be in another window and SwiftUI Tab order can differ from the visible order.
+- Tap alert buttons directly. Return depends on a default action, and Escape can leave a UIKit text-field alert open.
+- Find toolbar menu buttons by label if **Optimize Interface for Mac** leaves them without identifiers.
+- If typing, paste, or scrolling reports success without changing the app, check whether the installed native library supports Mac Catalyst input.
+
 ## Profiling
 
-Use `argent-native-profiler` for native profiling or `argent-react-native-profiler` to capture React performance on a react-native-macos app. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
+Use `argent-native-profiler` for native profiling or `argent-react-native-profiler` to capture React performance on a react-native-macos or Mac Catalyst React Native app. Instruments can pause the app during leak checks, delaying actions and inspection. After `MACOS_APP_RPC_TIMEOUT`, use `describe` before retrying because the action may already have taken effect.
 
 ## E2E tests
 
 Read `references/e2e.md` before recording or writing a test for a Mac app.
 
-## react-native-macos
+## React Native
 
-Start Metro before launching a react-native-macos Debug build with `boot-device`. See `argent-react-native-app-workflow` for Metro setup. Use `describe` to inspect the screen. The JavaScript debugger tools are unavailable for Mac apps.
+For React Native Debug builds on macOS, including Mac Catalyst, start Metro before `boot-device` (see `argent-react-native-app-workflow`). Inspect the UI with `describe`. The JavaScript debugger tools are unavailable for Mac apps.

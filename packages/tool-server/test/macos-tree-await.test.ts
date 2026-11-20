@@ -37,7 +37,7 @@ describe("await-ui-element on a Mac app", () => {
       {},
       { selector: { identifier: "web-button" }, condition: "visible", timeoutMs: 2000 }
     );
-    expect(tool.capability?.macos).toEqual({ app: true });
+    expect(tool.capability?.macos).toEqual({ app: true, catalyst: true });
     expect(result).toMatchObject({ success: true });
     expect(lib.calls[0]!.method).toBe("Accessibility.getTree");
   });
@@ -208,7 +208,7 @@ describe("await-screen-idle on a Mac app", () => {
   it("settles on a still tree from the in-app library", async () => {
     const lib = fakeMacosLibrary();
     const tool = createAwaitScreenIdleTool(macosRegistry(lib.api));
-    expect(tool.capability?.macos).toEqual({ app: true });
+    expect(tool.capability?.macos).toEqual({ app: true, catalyst: true });
     const result = await tool.execute(
       {},
       { udid: MACOS_DEVICE_ID, timeoutMs: 2000, pollIntervalMs: 20, minStableMs: 40 }

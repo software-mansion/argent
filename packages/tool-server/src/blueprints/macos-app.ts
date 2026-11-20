@@ -37,7 +37,9 @@ import {
   recordTrackedMacosApp,
   runningTrackedApp,
   stageLibraryFor,
+  trackedAppKind,
 } from "../utils/macos-apps";
+import type { MacosAppKind } from "../utils/macos-app-kind";
 import {
   isInjectableBundleId,
   NATIVE_NETWORK_LOG_LIMIT,
@@ -55,7 +57,8 @@ import {
  * started.
  *
  * Wire format: newline-delimited JSON. The first message on each connection is
- * the handshake `{"type":"Control","payload":{"bundleId","pid","platform":"macos","protocol","libraryVersion"}}`.
+ * the handshake `{"type":"Control","payload":{"bundleId","pid","platform":"macos","protocol","libraryVersion"}}`,
+ * with `identifierForVendor` too in a Mac Catalyst app.
  * A request is `{"type":"ViewInspector","payload":{"id","method","params","deadline"}}`;
  * its reply carries the same id with `result` or `error: {message}`. `deadline`
  * (ms since 1970) is when argent stops waiting: a request that has not run by
@@ -77,7 +80,16 @@ interface MacosLibraryHandshake {
   platform: "macos";
   protocol: number;
   libraryVersion?: string;
+  /**
+   * A Mac Catalyst app's `UIDevice.identifierForVendor`, which React Native
+   * hashes into the app's id in Metro's inspector. Absent in an AppKit app and
+   * from a library that predates it.
+   */
+  identifierForVendor?: string;
 }
+
+/** `NSUUID.UUIDString`: uppercase hex in the 8-4-4-4-12 groups. */
+const VENDOR_ID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/;
 
 interface MacosLaunchOptions {
   /**
@@ -120,6 +132,8 @@ interface MacosLaunchOptions {
 }
 
 export interface MacosLaunchResult extends MacosLibraryHandshake {
+  /** The device kind of the running build: an AppKit app or a Mac Catalyst app. */
+  kind: MacosAppKind;
   /** The arguments the running app was started with. */
   args: string[];
   appPath: string;
@@ -349,6 +363,9 @@ function parseHandshake(
     platform: "macos",
     protocol: p.protocol,
     ...(typeof p.libraryVersion === "string" ? { libraryVersion: p.libraryVersion } : {}),
+    ...(typeof p.identifierForVendor === "string" && VENDOR_ID_PATTERN.test(p.identifierForVendor)
+      ? { identifierForVendor: p.identifierForVendor }
+      : {}),
   };
 }
 
@@ -974,6 +991,21 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
             err
           );
         }
+        // The start's write of the vendor id is missing when that tool-server
+        // died before the handshake, or the write failed. This handshake has it.
+        const vendorId = ch.handshake?.identifierForVendor;
+        if (
+          own.catalyst &&
+          vendorId &&
+          ch.handshake?.pid === own.pid &&
+          own.identifierForVendor !== vendorId
+        ) {
+          try {
+            recordTrackedMacosApp({ ...own, identifierForVendor: vendorId });
+          } catch {
+            // Only the React profiler's lookup needs it; the next reconnect tries again.
+          }
+        }
         const { appPath, sandboxed, logPath, args } = own;
         const asked = opts.args && JSON.stringify(opts.args);
         const note = [
@@ -987,6 +1019,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           .join(" ");
         return {
           ...ch.handshake!,
+          kind: trackedAppKind(own),
           args,
           appPath,
           sandboxed,
@@ -1031,10 +1064,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     const unsupported = !isInjectableBundleId(bundleId)
       ? `${bundleId} is an Apple app. argent drives only apps it can load its library into, ` +
         `such as your own builds.`
-      : info.catalyst
-        ? `${bundleId} is a Mac Catalyst (UIKit) app, which argent does not drive: typing, ` +
-          `paste and scrolling do not reach its views. Test its UI on an iOS simulator instead.`
-        : chromiumRefusal(info);
+      : chromiumRefusal(info);
     if (unsupported) {
       throw macosFailure(
         unsupported,
@@ -1165,20 +1195,22 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
     // Recorded before the handshake: if this tool-server dies now, the next
     // one still knows which process to stop.
+    const record = {
+      bundleId,
+      appPath: info.appPath,
+      executable: info.executable,
+      name: info.name,
+      pid,
+      sandboxed: info.sandboxed,
+      userSelectedReadOnly: info.userSelectedReadOnly,
+      listenSocket: listen?.path ?? null,
+      logPath,
+      args,
+      startedAt: Date.now(),
+      catalyst: info.catalyst,
+    };
     try {
-      recordTrackedMacosApp({
-        bundleId,
-        appPath: info.appPath,
-        executable: info.executable,
-        name: info.name,
-        pid,
-        sandboxed: info.sandboxed,
-        userSelectedReadOnly: info.userSelectedReadOnly,
-        listenSocket: listen?.path ?? null,
-        logPath,
-        args,
-        startedAt: Date.now(),
-      });
+      recordTrackedMacosApp(record);
     } catch (err) {
       // A copy that no record names is one that argent never lists or stops.
       ch.close();
@@ -1221,8 +1253,19 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         err
       );
     }
+    if (hello.identifierForVendor) {
+      // For the React profiler, which finds a Mac Catalyst app's JS runtime in
+      // Metro by it, also after a tool-server restart. Without it only that
+      // lookup fails, so a failed write does not fail the launch.
+      try {
+        recordTrackedMacosApp({ ...record, identifierForVendor: hello.identifierForVendor });
+      } catch {
+        // The record of the first write stays.
+      }
+    }
     const result: MacosLaunchResult = {
       ...hello,
+      kind: info.catalyst ? "catalyst" : "app",
       args,
       appPath: info.appPath,
       sandboxed: info.sandboxed,
