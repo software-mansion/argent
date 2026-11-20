@@ -56,7 +56,7 @@ vi.mock("../src/utils/simctl-exec", async () => {
 import type { Registry } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { __resetProviderWarningsForTesting } from "../src/utils/external-devices";
-import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { firstSimulatorPoll, startSimulatorWatcher } from "../src/utils/simulator-watcher";
 
 /** The simulator a provider claims. */
 const CLAIMED_UDID = "11111111-1111-1111-1111-111111111111";
@@ -239,6 +239,39 @@ describe("simulator-watcher against a provider's simulator", () => {
     stop();
 
     expect(resolvedUdids(resolveService).sort()).toEqual([CLAIMED_UDID, OWN_UDID].sort());
+  });
+
+  /**
+   * An attach can wait out the provider's handshake. The provider owns that
+   * simulator's injection, so the first input to Argent's own simulators must
+   * not wait for it.
+   */
+  it("settles the first poll without waiting for a lent simulator to attach", async () => {
+    publishDescriptor({ capabilities: ["simctl", "native-devtools"] });
+    const api = makeApi();
+
+    const resolveService = vi.fn((urn: string) =>
+      urn.endsWith(CLAIMED_UDID) ? new Promise<never>(() => {}) : Promise.resolve(api)
+    );
+
+    vi.useFakeTimers();
+
+    try {
+      const { stop } = startSimulatorWatcher({
+        disposeService: vi.fn(async () => {}),
+        resolveService,
+      } as unknown as Registry);
+
+      let settled = false;
+      void firstSimulatorPoll().then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(0);
+      stop();
+
+      expect(resolvedUdids(resolveService).sort()).toEqual([CLAIMED_UDID, OWN_UDID].sort());
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /**
@@ -508,6 +541,41 @@ describe("simulator-watcher against a provider's simulator", () => {
       stop();
 
       expect(claimedAttempts(resolveService)).toBe(5);
+    });
+
+    /** A reboot is a fresh start, so the failures before it no longer count. */
+    it("starts the wait over once the simulator shuts down and boots again", async () => {
+      const { registry, resolveService } = makeFailingRegistry();
+      let claimedBooted = true;
+
+      execFileMock.mockImplementation((cmd: string) => {
+        if (cmd !== "xcrun") return { stdout: "", stderr: "" };
+        return bootedListResponse(claimedBooted ? [CLAIMED_UDID, OWN_UDID] : [OWN_UDID]);
+      });
+
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+
+      const attempted: number[] = [];
+      let seen = claimedAttempts(resolveService);
+      if (seen > 0) attempted.push(0);
+
+      for (let poll = 1; poll <= 17; poll++) {
+        claimedBooted = poll !== 6;
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        const attempts = claimedAttempts(resolveService);
+        if (attempts > seen) attempted.push(poll);
+        seen = attempts;
+      }
+
+      stop();
+
+      /**
+       * Failed at 0, 2 and 5, shut down at 6, then one, two and four polls sat
+       * out.
+       */
+      expect(attempted).toEqual([0, 2, 5, 7, 9, 12, 17]);
     });
 
     it("drops the wait while the provider withholds native-devtools", async () => {

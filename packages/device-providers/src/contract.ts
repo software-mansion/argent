@@ -336,6 +336,10 @@ const jsDebuggerSchema = z.object({
  * Send that frame promptly after accepting: Argent waits up to about two
  * seconds for it before it uses the connection. If it has not arrived by then,
  * calls fail as "not connected" until it does.
+ *
+ * Argent can hold more than one connection for the same device, one for each
+ * name of the device. Each one is a separate client: it gets its own `Control`
+ * frame and its request ids are unique only within that connection.
  */
 const nativeDevtoolsSchema = z.object({
   /**

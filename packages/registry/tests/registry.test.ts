@@ -920,6 +920,25 @@ describe("Registry -- factory signal across teardowns", () => {
     expect(calls[1]!.signal.aborted).toBe(true);
   });
 
+  it("keeps the next resolve abortable when a disposed factory rejects late", async () => {
+    const registry = new Registry();
+    const calls = registerHeldBlueprint(registry);
+
+    void settled(registry.resolveService("Held:x"));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await registry.disposeService("Held:x");
+
+    void settled(registry.resolveService("Held:x"));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+    calls[0]!.reject(new Error("gave up"));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await registry.dispose();
+
+    expect(calls[1]!.signal.aborted).toBe(true);
+  });
+
   it("does not fail the next resolve when a disposed factory rejects late", async () => {
     const registry = new Registry();
     const calls = registerHeldBlueprint(registry);

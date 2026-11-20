@@ -413,8 +413,9 @@ export class Registry {
       }
 
       /**
-       * Torn down while a dependency resolved. The factory never sees an
-       * aborted signal, so one that only listens for `abort` still stops.
+       * Torn down while a dependency resolved, so the factory is not called.
+       * A factory that awaits before it subscribes to `abort` must still check
+       * `signal.aborted` once it does.
        */
       if (signal.aborted) {
         throw new ServiceInitializationError(urn, "Service was terminated during initialization", {

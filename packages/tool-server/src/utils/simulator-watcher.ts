@@ -34,9 +34,10 @@ const FIRST_POLL_WAIT_MS = 15_000;
 let firstPollSettled: Promise<void> = Promise.resolve();
 
 /**
- * Settles once a poll has read the booted simulators and attempted injection for
- * each, once a tick finds Xcode's component install pending (no poll runs and
- * `simctl` launches nothing), or {@link FIRST_POLL_WAIT_MS} after startup.
+ * Settles once a poll has read the booted simulators and attempted injection
+ * for each one that no provider claims, once a tick finds Xcode's component
+ * install pending (no poll runs and `simctl` launches nothing), or
+ * {@linkcode FIRST_POLL_WAIT_MS} after startup.
  * Settled when no watcher runs. Awaited by whatever can start an app without
  * arming injection itself, so the app does not start uninjected: open-url, the
  * native profiler's malloc relaunch, and the simulator-server and tv-control
@@ -320,7 +321,7 @@ export function startSimulatorWatcher(registry: Registry): {
       return true;
     });
 
-    const pendingAttempts: Promise<unknown>[] = newUdids.map(async (udid) => {
+    const attemptInit = async (udid: string): Promise<void> => {
       const attached = await initUdid(registry, udid, trackedServices);
 
       if (!claimed.has(udid)) return;
@@ -336,7 +337,24 @@ export function startSimulatorWatcher(registry: Registry): {
         failures,
         pollsLeft: Math.min(2 ** (failures - 1), MAX_ATTACH_BACKOFF_POLLS),
       });
-    });
+    };
+
+    const pendingAttempts: Promise<unknown>[] = [];
+
+    /**
+     * What {@linkcode firstSimulatorPoll} waits for. Claimed simulators are
+     * left out: their provider owns the injection, so there is nothing for us
+     * to arm, and an attach can sit out the provider's handshake, which would
+     * hold back the first input to every simulator of our own.
+     */
+    const armingAttempts: Promise<unknown>[] = [];
+
+    const track = (udid: string, attempt: Promise<unknown>) => {
+      pendingAttempts.push(attempt);
+      if (!claimed.has(udid)) armingAttempts.push(attempt);
+    };
+
+    for (const udid of newUdids) track(udid, attemptInit(udid));
 
     for (const [udid, service] of trackedServices) {
       if (!booted.has(udid)) continue;
@@ -346,13 +364,16 @@ export function startSimulatorWatcher(registry: Registry): {
        * launched outside argent.
        */
       if (!service.isEnvSetup() && !service.getInitFailure()?.givenUp) {
-        pendingAttempts.push(service.ensureEnvReady().catch(() => {}));
+        track(
+          udid,
+          service.ensureEnvReady().catch(() => {})
+        );
       }
     }
 
     // Neither attempt kind rejects: initUdid and the ensureEnvReady retry catch.
-    const attempted = Promise.all(pendingAttempts).then(markArmed);
-    if (shouldBlockUntilSettled) await attempted;
+    void Promise.all(armingAttempts).then(markArmed);
+    if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
 
     /**
      * Shut down, so there is no environment left to hand anywhere, launchd took

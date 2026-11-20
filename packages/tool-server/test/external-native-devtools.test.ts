@@ -5,10 +5,11 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, Registry } from "@argent/registry";
 import {
   NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS,
   nativeDevtoolsBlueprint,
+  nativeDevtoolsRef,
 } from "../src/blueprints/native-devtools";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { resolveDevice } from "../src/utils/device-info";
@@ -155,8 +156,8 @@ async function waitForConnectedBundle(api: {
   }
 
   /**
-   * Without this the tests that assert an absence (no injection armed, no
-   * termination) would pass on an attach that never happened.
+   * Fail here rather than on the next RPC, which would only say "not
+   * connected".
    */
   throw new Error("the lent agent never reported a connected bundle");
 }
@@ -263,7 +264,7 @@ describe("a provider that lends its native-devtools agent", () => {
 
     const { createNativeNetworkLogsTool } =
       await import("../src/tools/native-devtools/native-network-logs");
-    const { Registry } = await import("@argent/registry");
+
     const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 
     await expect(
@@ -366,10 +367,14 @@ describe("a provider that lends its native-devtools agent", () => {
 
         const startedAt = Date.now();
         const instance = await instantiate();
+        const elapsed = Date.now() - startedAt;
 
-        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(
-          NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS - 50
-        );
+        /**
+         * The docs, `contract.ts` and the schema promise providers 2 seconds.
+         */
+        expect(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS).toBe(2_000);
+        expect(elapsed).toBeGreaterThanOrEqual(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS - 50);
+        expect(elapsed).toBeLessThan(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS + 1_000);
         expect(instance.api.listConnectedBundleIds()).toEqual([]);
         await expect(
           instance.api.queryViewHierarchy(BUNDLE_ID, "ViewHierarchy.describeScreen")
@@ -445,17 +450,27 @@ describe("a provider that lends its native-devtools agent", () => {
       await agent.close();
     });
 
-    it("gives up at once when the service was torn down before the factory ran", async () => {
+    /**
+     * The registry calls the factory with a live signal, but the factory awaits
+     * the capability check before it subscribes. A teardown that lands during
+     * that await must still end the attach.
+     */
+    it("gives up at once when the service is torn down before the factory subscribes", async () => {
       const agent = await startLentAgent({ handshake: "manual" });
       publishDescriptor({ socketPath: agent.socketPath });
 
-      const teardown = new AbortController();
-      teardown.abort();
+      const registry = new Registry();
+      registry.registerBlueprint(nativeDevtoolsBlueprint);
+      const ref = nativeDevtoolsRef(resolveDevice(DEVICE_ID));
 
       const startedAt = Date.now();
-      await expect(instantiate(DEVICE_ID, teardown.signal)).rejects.toThrow();
+      const attaching = registry.resolveService(ref.urn, ref.options);
+      const disposing = registry.disposeService(ref.urn);
+
+      await expect(attaching).rejects.toThrow();
       expect(Date.now() - startedAt).toBeLessThan(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS / 2);
 
+      await disposing;
       await agent.close();
     });
   });

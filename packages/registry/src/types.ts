@@ -69,7 +69,8 @@ export interface ServiceBlueprint<T = unknown, C = unknown> {
    * registry has no instance to dispose yet. The signal is never already
    * aborted when the factory is called: a service torn down while its
    * dependencies resolve rejects with the terminating error instead, without
-   * calling the factory.
+   * calling the factory. It can abort during any `await` in the factory, so a
+   * factory that subscribes after one should check `signal.aborted` too.
    */
   factory(
     deps: Record<string, unknown>,

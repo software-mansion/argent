@@ -166,11 +166,10 @@ export const NATIVE_DEVTOOLS_CONNECT_BUDGET_MS = 15_000;
  * own not-connected error names the bundle and the app is adopted once the
  * provider names it.
  *
- * This also bounds startup: the simulator watcher's first poll resolves this
- * service for every booted simulator a provider lends with `native-devtools`,
- * and the tool-server binds only after that poll. A provider that holds the
- * frame back delays startup by up to this long, once, since the watcher
- * resolves its simulators in parallel.
+ * The simulator watcher also resolves this service for every booted simulator
+ * a provider lends with `native-devtools`. It does not hold back
+ * `firstSimulatorPoll` for those, so a provider that holds the frame back
+ * delays no input to Argent's own simulators.
  */
 export const NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS = 2_000;
 
@@ -961,6 +960,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           resolve(socket);
         });
 
+        /** Torn down during the capability check, before we subscribed. */
         if (signal?.aborted) hangUp();
       });
 
