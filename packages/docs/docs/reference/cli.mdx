@@ -30,23 +30,10 @@ sidebar_custom_props:
 | `argent providers` | Inspect and manage external device providers: `list` / `check` / `publish` / `withdraw` / `prune`. See [Device providers](./device-providers.mdx)                                                                                                                           |
 | `argent telemetry` | Manage telemetry: `status` / `enable` / `disable`. Add `--scope project` to write the committed project file. `false` in either scope turns telemetry off                                                                                                                   |
 
-Run `argent --help` for the list of commands, `argent <command> --help` for the options of a command, and `argent --version` to print the installed version.
+Run `argent --help` for the full set of options, and `argent --version` to print the installed version.
 
 `argent init` exits with code `1` when the skills install fails and no skills are on disk.
 
 `argent update` and `argent uninstall` use the package manager that installed the global `argent` on `PATH`: npm, pnpm, bun or Yarn classic.
 
-`argent uninstall` exits with code `1` when a package removal fails, or when a global `argent` install is still on `PATH` after the removal. A version manager's shim that no longer runs, or a project's own copy, does not count. It still removes the other install that you selected.
-
-## `argent server start`
-
-`argent server start` starts the shared tool-server. The command accepts these options:
-
-| Option                     | Default     | Description                                                                                        |
-| -------------------------- | ----------- | -------------------------------------------------------------------------------------------------- |
-| `--port <n>`, `-p <n>`     | `3001`      | The port the tool-server listens on. `0` selects a free port                                       |
-| `--host <address>`         | `127.0.0.1` | The address the tool-server binds to. `0.0.0.0` binds every interface                              |
-| `--idle-timeout <minutes>` | `0`         | Minutes without a request after which the tool-server exits. `0` disables the timeout              |
-| `--detach`, `-d`           | off         | Run the tool-server in the background                                                              |
-| `--force`                  | off         | Stop a running tool-server before the start                                                        |
-| `--no-auth`                | off         | Start the tool-server without a token. Any process that can reach the port can use the tool-server |
+`argent uninstall` exits with code `1` when a package removal fails, or when a global `argent` is still on `PATH` after the removal.
