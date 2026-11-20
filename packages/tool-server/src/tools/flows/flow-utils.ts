@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import {
+  canonicalToolArgs,
   E2E_DIRS,
   FAILURE_CODES,
   FailureError,
@@ -14,6 +15,7 @@ import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_EXTENSIONS,
   SCRIPT_FILE_NAME_PATTERN,
   completeRunExtension,
   type ClientFileDirective,
@@ -35,6 +37,8 @@ import {
 // match engine defines it.
 export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
+import { MACOS_APPS_FLAG, isFlagOffered } from "../../utils/capability";
+import { MACOS_MODIFIERS, type MacosModifier } from "../../utils/macos-modifiers";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
@@ -257,7 +261,7 @@ export function flowNameCasingError(
 ): FailureError {
   // Hand back a name only when one can reach the file: an on-disk .YAML is
   // addressable by no name at all (the name route always builds
-  // "<name>.yaml"), it is omitted from `argent flow list`, and flow_path
+  // "<name>.yaml"), it is omitted from `argent flow list`, and e2e_test_path
   // refuses it too.
   const recovery = spelling.addressable
     ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
@@ -621,27 +625,29 @@ export function __flowFileLockCountForTesting(): number {
 type ChromiumLaunch = string | { path: string; args?: string[] };
 
 /**
- * An ios `launch` target: a bundle id (bare string) or a bundle id plus the
- * arguments passed to the app process at launch, on a simulator or a physical
- * iPhone.
+ * An ios or macos `launch` target: a bundle id (bare string) or a bundle id
+ * plus the arguments passed to the app process at launch, on a simulator, a
+ * physical iPhone or a Mac.
  */
-type IosLaunch = string | { app: string; args?: string[] };
+type AppLaunch = string | { app: string; args?: string[] };
 
 /**
  * The app a `launch` step starts from scratch. A bare string applies to every
  * platform; the map targets a specific id per platform (chromium takes a path —
- * see {@link ChromiumLaunch}), and `ios` may carry launch args ({@link IosLaunch}).
- * `native` is a shared id for the installed-app platforms (ios/android/vega),
- * overridden by a specific `ios`/`android`/`vega` key. A flow that BEGINS with a `launch` step is standalone; one that doesn't
- * is a fragment.
+ * see {@link ChromiumLaunch}), and `ios` and `macos` may carry launch args
+ * ({@link AppLaunch}).
+ * `native` is a shared id for the installed-app platforms (ios/android/vega/macos),
+ * overridden by a specific `ios`/`android`/`vega`/`macos` key. A flow that BEGINS
+ * with a `launch` step is standalone; one that doesn't is a fragment.
  */
 export type Launch =
   | string
   | {
       native?: string;
-      ios?: IosLaunch;
+      ios?: AppLaunch;
       android?: string;
       vega?: string;
+      macos?: AppLaunch;
       chromium?: ChromiumLaunch;
     };
 
@@ -742,7 +748,18 @@ export type FlowStep =
   // `flow` is the as-written YAML path, resolved against the containing file's directory.
   | { kind: "run"; flow: string }
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
-  | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
+  | {
+      kind: "tap";
+      selector?: FlowSelector;
+      x?: number;
+      y?: number;
+      times?: number;
+      // Only the non-default right button is ever stored: absent is the left
+      // one, so parse/serialize stay exact inverses (as `times: 1` is absent).
+      button?: "right";
+      // Nonempty, unique modifier keys in MACOS_MODIFIERS order.
+      modifiers?: MacosModifier[];
+    }
   | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
   | {
       kind: "swipe";
@@ -797,9 +814,20 @@ function isFoldPosture(value: unknown): value is FoldPosture {
   return typeof value === "string" && (FOLD_POSTURES as readonly string[]).includes(value);
 }
 
+export const RUNTIME_KINDS = ["mobile", "tv"] as const;
+export type FlowRuntimeKind = (typeof RUNTIME_KINDS)[number];
+
+/** The targets a flow supports. The keys are ANDed; `ios` covers a remote simulator. */
+export type FlowRequires = {
+  platform?: WhenPlatform[];
+  runtimeKind?: FlowRuntimeKind;
+};
+
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
+  /** Absent when the flow runs on any target. */
+  requires?: FlowRequires;
   steps: FlowStep[];
 };
 
@@ -882,7 +910,7 @@ function isE2eFlow(flow: FlowFile): boolean {
 
 /**
  * Resolve the launch app id for a platform, or null when none is declared. For
- * ios/android/vega a specific key wins, else the shared `native` id. For
+ * ios/android/vega/macos a specific key wins, else the shared `native` id. For
  * chromium this returns the app *path* (never `native`) — chromium booters want
  * {@link chromiumLaunchSpec}, which also carries the CLI args.
  *
@@ -898,9 +926,9 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
     return typeof c === "string" ? c : c.path;
   }
   const key = authoringPlatform(platform);
-  if (key === "ios") {
-    const i = launch.ios;
-    if (i !== undefined) return typeof i === "string" ? i : i.app;
+  if (key === "ios" || key === "macos") {
+    const entry = launch[key];
+    if (entry !== undefined) return typeof entry === "string" ? entry : entry.app;
     return launch.native ?? null;
   }
   const v = (launch as Record<string, string | undefined>)[key];
@@ -908,13 +936,16 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
 }
 
 /**
- * The launch args an ios `{ app, args }` entry declares, or undefined when it
- * declares none (a bare-string launch, a bare ios id, or no ios key at all).
+ * The launch args an ios or macos `{ app, args }` entry declares, or undefined
+ * when it declares none (a bare-string launch, a bare id, or no such key).
  */
-export function iosLaunchArgs(launch: Launch | undefined): string[] | undefined {
+export function appLaunchArgs(
+  launch: Launch | undefined,
+  key: "ios" | "macos"
+): string[] | undefined {
   if (launch === undefined || typeof launch === "string") return undefined;
-  const i = launch.ios;
-  return i !== undefined && typeof i !== "string" ? i.args : undefined;
+  const entry = launch[key];
+  return entry !== undefined && typeof entry !== "string" ? entry.args : undefined;
 }
 
 /**
@@ -982,9 +1013,11 @@ type YamlTarget = YamlSelector | { x: number; y: number };
 /**
  * A tap targets an element or a raw point. The options form nests the target
  * under `on` so option keys never mix with target fields:
- * `{ on: <target>, times: 2 }` is a double-tap.
+ * `{ on: <target>, times: 2 }` is a double-tap, `{ on: <target>, button: right }`
+ * a right-click, `{ on: <target>, modifiers: [command] }` a Command-click.
  */
-type TapBody = YamlTarget | { on: YamlTarget; times?: number };
+type TapBody =
+  YamlTarget | { on: YamlTarget; times?: number; button?: "right"; modifiers?: MacosModifier[] };
 
 /**
  * A `swipe` body: a bare direction (`swipe: left`) or the options form. The
@@ -1075,6 +1108,8 @@ type YamlStep =
 type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
 
 type YamlFlowFile = {
+  version?: number;
+  requires?: { platform?: WhenPlatform | WhenPlatform[]; runtimeKind?: FlowRuntimeKind };
   executionPrerequisite?: string;
   steps: YamlStep[];
 };
@@ -1560,11 +1595,19 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { when, steps: step.steps.map(toYamlStep) };
     }
     case "tap": {
-      // The options form appears only when an option is present (`times` is
-      // never stored as 1 — see parseTapTimes), so a plain tap round-trips to
-      // the plain selector/point body.
+      // Parsing strips default options, so a plain tap serializes as just its target.
       const target = targetToYaml(step);
-      return { tap: step.times !== undefined ? { on: target, times: step.times } : target };
+      if (step.times === undefined && step.button === undefined && step.modifiers === undefined) {
+        return { tap: target };
+      }
+      return {
+        tap: {
+          on: target,
+          ...(step.times !== undefined ? { times: step.times } : {}),
+          ...(step.button !== undefined ? { button: step.button } : {}),
+          ...(step.modifiers !== undefined ? { modifiers: [...step.modifiers] } : {}),
+        },
+      };
     }
     case "long-press": {
       const target = targetToYaml(step);
@@ -1728,14 +1771,14 @@ function toYamlStep(step: FlowStep): YamlStep {
 // 200 chars still shows a genuine flow entry in full.
 const MAX_ENTRY_RENDER_CHARS = 200;
 
-function badEntry(raw: unknown, detail: string): never {
+function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
   // throw and mask the validation message. It also returns the *value*
   // `undefined` for an omitted key (an absent `in:`/`into:`), a case its
-  // declared `string` return type hides.
+  // declared `string` return type hides, and renders `.inf`/`.nan` as `null`.
   let rendered: string;
   try {
-    rendered = JSON.stringify(raw) ?? String(raw);
+    rendered = typeof raw === "number" ? String(raw) : (JSON.stringify(raw) ?? String(raw));
   } catch {
     rendered = "[cyclic entry]";
   }
@@ -1743,7 +1786,11 @@ function badEntry(raw: unknown, detail: string): never {
     const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
     rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
   }
-  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${rendered}`, {
+  return rendered;
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${renderEntry(raw)}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
@@ -1830,13 +1877,14 @@ function rejectUnknownKeys(
   raw: unknown,
   body: Record<string, unknown>,
   allowed: readonly string[],
-  where: string
+  where: string,
+  named: readonly string[] = allowed
 ): void {
   const unknown = Object.keys(body).filter((k) => !allowed.includes(k));
   if (unknown.length === 0) return;
   badEntry(
     raw,
-    `${where} has ${describeUnknownKeys(unknown, allowed)} — allowed keys: ${allowed.join(", ")}`
+    `${where} has ${describeUnknownKeys(unknown, named)} — allowed keys: ${named.join(", ")}`
   );
 }
 
@@ -2309,7 +2357,17 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
  * The platforms an AUTHOR can name in a flow file: launch-map keys and
  * `when: { platform }` guards ({@link WhenPlatform}).
  */
-const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega", "macos"] as const;
+
+/**
+ * {@link LAUNCH_PLATFORMS} as an error names them: `macos` only where this
+ * host can drive a Mac app (the flag is on and the host is macOS). This is
+ * text only. The parser accepts `macos` on every host, checked against
+ * {@link LAUNCH_PLATFORMS}, because e2e files are shared between hosts.
+ */
+function namedLaunchPlatforms(): string[] {
+  return LAUNCH_PLATFORMS.filter((p) => p !== "macos" || isFlagOffered(MACOS_APPS_FLAG));
+}
 
 /**
  * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
@@ -2339,6 +2397,46 @@ export function authoringPlatform(platform: string): string {
 
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
+
+const REQUIRES_KEYS = ["platform", "runtimeKind"] as const;
+
+export function parseRequires(raw: unknown): FlowRequires {
+  const bad = (detail: string): never => badEntry({ requires: raw }, detail);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    bad(`requires must be a map of ${REQUIRES_KEYS.join(" / ")}`);
+  }
+  const b = raw as Record<string, unknown>;
+  rejectUnknownKeys({ requires: raw }, b, REQUIRES_KEYS, "requires");
+
+  const out: FlowRequires = {};
+  if (b.platform !== undefined) {
+    const list: unknown[] = Array.isArray(b.platform) ? b.platform : [b.platform];
+    const oneOf = `one of ${namedLaunchPlatforms().join(", ")}`;
+    if (list.length === 0) bad(`requires.platform must name at least ${oneOf}`);
+    const platforms: WhenPlatform[] = [];
+    for (const p of list) {
+      if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
+        bad(`requires.platform must be ${oneOf} (or a list of them)`);
+      }
+      platforms.push(p as WhenPlatform);
+    }
+    out.platform = platforms;
+  }
+  if (b.runtimeKind !== undefined) {
+    const kind = b.runtimeKind;
+    if (typeof kind !== "string" || !(RUNTIME_KINDS as readonly string[]).includes(kind)) {
+      bad(`requires.runtimeKind must be one of ${RUNTIME_KINDS.join(", ")}`);
+    }
+    out.runtimeKind = kind as FlowRuntimeKind;
+  }
+  if (out.platform === undefined && out.runtimeKind === undefined) {
+    bad(
+      `requires must declare at least one of ${REQUIRES_KEYS.join(", ")} ` +
+        `(omit the block for a flow that runs on any target)`
+    );
+  }
+  return out;
+}
 
 /**
  * YAML reads an unquoted `5` or `true` as a number or boolean, not a string.
@@ -2374,18 +2472,18 @@ function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
 }
 
 /**
- * Parse an ios launch value: a bundle id (bare string) or `{ app, args? }`.
+ * Parse an ios or macos launch value: a bundle id (bare string) or `{ app, args? }`.
  * Returns null when the shape is invalid (caller reports the launch error).
  */
-function parseIosLaunch(raw: unknown): IosLaunch | null {
+function parseAppLaunch(raw: unknown, key: "ios" | "macos"): AppLaunch | null {
   if (typeof raw === "string" && raw.length > 0) return raw;
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const b = raw as Record<string, unknown>;
-    rejectUnknownKeys({ launch: { ios: raw } }, b, ["app", "args"], "launch.ios");
+    rejectUnknownKeys({ launch: { [key]: raw } }, b, ["app", "args"], `launch.${key}`);
     if (typeof b.app !== "string" || b.app.length === 0) return null;
     if (b.args === undefined) return { app: b.app };
     if (Array.isArray(b.args))
-      rejectUnquotedLaunchArg({ launch: { ios: raw } }, b.args, "launch.ios");
+      rejectUnquotedLaunchArg({ launch: { [key]: raw } }, b.args, `launch.${key}`);
     if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
     return { app: b.app, args: b.args as string[] };
   }
@@ -2399,14 +2497,18 @@ function parseLaunch(raw: unknown): Launch {
     const b = raw as Record<string, unknown>;
     // Name a misspelled platform key (`amdroid:`) instead of falling through
     // to the generic shape error below.
-    rejectUnknownKeys({ launch: raw }, b, LAUNCH_MAP_KEYS, "launch");
+    rejectUnknownKeys({ launch: raw }, b, LAUNCH_MAP_KEYS, "launch", [
+      "native",
+      ...namedLaunchPlatforms(),
+    ]);
     const keys = Object.keys(b);
     if (keys.length > 0) {
       const out: {
         native?: string;
-        ios?: IosLaunch;
+        ios?: AppLaunch;
         android?: string;
         vega?: string;
+        macos?: AppLaunch;
         chromium?: ChromiumLaunch;
       } = {};
       let valid = true;
@@ -2418,13 +2520,13 @@ function parseLaunch(raw: unknown): Launch {
             break;
           }
           out.chromium = c;
-        } else if (k === "ios") {
-          const i = parseIosLaunch(b[k]);
-          if (i === null) {
+        } else if (k === "ios" || k === "macos") {
+          const entry = parseAppLaunch(b[k], k);
+          if (entry === null) {
             valid = false;
             break;
           }
-          out.ios = i;
+          out[k] = entry;
         } else if (typeof b[k] === "string" && (b[k] as string).length > 0) {
           (out as Record<string, string>)[k] = b[k] as string;
         } else {
@@ -2438,8 +2540,11 @@ function parseLaunch(raw: unknown): Launch {
   return badEntry(
     { launch: raw },
     `launch needs an app id (bare string) or a per-platform map ` +
-      `({ native | ${LAUNCH_PLATFORMS.filter((p) => p !== "chromium").join(" | ")}: <app id>, ` +
-      `ios: { app, args }, chromium: <app path> | { path, args } })`
+      `({ native | ${namedLaunchPlatforms()
+        .filter((p) => p !== "chromium")
+        .join(" | ")}: <app id>, ` +
+      `ios${isFlagOffered(MACOS_APPS_FLAG) ? " | macos" : ""}: { app, args }, ` +
+      `chromium: <app path> | { path, args } })`
   );
 }
 
@@ -2545,6 +2650,27 @@ function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
 }
 
 /**
+ * Parse `button` on a tap body: `right` is a right-click, which the runner sends
+ * only to a Mac app. `left` is the default and normalizes to
+ * absent, keeping parse/serialize exact inverses.
+ */
+function parseTapButton(raw: unknown, entry: unknown): "right" | undefined {
+  if (raw === undefined || raw === "left") return undefined;
+  if (raw !== "right") badEntry(entry, "tap.button must be left or right");
+  return "right";
+}
+
+function parseTapModifiers(raw: unknown, entry: unknown): MacosModifier[] | undefined {
+  if (raw === undefined) return undefined;
+  const names: readonly string[] = MACOS_MODIFIERS;
+  if (!Array.isArray(raw) || !raw.every((m) => typeof m === "string" && names.includes(m))) {
+    badEntry(entry, `tap.modifiers must be a list of ${MACOS_MODIFIERS.join(", ")}`);
+  }
+  const held = MACOS_MODIFIERS.filter((m) => (raw as unknown[]).includes(m));
+  return held.length > 0 ? held : undefined;
+}
+
+/**
  * Does this map carry any selector key (the `any` marker and the relational
  * scopes included)? Tells a selector map apart from the point/option forms in
  * the gesture-body checks below, so a scoped selector mixed with coordinates or
@@ -2606,7 +2732,12 @@ function parseTarget(raw: unknown, where: string): GestureTarget {
 function parseTap(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
-  if (obj.on !== undefined || obj.times !== undefined) {
+  if (
+    obj.on !== undefined ||
+    obj.times !== undefined ||
+    obj.button !== undefined ||
+    obj.modifiers !== undefined
+  ) {
     if (hasSelectorField(obj)) {
       badEntry(
         entry,
@@ -2619,15 +2750,26 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
         "the tap options form takes a nested point — e.g. tap: { on: { x: 0.5, y: 0.5 }, times: 2 }"
       );
     }
-    if (!Object.keys(obj).every((k) => k === "on" || k === "times")) {
-      badEntry(entry, "the tap options form accepts only { on, times }");
+    if (
+      !Object.keys(obj).every(
+        (k) => k === "on" || k === "times" || k === "button" || k === "modifiers"
+      )
+    ) {
+      badEntry(entry, "the tap options form accepts only { on, times, button, modifiers }");
     }
     if (obj.on === undefined) {
-      badEntry(entry, 'tap with times needs a target — e.g. tap: { on: "Photo", times: 2 }');
+      badEntry(
+        entry,
+        'tap with times, button or modifiers needs a target - e.g. tap: { on: "Photo", times: 2 }'
+      );
     }
     const step: FlowStep = { kind: "tap", ...parseTarget(obj.on, "tap.on") };
     const times = parseTapTimes(obj.times, entry);
     if (times !== undefined) step.times = times;
+    const button = parseTapButton(obj.button, entry);
+    if (button !== undefined) step.button = button;
+    const modifiers = parseTapModifiers(obj.modifiers, entry);
+    if (modifiers !== undefined) step.modifiers = modifiers;
     return step;
   }
 
@@ -2852,7 +2994,7 @@ function parseWhenCondition(raw: unknown): WhenCondition {
     }
     const p = b.platform;
     if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
-      badEntry({ when: raw }, `when.platform must be one of ${LAUNCH_PLATFORMS.join(", ")}`);
+      badEntry({ when: raw }, `when.platform must be one of ${namedLaunchPlatforms().join(", ")}`);
     }
     return { kind: "platform", platform: p as WhenPlatform };
   }
@@ -3058,7 +3200,7 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (typeof value !== "string" || value.length === 0) {
     badEntry(
       raw,
-      "a `script` step needs a `path` — a .mjs file path relative to this e2e test's file, e.g. `script: { path: scripts/seed.mjs }`"
+      `a \`script\` step needs a \`path\` — a ${SCRIPT_EXTENSIONS_FOR_MESSAGE} file path relative to this e2e test's file, e.g. \`script: { path: scripts/seed.mjs }\``
     );
   }
   if (value.includes("\\")) {
@@ -3070,23 +3212,41 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
     badEntry(raw, "a `script` path must be relative to the e2e test file that references it");
   }
-  if (!value.endsWith(".mjs")) {
-    if (value.toLowerCase().endsWith(".mjs")) {
-      badEntry(raw, "a `script` path must use the lowercase .mjs extension");
+  if (!SCRIPT_FILE_EXTENSIONS.some((extension) => value.endsWith(extension))) {
+    const lower = value.toLowerCase();
+    const miscased = SCRIPT_FILE_EXTENSIONS.find((extension) => lower.endsWith(extension));
+    if (miscased) {
+      badEntry(raw, `a \`script\` path must use the lowercase ${miscased} extension`);
+    }
+    // Node's own error for `require` in a `.js` file it read as an ES module
+    // ends by advising this rename, so a path that arrives here with it is
+    // usually following that advice and needs the way out, not the list again.
+    const commonJsOnly = COMMONJS_ONLY_EXTENSIONS.find((extension) => lower.endsWith(extension));
+    if (commonJsOnly) {
+      badEntry(
+        raw,
+        `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE}, and ${commonJsOnly} is not accepted — where the project's package.json sets "type": "module", use \`import\` in the script in place of \`require\``
+      );
     }
     badEntry(
       raw,
-      "a `script` path must end in .mjs — the extension pins the module type whatever the project's package.json says"
+      `a \`script\` path must end in ${SCRIPT_EXTENSIONS_FOR_MESSAGE} — a JavaScript or TypeScript file`
     );
   }
   if (!SCRIPT_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
     badEntry(
       raw,
-      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the .mjs`
+      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the extension`
     );
   }
   return value;
 }
+
+/** The spellings that pin a file to CommonJS, which {@link SCRIPT_FILE_EXTENSIONS} leaves out. */
+const COMMONJS_ONLY_EXTENSIONS = [".cjs", ".cts"] as const;
+
+/** ".mjs, .mts, .js or .ts", for the messages that name every spelling a script may take. */
+const SCRIPT_EXTENSIONS_FOR_MESSAGE = `${SCRIPT_FILE_EXTENSIONS.slice(0, -1).join(", ")} or ${SCRIPT_FILE_EXTENSIONS.slice(-1)[0]}`;
 
 /**
  * The `timeout` a `script` step may carry, in milliseconds. The finiteness
@@ -3211,14 +3371,15 @@ function* argFields(
  * and `long-press` take both, and the parsed step keeps no record of which was
  * written — `duration` is optional in long-press's options form and `times: 1`
  * normalizes to `undefined`, so a step carrying neither could have been spelled
- * either way. Naming one spelling there would name a path that is not in the
- * author's file, so `alt` carries the other and the refusal offers both.
+ * either way (`button: left` and `modifiers: []` normalize away too). The
+ * refusal uses `alt` to offer both paths when the original spelling is unknown.
  */
 function gestureTargetPath(
   step: Extract<FlowStep, { kind: "tap" | "long-press" | "pinch" | "rotate" }>
 ): { path: string; alt?: string } {
   if (step.kind === "pinch" || step.kind === "rotate") return { path: `${step.kind}.on` };
-  const option = step.kind === "tap" ? step.times : step.duration;
+  const option =
+    step.kind === "tap" ? (step.times ?? step.button ?? step.modifiers) : step.duration;
   if (option !== undefined) return { path: `${step.kind}.on` };
   return { path: step.kind, alt: `${step.kind}.on` };
 }
@@ -3701,10 +3862,18 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     }
     const step: FlowStep = { kind: "snapshot", name: b.name };
     if (b.maxMismatch !== undefined) {
-      // The runner compares `mismatchPercentage <= maxMismatch` — a NaN here
+      // The runner compares the diff against `maxMismatch` — a NaN here
       // (e.g. from "5%") would make every comparison false, failing the snapshot
       // even on byte-identical frames.
-      const m = Number(b.maxMismatch);
+      // Only real numbers and plain decimal strings count: `Number()` alone would
+      // turn null/false/[]/blank into 0, true into 1 and "0x10" into 16.
+      const rawMax: unknown = b.maxMismatch;
+      const m =
+        typeof rawMax === "number"
+          ? rawMax
+          : typeof rawMax === "string" && /^\s*[-+]?(\d+\.?\d*|\.\d+)\s*$/.test(rawMax)
+            ? Number(rawMax)
+            : NaN;
       if (!Number.isFinite(m) || m < 0 || m > 100) {
         badEntry(
           raw,
@@ -3726,7 +3895,13 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   if ("tool" in raw) {
     const r = raw as { tool: string; args?: Record<string, unknown>; delayMs?: number };
-    const step: FlowStep = { kind: "tool", name: r.tool, args: r.args ?? {} };
+    let args = r.args ?? {};
+    try {
+      args = canonicalToolArgs(r.tool, args);
+    } catch (err) {
+      badEntry(raw, err instanceof Error ? err.message : String(err));
+    }
+    const step: FlowStep = { kind: "tool", name: r.tool, args };
     if (r.delayMs !== undefined) step.delayMs = r.delayMs;
     return step;
   }
@@ -3734,9 +3909,50 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   return badEntry(raw, "unrecognized step kind");
 }
 
-/** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
+/**
+ * The e2e file format version this build writes and the newest it reads. A file
+ * without `version` is version 1.
+ *
+ * - 1: on an iOS simulator, the raw points (`tap: { x, y }`, a swipe's `from`
+ *   and `to` points, its `by`) and the coordinates of a raw `tool:` step are
+ *   in the screen's portrait-native space, which a landscape UI lies sideways
+ *   in.
+ * - 2: they are in the UI's upright space, as screenshots and describe frames
+ *   are, and as on every other platform.
+ *
+ * The two differ only for a landscape or upside-down UI on an iOS simulator.
+ * A version 1 file still runs as it was recorded: the runner turns its points
+ * (flow-legacy-points.ts).
+ */
+const FLOW_FILE_VERSION = 2;
+
+/**
+ * The format version of each flow {@link parseFlow} read from a file older
+ * than {@link FLOW_FILE_VERSION}. Kept beside the flow rather than in it, so a
+ * parsed flow compares equal to one built in memory and the version is never
+ * written back.
+ */
+const olderFormatVersions = new WeakMap<FlowFile, number>();
+
+/** The format version `flow` was read in: this build's own unless parseFlow read an older file. */
+export function flowFormatVersion(flow: FlowFile): number {
+  return olderFormatVersions.get(flow) ?? FLOW_FILE_VERSION;
+}
+
+function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["requires"] {
+  return {
+    ...(platform ? { platform: platform.length === 1 ? platform[0] : platform } : {}),
+    ...(runtimeKind ? { runtimeKind } : {}),
+  };
+}
+
+/** Serialize a full flow file to YAML: `version` always, other fields only when not empty or defaulted. */
 export function serializeFlow(flow: FlowFile): string {
-  const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
+  const doc: YamlFlowFile = {
+    version: FLOW_FILE_VERSION,
+    ...(flow.requires ? { requires: requiresToYaml(flow.requires) } : {}),
+    steps: flow.steps.map(toYamlStep),
+  };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
@@ -3746,7 +3962,10 @@ export function serializeFlow(flow: FlowFile): string {
   // multi-line values as double-quoted scalars (escape-exact both ways);
   // single-line values still serialize plain, and legacy files containing block
   // scalars still parse.
-  return yamlStringify(doc, { blockQuote: false });
+  // doubleQuotedMinMultiLineLength: Infinity — keep every newline as a `\n`
+  // escape. Otherwise yaml writes a long value's newlines as line breaks and
+  // escapes a line of exactly one space twice (`\\ `), so " " came back as "\".
+  return yamlStringify(doc, { blockQuote: false, doubleQuotedMinMultiLineLength: Infinity });
 }
 
 export function validateFlow(flow: FlowFile): void {
@@ -3789,23 +4008,44 @@ export function parseFlow(content: string): FlowFile {
     );
   }
 
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("steps" in parsed) ||
-    !Array.isArray(parsed.steps)
-  ) {
-    throw new FailureError("Invalid e2e test file: expected an object with a steps array", {
+  const notAFlow = () =>
+    new FailureError("Invalid e2e test file: expected an object with a steps array", {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_file_parse",
       failure_area: "tool_server",
       error_kind: "validation",
     });
+  if (typeof parsed !== "object" || parsed === null) throw notAFlow();
+
+  // Before the shape checks: a newer version may change the shape.
+  const version: unknown = parsed.version ?? 1;
+  if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
+    throw new FailureError(
+      `Invalid e2e test file: version must be a positive integer, got ${renderEntry(version)}`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  if (version > FLOW_FILE_VERSION) {
+    throw new FailureError(
+      `The e2e test file is version ${version}, but this Argent reads up to version ${FLOW_FILE_VERSION}. Update Argent to run it.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
 
-  // Same strictness as step bodies: the file has exactly two top-level keys, so
-  // a misspelled `executionPrerequisite` must not silently become "".
-  const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
+  if (!("steps" in parsed) || !Array.isArray(parsed.steps)) throw notAFlow();
+
+  // Same strictness as step bodies: a misspelled top-level key must not be silently dropped.
+  const topKeys: readonly string[] = ["version", "executionPrerequisite", "requires", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(
@@ -3827,9 +4067,11 @@ export function parseFlow(content: string): FlowFile {
 
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
+    ...(parsed.requires === undefined ? {} : { requires: parseRequires(parsed.requires) }),
     steps,
   };
   validateFlow(flow);
+  if (version < FLOW_FILE_VERSION) olderFormatVersions.set(flow, version);
   return flow;
 }
 

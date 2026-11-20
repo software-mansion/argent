@@ -3488,6 +3488,10 @@
               const j = await d.json();
               if (j && j.tree) {
                 vp.tree = j.tree;
+                // The tree is drawn over the stream, in the screen's
+                // portrait-native space; screenshots are upright. Kept to
+                // turn a frame for cropping one (see vpUprightFrame).
+                vp.uiOrientation = j.uiOrientation || null;
                 vp.treeAt = Date.now();
                 describeWarmupPending = false;
                 // A right-click that landed before the tree was loaded waits
@@ -3632,6 +3636,27 @@
       // into a chip. Letterboxed (no distortion). Falls back to the full,
       // contained image when the element isn't matched on-screen or the agent
       // supplied a data: URI (treated as author-made art, shown whole).
+      // A frame of the preview's describe tree (the screen's portrait-native
+      // space) in the UI's upright space, the space of screenshots. The same
+      // map as the tool-server's nativeFrameToUi.
+      function vpUprightFrame(f, orientation) {
+        switch (orientation) {
+          case "landscapeRight":
+            return { x: f.y, y: 1 - f.x - f.width, width: f.height, height: f.width };
+          case "landscapeLeft":
+            return { x: 1 - f.y - f.height, y: f.x, width: f.height, height: f.width };
+          case "portraitUpsideDown":
+            return {
+              x: 1 - f.x - f.width,
+              y: 1 - f.y - f.height,
+              width: f.width,
+              height: f.height,
+            };
+          default:
+            return { x: f.x, y: f.y, width: f.width, height: f.height };
+        }
+      }
+
       function applyThumbCrop(tw, frame) {
         const im = tw.querySelector(".thumb-img");
         if (!im || !im.naturalWidth || !im.naturalHeight) return;
@@ -5133,8 +5158,9 @@
             };
           }
           if (p._node && !vp.thumbFrames[p.id]) {
-            const f = p._node.frame;
-            vp.thumbFrames[p.id] = { x: f.x, y: f.y, width: f.width, height: f.height };
+            // The thumbnail crops a screenshot, which is upright, while the
+            // tree's frame is in the stream's portrait-native space.
+            vp.thumbFrames[p.id] = vpUprightFrame(p._node.frame, vp.uiOrientation);
           }
         }
         layoutCards();

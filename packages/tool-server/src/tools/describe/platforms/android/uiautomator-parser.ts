@@ -1,7 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { DescribeFrame, DescribeNode } from "../../contract";
 
-interface ParsedXmlNode {
+export interface ParsedXmlNode {
   tag: string;
   attrs: Record<string, string>;
   children: ParsedXmlNode[];

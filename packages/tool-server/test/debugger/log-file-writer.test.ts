@@ -124,6 +124,50 @@ describe("LogFileWriter", () => {
     expect(content).toContain("first line second line");
   });
 
+  it("clusters are sorted by count descending", () => {
+    for (let i = 0; i < 20; i++) writer.write(makeEntry(i, { message: "frequent" }));
+    for (let i = 20; i < 25; i++) writer.write(makeEntry(i, { message: "medium" }));
+    writer.write(makeEntry(25, { message: "rare" }));
+
+    const clusters = writer.getClusters();
+    expect(clusters[0].message).toBe("frequent");
+    expect(clusters[0].count).toBe(20);
+    expect(clusters[1].message).toBe("medium");
+    expect(clusters[1].count).toBe(5);
+    expect(clusters[2].message).toBe("rare");
+    expect(clusters[2].count).toBe(1);
+  });
+
+  it("handles empty log state", () => {
+    const stats = writer.getStats();
+    expect(stats.totalEntries).toBe(0);
+    expect(stats.byLevel).toEqual({});
+    expect(stats.fileSizeBytes).toBe(0);
+
+    const clusters = writer.getClusters();
+    expect(clusters).toEqual([]);
+  });
+
+  it("handles high volume without crashing", () => {
+    for (let i = 0; i < 5000; i++) {
+      writer.write(
+        makeEntry(i, {
+          level: i % 3 === 0 ? "error" : "log",
+          message: `msg-${i % 100}`,
+        })
+      );
+    }
+
+    const stats = writer.getStats();
+    expect(stats.totalEntries).toBe(5000);
+    expect(stats.byLevel.error).toBeGreaterThan(0);
+
+    const clusters = writer.getClusters(20);
+    expect(clusters).toHaveLength(20);
+    // All 100 unique messages, top 20 by count
+    expect(clusters[0].count).toBe(50);
+  });
+
   it("limits clusters to requested count", () => {
     for (let i = 0; i < 30; i++) {
       writer.write(makeEntry(i, { message: `msg-${i}` }));

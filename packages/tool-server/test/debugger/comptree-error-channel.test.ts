@@ -79,12 +79,6 @@ afterEach(() => {
 });
 
 describe("component-tree delivers errors via the binding channel", () => {
-  it("invokes __argent_callback on the 'No DevTools hook' error path", async () => {
-    const payloads = run({ hook: undefined });
-    await new Promise((r) => setTimeout(r, 10));
-    expect(payloads.length).toBeGreaterThan(0);
-  });
-
   it("encodes the error so the tool surfaces it as parsed.error", async () => {
     const payloads = run({ hook: undefined });
     await new Promise((r) => setTimeout(r, 10));

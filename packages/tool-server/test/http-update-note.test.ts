@@ -28,6 +28,7 @@ vi.mock("../src/utils/update-checker", () => ({
 }));
 
 import { getUpdateState, suppressUpdateNote } from "../src/utils/update-checker";
+import { dismissUpdateTool } from "../src/tools/system/dismiss-update";
 
 const mockGetUpdateState = vi.mocked(getUpdateState);
 const mockSuppressUpdateNote = vi.mocked(suppressUpdateNote);
@@ -167,7 +168,7 @@ describe("HTTP update note injection", () => {
     expect(res.body.note).toContain("update-argent");
   });
 
-  it("note mentions `dismiss-update` tool", async () => {
+  it("note names the postpone tool, which agents can reach, and says when it repeats", async () => {
     mockGetUpdateState.mockReturnValue(
       mkState({
         updateAvailable: true,
@@ -181,24 +182,9 @@ describe("HTTP update note injection", () => {
 
     const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
-    expect(res.body.note).toContain("dismiss-update");
-  });
-
-  it("note instructs agent to persist the update info", async () => {
-    mockGetUpdateState.mockReturnValue(
-      mkState({
-        updateAvailable: true,
-        updateInstallable: true,
-        latestVersion: "1.2.3",
-        installableVersion: "1.2.3",
-      })
-    );
-
-    handle = createHttpApp(stubRegistry());
-
-    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
-
-    expect(res.body.note).toContain("Save a note");
+    expect(dismissUpdateTool.hideFromMcp).toBeUndefined();
+    expect(res.body.note).toContain("`dismiss-update`");
+    expect(res.body.note).toContain("will not repeat for the next 30 minutes");
   });
 
   it("does NOT include a note on 500 error responses", async () => {

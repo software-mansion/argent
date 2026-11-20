@@ -5,7 +5,6 @@ import { toSimulatorNetworkError } from "./format-error";
 import { sleep } from "./timing";
 import {
   encodeButton,
-  encodeKey,
   encodeRotate,
   encodeTouch,
   type ButtonName,
@@ -15,7 +14,17 @@ import {
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
+import { captureOnDemandDropped } from "./profiling-devices";
 import { resolveLivePanel, screenLabel, unresolvedPanelNote, type FoldablePanel } from "./foldable";
+import { isIosSimulator, resolveDevice } from "./device-info";
+import {
+  forgetUiOrientation,
+  inNativeCoordinates,
+  readUiOrientation,
+  unknownOrientationNote,
+} from "./ios-ui-orientation";
+import { isTurned, uiPointToNative } from "./ui-orientation";
+import type { UiOrientation } from "../tools/describe/contract";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -108,6 +117,19 @@ interface CommandAck {
   message?: string;
 }
 
+/**
+ * The outstanding command an id-less parse error names, if it names one. serde
+ * reports a `cmd` the server has no variant for as "unknown variant `<cmd>`".
+ */
+function pendingIdNamedBy(conn: Connection, message: string | undefined): string | undefined {
+  const named = message?.match(/unknown variant `([^`]+)`/)?.[1];
+  if (named === undefined) return undefined;
+  for (const [id, entry] of conn.pending) {
+    if (entry.cmd === named) return id;
+  }
+  return undefined;
+}
+
 function failAllPending(conn: Connection, makeError: (cmd: string) => FailureError): void {
   const entries = [...conn.pending.values()];
   conn.pending.clear();
@@ -190,7 +212,10 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
     if (ack.id != null && !conn.pending.has(ack.id)) return;
     // Only an id-less reply (i.e. an error) is matched positionally, against
     // the oldest outstanding command, which is what an in-order server means by it.
-    const id = ack.id ?? conn.pending.keys().next().value;
+    // One that names the command it could not parse goes to that command: an
+    // older server rejects `capture_on_demand` that way while a slow command
+    // sent before it (a foldable's `rotate`) still waits for its reply.
+    const id = ack.id ?? pendingIdNamedBy(conn, ack.message) ?? conn.pending.keys().next().value;
     if (id == null) return;
     const entry = conn.pending.get(id);
     if (entry == null) return;
@@ -225,6 +250,8 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
   ws.on("close", () => {
     connections.delete(key);
     failAllPending(conn, (cmd) => transportError(cmd, key, "the connection closed"));
+    // The server drops the connection's capture_on_demand with it.
+    if (api.deviceId) captureOnDemandDropped(api.deviceId, key);
   });
 
   connections.set(key, conn);
@@ -244,23 +271,35 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  * those cases used to be indistinguishable from a landed tap
  * (https://github.com/software-mansion/argent/issues/932).
  *
- * MoQ has no per-command ack, so it reports less: a send the session refuses
- * (a closed track, a released machine) rejects, while a send that goes out is
- * reported as delivered. That is strictly narrower than the WebSocket ack, and
- * it is still the difference between a failed gesture and `{ tapped: true }`.
+ * MoQ has no per-command ack, so it reports less: a send rejects only once the
+ * session is closed - by `close()`, or when its transport is seen to close,
+ * which can lag a released machine by seconds. Any other send is reported as
+ * delivered. That is strictly narrower than the WebSocket ack, and it is still
+ * the difference between a failed gesture and `{ tapped: true }`.
  */
 export async function sendCommand(
   api: SimulatorServerApi,
   cmd: Record<string, unknown>
 ): Promise<SendCommandOutcome> {
   const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
+  // The UI turns with the device, and a button (home, app switcher, lock) can
+  // bring another app or the home screen to the front: either way what was
+  // read of the orientation is stale.
+  if ((cmd.cmd === "rotate" || cmd.cmd === "button") && api.deviceId) {
+    forgetUiOrientation(api.deviceId);
+  }
+  const { cmd: native, warning: turnWarning } = await withNativeTouchSpace(api, cmd);
   // MoQ carries no screen: a remote simulator is driven on its main screen.
   if (api.transport) {
-    await sendViaTransport(api.transport, cmd, cmdName);
-    return {};
+    await sendViaTransport(api.transport, native, cmdName);
+    return turnWarning !== undefined ? { warning: turnWarning } : {};
   }
   const conn = getOrCreateConnection(api);
-  const { cmd: targeted, warning } = await withActiveScreen(api, cmd);
+  const { cmd: targeted, warning: screenWarning } = await withActiveScreen(api, native);
+  const warning =
+    turnWarning !== undefined && screenWarning !== undefined
+      ? `${screenWarning} ${turnWarning}`
+      : (screenWarning ?? turnWarning);
   const id = String(++cmdId);
   const payload = JSON.stringify({ id, ...targeted });
 
@@ -328,6 +367,67 @@ export async function sendCommand(
  */
 export interface SendCommandOutcome {
   warning?: string;
+}
+
+/**
+ * The interface orientation the touch sequence in flight on a server is turned
+ * by, from its Down to its Up, as {@link gestureScreens} keeps its panel: a
+ * UI that turns in the middle of a swipe must not send the swipe's tail
+ * somewhere its head was not.
+ */
+const gestureTurns = new WeakMap<SimulatorServerApi, UiOrientation | undefined>();
+
+/**
+ * A touch in the UI's upright space, turned into the screen's portrait-native
+ * space an iOS simulator takes touches in (`utils/ios-ui-orientation.ts`).
+ * Every touch the tool-server sends is upright: the gesture tools take the
+ * coordinates agents read off upright screenshots and describe frames, and
+ * flows resolve against upright trees. Only the Down reads the orientation;
+ * the Moves and the Up of its sequence reuse it.
+ *
+ * Any other device, and any other command, is sent unchanged. When the
+ * orientation cannot be read the touch goes out unturned, with a note: right
+ * for a portrait UI, which is the common case, and said for the rest.
+ */
+async function withNativeTouchSpace(
+  api: SimulatorServerApi,
+  cmd: Record<string, unknown>
+): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
+  if (
+    cmd.cmd !== "touch" ||
+    !api.deviceId ||
+    inNativeCoordinates() ||
+    !isIosSimulator(resolveDevice(api.deviceId))
+  ) {
+    return { cmd };
+  }
+  let orientation: UiOrientation | undefined;
+  let warning: string | undefined;
+  if (cmd.type !== "Down" && gestureTurns.has(api)) {
+    orientation = gestureTurns.get(api);
+  } else {
+    const read = await readUiOrientation(api.deviceId);
+    orientation = read.orientation;
+    if (read.unknownReason !== undefined) {
+      warning = unknownOrientationNote(read, "this touch was sent in");
+    }
+  }
+  if (cmd.type === "Up") gestureTurns.delete(api);
+  else gestureTurns.set(api, orientation);
+  if (!isTurned(orientation)) return { cmd, ...(warning !== undefined ? { warning } : {}) };
+
+  const turned: Record<string, unknown> = { ...cmd };
+  const first = uiPointToNative({ x: cmd.x as number, y: cmd.y as number }, orientation);
+  turned.x = first.x;
+  turned.y = first.y;
+  const sx = cmd.second_x;
+  const sy = cmd.second_y;
+  if (typeof sx === "number" && typeof sy === "number") {
+    const second = uiPointToNative({ x: sx, y: sy }, orientation);
+    turned.second_x = second.x;
+    turned.second_y = second.y;
+  }
+  return { cmd: turned };
 }
 
 /**
@@ -451,6 +551,8 @@ export async function postHinge(
   request: HingeRequest,
   signal?: AbortSignal
 ): Promise<SimulatorDisplayState> {
+  // Folding hands the UI to another panel, which can lie the other way.
+  if (api.deviceId) forgetUiOrientation(api.deviceId);
   if (api.transport) {
     throw new FailureError(
       "Fold failed: a remote simulator is driven on its main screen and has no hinge control.",
@@ -938,7 +1040,7 @@ export function createMoqTransport(
       await options.pasteText(text);
     },
     async pressKey(direction, keyCode) {
-      await moq.sendControl(encodeKey({ action: direction, code: keyCode }));
+      await moq.key(direction, keyCode);
     },
     async screenshot(opts) {
       const scale = opts?.scale ?? getScreenshotScale();

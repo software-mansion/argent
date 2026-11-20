@@ -18,7 +18,10 @@ const telemetryMock = vi.hoisted(() => ({
   })),
   track: vi.fn(),
   shutdown: vi.fn().mockResolvedValue(undefined),
-  warmTelemetryIdentity: vi.fn().mockResolvedValue(undefined),
+  // Never settles, so `start()` attaches the store-event relays and then parks:
+  // the HTTP server never binds and shutdown never runs, so the relays stay
+  // registered for the duration of the test with no exit race.
+  warmTelemetryIdentity: vi.fn(() => new Promise<void>(() => {})),
   aiTelemetryFromMeta: vi.fn(() => ({})),
 }));
 
@@ -53,13 +56,10 @@ vi.mock("../src/http", () => ({ createHttpApp: vi.fn(() => httpHandleMock) }));
 vi.mock("../src/utils/update-checker", () => ({
   startUpdateChecker: vi.fn(() => ({ dispose: vi.fn() })),
 }));
-// The watcher's `ready` never settles, so `start()` attaches the store-event
-// relays and then parks: the HTTP server never binds and shutdown never runs, so
-// the relays stay registered for the duration of the test with no exit race.
 vi.mock("../src/utils/simulator-watcher", () => ({
   startSimulatorWatcher: vi.fn(() => ({
     stop: vi.fn(),
-    ready: new Promise<void>(() => {}),
+    ready: Promise.resolve(),
   })),
 }));
 
@@ -81,7 +81,7 @@ describe("tool-server Lens telemetry relay wiring", () => {
     // Clean slate: no relays from a prior import of this singleton in-process.
     variantProposalStore.events.removeAllListeners();
 
-    start(); // attaches the relays synchronously; watcher never settles.
+    start(); // attaches the relays synchronously; identity warm-up never settles.
 
     telemetryMock.track.mockClear();
 

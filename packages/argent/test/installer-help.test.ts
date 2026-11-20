@@ -157,6 +157,7 @@ describe("printInstallerHelp", () => {
     expect(init).toContain("Options:");
     expect(init).toContain("--yes, -y");
     expect(init).toContain("--no-telemetry");
+    expect(init).toContain("--no-allowlist");
     expect(init).toContain("--from <path>");
     expect(init).toContain("--global");
     expect(init).toContain("--local");
@@ -182,19 +183,6 @@ describe("printInstallerHelp", () => {
     const remove = render("remove");
     expect(remove).toContain("Run `argent uninstall --help` to see its options.");
     expect(remove).not.toContain("Options:");
-  });
-
-  it("only writes to stdout (no wizard / prompt / network)", () => {
-    // The whole contract of the help path is that it is side-effect-free. This
-    // asserts the function writes to console.log and returns nothing — not how
-    // many calls it batches the output into, which is an implementation
-    // detail. The end-to-end guarantee (config left untouched) is covered in
-    // cli-dispatch.test.ts.
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const result = printInstallerHelp("uninstall");
-    expect(result).toBeUndefined();
-    expect(spy).toHaveBeenCalled();
-    spy.mockRestore();
   });
 });
 

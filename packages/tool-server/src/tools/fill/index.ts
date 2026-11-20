@@ -6,6 +6,7 @@ import { isAndroidTv } from "../../utils/adb";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isRemoteTvOsSimulator } from "../../utils/sim-remote";
 import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
+import { noteTypedSecrets } from "../../utils/typed-secrets";
 import { iosRequires } from "../describe/platforms/ios";
 import { androidRequires } from "../describe/platforms/android";
 import { fillIos } from "./ios";
@@ -15,6 +16,16 @@ import { fillByDeviceKeys } from "./keys";
 import type { FillParams, FillResult } from "./types";
 
 export type { FillResult } from "./types";
+
+// No Vega and no TV: a TV field is reached and typed through the focus engine,
+// which has no way to replace a field's text. tvOS and Android TV share their
+// platform with phones, so the handlers probe and refuse them before acting.
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  chromium: { app: true },
+};
 
 const zodSchema = z.object({
   udid: z.string().min(1).describe("Target device id from `list-devices`."),
@@ -26,16 +37,6 @@ const zodSchema = z.object({
 });
 
 type Params = z.infer<typeof zodSchema>;
-
-// No Vega and no TV: a TV field is reached and typed through the focus engine,
-// which has no way to replace a field's text. tvOS and Android TV share their
-// platform with phones, so the handlers probe and refuse them before acting.
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  chromium: { app: true },
-};
 
 export function createFillTool(registry: Registry): ToolDefinition<Params, FillResult> {
   const dispatch = dispatchByPlatform<
@@ -88,6 +89,11 @@ export function createFillTool(registry: Registry): ToolDefinition<Params, FillR
 
   return {
     id: "fill",
+    description: `Set the text of the focused text field to exactly \`text\`, replacing what it holds; "" clears it. Tap the field first.
+Returns { verified }, never the text: true when the field was read back holding the text, false on a physical iPhone, where nothing can read it back.
+Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text, FILL_UNSUPPORTED_FIELD for a field that cannot take the text (a date or time input, a newline in a single-line field; nothing is changed). Fails if the device's ax-service or devtools helper predates fill; update argent. Not supported on TV targets or Vega.`,
+    zodSchema,
+    hideFromMcp: true,
     interaction: {
       // Never quote `text`: it may be a credential, and these messages reach
       // the event log.
@@ -95,16 +101,14 @@ export function createFillTool(registry: Registry): ToolDefinition<Params, FillR
       completedMsg: () => "Filled the focused field",
       failedMsg: ({ failureSignal }) => `Failed to fill the field: ${failureSignal.error_code}`,
     },
-    description: `Set the text of the focused text field to exactly \`text\`, replacing what it holds; "" clears it. Tap the field first.
-Returns { verified }, never the text: true when the field was read back holding the text, false on a physical iPhone, where nothing can read it back.
-Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text, FILL_UNSUPPORTED_FIELD for a field that cannot take the text (a date or time input, a newline in a single-line field; nothing is changed). Fails if the device's ax-service or devtools helper predates fill; update argent. Not supported on TV targets or Vega.`,
-    hideFromMcp: true,
-    zodSchema,
     capability,
     services: () => ({}),
     execute: async (services, params, options) => {
       // Resolved here, after every logging boundary, as `keyboard` does.
-      const { text, secrets } = resolveSecretPlaceholders(params.text);
+      const { text, secrets } = resolveSecretPlaceholders(params.text, {
+        clientSecrets: options?.clientSecrets,
+      });
+      noteTypedSecrets(params.udid, secrets);
       try {
         return await dispatch(services, { udid: params.udid, text }, options);
       } catch (err) {

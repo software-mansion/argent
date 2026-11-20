@@ -122,12 +122,27 @@ function createConsoleLogServer(
   });
 }
 
+/**
+ * What a React Native runtime says about itself in
+ * `ReactNativeApplication.metadataUpdated`, its answer to the enable sent at
+ * connect. Metro's target list names the app but not its platform, so this is
+ * where a runtime says it runs on Android or iOS. Fields stay unset when the
+ * runtime does not send it.
+ */
+export interface RuntimeAppMetadata {
+  /** Android package name or iOS bundle id. */
+  appId?: string;
+  /** "android" or "ios". */
+  platform?: string;
+}
+
 export interface JsRuntimeDebuggerApi {
   port: number;
   projectRoot: string;
   deviceName: string;
   appName: string;
   logicalDeviceId: string | undefined;
+  runtimeApp?: RuntimeAppMetadata;
   isNewDebugger: boolean;
   cdp: CDPClient;
   sourceResolver: SourceResolver;
@@ -316,19 +331,26 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       process.stderr.write(`[JsRuntimeDebugger:${port}] ${label} failed (non-fatal): ${msg}\n`);
     };
 
-    /**
-     * Through a provider's socket Argent is one of several clients on a single
-     * connection, so this setup splits by what it touches.
-     *
-     * These four are per-runtime, not per-client. On a shared session they reach
-     * into someone else's debugger: `setPauseOnExceptions: "none"` would disarm
-     * exception breakpoints a user set, from a tool they did not run. The client
-     * that owns the session owns its global state.
-     *
-     * The remaining setup only affects Argent's client. Enables are idempotent,
-     * and a binding only adds one. Other clients can ignore it by name.
-     */
+    const runtimeApp: RuntimeAppMetadata = {};
+    cdp.events.on("event", (method, params) => {
+      if (method !== "ReactNativeApplication.metadataUpdated") return;
+      if (typeof params.appIdentifier === "string") runtimeApp.appId = params.appIdentifier;
+      if (typeof params.platform === "string") runtimeApp.platform = params.platform;
+    });
+
     try {
+      /**
+       * Through a provider's socket Argent is one of several clients on a single
+       * connection, so this setup splits by what it touches.
+       *
+       * These four are per-runtime, not per-client. On a shared session they reach
+       * into someone else's debugger: `setPauseOnExceptions: "none"` would disarm
+       * exception breakpoints a user set, from a tool they did not run. The client
+       * that owns the session owns its global state.
+       *
+       * The remaining setup only affects Argent's client. Enables are idempotent,
+       * and a binding only adds one. Other clients can ignore it by name.
+       */
       if (!proxied) {
         await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
       }
@@ -353,74 +375,77 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
       }
 
-      await cdp.addBinding("__argent_callback");
+      await cdp.addBinding("__argent_callback", { legacyInspector: selected.legacyInspector });
 
       await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
 
       await sourceMaps.waitForPending();
-    } catch (err) {
+
+      const sourceResolver = createSourceResolver(port, metro.projectRoot);
+
+      const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
+
+      const api: JsRuntimeDebuggerApi = {
+        port,
+        projectRoot: metro.projectRoot,
+        deviceName: selected.deviceName,
+        appName: selected.target.title,
+        logicalDeviceId,
+        runtimeApp,
+        isNewDebugger: selected.isNewDebugger,
+        cdp,
+        sourceResolver,
+        sourceMaps,
+        logWriter,
+        consoleEvents,
+        consoleSocketUrl: consoleServer.url,
+      };
+
+      // Connect is the only place both ids are known at once; the alias keeps a
+      // later tool that forwards the logicalDeviceId on this instance instead of
+      // opening a second one. See utils/debugger/device-alias.ts.
+      rememberDeviceAlias(api.logicalDeviceId, deviceId);
+      // Equal ids mean the caller connected with the logicalDeviceId itself, as
+      // `selectTarget` demands once a second device shares this Metro. Nothing
+      // then joins the session to a udid or serial, so a `list-devices`-scoped
+      // `stop-all-simulator-servers` can only report it, never reach it.
+      rememberLogicalKeyedDevice(api.logicalDeviceId, deviceId);
+
+      const events = new TypedEventEmitter<ServiceEvents>();
+
+      cdp.events.on("disconnected", (error) => {
+        events.emit(
+          "terminated",
+          error ??
+            new FailureError("CDP disconnected", {
+              error_code: FAILURE_CODES.JS_RUNTIME_CDP_DISCONNECTED,
+              failure_stage: "js_runtime_debugger_cdp_lifecycle",
+              failure_area: "tool_server",
+              error_kind: "network",
+            })
+        );
+      });
+
+      return {
+        api,
+        dispose: async () => {
+          forgetDeviceAlias(api.logicalDeviceId);
+          forgetLogicalKeyedDevice(deviceId);
+          await consoleServer.close();
+          // Routinely another agent's `stop-all-simulator-servers`, so leave word.
+          closeLog({ breadcrumb: true });
+          await cdp.disconnect();
+        },
+        events,
+      };
+    } catch (error) {
       // A socket drop here is the app dying as the debugger attaches, possibly
       // after replaying its startup logs. Only that leaves anything to report.
       closeLog({ breadcrumb: !cdp.isConnected() });
-      await cdp.disconnect().catch(ignore);
-      throw err;
+      // An open socket keeps the inspector's debugger session, and the next
+      // connect's Runtime.enable then goes unanswered.
+      await cdp.disconnect();
+      throw error;
     }
-
-    const sourceResolver = createSourceResolver(port, metro.projectRoot);
-
-    const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
-
-    const api: JsRuntimeDebuggerApi = {
-      port,
-      projectRoot: metro.projectRoot,
-      deviceName: selected.deviceName,
-      appName: selected.target.title,
-      logicalDeviceId,
-      isNewDebugger: selected.isNewDebugger,
-      cdp,
-      sourceResolver,
-      sourceMaps,
-      logWriter,
-      consoleEvents,
-      consoleSocketUrl: consoleServer.url,
-    };
-
-    // Connect is the only place both ids are known at once; the alias keeps a
-    // later tool that forwards the logicalDeviceId on this instance instead of
-    // opening a second one. See utils/debugger/device-alias.ts.
-    rememberDeviceAlias(api.logicalDeviceId, deviceId);
-    // Equal ids mean the caller connected with the logicalDeviceId itself, as
-    // `selectTarget` demands once a second device shares this Metro. Nothing
-    // then joins the session to a udid or serial, so a `list-devices`-scoped
-    // `stop-all-simulator-servers` can only report it, never reach it.
-    rememberLogicalKeyedDevice(api.logicalDeviceId, deviceId);
-
-    const events = new TypedEventEmitter<ServiceEvents>();
-
-    cdp.events.on("disconnected", (error) => {
-      events.emit(
-        "terminated",
-        error ??
-          new FailureError("CDP disconnected", {
-            error_code: FAILURE_CODES.JS_RUNTIME_CDP_DISCONNECTED,
-            failure_stage: "js_runtime_debugger_cdp_lifecycle",
-            failure_area: "tool_server",
-            error_kind: "network",
-          })
-      );
-    });
-
-    return {
-      api,
-      dispose: async () => {
-        forgetDeviceAlias(api.logicalDeviceId);
-        forgetLogicalKeyedDevice(deviceId);
-        await consoleServer.close();
-        // Routinely another agent's `stop-all-simulator-servers`, so leave word.
-        closeLog({ breadcrumb: true });
-        await cdp.disconnect();
-      },
-      events,
-    };
   },
 };

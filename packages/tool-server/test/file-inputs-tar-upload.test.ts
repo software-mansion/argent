@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FILE_INPUT_MARKER, flowMemberKey, type FileInputSpec } from "@argent/registry";
+import { createArchiveFile } from "@argent/archive";
 import { resolveFileInputs, type UploadEntry } from "../src/file-inputs";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
 
@@ -180,6 +181,24 @@ describe("resolveFileInputs — tar-upload kind", () => {
     await expect(fs.stat(resolvedPath)).rejects.toThrow();
   });
 
+  it("extracts a zstd upload", async () => {
+    const appDir = await makeFakeApp();
+    const tarPath = path.join(tmpDir, "upload.tar.zst");
+    await createArchiveFile(appDir, tarPath, "zstd");
+    const entry = await uploadEntry(tarPath);
+
+    const { args, cleanup } = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wireUpload("/client/MyApp.app", "u-zstd", entry) },
+      (id) => (id === "u-zstd" ? entry : undefined)
+    );
+    cleanups.push(cleanup);
+
+    expect(await fs.readFile(path.join(args.appPath as string, "Info.plist"), "utf8")).toBe(
+      "<plist/>"
+    );
+  });
+
   it("extracts an uploaded single file (e.g. an .apk) and returns its path", async () => {
     const apk = await makeFakeApk("app.apk");
     const tarPath = await tarApp(apk);
@@ -340,7 +359,7 @@ describe("resolveFileInputs — tar-upload kind", () => {
 describe("resolveFileInputs — flow members sent through POST /upload", () => {
   const FLOWS = "/client/proj/.argent/flows";
   const FLOW_SPEC: FileInputSpec[] = [
-    { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+    { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
   ];
 
   /** Hands each entry over once, as the upload store of the HTTP layer does. */
@@ -396,12 +415,14 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
 
     const { fileInputs, cleanup } = await resolveFileInputs(
       { fileInputs: FLOW_SPEC },
-      { flow_path: flowWire([member("a.yaml", "a", a, { size: Buffer.byteLength(FRAGMENT) })]) },
+      {
+        e2e_test_path: flowWire([member("a.yaml", "a", a, { size: Buffer.byteLength(FRAGMENT) })]),
+      },
       store.lookup
     );
     cleanups.push(cleanup);
 
-    expect(fileInputs!.flow_path!.members).toEqual({
+    expect(fileInputs!.e2e_test_path!.members).toEqual({
       [flowMemberKey(FLOWS, "a.yaml")]: {
         role: "flow",
         state: "present",
@@ -419,7 +440,7 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
     await expect(
       resolveFileInputs(
         { fileInputs: FLOW_SPEC },
-        { flow_path: flowWire([member("a.yaml", "a", a, { size: 5 })]) },
+        { e2e_test_path: flowWire([member("a.yaml", "a", a, { size: 5 })]) },
         uploadStore({ a }).lookup
       )
     ).rejects.toThrow(`is ${Buffer.byteLength(FRAGMENT)} bytes but the client recorded 5`);
@@ -436,7 +457,7 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
     await expect(
       resolveFileInputs(
         { fileInputs: FLOW_SPEC },
-        { flow_path: flowWire([member("big.yaml", "big", big)]) },
+        { e2e_test_path: flowWire([member("big.yaml", "big", big)]) },
         uploadStore({ big }).lookup
       )
     ).rejects.toThrow("exceeds the 33554432-byte file-input limit");
@@ -466,7 +487,7 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
         resolveFileInputs(
           { fileInputs: FLOW_SPEC },
           {
-            flow_path: flowWire([
+            e2e_test_path: flowWire([
               member("a.yaml", "a", a!),
               member("b.yaml", "b", b!),
               member("c.yaml", "c", c!),
@@ -493,7 +514,7 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
     await expect(
       resolveFileInputs(
         { fileInputs: FLOW_SPEC },
-        { flow_path: flowWire([member("a.yaml", "expired", a)]) },
+        { e2e_test_path: flowWire([member("a.yaml", "expired", a)]) },
         uploadStore({}).lookup
       )
     ).rejects.toThrow(/Upload "expired" was not found on the tool-server/);
@@ -510,7 +531,7 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
       resolveFileInputs(
         { fileInputs: FLOW_SPEC },
         {
-          flow_path: flowWire([
+          e2e_test_path: flowWire([
             member("a.yaml", "a", a!, { contentHash: "0".repeat(64) }),
             member("b.yaml", "b", b!),
             member("c.yaml", "c", c!),
@@ -525,18 +546,18 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
   });
 
   it("removes the uploads of a wire that the call does not resolve", async () => {
-    // name + flow_path: the tool reports the two sources, so the closure that
-    // came with flow_path is never read.
+    // name + e2e_test_path: the tool reports the two sources, so the closure that
+    // came with e2e_test_path is never read.
     const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
     const store = uploadStore({ a });
 
     const { args } = await resolveFileInputs(
       { fileInputs: [{ ...FLOW_SPEC[0]!, unwrapWhenSet: "name" }] },
-      { name: "saved", flow_path: flowWire([member("a.yaml", "a", a)]) },
+      { name: "saved", e2e_test_path: flowWire([member("a.yaml", "a", a)]) },
       store.lookup
     );
 
-    expect(args.flow_path).toBe(`${FLOWS}/root.yaml`);
+    expect(args.e2e_test_path).toBe(`${FLOWS}/root.yaml`);
     expect([...store.pending.keys()]).toEqual([]);
     await expect(fs.stat(a.tarPath)).rejects.toThrow();
   });
