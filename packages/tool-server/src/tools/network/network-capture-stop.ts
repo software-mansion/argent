@@ -13,6 +13,7 @@ import {
   findJsCapture,
   jsCapture,
   jsCapturePayload,
+  jsCapturesOfAppOn,
   setJsCapture,
   type JsCapture,
 } from "../../blueprints/network-inspector";
@@ -177,7 +178,8 @@ async function stopJsLayer(
   try {
     dbg = await resolveJsRuntime(registry, udid, logicalDeviceId, port);
   } catch (err) {
-    const notReached = jsNotReached(classifyNotConnected(err), port, err);
+    const notConnected = classifyNotConnected(err);
+    const notReached = jsNotReached(notConnected, port, err);
     if (other) {
       return {
         layer: "js",
@@ -186,8 +188,24 @@ async function stopJsLayer(
         reason: `${notReached}; ${otherPortHint(bundleId, other.port)}`,
       };
     }
-    // The app has no capture to stop on any port.
     if (!prior) {
+      // On a Metro that several devices share, a start that named a logicalDeviceId
+      // keeps the app's capture under that id, which this call does not name.
+      const mayRecord =
+        notConnected === "device_mismatch" &&
+        jsCapturesOfAppOn(port, bundleId).some(
+          (capture) =>
+            capture.intent === "started" || (capture.installed && capture.paused !== true)
+        );
+      if (mayRecord) {
+        return {
+          layer: "js",
+          armed: true,
+          total: 0,
+          reason: `${notReached}; a JS capture of ${bundleId} on this Metro may still record, so call network-capture-stop again with this device's logicalDeviceId before you rely on the stop`,
+        };
+      }
+      // The app has no capture to stop on any port.
       return { layer: "js", armed: false, total: 0, reason: `${notReached}; ${NOT_STARTED}` };
     }
     const stored = storeStopped(kept?.paused === true);

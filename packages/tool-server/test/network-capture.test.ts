@@ -2868,13 +2868,27 @@ describe("a Metro that several devices share", () => {
     expect(logs).toContain("/shared");
   });
 
-  it("stops the JS layer with the same logicalDeviceId, and a stop without it leaves that runtime recording", async () => {
+  it("stops the JS layer with the same logicalDeviceId, and a stop without it is unconfirmed and leaves that runtime recording", async () => {
     const rt = shared();
     await start(IOS_UDID, APP, undefined, undefined, SHARED_ID);
 
-    const without = await stop(IOS_UDID, APP);
-    expect(layer(without, "js")).toMatchObject({ armed: false });
+    const without = await stop(IOS_UDID, APP, undefined, "js");
+    expect(without.layers).toEqual([
+      {
+        layer: "js",
+        armed: true,
+        total: 0,
+        reason: `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; pass this device's logicalDeviceId (in parentheses: ${SHARED_DEVICES}), or give each device its own Metro port; a JS capture of ${APP} on this Metro may still record, so call network-capture-stop again with this device's logicalDeviceId before you rely on the stop; pass layer "js" to that call, so it leaves the other layer as it is`,
+      },
+    ]);
+    expect(
+      createNetworkCaptureStopTool(registry).interaction?.completedMsg?.({
+        params: { udid: IOS_UDID, bundleId: APP, layer: "js" },
+        result: without,
+      })
+    ).toBe(`Stop of JS network capture for ${APP} is unconfirmed: js may still record`);
     expect(rt.paused).toBe(false);
+    expect(findJsCapture(SHARED_ID, APP)).toMatchObject({ intent: "started" });
 
     const stopped = await stop(IOS_UDID, APP, undefined, undefined, SHARED_ID);
     expect(layer(stopped, "js")).toEqual({ layer: "js", armed: false, total: 0 });

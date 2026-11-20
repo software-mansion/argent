@@ -159,6 +159,15 @@ export function findJsCapture(
   return jsCapturesOn(device).find((capture) => capture.bundleId === bundleId);
 }
 
+/** The app's entries on the Metro port, whatever device id they are kept under. */
+export function jsCapturesOfAppOn(port: number, bundleId: string): JsCapture[] {
+  return [...jsCaptures]
+    .filter(
+      ([payload, capture]) => capture.bundleId === bundleId && splitPayload(payload).port === port
+    )
+    .map(([, capture]) => capture);
+}
+
 /** The payloads of the devices' entries, or of every entry without them. */
 function payloadsOf(devices?: readonly string[]): string[] {
   return [...jsCaptures.keys()].filter((payload) => {
