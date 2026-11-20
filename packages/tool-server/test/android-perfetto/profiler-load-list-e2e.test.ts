@@ -6,11 +6,7 @@ import * as path from "path";
 // ---------------------------------------------------------------------------
 // True end-to-end test for `profiler-load { mode: "list" }`.
 //
-// Unlike profiler-load-list.test.ts (which vi.mocks getDebugDir), this exercises
-// the REAL getDebugDir(): it returns `join(os.tmpdir(), "argent-profiler-cwd")`.
-// So we point the tmpdir at an isolated scratch dir per test and let the real
-// code resolve the real on-disk path. Nothing in listSessions (the logic under
-// test) is mocked.
+// Each test redirects the tmpdir so getDebugDir() finds only its on-disk fixtures.
 //
 // The `mode: "list"` execute path calls `listSessions(await getDebugDir())` and
 // never touches `services`, so we drive it as execute({}, { mode: "list", ... }).
@@ -189,6 +185,16 @@ describe("profiler-load list — E2E against real on-disk fixtures (no mocks)", 
     expect(countOccurrences(out, "20260101-090000")).toBe(1);
     // Only CPU export → just "CPU".
     expect(out).toContain("`20260101-090000` | CPU |");
+  });
+
+  it("lists a launch profile separately from an xctrace capture in the same second", async () => {
+    const timestamp = "20261120-102030";
+    const launchId = `${timestamp}-launch-10db6098-b3cc-4802-8697-a10a4f43bd83`;
+    await fs.writeFile(path.join(debugDir, `native-profiler-${launchId}_raw_cpu.xml`), "");
+    await fs.writeFile(path.join(debugDir, `native-profiler-${timestamp}_raw_hangs.xml`), "");
+    const output = await runList();
+    expect(output).toContain(`| \`${launchId}\` | CPU |`);
+    expect(output).toContain(`| \`${timestamp}\` | hangs |`);
   });
 
   // ---- Matrix case 4: empty dir ----

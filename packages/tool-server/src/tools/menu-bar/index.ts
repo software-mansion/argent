@@ -33,7 +33,7 @@ type Result =
   | { chosen: string[]; identifier?: string };
 
 const capability: ToolCapability = {
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 const invalid = (message: string) =>

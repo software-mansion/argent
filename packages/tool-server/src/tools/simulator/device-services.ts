@@ -8,6 +8,7 @@ import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
 import { ANDROID_TV_CONTROL_NAMESPACE } from "../../blueprints/android-tv-control";
 import { AX_SERVICE_NAMESPACE } from "../../blueprints/ax-service";
 import { SCREEN_RECORDING_SESSION_NAMESPACE } from "../../blueprints/screen-recording-session";
+import { IOS_AUDIO_SESSION_NAMESPACE } from "../../blueprints/ios-audio-session";
 import { NATIVE_PROFILER_SESSION_NAMESPACE } from "../../blueprints/native-profiler-session";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
@@ -69,6 +70,16 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
 const APP_KEYED_NAMESPACES: readonly string[] = [ANDROID_NETWORK_INSPECTOR_NAMESPACE];
 
 /**
+ * Namespaces whose URN holds the device's native id (udid or adb serial) also
+ * when the service was asked for with its `ext:` id, so either spelling of the
+ * device matches.
+ */
+const NATIVE_ID_KEYED_NAMESPACES: readonly string[] = [
+  ...APP_KEYED_NAMESPACES,
+  NATIVE_DEVTOOLS_NAMESPACE,
+];
+
+/**
  * Every namespace whose service belongs to exactly one device. Membership is
  * "does `dispose()` reap a resource that outlives the call", with two
  * exceptions: `AndroidTvControl` is stateless adb shell-outs with a no-op
@@ -97,6 +108,7 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   ANDROID_TV_CONTROL_NAMESPACE,
   AX_SERVICE_NAMESPACE,
   SCREEN_RECORDING_SESSION_NAMESPACE,
+  IOS_AUDIO_SESSION_NAMESPACE,
   NATIVE_PROFILER_SESSION_NAMESPACE,
   MACOS_APP_NAMESPACE,
   ...PORT_KEYED_NAMESPACES,
@@ -168,7 +180,7 @@ export function deviceIdOwningUrn(
     if (portion === undefined) continue;
     const tail = portion.toLowerCase();
     const owner = deviceIds.find((id) => {
-      const spellings = APP_KEYED_NAMESPACES.includes(namespace)
+      const spellings = NATIVE_ID_KEYED_NAMESPACES.includes(namespace)
         ? [id, externalNativeId(id)]
         : [id];
       return spellings.some((spelling) => {

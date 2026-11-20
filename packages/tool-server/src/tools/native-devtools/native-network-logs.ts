@@ -117,7 +117,7 @@ export function createNativeNetworkLogsTool(
       apple: { simulator: true },
       appleRemote: { simulator: true },
       android: { emulator: true, device: true },
-      macos: { app: true },
+      macos: { app: true, catalyst: true },
     },
     description: `Retrieve network requests captured at the native level: NSURLProtocol on iOS, OkHttp on Android.
 Use when inspecting native-level HTTP traffic that view-network-logs cannot see: requests that never pass through JS XMLHttpRequest or fetch.

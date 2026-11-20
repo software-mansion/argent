@@ -26,6 +26,7 @@ import {
   PROCESS_ENDED,
   PROCESS_GONE,
   RECORD_CHARS_BUDGET,
+  isMetroTraffic,
   recordSize,
   type NativeNetworkBody,
 } from "../src/utils/native-network-record";
@@ -765,6 +766,32 @@ describe("iOS native network records: Metro filter", () => {
     // Filtered, not dropped.
     expect(store.records(4000)).toHaveLength(5);
   });
+
+  it.each([
+    ["http", "http://127.0.0.1:80/index.bundle", 80],
+    ["http without a port", "http://localhost/index.bundle", 80],
+    ["ws", "ws://localhost:80/hot", 80],
+    ["https", "https://localhost:443/index.bundle", 443],
+    ["https without a port", "https://[::1]/symbolicate", 443],
+    ["wss", "wss://127.0.0.1:443/inspector/device", 443],
+  ])("leaves out Metro's traffic on the default port of %s", (_protocol, url, port) => {
+    expect(isMetroTraffic(url, port)).toBe(true);
+
+    const store = newStore();
+    const agent = agentOn(store);
+    agent.complete("metro", url);
+    agent.complete("api", "https://api.example.com/items");
+
+    expect(store.records(port).map((r) => r.layerId)).toEqual(["api"]);
+    expect(store.records(8081).map((r) => r.layerId)).toEqual(["metro", "api"]);
+  });
+
+  it("keeps a loopback request without a port when Metro is on another port", () => {
+    expect(isMetroTraffic("http://localhost/index.bundle", 443)).toBe(false);
+    expect(isMetroTraffic("https://localhost/index.bundle", 80)).toBe(false);
+    expect(isMetroTraffic("http://localhost/index.bundle", 0)).toBe(false);
+    expect(isMetroTraffic("ftp://localhost/index.bundle", 0)).toBe(false);
+  });
 });
 
 describe("iOS native network records: connection closed", () => {
@@ -1180,6 +1207,28 @@ describe("iOS native network records: body reads", () => {
     expect(await read).toEqual(body('{"name":"demo"}'));
     expect(await store.requestPostData(id)).toEqual(body('{"name":"demo"}'));
     expect(app.request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each<[string, Record<string, unknown>, Partial<NativeNetworkBody>]>([
+    [
+      "marks a request body as incomplete and cut",
+      { incomplete: true },
+      { truncated: true, incomplete: true },
+    ],
+    ["reads a request body as whole", { incomplete: false }, {}],
+    ["reads a request body as whole from an agent that sends no incomplete field", {}, {}],
+  ])("%s by the incomplete field of the reply", async (_name, fields, expected) => {
+    const { app, store, agent } = bodyStore();
+    agent.requestWillBeSent("r", "https://api.example.com/upload", {
+      method: "POST",
+      hasPostData: true,
+    });
+
+    const read = store.requestPostData(idOf(store, "r"));
+    await settle();
+    app.sent[0]!.reply({ postData: "a".repeat(800), base64Encoded: false, ...fields });
+
+    expect(await read).toEqual(body("a".repeat(800), expected));
   });
 
   it.each<[string, "response" | "post", (read: SentRead) => void, string]>([
