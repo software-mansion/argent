@@ -20,7 +20,7 @@
 // arrays of objects fall through to --field-json.
 
 export interface JsonSchema {
-  type?: string;
+  type?: string | string[];
   properties?: Record<string, JsonSchema>;
   required?: string[];
   items?: JsonSchema;
@@ -38,7 +38,7 @@ interface FlagParseResult {
 
 export class FlagParseException extends Error {}
 
-function isScalarType(type: string | undefined): boolean {
+function isScalarType(type: JsonSchema["type"]): boolean {
   return type === "string" || type === "number" || type === "integer" || type === "boolean";
 }
 
@@ -113,7 +113,11 @@ function booleanLiteral(raw: string): boolean | undefined {
   return undefined;
 }
 
-function coerceScalar(raw: string, type: string | undefined, field: string): unknown {
+function coerceScalar(raw: string, type: JsonSchema["type"], field: string): unknown {
+  // Zod advertises a nullable integer or number as a two-member type array.
+  if (Array.isArray(type) && type.length === 2 && type.includes("null")) {
+    type = type.find((member) => member === "integer" || member === "number");
+  }
   if (type === "number") {
     // Number("") and Number("   ") are 0, so reject empty/whitespace explicitly.
     if (raw.trim() === "")
@@ -398,5 +402,5 @@ function renderType(prop: JsonSchema): string {
     const suffix = isScalarType(prop.items?.type) ? " (repeatable)" : "";
     return `array<${item}>${suffix}`;
   }
-  return prop.type ?? "any";
+  return Array.isArray(prop.type) ? prop.type.join(" | ") : (prop.type ?? "any");
 }

@@ -33,3 +33,7 @@ sidebar_custom_props:
 Run `argent --help` for the full set of options, and `argent --version` to print the installed version.
 
 `argent init` exits with code `1` when the skills install fails and no skills are on disk.
+
+When you pass `--commit_index` or `--hang_index` to `argent run`, supply an integer.
+The CLI rejects empty or whitespace-only values.
+To send JSON `null`, use `--commit_index-json null` or `--hang_index-json null`.
