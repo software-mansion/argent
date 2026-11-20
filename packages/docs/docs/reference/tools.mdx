@@ -177,7 +177,7 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
 
-When the expression of `debugger-evaluate` returns a Promise, Argent waits up to 10 seconds for the Promise to settle. Argent waits on Chromium and on Hermes with React Native 0.76 or later. On Vega and on React Native 0.75 and older with the legacy inspector, the result is the internal fields of the Promise.
+When the expression of `debugger-evaluate` returns a Promise, Argent waits up to 10 seconds for the Promise to settle. Argent waits on Chromium and on Hermes with the modern React Native inspector, which is the default from React Native 0.76. On Vega and on Hermes with the legacy inspector (React Native 0.75 and older), the result is the internal fields of the Promise.
 
 These are the results when Argent waits:
 

@@ -42,6 +42,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   session.disconnect();
   await new Promise((resolve) => wss.close(resolve));
 });
@@ -55,6 +56,11 @@ async function connect(options: { awaitPromisesInApp: boolean }): Promise<CDPCli
 
 function leftoverSlots(): string[] {
   return Object.keys(globalThis).filter((key) => key.startsWith("__argentPromise_"));
+}
+
+function pollCount(): number {
+  return sent.filter((request) => String(request.params.expression).includes("(function (slot)"))
+    .length;
 }
 
 function sentMethods(): string[] {
@@ -112,14 +118,51 @@ describe("CDPClient.evaluateAwaited", () => {
 
   it("fails with DEBUGGER_CDP_REQUEST_TIMEOUT when the Promise never settles", async () => {
     const client = await connect({ awaitPromisesInApp: true });
+    vi.useFakeTimers({ toFake: ["Date"] });
 
-    const error = await client
-      .evaluateAwaited("new Promise(() => {})", { timeout: 300 })
-      .catch((e: unknown) => e);
+    const pending = client.evaluateAwaited("new Promise(() => {})").catch((e: unknown) => e);
+    await vi.waitFor(() => expect(pollCount()).toBeGreaterThan(0));
+    vi.setSystemTime(Date.now() + 10_000);
+    const error = await pending;
 
     expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT);
-    expect((error as Error).message).toContain("did not settle within 300ms");
+    expect((error as Error).message).toContain("did not settle within 10000ms");
     await vi.waitFor(() => expect(leftoverSlots()).toEqual([]));
+    await client.disconnect();
+  });
+
+  it("awaits a thenable that is not a Promise", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const value = await client.evaluateAwaited(
+      "({ then: (resolve) => setTimeout(() => resolve(5), 150) })"
+    );
+
+    expect(value).toBe(5);
+    await client.disconnect();
+  });
+
+  it("describes a rejection reason that JSON cannot represent", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const error = await client
+      .evaluateAwaited('new Promise((_, reject) => setTimeout(() => reject(Symbol("why")), 50))')
+      .catch((e: unknown) => e);
+
+    expect((error as Error).message).toBe("Error: Promise rejected with: Symbol(why)");
+    await client.disconnect();
+  });
+
+  it("fails when the slot disappears, as it does on a JS reload", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const pending = client.evaluateAwaited("new Promise(() => {})").catch((e: unknown) => e);
+    await vi.waitFor(() => expect(leftoverSlots()).toHaveLength(1));
+    for (const slot of leftoverSlots()) delete (globalThis as Record<string, unknown>)[slot];
+    const error = await pending;
+
+    expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION);
+    expect((error as Error).message).toContain("The JS context reloaded");
     await client.disconnect();
   });
 

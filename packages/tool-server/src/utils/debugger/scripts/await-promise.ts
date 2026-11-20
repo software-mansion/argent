@@ -38,19 +38,26 @@ export const WATCH_PROMISE_FUNCTION = `function (slot) {
 export function takeSettledScript(slot: string): string {
   return `(function (slot) {
   var box = globalThis[slot];
-  if (!box) throw new Error("The JS context reloaded while the Promise was pending.");
+  if (!box) throw ownError("The JS context reloaded while the Promise was pending.");
   if (!box.settled) return slot;
 
   delete globalThis[slot];
   if (!box.rejected) return box.value;
   if (box.value instanceof Error) throw box.value;
-  throw new Error("Promise rejected with: " + describe(box.value));
+  throw ownError("Promise rejected with: " + describe(box.value));
+
+  function ownError(message) {
+    var error = new Error(message);
+    error.stack = "";
+    return error;
+  }
 
   function describe(reason) {
     try {
-      return JSON.stringify(reason);
+      var json = JSON.stringify(reason);
+      return json === undefined ? String(reason) : json;
     } catch (e) {
-      return String(reason);
+      return Object.prototype.toString.call(reason);
     }
   }
 })(${JSON.stringify(slot)})`;

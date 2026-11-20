@@ -522,10 +522,10 @@ export class CDPClient {
   /**
    * {@linkcode evaluate}, also on runtimes that ignore `awaitPromise`: a
    * returned Promise yields the value it resolves to, and a rejection throws
-   * like an exception. A Promise still pending after `timeout` fails with
-   * DEBUGGER_CDP_REQUEST_TIMEOUT.
+   * like an exception. A Promise still pending after {@linkcode DEFAULT_TIMEOUT_MS}
+   * fails with DEBUGGER_CDP_REQUEST_TIMEOUT.
    */
-  async evaluateAwaited(expression: string, options?: { timeout?: number }): Promise<unknown> {
+  async evaluateAwaited(expression: string): Promise<unknown> {
     if (!this.awaitPromisesInApp) return this.evaluate(expression);
 
     const result = await this.runtimeCall("Runtime.evaluate", { expression, returnByValue: false });
@@ -549,7 +549,7 @@ export class CDPClient {
     }
 
     if (watched !== slot) return watched;
-    return this.waitForSettled(slot, options?.timeout ?? DEFAULT_TIMEOUT_MS);
+    return this.waitForSettled(slot);
   }
 
   private async runtimeCall(
@@ -562,9 +562,9 @@ export class CDPClient {
     return response.result;
   }
 
-  private async waitForSettled(slot: string, timeout: number): Promise<unknown> {
+  private async waitForSettled(slot: string): Promise<unknown> {
     const take = takeSettledScript(slot);
-    const deadline = Date.now() + timeout;
+    const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
 
     let taken = await this.evaluate(take);
     while (taken === slot && Date.now() < deadline) {
@@ -575,7 +575,7 @@ export class CDPClient {
 
     this.evaluate(`delete globalThis[${JSON.stringify(slot)}]`).catch(() => {});
     throw new FailureError(
-      `The expression returned a Promise that did not settle within ${timeout}ms. The ` +
+      `The expression returned a Promise that did not settle within ${DEFAULT_TIMEOUT_MS}ms. The ` +
         `expression ran, and running it again repeats its side effects.`,
       {
         error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
