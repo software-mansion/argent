@@ -204,6 +204,10 @@ function notReached(code: FailureCode, message: string): FailureError {
   });
 }
 
+/** The devices on a Metro that several devices share, as selectTarget lists them. */
+const SHARED_ID = "8f2c1d7e-logical";
+const SHARED_DEVICES = `iPhone 17 (${SHARED_ID}), Pixel 9 (5b0a-logical)`;
+
 /** How long a debugger connect takes, as on a busy runtime. */
 let connectDelayMs = 0;
 
@@ -217,6 +221,13 @@ const fakeDebuggerBlueprint: ServiceBlueprint<unknown, string> = {
     const answer = metro.get(payload);
     if (answer === undefined) {
       throw notReached(FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING, `nothing answers on port ${port}`);
+    }
+    if (answer === FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH) {
+      // As selectTarget words it.
+      throw notReached(
+        answer,
+        `No debugger target matches device_id "${payload.slice(payload.indexOf(":") + 1)}". 2 devices are connected to Metro on port ${port}: ${SHARED_DEVICES}. Re-target with the logicalDeviceId in parentheses.`
+      );
     }
     if (typeof answer === "string") throw notReached(answer, `Metro on port ${port}: ${answer}`);
     const cdp = {
@@ -486,21 +497,35 @@ afterEach(async () => {
 
 type CaptureLayerParam = "js" | "native";
 
-function start(udid: string, bundleId: string, port?: number, captureLayer?: CaptureLayerParam) {
+function start(
+  udid: string,
+  bundleId: string,
+  port?: number,
+  captureLayer?: CaptureLayerParam,
+  logicalDeviceId?: string
+) {
   return registry.invokeTool<CaptureResult<StartedLayer>>("network-capture-start", {
     udid,
     bundleId,
     ...(port !== undefined ? { port } : {}),
     ...(captureLayer !== undefined ? { layer: captureLayer } : {}),
+    ...(logicalDeviceId !== undefined ? { logicalDeviceId } : {}),
   });
 }
 
-function stop(udid: string, bundleId: string, port?: number, captureLayer?: CaptureLayerParam) {
+function stop(
+  udid: string,
+  bundleId: string,
+  port?: number,
+  captureLayer?: CaptureLayerParam,
+  logicalDeviceId?: string
+) {
   return registry.invokeTool<CaptureResult<StoppedLayer>>("network-capture-stop", {
     udid,
     bundleId,
     ...(port !== undefined ? { port } : {}),
     ...(captureLayer !== undefined ? { layer: captureLayer } : {}),
+    ...(logicalDeviceId !== undefined ? { logicalDeviceId } : {}),
   });
 }
 
@@ -1130,7 +1155,7 @@ describe("network-capture-start", () => {
       });
     });
 
-    const SHARED_METRO = `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; give each device its own Metro port (udid takes the id from list-devices, not a logicalDeviceId)`;
+    const SHARED_METRO = `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; pass this device's logicalDeviceId (in parentheses: ${SHARED_DEVICES}), or give each device its own Metro port`;
     const STILL_RECORDS =
       "the interceptor already in the app's JS runtime may still record, so call network-capture-start again once the app answers";
     const NOT_REACHED = [
@@ -2753,6 +2778,102 @@ describe("a JS runtime of another app on the port", () => {
     expect(text).toBe(
       `Network capture is not started on the JS layer: network-capture-start for ${APP} found it unavailable (${layer(started, "js").reason}). native-network-logs lists the requests of the native layer. Once the JS layer can start, call network-capture-start again, repeat the action, then call view-network-logs again.`
     );
+  });
+});
+
+describe("a Metro that several devices share", () => {
+  /** This device's runtime answers only to its logicalDeviceId, as on a shared Metro. */
+  function shared(): FakeRuntime {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH);
+    serve(PORT, SHARED_ID, rt);
+    ios.connected.add(APP);
+    return rt;
+  }
+
+  it("arms the JS layer on the runtime that logicalDeviceId names, which view-network-logs then reads", async () => {
+    const rt = shared();
+
+    const result = await start(IOS_UDID, APP, undefined, undefined, SHARED_ID);
+
+    expect(result.layers).toEqual([
+      { layer: "js", armed: true },
+      { layer: "ios-native", armed: true },
+    ]);
+    expect(findJsCapture(SHARED_ID, APP)).toMatchObject({ intent: "started", installed: true });
+    expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
+    rt.send("/shared");
+    const logs = await read(SHARED_ID);
+    expect(logs).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+    expect(logs).toContain("/shared");
+  });
+
+  it("stops the JS layer with the same logicalDeviceId, and a stop without it leaves that runtime recording", async () => {
+    const rt = shared();
+    await start(IOS_UDID, APP, undefined, undefined, SHARED_ID);
+
+    const without = await stop(IOS_UDID, APP);
+    expect(layer(without, "js")).toMatchObject({ armed: false });
+    expect(rt.paused).toBe(false);
+
+    const stopped = await stop(IOS_UDID, APP, undefined, undefined, SHARED_ID);
+    expect(layer(stopped, "js")).toEqual({ layer: "js", armed: false, total: 0 });
+    expect(rt.paused).toBe(true);
+    expect(findJsCapture(SHARED_ID, APP)).toMatchObject({ intent: "stopped" });
+  });
+
+  it("names the logicalDeviceIds to pass when the start gives none, and the native layer still arms", async () => {
+    shared();
+
+    const result = await start(IOS_UDID, APP);
+
+    expect(layer(result, "js")).toEqual({
+      layer: "js",
+      armed: false,
+      unavailable: true,
+      reason: `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; pass this device's logicalDeviceId (in parentheses: ${SHARED_DEVICES}), or give each device its own Metro port`,
+    });
+    expect(layer(result, "ios-native")).toEqual({ layer: "ios-native", armed: true });
+  });
+
+  it("is stopped by stop-all-simulator-servers only when its devices name the logicalDeviceId", async () => {
+    const rt = shared();
+    await start(IOS_UDID, APP, undefined, undefined, SHARED_ID);
+
+    await stopAll([IOS_UDID]);
+    expect(rt.paused).toBe(false);
+    expect(findJsCapture(SHARED_ID, APP)).toMatchObject({ intent: "started" });
+
+    await stopAll([IOS_UDID, SHARED_ID]);
+    expect(rt.paused).toBe(true);
+    expect(findJsCapture(SHARED_ID, APP)).toBeUndefined();
+  });
+
+  it("uses logicalDeviceId for a start and a stop of the js layer alone, and leaves it out of the native layer", async () => {
+    const rt = shared();
+
+    expect((await start(IOS_UDID, APP, undefined, "js", SHARED_ID)).layers).toEqual([
+      { layer: "js", armed: true },
+    ]);
+    expect((await start(IOS_UDID, APP, undefined, "native", SHARED_ID)).layers).toEqual([
+      { layer: "ios-native", armed: true },
+    ]);
+    expect(rt.paused).toBe(false);
+
+    expect((await stop(IOS_UDID, APP, undefined, "js", SHARED_ID)).layers).toEqual([
+      { layer: "js", armed: false, total: 0 },
+    ]);
+    expect(rt.paused).toBe(true);
+    expect(
+      layer(await stop(IOS_UDID, APP, undefined, "native", SHARED_ID), "ios-native")
+    ).toMatchObject({ armed: false });
+  });
+
+  it("refuses an empty logicalDeviceId before any layer runs", async () => {
+    shared();
+
+    await expect(start(IOS_UDID, APP, undefined, undefined, "")).rejects.toThrow(/logicalDeviceId/);
+    expect(findJsCapture(SHARED_ID, APP)).toBeUndefined();
   });
 });
 

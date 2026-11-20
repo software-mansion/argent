@@ -22,6 +22,13 @@ export const captureSchema = z.object({
     .describe(
       "The layer to act on: js (the app's JS runtime, read with view-network-logs) or native (NSURLProtocol on iOS, OkHttp on Android, read with native-network-logs). Omit it to act on both. The other layer stays as it is."
     ),
+  logicalDeviceId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Only when several devices share the Metro port: this device's logicalDeviceId, which the JS layer's reason lists. The JS layer connects to that runtime, and view-network-logs then takes it as device_id. The native layer always uses udid."
+    ),
 });
 
 export type CaptureParams = z.infer<typeof captureSchema>;
@@ -191,9 +198,11 @@ export function jsNotReached(
   switch (reason) {
     case "metro_not_running":
       return `Metro is not running on port ${port}; start it, or pass the port of the app's Metro`;
-    // The detail lists logicalDeviceIds to re-target with, which udid cannot take.
-    case "device_mismatch":
-      return `several devices are connected to Metro on port ${port}, so the JS layer cannot tell which runtime is this device's; give each device its own Metro port (udid takes the id from list-devices, not a logicalDeviceId)`;
+    case "device_mismatch": {
+      // The detail lists each device with its logicalDeviceId in parentheses.
+      const listed = /connected to Metro on port \d+: (.+?)\. Re-target/.exec(detail)?.[1];
+      return `several devices are connected to Metro on port ${port}, so the JS layer cannot tell which runtime is this device's; pass this device's logicalDeviceId (${listed ? `in parentheses: ${listed}` : detail}), or give each device its own Metro port`;
+    }
     case "no_app_connected":
       return `no app is connected to Metro on port ${port} yet`;
     case undefined:
