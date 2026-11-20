@@ -19,7 +19,7 @@ const capability: ToolCapability = {
   android: { emulator: true, unknown: true },
   // A Mac app shares the host pasteboard, so its branch inserts the text
   // and never touches the pasteboard.
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
   // No `chromium`: its only clipboard is the HOST one, so a paste would
   // overwrite what the user copied. No `vega`: VVD exposes no clipboard API.
   //

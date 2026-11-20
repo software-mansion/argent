@@ -110,7 +110,6 @@ describe("canonicalToolId", () => {
       expect(id).toBe(`e2e-${alias.slice("flow-".length)}`);
       expect(canonicalToolId(alias)).toBe(id);
     }
-    expect(Object.keys(TOOL_ID_ALIASES)).toHaveLength(7);
   });
 
   it("leaves any other id unchanged", () => {

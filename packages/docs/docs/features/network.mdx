@@ -96,7 +96,7 @@ The capture stays on until the agent stops it for the app. The capture of a diff
 
 ## Native `NSURLProtocol` layer on a Mac app
 
-The native `NSURLProtocol` layer also captures the `URLSession` requests of a Mac app. The start of the capture waits until the app acknowledges the capture, for at most 5 seconds. If the app does not run, the start tells the agent so. Then Argent starts the capture when the agent starts the app with `boot-device`, `launch-app` or `restart-app`. For an Apple app, and for an app that Argent does not start, such as a Mac Catalyst app, the start fails, because Argent cannot capture these apps.
+The native `NSURLProtocol` layer also captures the `URLSession` requests of a Mac app, which includes a Mac Catalyst app. The start of the capture waits until the app acknowledges the capture, for at most 5 seconds. If the app does not run, the start tells the agent so. Then Argent starts the capture when the agent starts the app with `boot-device`, `launch-app` or `restart-app`. For an Apple app, and for an app that Argent does not start, such as an Electron app, the start fails, because Argent cannot capture these apps.
 
 The app can run before the capture starts. Then the header line of the first result tells that Argent did not record the earlier requests.
 
@@ -143,7 +143,7 @@ Then the agent reads the details of one record by its ID. The details contain th
 
 For the JS runtime layer, the two native layers and the Chrome DevTools Protocol layer, Argent replaces the values of secret headers with `[REDACTED]`. A header is secret if its name contains `authorization`, `cookie`, `token`, `api-key` or a related word.
 
-Argent also shortens a body that is longer than 1000 characters. A message before the shortened body gives the size of the full body. The JS runtime layer can keep only the start of a large body. For such a body, the message gives the full size in bytes, the full length in characters or a minimum length. The two native layers can also keep only the start of a large body. For such a body, the message gives the full size in bytes if Argent knows it, and the number of bytes that the layer kept.
+Argent also shortens a body that is longer than 1000 characters. A message before the shortened body gives the size of the full body. The JS runtime layer can keep only the start of a large body. For such a body, the message gives the full size in bytes, the full length in characters or a minimum length. The two native layers can also keep only the start of a large body. For such a body, the message gives the full size in bytes if Argent knows it, and the number of bytes that the layer kept. On iOS, the app can end the upload of a body stream before the stream reaches its end. Then the message tells that the request body contains only the bytes that the app wrote before that time.
 
 Argent removes the bundle traffic and the HMR traffic of Metro from the network log. Thus the network log contains the requests of your app only. This removal applies only when the app connects to Metro on a local address. If a physical Android device connects to Metro on a network address, for example `192.168.1.20:8081`, the network log also contains the requests to Metro. The native layers remove all requests to the Metro port on a local address, for example `localhost:8081`.
 

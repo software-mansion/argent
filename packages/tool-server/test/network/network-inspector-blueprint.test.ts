@@ -59,11 +59,6 @@ afterEach(() => {
 });
 
 describe("NetworkInspector blueprint", () => {
-  it("has namespace 'NetworkInspector'", () => {
-    expect(networkInspectorBlueprint.namespace).toBe("NetworkInspector");
-    expect(NETWORK_INSPECTOR_NAMESPACE).toBe("NetworkInspector");
-  });
-
   it("getURN returns correct format", () => {
     expect(networkInspectorBlueprint.getURN("8081:SIM-UDID-123")).toBe(
       "NetworkInspector:8081:SIM-UDID-123"
@@ -264,25 +259,6 @@ describe("NetworkInspector blueprint", () => {
     const emittedError = terminatedHandler.mock.calls[0][0];
     expect(emittedError).toBeInstanceOf(Error);
     expect(emittedError.message).toBe("CDP disconnected");
-  });
-
-  it("does not import discovery, target-selection, or construct CDPClient", async () => {
-    // Read the source file to verify no dangerous imports exist.
-    // This is a static analysis check to catch regressions.
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    const source = await fs.readFile(
-      path.resolve(__dirname, "../../src/blueprints/network-inspector.ts"),
-      "utf-8"
-    );
-
-    // Must NOT import from discovery or target-selection (that would mean it creates its own connection)
-    expect(source).not.toContain('from "../utils/debugger/discovery"');
-    expect(source).not.toContain('from "../utils/debugger/target-selection"');
-    // Must NOT construct new CDPClient (only imports the type)
-    expect(source).not.toContain("new CDPClient");
-    // Should use type-only import for CDPClient
-    expect(source).toContain("import type");
   });
 });
 

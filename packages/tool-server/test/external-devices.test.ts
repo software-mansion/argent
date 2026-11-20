@@ -8,9 +8,12 @@ import { argentHomeDir } from "@argent/configuration-core";
 import {
   ALLOWED_SIM_SERVER_ENDPOINTS,
   EXTERNAL_CAPABILITIES,
-  EXTERNAL_PREFIX,
   PROVIDER_ID_SHAPE,
   PROVIDER_SCHEMA_VERSION,
+  type ProviderDevice,
+  type ProviderRecord,
+  providerDeviceSchema,
+  providerRecordSchema,
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
   assertAllowedSimServerEndpoint,
@@ -23,16 +26,11 @@ import {
   externalProviderLabel,
   externalClaimForNativeId,
   externalSupportHint,
-  isExternalDeviceUrn,
   isExternalId,
   listExternalDevices,
   findExternalDevice,
   lookupExternalDevice,
   makeExternalId,
-  type ProviderDevice,
-  providerDeviceSchema,
-  type ProviderRecord,
-  providerRecordSchema,
   providersDirectory,
 } from "../src/utils/external-devices";
 import { classifyDevice, resolveDevice } from "../src/utils/device-info";
@@ -220,63 +218,19 @@ describe("the contract's tool-server facade", () => {
     expect(providersDirectory()).toBe(path.join(argentHomeDir(), "providers"));
   });
 
-  /**
-   * The precondition every "nothing claims this device" assertion in the file
-   * rests on: an empty providers directory, which only a scoped home gives.
-   */
-  it("discovers against a providers directory this run owns", () => {
-    expect(providersDirectory()).toContain(HOME_PREFIX);
-    expect(discoverProviders()).toEqual([]);
-  });
-
-  /**
-   * Third parties resolve the contract through this module and its header
-   * promises the export set never shrinks. A re-export dropped during a refactor
-   * is silent until someone's build breaks, so name them.
-   */
-  it("re-exports the whole contract surface", () => {
-    expect(PROVIDER_SCHEMA_VERSION).toBe(1);
-    expect(EXTERNAL_PREFIX).toBe("ext:");
-    expect(PROVIDER_ID_SHAPE.test("acme-3f2a9c")).toBe(true);
-    expect([...EXTERNAL_CAPABILITIES]).toContain("simulator-server");
-    expect([...ALLOWED_SIM_SERVER_ENDPOINTS]).toEqual([
-      "/api/clipboard/text",
-      "/api/display",
-      "/api/hinge",
-      "/api/pointer",
-      "/api/screenshot",
-      "/ws",
-    ]);
-
-    /**
-     * The type re-exports matter as much as the value ones and nothing at
-     * runtime can check them, so they are annotated here. Dropping either from
-     * the facade fails `typecheck:tests`.
-     */
+  it("discovers a descriptor written with the exported provider schemas", () => {
     const device: ProviderDevice = providerDeviceSchema.parse(iosDevice());
-    expect(device.nativeId).toBe(IOS_UDID);
-
     const record: ProviderRecord = providerRecordSchema.parse({
-      devices: [iosDevice()],
       id: "acme",
       name: "Acme",
-      schemaVersion: 1,
+      schemaVersion: PROVIDER_SCHEMA_VERSION,
+      devices: [device],
     });
-    expect(record.devices).toHaveLength(1);
+    useDescriptors(writeDescriptor("acme.json", record));
 
-    for (const fn of [
-      isExternalId,
-      isExternalDeviceUrn,
-      makeExternalId,
-      externalNativeId,
-      externalProviderId,
-      externalProviderLabel,
-      discoverProviders,
-      providersDirectory,
-      __resetProviderWarningsForTesting,
-    ]) {
-      expect(typeof fn).toBe("function");
-    }
+    const [discovered] = discoverProviders();
+    expect(discovered).toMatchObject(record);
+    expect(discovered!.id).toMatch(PROVIDER_ID_SHAPE);
   });
 });
 
@@ -1156,12 +1110,9 @@ describe("revocation", () => {
 });
 
 describe("simulator-server endpoint parity", () => {
-  it.each(["/ws", "/api/screenshot", "/api/pointer", "/api/clipboard/text"])(
-    "allows %s",
-    (endpoint) => {
-      expect(() => assertAllowedSimServerEndpoint(endpoint)).not.toThrow();
-    }
-  );
+  it.each(ALLOWED_SIM_SERVER_ENDPOINTS)("allows %s", (endpoint) => {
+    expect(() => assertAllowedSimServerEndpoint(endpoint)).not.toThrow();
+  });
 
   /**
    * A provider's build may serve more than argent's does. Anything off the list

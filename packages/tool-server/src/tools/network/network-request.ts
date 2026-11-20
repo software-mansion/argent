@@ -236,7 +236,7 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
   // A Mac app has only native IDs, which need no debugger.
-  capability: { ...DEBUGGER_TOOL_CAPABILITY, macos: { app: true } },
+  capability: { ...DEBUGGER_TOOL_CAPABILITY, macos: { app: true, catalyst: true } },
   services: (params): Record<string, ServiceRef> => {
     /**
      * A native ID names its record without the device, so it
@@ -608,13 +608,15 @@ async function readNativeBody(
     return `[unavailable: ${err instanceof Error ? err.message : String(err)}]`;
   }
   if (!body.available) return `[unavailable: ${body.reason ?? "no body"}]`;
+  // A request body that the upload cut has no known whole size.
+  if (body.incomplete) framing = { ...framing, wholeSize: undefined };
   if (body.inlineChars !== undefined) {
-    return inlineBody(body.body, body.inlineChars, mimeType, framing);
+    return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing);
   }
   if (!body.base64Encoded) {
     const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
     return body.truncated
-      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing)
+      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing, body.incomplete)
       : truncateBody(text, mimeType);
   }
 
@@ -626,11 +628,11 @@ async function readNativeBody(
   const text = decodeText(bytes, charsetOf(framing.contentType), body.truncated);
   if (text === null) {
     return body.truncated
-      ? `[body omitted: binary ${mimeType || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length)}]`
+      ? `[body omitted: binary ${mimeType || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length, body.incomplete)}]`
       : `[body omitted: binary ${mimeType || "data"}, ${bytes.length} bytes]`;
   }
   return body.truncated
-    ? cutByAgent(text, mimeType, kept.length, framing)
+    ? cutByAgent(text, mimeType, kept.length, framing, body.incomplete)
     : truncateBody(text, mimeType);
 }
 
@@ -640,47 +642,63 @@ async function readNativeBody(
  * decode in the declared charset, as the bytes of a base64 body do.
  */
 function inDeclaredCharset(text: string, contentType: string, truncated: boolean): string {
+  if (namesUtf8(contentType)) return text;
+  return decodeText(Buffer.from(text, "utf8"), charsetOf(contentType), truncated) ?? text;
+}
+
+/** A Content-Type that names no charset, or UTF-8: a text body reads as the agent sent it. */
+function namesUtf8(contentType: string): boolean {
   const charset = charsetOf(contentType);
-  if (!charset || /^utf-?8$/i.test(charset)) return text;
-  return decodeText(Buffer.from(text, "utf8"), charset, truncated) ?? text;
+  return !charset || /^utf-?8$/i.test(charset);
 }
 
 /**
  * A request body that came with the request, which the host holds. The agent
  * sends a body this way only when it is UTF-8 text, so a body of a binary type
- * is omitted by its type.
+ * is omitted by its type. Its bytes decode in the declared charset, as those of
+ * a body the agent gives by a read do. `truncated` says the host kept only the
+ * start of the body, which is `wholeChars` long when read as UTF-8.
  */
 function inlineBody(
   text: string,
   wholeChars: number,
+  truncated: boolean,
   mimeType: string,
   framing: NativeBodyFraming
 ): string {
   if (BINARY_BODY_TYPES.test(mimeType.toLowerCase())) {
     return `[body omitted: binary ${mimeType}, ${framing.wholeSize ?? "size unknown"}]`;
   }
-  return wholeChars > MAX_BODY_SIZE
-    ? `${cutMarker(`${wholeChars} chars`, mimeType)}\n${text.slice(0, MAX_BODY_SIZE)}...`
-    : text;
+  const decoded = inDeclaredCharset(text, framing.contentType, truncated);
+  if (!truncated) return truncateBody(decoded, mimeType);
+  // In another charset, the whole body has more chars than its kept start, but how many is unknown.
+  const fullSize = namesUtf8(framing.contentType)
+    ? `${wholeChars} chars`
+    : `more than ${decoded.length} chars`;
+  return `${cutMarker(fullSize, mimeType)}\n${decoded.slice(0, MAX_BODY_SIZE)}...`;
 }
 
 /**
- * A body the agent cut short: its own length is the cut's, so the size shown
- * is the whole body's, in bytes, when the record knows it.
+ * A body the agent cut short, or a request body that the upload cut: its own
+ * length is the cut's, so the size shown is the whole body's, in bytes, when
+ * the record knows it.
  */
 function cutByAgent(
   text: string,
   mimeType: string,
   keptBytes: number,
-  framing: NativeBodyFraming
+  framing: NativeBodyFraming,
+  incomplete?: boolean
 ): string {
   const shown = Math.min(text.length, MAX_BODY_SIZE);
-  const fullSize = `${framing.wholeSize ?? "unknown"}; ${agentKept(keptBytes)}`;
+  const fullSize = `${framing.wholeSize ?? "unknown"}; ${agentKept(keptBytes, incomplete)}`;
   return `${cutMarker(fullSize, mimeType, shown)}\n${text.slice(0, shown)}${text.length > shown ? "..." : ""}`;
 }
 
-function agentKept(keptBytes: number): string {
-  return `the agent kept only the first ${keptBytes} bytes`;
+function agentKept(keptBytes: number, incomplete?: boolean): string {
+  return incomplete
+    ? `the upload ended after the first ${keptBytes} bytes, before the app's body stream reached its end`
+    : `the agent kept only the first ${keptBytes} bytes`;
 }
 
 function sizeInBytes(bytes: number, how: string): string | undefined {

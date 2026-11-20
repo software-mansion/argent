@@ -29,13 +29,14 @@ import { localIosHost, remoteIosHost } from "../../utils/ios-host";
 import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
 import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../utils/simctl-config";
-import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
+import { classifyNotConnected } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
   captureSchema,
   errorMessage,
   isLiveService,
   jsNotReached,
+  resolveJsRuntime,
   otherPortHint,
   runLayers,
   withCaptureLock,
@@ -158,7 +159,7 @@ async function stopJsLayer(
 
   let dbg: JsRuntimeDebuggerApi;
   try {
-    dbg = await resolveDebuggerService(registry, { port, device_id: jsDeviceId });
+    dbg = await resolveJsRuntime(registry, udid, logicalDeviceId, port);
   } catch (err) {
     const notReached = jsNotReached(classifyNotConnected(err), port, err);
     if (other) {

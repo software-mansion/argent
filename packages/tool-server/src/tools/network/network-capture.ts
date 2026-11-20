@@ -6,6 +6,10 @@ import { deviceKeyOf } from "../../utils/native-network-record";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import { settleWithin } from "../../utils/timing";
+import { classifyDevice } from "../../utils/device-info";
+import { proxyStart } from "../../utils/sim-remote";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import { resolveDebuggerService } from "../debugger/not-connected";
 
 export const captureSchema = z.object({
   udid: z
@@ -38,7 +42,7 @@ export const CAPTURE_CAPABILITY: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 type CaptureLayer = "js" | "ios-native" | "android-native" | "macos-native";
@@ -173,6 +177,24 @@ export async function runLayers<L>(layers: Array<Promise<L>>): Promise<L[]> {
 export function isLiveService(registry: Pick<Registry, "getSnapshot">, urn: string): boolean {
   const state = registry.getSnapshot().services.get(urn)?.state;
   return state !== undefined && isLiveServiceState(state);
+}
+
+/**
+ * The debugger of the app's JS runtime. With `logicalDeviceId`, Metro's target
+ * goes by that id, while a remote simulator's runtime still reaches Metro over
+ * the sim-remote tunnel of its udid. The debugger opens that tunnel only for an
+ * id of a remote simulator, so it is opened here.
+ */
+export async function resolveJsRuntime(
+  registry: Registry,
+  udid: string,
+  logicalDeviceId: string | undefined,
+  port: number
+): Promise<JsRuntimeDebuggerApi> {
+  if (logicalDeviceId !== undefined && classifyDevice(udid) === "ios-remote") {
+    await proxyStart(udid, port);
+  }
+  return resolveDebuggerService(registry, { port, device_id: logicalDeviceId ?? udid });
 }
 
 /** Why the app's JS runtime was not reached, in a few words the caller can act on. */

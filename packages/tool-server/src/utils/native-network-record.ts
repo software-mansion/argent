@@ -61,6 +61,12 @@ export interface NativeNetworkBody {
   body: string;
   base64Encoded: boolean;
   truncated: boolean;
+  /**
+   * Set on a request body whose upload ended before the app's body stream
+   * reached its end, for example as the app cancelled the task: `body` is
+   * only what the app wrote by then, and `truncated` is set too.
+   */
+  incomplete?: boolean;
   reason?: string;
   /**
    * Set on a request body that came with the request itself and that the host
@@ -106,6 +112,13 @@ export function isOpen(record: NativeNetworkRecord): boolean {
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "10.0.2.2", "[::1]"]);
+/** `URL.port` is empty for the protocol's default port, even when the URL names it. */
+const DEFAULT_PORTS: Record<string, number> = {
+  "http:": 80,
+  "ws:": 80,
+  "https:": 443,
+  "wss:": 443,
+};
 
 /**
  * Metro's own traffic on `metroPort`: the bundle, HMR, symbolication, the
@@ -118,7 +131,8 @@ export function isMetroTraffic(url: string, metroPort: number): boolean {
   } catch {
     return false;
   }
-  return LOOPBACK_HOSTS.has(parsed.hostname) && Number(parsed.port) === metroPort;
+  const port = parsed.port === "" ? DEFAULT_PORTS[parsed.protocol] : Number(parsed.port);
+  return LOOPBACK_HOSTS.has(parsed.hostname) && port === metroPort;
 }
 
 /** Keeps the start of an absurdly long value and says how much was left out. */
@@ -180,7 +194,10 @@ export function recordSize(record: NativeNetworkRecord): number {
   return chars;
 }
 
-/** A body reply of an in-app agent: `{body | postData, base64Encoded, wasTruncated}`. */
+/**
+ * A body reply of an in-app agent: `{body | postData, base64Encoded, wasTruncated}`.
+ * A request body reply of the iOS agent can also have `incomplete`.
+ */
 export function toBody(result: unknown, kind: "response" | "post"): NativeNetworkBody {
   const r = asObject(result);
   const text = kind === "response" ? r.body : r.postData;
@@ -191,11 +208,13 @@ export function toBody(result: unknown, kind: "response" | "post"): NativeNetwor
         : "the agent holds no body for this request"
     );
   }
+  const incomplete = kind === "post" && r.incomplete === true;
   return {
     available: true,
     body: text,
     base64Encoded: r.base64Encoded === true,
-    truncated: r.wasTruncated === true,
+    truncated: r.wasTruncated === true || incomplete,
+    ...(incomplete ? { incomplete } : {}),
   };
 }
 

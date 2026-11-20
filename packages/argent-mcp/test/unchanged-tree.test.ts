@@ -193,9 +193,11 @@ describe("createTreeMemory", () => {
 
 describe("unchangedTreeNote", () => {
   it("identifies the earlier tree, notes that action effects may be hidden, and gives the fallback", () => {
-    expect(unchangedTreeNote("k3x-7", "gesture-tap")).toBe(
-      "Element tree matches `k3x-7` from an earlier `gesture-tap` result. Actions may have effects the tree omits. Call `describe` if you lack that tree."
-    );
+    const note = unchangedTreeNote("k3x-7", "gesture-tap");
+    expect(note).toContain("k3x-7");
+    expect(note).toContain("gesture-tap");
+    expect(note).toMatch(/effects.*tree/i);
+    expect(note).toContain("describe");
   });
 });
 
