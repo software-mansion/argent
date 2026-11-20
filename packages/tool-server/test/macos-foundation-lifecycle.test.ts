@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { failedSpawn } from "./helpers/failed-spawn";
+
 // The macOS artifacts are stand-ins: a helper that runs a Node "app" speaking
 // the library protocol (test/fixtures/macos-fake-library). The real helper and
 // library are proven by the end-to-end run against a built app.
@@ -30,6 +32,7 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     spawn: (command: string, args: string[], options: SpawnOptions) => {
       spawned.push({ command, args, env: { ...(options?.env ?? {}) }, cwd: options?.cwd });
+      if (args.includes("--spawn-emfile")) return failedSpawn();
       return actual.spawn(command, args, options);
     },
   };
@@ -93,6 +96,8 @@ import { createLaunchAppTool } from "../src/tools/launch-app";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { openUrlTool } from "../src/tools/open-url";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
+import { assertSupported } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import {
   chromiumRefusal,
@@ -104,6 +109,7 @@ import {
   otherWorktreeOfBuild,
   parseCodesignDisplay,
   processRunsExecutable,
+  readCodeSignature,
   recordTrackedMacosApp,
   removeUnusedLibraries,
   runningTrackedApp,
@@ -144,6 +150,52 @@ function writeBundle(dir: string, bundleId: string, extraPlist = ""): string {
     mode: 0o755,
   });
   return fs.realpathSync(app);
+}
+
+const PLATFORM_MACOS = 1;
+const PLATFORM_IOS = 2;
+const PLATFORM_MACCATALYST = 6;
+const CPU_ARM64 = 0x0100000c;
+const CPU_X86_64 = 0x01000007;
+
+/**
+ * A 64-bit Mach-O header with the load commands `before` (each as its first
+ * three 32-bit words, cmdsize 24), then one LC_BUILD_VERSION for `platform`.
+ */
+function machO(platform: number, cputype = CPU_ARM64, before: number[][] = []): Buffer {
+  const commands = [...before, [0x32, 24, platform]];
+  const file = Buffer.alloc(32 + commands.length * 24);
+  [0xfeedfacf, cputype, 0, 2, commands.length, commands.length * 24].forEach((v, i) =>
+    file.writeUInt32LE(v, i * 4)
+  );
+  commands.forEach((words, c) =>
+    words.forEach((v, i) => file.writeUInt32LE(v, 32 + c * 24 + i * 4))
+  );
+  return file;
+}
+
+/** A universal binary of `slices` at 4 KiB boundaries, with 64-bit offsets and sizes when `wide`. */
+function fat(slices: Buffer[], wide = false): Buffer {
+  const entry = wide ? 32 : 20;
+  const file = Buffer.alloc(4096 * (slices.length + 1));
+  file.writeUInt32BE(wide ? 0xcafebabf : 0xcafebabe, 0);
+  file.writeUInt32BE(slices.length, 4);
+  slices.forEach((slice, i) => {
+    const at = 8 + i * entry;
+    const offset = 4096 * (i + 1);
+    file.writeUInt32BE(slice.readUInt32LE(4), at);
+    if (wide) {
+      file.writeBigUInt64BE(BigInt(offset), at + 8);
+      file.writeBigUInt64BE(BigInt(slice.length), at + 16);
+      file.writeUInt32BE(12, at + 24);
+    } else {
+      file.writeUInt32BE(offset, at + 8);
+      file.writeUInt32BE(slice.length, at + 12);
+      file.writeUInt32BE(12, at + 16);
+    }
+    slice.copy(file, offset);
+  });
+  return file;
 }
 
 function pidAlive(pid: number): boolean {
@@ -329,6 +381,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(booted).toMatchObject({
       platform: "macos",
       id: DEVICE_ID,
+      kind: "app",
       bundleId: BUNDLE_ID,
       appPath,
       sandboxed: false,
@@ -496,6 +549,76 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     await expect(app.call("Echo", {}, { runLate: true })).resolves.not.toHaveProperty("deadline");
   });
 
+  it("while it watches suspensions, a call waits for a suspended app, and a timeout says it was suspended", async () => {
+    const { pid } = await run("boot-device", { macosAppPath: appPath });
+    const app = await macosApp();
+    // The fake helper suspends the app with SIGSTOP 100 ms after the start for
+    // 900 ms, and again 1.5 s after the start for 800 ms.
+    vi.stubEnv(
+      "FAKE_SUSPENSIONS",
+      JSON.stringify([
+        [100, 900],
+        [1_500, 800],
+      ])
+    );
+    const watch = await app.watchSuspensions(pid);
+    expect(watch).not.toBeNull();
+
+    // Sent during the first suspension: it waits for the app, and then gets its
+    // whole deadline, as the library starts its clock when it gets the request.
+    await new Promise((r) => setTimeout(r, 300));
+    const asked = Date.now();
+    const { deadline } = await app.call<{ deadline: number }>("Echo", {}, { timeoutMs: 400 });
+    expect(Date.now() - asked).toBeGreaterThan(500);
+    expect(deadline - 400).toBeGreaterThanOrEqual(asked + 500);
+
+    // In flight when the second suspension starts: the library drops a request
+    // that is past its deadline when the app runs again, so the call does not wait
+    // longer than its timeout, and it says that the app was suspended.
+    await new Promise((r) => setTimeout(r, Math.max(0, asked + 1_100 - Date.now())));
+    const slowAt = Date.now();
+    const slow = await app.call("Slow", { ms: 500 }, { timeoutMs: 600 }).catch((e: unknown) => e);
+    expect(codeOf(slow)).toBe(FAILURE_CODES.MACOS_APP_RPC_TIMEOUT);
+    expect((slow as Error).message).toMatch(/held it suspended for \d+ ms of that time.*describe/);
+    expect(Date.now() - slowAt).toBeLessThan(900);
+
+    // A request that gets no answer still times out, and says the app was suspended.
+    vi.stubEnv("FAKE_SUSPENSIONS", JSON.stringify([[50, 400]]));
+    const again = await app.watchSuspensions(pid);
+    const hung = await app.call("Hang", {}, { timeoutMs: 300 }).catch((e: unknown) => e);
+    expect(codeOf(hung)).toBe(FAILURE_CODES.MACOS_APP_RPC_TIMEOUT);
+    expect((hung as Error).message).toMatch(/held it suspended for \d+ ms of that time.*describe/);
+
+    // After the end, nothing waits: a stopped app times out at once. The end comes
+    // after the 400 ms suspension, as the fake helper continues an app it stopped
+    // when it is stopped itself, which could undo the SIGSTOP below.
+    await new Promise((r) => setTimeout(r, 300));
+    const windows = again!.end();
+    expect(windows.length).toBeGreaterThanOrEqual(1);
+    process.kill(pid, "SIGSTOP");
+    try {
+      const timedOut = await app.call("Echo", {}, { timeoutMs: 200 }).catch((e: unknown) => e);
+      expect((timedOut as Error).message).toBe(`${BUNDLE_ID} did not answer Echo within 200 ms.`);
+    } finally {
+      process.kill(pid, "SIGCONT");
+    }
+    // The first watch was replaced by the second: its end returns what it saw.
+    expect(watch!.end().length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("watches no suspensions with a helper that lacks the command", async () => {
+    const { pid } = await run("boot-device", { macosAppPath: appPath });
+    const app = await macosApp();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    vi.stubEnv("FAKE_HELPER_NO_WATCH", "1");
+    try {
+      await expect(app.watchSuspensions(pid)).resolves.toBeNull();
+    } finally {
+      stderr.mockRestore();
+    }
+    await expect(app.call("Echo")).resolves.toMatchObject({ params: {} });
+  });
+
   it("tells a call cut off by argent's own close apart from an app that quit", async () => {
     const { pid } = await run("boot-device", { macosAppPath: appPath });
     const urn = macosAppRef(resolveDevice(DEVICE_ID)).urn;
@@ -575,23 +698,165 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(helperRuns()).toBe(0);
   });
 
-  it("refuses a Mac Catalyst app, also as one slice of a universal binary", async () => {
+  it("starts a Mac Catalyst app as kind catalyst, which the tools that read the AppKit view tree refuse", async () => {
     const catalyst = writeBundle(path.join(root, `catalyst-${Date.now()}`), BUNDLE_ID);
-    // A 64-bit Mach-O header and one LC_BUILD_VERSION load command for platform 6, Mac Catalyst.
-    const thin = Buffer.alloc(56);
-    [0xfeedfacf, 0x0100000c, 0, 2, 1, 24].forEach((v, i) => thin.writeUInt32LE(v, i * 4));
-    [0x32, 24, 6].forEach((v, i) => thin.writeUInt32LE(v, 32 + i * 4));
-    const fat = Buffer.alloc(4096 + thin.length);
-    [0xcafebabe, 1, 0x0100000c, 0, 4096, thin.length].forEach((v, i) =>
-      fat.writeUInt32BE(v, i * 4)
+    const catalystExecutable = path.join(catalyst, "Contents", "MacOS", "FakeApp");
+    // Never executed: the fake helper runs Node under this path.
+    fs.writeFileSync(catalystExecutable, machO(PLATFORM_MACCATALYST));
+    // Not started yet: an AppKit app until argent reads the build.
+    expect(resolveDevice(DEVICE_ID).kind).toBe("app");
+
+    const booted = await run("boot-device", { macosAppPath: catalyst });
+    expect(booted).toMatchObject({ platform: "macos", id: DEVICE_ID, kind: "catalyst" });
+    expect(fakeAppPids(catalystExecutable)).toEqual([booted.pid]);
+    expect((await macosEntries()).map((d) => [d.id, d.kind])).toEqual([[DEVICE_ID, "catalyst"]]);
+    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({ catalyst: true });
+
+    const device = resolveDevice(DEVICE_ID);
+    expect(device).toEqual({ id: DEVICE_ID, platform: "macos", kind: "catalyst" });
+    expect(() =>
+      assertSupported("native-find-views", nativeFindViewsTool.capability, device)
+    ).toThrow(
+      "Tool 'native-find-views' is not supported on macos catalyst (a Mac Catalyst app's UIKit " +
+        "views are not in its AppKit view tree: use describe"
     );
-    thin.copy(fat, 4096);
-    for (const executable of [thin, fat]) {
-      fs.writeFileSync(path.join(catalyst, "Contents", "MacOS", "FakeApp"), executable);
-      await expect(run("boot-device", { macosAppPath: catalyst })).rejects.toThrow(
-        /is a Mac Catalyst \(UIKit\) app/
-      );
-    }
+    expect(() =>
+      assertSupported("launch-app", tools["launch-app"]!.capability, device)
+    ).not.toThrow();
+
+    expect(await run("launch-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
+      kind: "catalyst",
+    });
+    expect(await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
+      restarted: true,
+      kind: "catalyst",
+    });
+    expect(await run("boot-device", { macosAppPath: catalyst })).toMatchObject({
+      alreadyRunning: true,
+      kind: "catalyst",
+    });
+
+    // A new tool-server reads the kind from ~/.argent/macos-apps.json alone.
+    vi.resetModules();
+    const fresh = await import("../src/utils/device-info");
+    expect(fresh.resolveDevice(DEVICE_ID).kind).toBe("catalyst");
+
+    // The same bundle id rebuilt as an AppKit app: its next start decides.
+    fs.writeFileSync(catalystExecutable, machO(PLATFORM_MACOS));
+    expect(await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
+      kind: "app",
+    });
+    expect(resolveDevice(DEVICE_ID).kind).toBe("app");
+    expect(fresh.resolveDevice(DEVICE_ID).kind).toBe("app");
+    expect((await macosEntries()).map((d) => d.kind)).toEqual(["app"]);
+    expect(() =>
+      assertSupported("native-find-views", nativeFindViewsTool.capability, resolveDevice(DEVICE_ID))
+    ).not.toThrow();
+
+    // And back: also through boot-device with force.
+    fs.writeFileSync(catalystExecutable, machO(PLATFORM_MACCATALYST));
+    const forced = await run("boot-device", { macosAppPath: catalyst, force: true });
+    expect(forced).toMatchObject({ kind: "catalyst" });
+    expect(forced.alreadyRunning).toBeUndefined();
+    expect(resolveDevice(DEVICE_ID).kind).toBe("catalyst");
+  }, 20_000);
+
+  it("keeps the identifierForVendor that a Mac Catalyst app's library reports, which the React profiler matches", async () => {
+    const catalyst = writeBundle(path.join(root, `catalyst-ifv-${Date.now()}`), BUNDLE_ID);
+    fs.writeFileSync(
+      path.join(catalyst, "Contents", "MacOS", "FakeApp"),
+      machO(PLATFORM_MACCATALYST)
+    );
+    const vendorId = "3F3B75E2-A9D2-585E-9ADF-8A1405F6525A";
+
+    await run("boot-device", {
+      macosAppPath: catalyst,
+      macosAppArgs: [`--identifier-for-vendor=${vendorId}`],
+    });
+    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({
+      catalyst: true,
+      identifierForVendor: vendorId,
+    });
+    // A new tool-server reads it from ~/.argent/macos-apps.json alone.
+    vi.resetModules();
+    const fresh = await import("../src/utils/macos-app-kind");
+    expect(fresh.trackedMacosAppVendorId(BUNDLE_ID)).toBe(vendorId);
+
+    // Only an NSUUID string is kept; each start writes the record anew.
+    await run("restart-app", {
+      udid: DEVICE_ID,
+      bundleId: BUNDLE_ID,
+      launchArgs: ["--identifier-for-vendor=not-a-uuid"],
+    });
+    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({ catalyst: true });
+    expect(getTrackedMacosApp(BUNDLE_ID)!.identifierForVendor).toBeUndefined();
+    expect(fresh.trackedMacosAppVendorId(BUNDLE_ID)).toBeUndefined();
+  }, 20_000);
+
+  it("writes the identifierForVendor of a running Mac Catalyst app that its record lacks when argent connects again", async () => {
+    const catalyst = writeBundle(path.join(root, `catalyst-ifv-again-${Date.now()}`), BUNDLE_ID);
+    fs.writeFileSync(
+      path.join(catalyst, "Contents", "MacOS", "FakeApp"),
+      machO(PLATFORM_MACCATALYST)
+    );
+    const vendorId = "3F3B75E2-A9D2-585E-9ADF-8A1405F6525A";
+    const { pid } = await run("boot-device", {
+      macosAppPath: catalyst,
+      macosAppArgs: [`--identifier-for-vendor=${vendorId}`],
+    });
+    // The record of a tool-server that died before the handshake, which writes the vendor id.
+    const file = path.join(process.env.HOME!, ".argent", "macos-apps.json");
+    const [record] = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>[];
+    delete record!.identifierForVendor;
+    fs.writeFileSync(file, JSON.stringify([record]));
+    expect(getTrackedMacosApp(BUNDLE_ID)!.identifierForVendor).toBeUndefined();
+
+    expect(await run("launch-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
+      kind: "catalyst",
+    });
+    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({
+      pid,
+      catalyst: true,
+      identifierForVendor: vendorId,
+    });
+  }, 20_000);
+
+  it("reads a record without the catalyst field, which an older argent wrote, as an AppKit app", async () => {
+    const { pid } = await run("boot-device", { macosAppPath: appPath });
+    const file = path.join(process.env.HOME!, ".argent", "macos-apps.json");
+    const [record] = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>[];
+    expect(record).toMatchObject({ catalyst: false });
+    delete record!.catalyst;
+    fs.writeFileSync(file, JSON.stringify([record]));
+    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({ pid });
+    expect(resolveDevice(DEVICE_ID).kind).toBe("app");
+    expect((await macosEntries()).map((d) => [d.pid, d.kind])).toEqual([[pid, "app"]]);
+    expect(await run("launch-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
+      kind: "app",
+    });
+  });
+
+  it("refuses an iPad or iPhone app that runs on the Mac (Designed for iPad) with its own message", async () => {
+    const wrapper = path.join(root, `ipad-${Date.now()}`, "Pad.app");
+    const inner = path.join(wrapper, "Wrapper", "Pad.app");
+    fs.mkdirSync(inner, { recursive: true });
+    fs.writeFileSync(path.join(inner, "Info.plist"), "<plist/>");
+    fs.symlinkSync("Wrapper/Pad.app", path.join(wrapper, "WrappedBundle"));
+    const err = await run("boot-device", { macosAppPath: wrapper }).catch((e: unknown) => e);
+    expect((err as Error).message).toContain(
+      `${wrapper} is an iPad or iPhone app that runs on the Mac ("Designed for iPad")`
+    );
+    expect((err as Error).message).toMatch(/Build the app's Mac Catalyst target.*iOS simulator/);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.MACOS_APP_BUNDLE_INVALID,
+      error_kind: "unsupported",
+    });
+
+    // Without the link it is no wrapper: the message for any folder without Contents/Info.plist.
+    fs.rmSync(path.join(wrapper, "WrappedBundle"));
+    await expect(run("boot-device", { macosAppPath: wrapper })).rejects.toThrow(
+      "expected a .app directory with Contents/Info.plist"
+    );
     expect(helperRuns()).toBe(0);
   });
 
@@ -601,6 +866,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(restarted).toEqual({
       restarted: true,
       bundleId: BUNDLE_ID,
+      kind: "app",
       appPath: fs.realpathSync(appPath),
       args: [],
     });
@@ -759,6 +1025,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toEqual({
       restarted: true,
       bundleId: BUNDLE_ID,
+      kind: "app",
       appPath: fs.realpathSync(appPath),
       args: ARGS,
     });
@@ -814,6 +1081,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(await run("launch-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toEqual({
       launched: true,
       bundleId: BUNDLE_ID,
+      kind: "app",
       appPath: fs.realpathSync(appPath),
       args: [],
     });
@@ -876,6 +1144,13 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(pidAlive(second)).toBe(false);
     expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
   }, 20_000);
+
+  it("reports the spawn error when the helper has no library descriptor", async () => {
+    const app = await macosApp();
+    const err = await app.launch({ appPath, args: ["--spawn-emfile"] }).catch((e: unknown) => e);
+    expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_SPAWN_FAILED);
+    expect(err).toMatchObject({ cause: { code: "EMFILE" } });
+  });
 
   it.each([
     [
@@ -1244,6 +1519,41 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       fs.mkdirSync(path.join(app, "Contents", "Frameworks", framework), { recursive: true });
     expect((await inspectMacosApp(app)).chromium).toBe(kind);
   });
+
+  const catalystOnly = machO(PLATFORM_MACCATALYST);
+  const macosOnly = machO(PLATFORM_MACOS);
+  it.each([
+    ["a thin Mac Catalyst binary", true, catalystOnly],
+    [
+      "a universal Mac Catalyst binary",
+      true,
+      fat([catalystOnly, machO(PLATFORM_MACCATALYST, CPU_X86_64)]),
+    ],
+    ["a universal binary with 64-bit offsets", true, fat([catalystOnly], true)],
+    ["a universal binary whose second slice is Mac Catalyst", true, fat([macosOnly, catalystOnly])],
+    ["the same with 64-bit offsets", true, fat([macosOnly, catalystOnly], true)],
+    ["a thin macOS binary", false, macosOnly],
+    ["a universal macOS binary", false, fat([macosOnly, machO(PLATFORM_MACOS, CPU_X86_64)], true)],
+    ["an iOS binary", false, machO(PLATFORM_IOS)],
+    // Platform 6 in the same place of a load command that is not LC_BUILD_VERSION.
+    [
+      "a macOS binary with a 6 in another load command",
+      false,
+      machO(PLATFORM_MACOS, CPU_ARM64, [[0x19, 24, 6]]),
+    ],
+    ["a slice offset past the end of the file", false, fat([catalystOnly]).subarray(0, 64)],
+    // A Java class file starts with the same magic as a universal binary.
+    ["a Java class file", false, Buffer.from("cafebabe00000034000a0a", "hex")],
+    ["a shell script", false, Buffer.from("#!/bin/sh\nexit 0\n")],
+    ["an empty file", false, Buffer.alloc(0)],
+  ])("reads %s as Mac Catalyst: %s", async (_label, catalyst, executable) => {
+    const app = writeBundle(
+      path.join(root, `macho-${Math.random().toString(36).slice(2, 8)}`),
+      BUNDLE_ID
+    );
+    fs.writeFileSync(path.join(app, "Contents", "MacOS", "FakeApp"), executable);
+    expect((await inspectMacosApp(app)).catalyst).toBe(catalyst);
+  });
 });
 
 describe.skipIf(process.platform !== "darwin")("process checks outside a UTF-8 locale", () => {
@@ -1281,6 +1591,53 @@ describe.skipIf(process.platform !== "darwin")("process checks outside a UTF-8 l
     async () => {
       // launchd is root's: signalling it fails with EPERM.
       expect(await processRunsExecutable(1, "/sbin/launchd")).toBe(true);
+    }
+  );
+});
+
+describe.skipIf(process.platform !== "darwin")("readCodeSignature of a running process", () => {
+  let dir = "";
+  let running: ReturnType<typeof spawn> | undefined;
+  beforeEach(() => {
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-sig-")));
+    fs.writeFileSync(
+      path.join(dir, "gta.plist"),
+      '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>' +
+        `<key>${GTA}</key><true/></dict></plist>`
+    );
+  });
+  afterEach(() => {
+    running?.kill("SIGKILL");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A copy of this Node binary, signed ad hoc with or without get-task-allow. */
+  const build = (file: string, getTaskAllow: boolean) => {
+    fs.copyFileSync(process.execPath, file, fs.constants.COPYFILE_FICLONE);
+    const entitlements = getTaskAllow ? ["--entitlements", path.join(dir, "gta.plist")] : [];
+    execFileSync("codesign", ["--force", "--sign", "-", ...entitlements, file], {
+      stdio: "ignore",
+    });
+  };
+
+  it.each([true, false])(
+    "reads the process's own entitlements (get-task-allow %s) after the file at its path is replaced",
+    async (launchedWith) => {
+      const executable = path.join(dir, "app");
+      build(executable, launchedWith);
+      running = spawn(executable, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      const pid = running.pid!;
+      await waitUntil(() => pidAlive(pid));
+      // A rebuild: the process keeps its old file.
+      build(path.join(dir, "next"), !launchedWith);
+      fs.renameSync(path.join(dir, "next"), executable);
+
+      expect(await readCodeSignature(pid)).toMatchObject({
+        entitlements: { getTaskAllow: launchedWith },
+      });
+      expect(await readCodeSignature(executable)).toMatchObject({
+        entitlements: { getTaskAllow: !launchedWith },
+      });
     }
   );
 });

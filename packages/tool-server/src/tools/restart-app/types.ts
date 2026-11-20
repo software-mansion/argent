@@ -2,6 +2,7 @@ import type {
   NativeDevtoolsApi,
   NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
+import type { MacosAppKind } from "../../utils/macos-app-kind";
 
 export interface RestartAppParams {
   udid: string;
@@ -16,6 +17,8 @@ export type RestartAppResult =
   | {
       restarted: boolean;
       bundleId: string;
+      /** Mac apps: an AppKit app or a Mac Catalyst app, as list-devices names it. */
+      kind?: MacosAppKind;
       /** Mac apps and Chromium: the `.app`, or the Electron app path, the new process was started from. */
       appPath?: string;
       /** Mac apps and Chromium: the arguments the new process was started with (Chromium: the boot's `electronArgs`). */

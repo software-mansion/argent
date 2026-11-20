@@ -274,7 +274,7 @@ describe("describe tool on a Mac app", () => {
     const lib = fakeMacosLibrary();
     const registry = macosRegistry(lib.api);
     const tool = createDescribeTool(registry);
-    expect(tool.capability?.macos).toEqual({ app: true });
+    expect(tool.capability?.macos).toEqual({ app: true, catalyst: true });
     const result = await tool.execute({}, { udid: MACOS_DEVICE_ID });
     expect(result.source).toBe("macos-devtools");
     expect(result.description).toContain('AXButton "Tap me" id="appkit.button"');

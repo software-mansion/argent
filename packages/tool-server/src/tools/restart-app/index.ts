@@ -31,7 +31,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 const zodSchema = z.object({
@@ -75,7 +75,8 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     longRunning: true,
     description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>macOS, </flag:macos-apps>Vega, or Chromium.
 Use when you need a clean in-memory state without a full reinstall. On Chromium it relaunches an Electron app that this tool-server session booted (boot-device, or an e2e run), on the same port and device id; any other Chromium runtime cannot be restarted. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).<flag:macos-apps> On a Mac app it quits the app and starts the same .app again in the background.</flag:macos-apps>
-Returns { restarted, bundleId, appPath?, args?, <flag:macos-apps>note?, </flag:macos-apps>networkCapture? }. networkCapture (Android) says whether native network capture followed the launch. appPath and args are the app that runs and its arguments: <flag:macos-apps>on a Mac app the .app, and </flag:macos-apps>on Chromium the path and \`electronArgs\` of the boot it repeats.<flag:macos-apps> note (Mac app) warns about the start, for example a force-quit or no window.</flag:macos-apps> Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.`,
+Returns { restarted, bundleId, <flag:macos-apps>kind?, </flag:macos-apps>appPath?, args?, <flag:macos-apps>note?, </flag:macos-apps>networkCapture? }. networkCapture (Android) says whether native network capture followed the launch. appPath and args are the app that runs and its arguments, to confirm the restarted build: <flag:macos-apps>on a Mac app the .app, and </flag:macos-apps>on Chromium the path and \`electronArgs\` of the boot it repeats. Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.<flag:macos-apps>
+For Mac apps, kind is 'catalyst' or 'app'. Check note for warnings such as a force-quit or no window.</flag:macos-apps>`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

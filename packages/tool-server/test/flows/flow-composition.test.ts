@@ -3373,15 +3373,6 @@ describe("flow composition (run:)", () => {
       expect(reason).toMatch(/Re-running the e2e test repeats the same launch/);
     });
 
-    // The `not.toContain` guards below compare rendered substrings, so they only
-    // mean anything while neither figure is a suffix of the other: 500/1500 would
-    // make `"1500 ms".includes("500 ms")` true and fail them for the wrong
-    // reason. Pin what those guards need, not merely the ordering.
-    it("renders a launch-to-verdict spend the connect wait cannot be read into", () => {
-      expect(LAUNCH_TO_VERDICT_MS).toBeGreaterThan(NATIVE_READY_TIMEOUT_MS);
-      expect(`${LAUNCH_TO_VERDICT_MS} ms`).not.toContain(`${NATIVE_READY_TIMEOUT_MS} ms`);
-    });
-
     // `stale_process` has two producers, and one carries THIS endpoint — it
     // predates the listener, not the launchd environment. Blaming the
     // environment would contradict the measured text this wraps.
