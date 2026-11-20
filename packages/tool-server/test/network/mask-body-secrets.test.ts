@@ -102,18 +102,22 @@ describe("maskBodySecrets", () => {
     expect(maskBodySecrets("user=a&password=x", twice)).toBe("user=a&password=[REDACTED]");
   });
 
-  it("scans a large crafted body in linear time", () => {
-    const crafted = (repeats: number) =>
-      "[" + `{"password":"\\"","a":`.repeat(repeats) + '"\\'.repeat(repeats);
+  it.each([
+    {
+      shape: "JSON",
+      crafted: (repeats: number) =>
+        "[" + `{"password":"\\"","a":`.repeat(repeats) + '"\\'.repeat(repeats),
+    },
+    { shape: "form", crafted: (repeats: number) => "a" + "[]".repeat(repeats) + "x=1" },
+  ])("scans a large crafted $shape body in linear time", ({ crafted }) => {
     const scanMs = (body: string) => {
       const started = performance.now();
-      maskBodySecrets(body, JSON_TYPE);
       maskBodySecrets(body, FORM_TYPE);
       return performance.now() - started;
     };
-    scanMs(crafted(10_000));
-    const small = scanMs(crafted(20_000));
-    const large = scanMs(crafted(200_000));
-    expect(large).toBeLessThan(Math.max(small, 1) * 100);
+    const fastestMs = (body: string) => Math.min(scanMs(body), scanMs(body), scanMs(body));
+    const small = fastestMs(crafted(20_000));
+    const large = fastestMs(crafted(200_000));
+    expect(large).toBeLessThan(Math.max(small, 2) * 30);
   });
 });

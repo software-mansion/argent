@@ -54,10 +54,21 @@ function maskFormBody(body: string): string {
 
 /** The last part of a form field name, as in Rails' `user[password]` or ASP.NET's `Input.Password`. */
 function formFieldName(rawKey: string): string {
-  const key = decodeFormKey(rawKey).replace(/(\[\d*\])+$/, "");
+  const key = withoutArraySuffix(decodeFormKey(rawKey));
   const open = key.lastIndexOf("[");
   const name = open !== -1 && key.endsWith("]") ? key.slice(open + 1, -1) : key;
   return name.slice(name.lastIndexOf(".") + 1);
+}
+
+function withoutArraySuffix(key: string): string {
+  let end = key.length;
+  while (key[end - 1] === "]") {
+    let open = end - 2;
+    while (open >= 0 && key[open]! >= "0" && key[open]! <= "9") open--;
+    if (key[open] !== "[") break;
+    end = open;
+  }
+  return key.slice(0, end);
 }
 
 function decodeFormKey(rawKey: string): string {
@@ -102,7 +113,7 @@ function maskJsonBody(body: string): string {
 function jsonKeyName(rawKey: string): string {
   if (!rawKey.includes("\\")) return rawKey;
   try {
-    return String(JSON.parse(`"${rawKey}"`));
+    return JSON.parse(`"${rawKey}"`) as string;
   } catch {
     return rawKey;
   }
