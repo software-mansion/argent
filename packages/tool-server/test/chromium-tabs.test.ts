@@ -127,12 +127,29 @@ describe("TabsManager", () => {
 
     await mgr.open({ url: "https://x.test" });
 
-    expect(order).toEqual(["activated", "Page.navigate", "Page.resetNavigationHistory"]);
+    await vi.waitFor(() =>
+      expect(order).toEqual(["activated", "Page.navigate", "Page.resetNavigationHistory"])
+    );
     expect(cdp.send).toHaveBeenCalledWith(
       "Page.navigate",
       { url: "https://x.test", transitionType: "typed" },
       expect.any(Number)
     );
+  });
+
+  it("open() retries the history reset until the load has committed", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+    const reset = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Not attached to an active page"))
+      .mockResolvedValue({});
+    cdp.send.mockImplementation(async (method: string) =>
+      method === "Page.resetNavigationHistory" ? reset() : {}
+    );
+
+    await mgr.open({ url: "https://x.test" });
+
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledTimes(2));
   });
 
   it("open() returns without waiting for the page to answer", async () => {
