@@ -78,6 +78,15 @@ On an iOS simulator:
 - Unfolded, the UI is landscape. `rotate` sets the orientation of the device, not of the UI. `Portrait` gives a landscape UI.
 - If Argent cannot find the active panel, it uses the cover panel. The tool result then has a warning.
 
+To move a full-screen app into Split View on an open iPhone Duo simulator, use one `gesture-custom` call:
+
+1. Start with the app full screen and the UI in landscape.
+2. Set `edge: "bottom"` and `interpolate: 12`. Send `Down` at (0.5, 1).
+3. Move to (0.5, 0.5) over 280 ms. Hold there with a second `Move` after 300 ms.
+4. Move to x = 0.14 for the left half or x = 0.86 for the right half over 320 ms.
+5. Keep y = 0.5. Send `Up` at the same point after 200 ms.
+6. Check that the app occupies the requested half and the Home Screen occupies the other half.
+
 On an Android emulator:
 
 - The result gives `deviceState` (`CLOSED`, `HALF_OPENED` or `OPENED`) and the matching `posture`.
@@ -125,7 +134,7 @@ On a physical iPhone, `describe` includes a web sign-in sheet or an in-app Safar
 | `screen-recording-start` | Start recording the screen to an h264 mp4                                          |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                                          |
 
-`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. On a local iOS simulator, `gesture-custom` accepts `edge` for a system gesture. Use `top`, `right`, `bottom`, or `left` in upright screen coordinates. Send one finger with `Down`, optional `Move` events, and `Up`. After a simulator-server restart, the first `Down` can take up to 35 seconds. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
 
 Through the MCP server, an interaction tool and `await-ui-element` return a screenshot and the element tree after the screen stops changing. These limits apply:
 
@@ -411,6 +420,20 @@ On a Mac app, pass `modifiers` to `gesture-tap` as a list of keys from `control`
 #### Screenshots and scrolling
 
 Use `scale: 1.0` for one pixel per point. By default, screenshots downscale windows larger than 768 points on the longest side, to at least 0.6 pixels per point. The minimum explicit scale is `0.1`. Mac apps ignore `ARGENT_SCREENSHOT_SCALE` and `rotation`.
+
+#### Rotated devices
+
+All coordinates use the UI as the user sees it, also when the UI is landscape or upside down. On an iOS simulator, Argent turns these surfaces to the orientation of the UI:
+
+- Screenshots
+- `describe` frames
+- The points of the native view tools
+- The tap points of `debugger-component-tree`
+- The coordinates of the gesture tools
+
+Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `button`, `launch-app`, `restart-app`, `open-url`, `terminate-app` and `reinstall-app`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
+
+If Argent cannot read the orientation, the tool result has a note. For a live capture of `screenshot-diff`, the note is in the summary. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
 
 Scrolling targets the nearest scrollable content under the point. Web content scrolls first; an enclosing native scroll view can take over at the page boundary. The call fails if no eligible content can scroll.
 

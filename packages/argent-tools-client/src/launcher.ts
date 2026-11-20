@@ -297,6 +297,12 @@ function killSpawnedChild(child: ReturnType<typeof spawn>, pid: number): void {
   }
 }
 
+export function resolveToolsServerNode(): string {
+  // Bun, Deno and Electron need a separate Node executable for the tool-server.
+  const { bun, deno, electron } = process.versions;
+  return !(bun || deno || electron) && fs.existsSync(process.execPath) ? process.execPath : "node";
+}
+
 export function spawnToolsServer(
   paths: ToolsServerPaths,
   port: number,
@@ -311,11 +317,7 @@ export function spawnToolsServer(
       logFd = fs.openSync("/dev/null", "w");
     }
 
-    // Reuse the running Node binary while it still exists; Bun, Deno and
-    // Electron (whose execPath launches the app itself) fall back to `node` on PATH.
-    const { bun, deno, electron } = process.versions;
-    const nodeBin =
-      !(bun || deno || electron) && fs.existsSync(process.execPath) ? process.execPath : "node";
+    const nodeBin = resolveToolsServerNode();
     const child = spawn(nodeBin, [paths.bundlePath, "start"], {
       detached: true,
       stdio: ["ignore", "pipe", logFd],

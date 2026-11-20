@@ -1,6 +1,6 @@
 ---
 name: argent-screen-recording
-description: Record a video of an iOS simulator or Android emulator/device screen using argent MCP tools. Use when the user asks to record the screen, capture a video of a flow, interaction, or animation, produce a screen recording, or document app behavior as a video clip.
+description: Record a video of an iOS simulator, cabled iPhone, or Android emulator/device screen using argent MCP tools. Use when the user asks to record the screen, capture a video of a flow, interaction, or animation, produce a screen recording, or document app behavior as a video clip.
 ---
 
 `screen-recording-start` and `screen-recording-stop` carry the options (`timeLimitSeconds`, `trimStatic`, `showTouches`) and the result fields. One recording per device at a time; different devices can record concurrently.
@@ -24,7 +24,8 @@ A forgotten recording keeps capturing until its `timeLimitSeconds` cap fires, ho
 
 ## 3. Platform notes and limits
 
-- **Recordable**: iOS simulators (local and remote `remote:`), Android emulators and physical Android devices. **Unsupported**: physical iPhones, tvOS simulators, Chromium apps, Vega/Fire TV and HarmonyOS. For a still frame use `screenshot`; for a replayable interaction script use `argent-create-e2e`.
+- **Recordable**: iOS simulators (local and remote `remote:`), physical iPhones on a USB cable, Android emulators and physical Android devices. **Unsupported**: iPhones reachable only over Wi-Fi, tvOS simulators, Chromium apps, Vega/Fire TV and HarmonyOS. For a still frame use `screenshot`; for a replayable interaction script use `argent-create-e2e`.
+- **Physical iPhone**: needs `state: "connected"` with `transportType: "wired"` in `list-devices`. The first recording on a Mac compiles a helper (a few seconds) and macOS asks the user to allow camera access for `ios-screen-stream`; tell the user to click Allow. No touch markers are drawn.
 - **One size per video**: the video keeps the size of the screen at the start; a later size change is letterboxed. On a foldable simulator, start recording on the panel you need at full size.
 - **Remote (`remote:`) simulators**: the video keeps the screen's portrait orientation, so a device in landscape plays sideways.
 - **Android**: secure screens (DRM, some password fields) come out black.

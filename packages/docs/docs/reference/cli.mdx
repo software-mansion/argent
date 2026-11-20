@@ -37,3 +37,6 @@ Run `argent --help` for the full set of options, and `argent --version` to print
 `argent update` and `argent uninstall` use the package manager that installed the global `argent` on `PATH`: npm, pnpm, bun or Yarn classic.
 
 `argent uninstall` exits with code `1` when a package removal fails, or when a global `argent` is still on `PATH` after the removal.
+
+`argent server start` uses the same Node.js executable as the CLI in both foreground and detached mode.
+If that executable no longer exists, or the CLI runs under Bun, Deno or Electron, Argent uses `node` from `PATH`.
