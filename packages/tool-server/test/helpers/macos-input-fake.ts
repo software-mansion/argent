@@ -1,17 +1,23 @@
 import { vi } from "vitest";
 import { isFlagEnabled } from "@argent/configuration-core";
-import { Registry } from "@argent/registry";
-import { macosAppRef, type MacosAppApi } from "../../src/blueprints/macos-app";
+import { FAILURE_CODES, Registry } from "@argent/registry";
+import {
+  macosAppRef,
+  type MacosAppApi,
+  type MacosAppConnection,
+} from "../../src/blueprints/macos-app";
 import { resolveDevice } from "../../src/utils/device-info";
+import { macosFailure } from "../../src/utils/macos-apps";
 
 export const MAC_ID = "macos-app-com.example.Probe";
 export const MAC_BUNDLE_ID = "com.example.Probe";
+export const MAC_PID = 4321;
 export const MAC_URN = macosAppRef(resolveDevice(MAC_ID)).urn;
 
 export interface LibraryCall {
   method: string;
   params: Record<string, unknown>;
-  opts?: { timeoutMs?: number; runLate?: boolean };
+  opts?: { timeoutMs?: number; runLate?: boolean; connection?: MacosAppConnection };
 }
 
 type Handlers = Record<string, (params: Record<string, unknown>) => unknown>;
@@ -20,17 +26,33 @@ type Handlers = Record<string, (params: Record<string, unknown>) => unknown>;
  * A stand-in for the in-app library of a Mac app: `handlers` answer by method,
  * anything else answers `{}`. Each reply resolves a microtask later, and
  * `overlapped()` says whether a request went out before the previous one
- * answered.
+ * answered. `connect()` hands out one connection, which `closeConnection()`
+ * closes: a call bound to it then fails without reaching the handlers.
  */
 export function fakeMacosApp(handlers: Handlers = {}) {
   const calls: LibraryCall[] = [];
   let pending = 0;
   let overlapped = false;
+  let open = true;
+  const connection: MacosAppConnection = {
+    pid: MAC_PID,
+    get isOpen() {
+      return open;
+    },
+  };
   const call = async (
     method: string,
     params: Record<string, unknown> = {},
-    opts?: { timeoutMs?: number; runLate?: boolean }
+    opts?: LibraryCall["opts"]
   ) => {
+    if (opts?.connection && !opts.connection.isOpen) {
+      throw macosFailure(
+        `The connection to ${MAC_BUNDLE_ID} that ${method} was bound to has closed.`,
+        FAILURE_CODES.MACOS_APP_CONNECTION_LOST,
+        "macos_app_connection",
+        "unknown"
+      );
+    }
     if (pending > 0) overlapped = true;
     pending++;
     calls.push({ method, params, ...(opts ? { opts } : {}) });
@@ -41,8 +63,20 @@ export function fakeMacosApp(handlers: Handlers = {}) {
       pending--;
     }
   };
-  const app = { bundleId: MAC_BUNDLE_ID, call: vi.fn(call) } as unknown as MacosAppApi;
-  return { app, calls, overlapped: () => overlapped };
+  const app = {
+    bundleId: MAC_BUNDLE_ID,
+    call: vi.fn(call),
+    connect: vi.fn(async () => connection),
+  } as unknown as MacosAppApi;
+  return {
+    app,
+    calls,
+    connection,
+    closeConnection: () => {
+      open = false;
+    },
+    overlapped: () => overlapped,
+  };
 }
 
 /**

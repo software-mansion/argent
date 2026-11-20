@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import * as os from "os";
 import * as path from "path";
 import { promises as fs } from "fs";
@@ -5,12 +6,24 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
 import { describeReapedSession, takeReapedSession } from "../../utils/reaped-sessions";
 
-/** Where a capture writes its video: a new file in `dir`, named after the device and the time. */
+/**
+ * The most of the device id a video's file name holds. A Mac app's bundle id
+ * has no length limit, and a file name at most 255 bytes.
+ */
+const MAX_DEVICE_ID_IN_NAME = 80;
+
+/**
+ * Where a capture writes its video: a new file in `dir`, named after the
+ * device and the time. A longer device id is cut and ends in a hash of the
+ * whole id, so two long ids with the same start still get different names.
+ */
 export function recordingOutputPath(deviceId: string, dir: string = os.tmpdir()): string {
-  return path.join(
-    dir,
-    `argent-screen-recording-${deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
-  );
+  let id = deviceId.replace(/[^A-Za-z0-9._-]/g, "-");
+  if (id.length > MAX_DEVICE_ID_IN_NAME) {
+    const hash = createHash("sha256").update(deviceId).digest("hex").slice(0, 12);
+    id = `${id.slice(0, MAX_DEVICE_ID_IN_NAME - hash.length - 1)}-${hash}`;
+  }
+  return path.join(dir, `argent-screen-recording-${id}-${Date.now()}.mp4`);
 }
 
 export interface StartRecordingResult {

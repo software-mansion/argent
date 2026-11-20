@@ -67,7 +67,7 @@ Five details differ from a simulator recording:
 - Argent cannot record a minimized window or a window that is not fully on one display. When this occurs during a recording, the video holds the last frame, and the stop call returns a warning.
 - The recording runs in the app and uses some of its processor time. Do not record while the agent profiles the same app.
 
-If the app quits or restarts during a recording, Argent loses the recording. When the agent disconnects Argent from the app during a recording, Argent first asks the app to write the video, and the next stop call says where it is.
+If the app quits or restarts during a recording, or another Argent tool-server connects to the app, Argent loses the recording. When the agent disconnects Argent from the app during a recording, Argent first asks the app to write the video, and the next stop call says where it is.
 
 ## Where the video lands
 

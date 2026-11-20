@@ -52,6 +52,8 @@ export interface RemoteCapture {
 
 /** What the app said about a Mac app's recording when it ended it. */
 export interface EndedMacosRecording {
+  /** Size of the video at the session's `outputFile`. */
+  sizeBytes: number;
   /** Length of the video. */
   durationMs: number;
   /** Real elapsed recording time. */
@@ -70,9 +72,9 @@ export interface EndedMacosRecording {
  */
 export interface MacosCapture {
   /**
-   * Ends the recording in the app, which writes the video to the session's
-   * `outputFile`, once: the first caller does the work, every later one gets
-   * the same promise.
+   * Ends the recording in the app, which writes the video to a file of its
+   * own, and copies it to the session's `outputFile`, once: the first caller
+   * does the work, every later one gets the same promise.
    */
   end: () => Promise<EndedMacosRecording>;
 }
@@ -190,16 +192,21 @@ const DISPOSE_REAP_MS = 1_000;
 // How long a teardown waits for a recording made elsewhere to end. A remote
 // release ends the runner-side recording and downloads it, which can take
 // minutes; once the stop has reached the runner it finishes there anyway and
-// the recording is kept for `sim-remote screen-record fetch`. A Mac app
-// usually writes its video out within a second.
+// the recording is kept for `sim-remote screen-record fetch`.
 const DISPOSE_RELEASE_GRACE_MS = 5_000;
+// A Mac app ends its recording over the connection that started it, which
+// the teardown closes next, and the app drops a video it is still writing when
+// that connection closes. It usually writes the video out within a second.
+// The wait stays below the 30 s after which the MCP adapter sends a call
+// again, so a stop-simulator-server is answered once.
+const MACOS_DISPOSE_GRACE_MS = 20_000;
 
-async function endWithinGrace(end: () => Promise<unknown>): Promise<void> {
+async function endWithinGrace(end: () => Promise<unknown>, graceMs: number): Promise<void> {
   let grace: NodeJS.Timeout | undefined;
   await Promise.race([
     end().catch(() => {}),
     new Promise<void>((resolve) => {
-      grace = setTimeout(resolve, DISPOSE_RELEASE_GRACE_MS);
+      grace = setTimeout(resolve, graceMs);
     }),
   ]);
   clearTimeout(grace);
@@ -354,7 +361,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         if (state.remote) {
           const { end } = state.remote;
           state.remote = null;
-          await endWithinGrace(end);
+          await endWithinGrace(end, DISPOSE_RELEASE_GRACE_MS);
         }
 
         // A Mac app keeps recording until its time limit; ending it now has
@@ -362,7 +369,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         if (state.macos) {
           const { end } = state.macos;
           state.macos = null;
-          await endWithinGrace(end);
+          await endWithinGrace(end, MACOS_DISPOSE_GRACE_MS);
         }
 
         // The overlay is sim-server global state that must not outlive the

@@ -271,6 +271,7 @@ export function fakeMacosLibrary(
       }
       throw new Error(`fake library: unexpected method ${method}`);
     },
+    connect: async () => ({ pid: 4242, isOpen: true }),
     launch: async () => {
       throw new Error("fake library: launch");
     },

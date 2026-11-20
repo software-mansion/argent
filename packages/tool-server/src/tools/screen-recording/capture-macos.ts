@@ -1,7 +1,7 @@
 import * as os from "os";
-import { promises as fs } from "fs";
+import { constants as fsConstants, promises as fs } from "fs";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
-import type { MacosAppApi } from "../../blueprints/macos-app";
+import type { MacosAppApi, MacosAppConnection } from "../../blueprints/macos-app";
 import type {
   EndedMacosRecording,
   MacosCapture,
@@ -18,7 +18,6 @@ import {
   assertNoActiveRecording,
   assertNotDisposed,
   assertStoppableSession,
-  statNonEmptyOutput,
   type StartRecordingResult,
   type StopRecordingFile,
   recordingOutputPath,
@@ -33,7 +32,13 @@ import { WATERMARK_PNG_BASE64 } from "./watermark-asset";
  * no ffmpeg on the host. It encodes the mp4, stamps the watermark, cuts still
  * stretches and draws the pointer while it records, so the capture is two
  * calls with a timer between them, as on a remote simulator: the stop has the
- * app write the finished video to the path this start chose.
+ * app write the finished video to a path this start chose, then copies it to
+ * the session's `outputFile`, which the app cannot reach.
+ *
+ * The library drops a recording when the connection that started it closes,
+ * so every later call of a recording goes over that connection only: on a new
+ * one it would close the connection of whoever connected to the app since,
+ * another tool-server's recording included.
  */
 
 /** A start checks that the window can be recorded before it answers. */
@@ -53,17 +58,145 @@ interface MacosStopReply {
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 /**
- * Where the app writes the video: the host's temporary directory, resolved,
- * since a sandboxed app is granted the resolved path (/var is /private/var).
+ * Where the video ends up: the host's temporary directory, resolved, since a
+ * sandboxed app is granted the resolved path of its file (/var is /private/var).
  */
 async function outputPath(deviceId: string): Promise<string> {
   return recordingOutputPath(deviceId, await fs.realpath(os.tmpdir()));
 }
 
-/** A sandboxed app may write only the file it is given access to. */
-async function sandboxTokens(app: MacosAppApi, file: string): Promise<{ tokens?: string[] }> {
-  if (!getTrackedMacosApp(app.bundleId)?.sandboxed) return {};
+/**
+ * Where the app writes the video, next to `outputFile`. The app can still
+ * write this path after the stop, so the video is copied out of it.
+ */
+function appOutputPath(outputFile: string): string {
+  return outputFile.replace(/\.mp4$/, ".from-app.mp4");
+}
+
+/**
+ * A sandboxed app may write only the file it is given access to. Read from
+ * the record of the process the start goes to: a launch writes the record
+ * before the app connects, and `connect()` waits for a launch in flight.
+ */
+async function sandboxTokens(
+  app: MacosAppApi,
+  connection: MacosAppConnection,
+  file: string
+): Promise<{ tokens?: string[] }> {
+  const tracked = getTrackedMacosApp(app.bundleId);
+  if (tracked?.pid !== connection.pid) {
+    throw macosFailure(
+      `argent has no record of the ${app.bundleId} process it is connected to (pid ` +
+        `${connection.pid}), so it cannot tell whether the app's sandbox lets it write the ` +
+        `video. Run restart-app, then start the recording again.`,
+      FAILURE_CODES.MACOS_APP_FILE_ACCESS_FAILED,
+      "screen_recording_macos_start",
+      "unknown"
+    );
+  }
+  if (!tracked.sandboxed) return {};
   return { tokens: [await issueSandboxExtension(file)] };
+}
+
+/** The app dropped the recording: the connection that started it closed. */
+function recordingLost(bundleId: string, cause?: unknown): FailureError {
+  return new FailureError(
+    `The recording in ${bundleId} was lost: the connection that started it closed, and the ` +
+      `app drops a recording then. The app quit or restarted, stop-simulator-server closed ` +
+      `the connection, or another tool-server connected to the app. Start a new recording.`,
+    {
+      error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
+      failure_stage: "screen_recording_macos_stop",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    },
+    cause instanceof Error ? { cause } : undefined
+  );
+}
+
+function outputRefused(detail: string, cause?: unknown): FailureError {
+  return new FailureError(
+    `The recording ended but ${detail}.`,
+    {
+      error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
+      failure_stage: "screen_recording_macos_stop",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    },
+    cause instanceof Error ? { cause } : undefined
+  );
+}
+
+/** Copied in chunks of this size, so a long video never sits in memory whole. */
+const COPY_CHUNK_BYTES = 1 << 20;
+
+/**
+ * Copies the video the app wrote at `from` to `to`, a new file, and removes
+ * `from` whatever the outcome. `from` is opened without following a symlink
+ * and without blocking on a FIFO, and only a regular file with one link is
+ * read, through that descriptor: the app can replace the path at any time, so
+ * nothing that it points at is trusted, and no message names it. At most the
+ * size seen at the open is copied.
+ */
+async function copyAppOutput(from: string, to: string): Promise<number> {
+  try {
+    return await copyFromDescriptor(from, to);
+  } finally {
+    await fs.rm(from, { force: true }).catch(() => {});
+  }
+}
+
+async function copyFromDescriptor(from: string, to: string): Promise<number> {
+  let src: fs.FileHandle;
+  try {
+    src = await fs.open(
+      from,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    throw outputRefused(
+      code === "ENOENT"
+        ? `the app wrote no video`
+        : code === "ELOOP"
+          ? `the app's video file is a symbolic link`
+          : `the app's video file could not be opened (${code ?? "unknown error"})`,
+      err
+    );
+  }
+  let copied = 0;
+  try {
+    const st = await src.stat();
+    if (!st.isFile() || st.nlink !== 1) {
+      throw outputRefused(`the app's video file is not a plain file with one link`);
+    }
+    if (st.size === 0) throw outputRefused(`the app's video file is empty`);
+    const dst = await fs.open(to, "wx");
+    try {
+      const chunk = Buffer.allocUnsafe(Math.min(COPY_CHUNK_BYTES, st.size));
+      while (copied < st.size) {
+        const { bytesRead } = await src.read(
+          chunk,
+          0,
+          Math.min(chunk.length, st.size - copied),
+          copied
+        );
+        if (bytesRead === 0) break;
+        await dst.write(chunk, 0, bytesRead);
+        copied += bytesRead;
+      }
+      // Emptied since the open.
+      if (copied === 0) throw outputRefused(`the app's video file is empty`);
+    } catch (err) {
+      await dst.close().catch(() => {});
+      await fs.rm(to, { force: true }).catch(() => {});
+      throw err;
+    }
+    await dst.close();
+  } finally {
+    await src.close().catch(() => {});
+  }
+  return copied;
 }
 
 /**
@@ -99,27 +232,33 @@ export async function startMacosCapture(
   // start or stop is rejected instead of racing this one; cleared on every exit.
   api.startPending = true;
   let outputFile: string;
+  let appFile: string;
+  let connection: MacosAppConnection | undefined;
   try {
     assertNotDisposed(api, "screen_recording_start");
+    connection = await app.connect();
     outputFile = await outputPath(api.deviceId);
-    const tokens = await sandboxTokens(app, outputFile);
+    appFile = appOutputPath(outputFile);
+    const tokens = await sandboxTokens(app, connection, appFile);
     await app.call(
       "ScreenRecording.start",
       {
-        outputPath: outputFile,
+        outputPath: appFile,
         timeLimitSeconds: params.timeLimitSeconds,
         trimStatic: params.trimStatic,
         showPointer: params.showTouches,
         ...(params.watermark ? { watermark: WATERMARK_PNG_BASE64 } : {}),
         ...tokens,
       },
-      { timeoutMs: START_TIMEOUT_MS }
+      { timeoutMs: START_TIMEOUT_MS, connection }
     );
     // A dispose while the app was starting found nothing to end, so the
     // recording it left running is ended here.
     if (api.disposed) {
-      await app.call("ScreenRecording.stop", {}, { timeoutMs: STOP_TIMEOUT_MS }).catch(() => {});
-      await fs.rm(outputFile, { force: true }).catch(() => {});
+      await app
+        .call("ScreenRecording.stop", {}, { timeoutMs: STOP_TIMEOUT_MS, connection })
+        .catch(() => {});
+      await fs.rm(appFile, { force: true }).catch(() => {});
       assertNotDisposed(api, "screen_recording_start");
     }
   } catch (err) {
@@ -127,8 +266,20 @@ export async function startMacosCapture(
     // A teardown closes the app's connection after it ends the session, so a
     // start it cut short reports the teardown, not the closed connection.
     assertNotDisposed(api, "screen_recording_start");
+    if (connection && !connection.isOpen) {
+      throw macosFailure(
+        `The connection to ${app.bundleId} closed before the recording started, so nothing ` +
+          `was recorded: the app quit or restarted, or another tool-server connected to it. ` +
+          `Start the recording again.`,
+        FAILURE_CODES.MACOS_APP_CONNECTION_LOST,
+        "screen_recording_macos_start",
+        "unknown",
+        err
+      );
+    }
     throw asOutdatedLibrary(err, app.bundleId) ?? err;
   }
+  const bound = connection;
 
   // The capture is live: this recording owns the session now. Stamped only on
   // success, so a failed start never burns a previous capture's recovery.
@@ -150,7 +301,7 @@ export async function startMacosCapture(
   const macos: MacosCapture = {
     end: () => {
       if (!ended) {
-        ended = endInApp(app);
+        ended = endInApp(app, bound, appFile, outputFile);
         // The cap fires this with nobody awaiting; a failure is for the stop
         // that awaits it later, not an unhandled rejection now.
         ended.catch(() => {});
@@ -182,14 +333,56 @@ export async function startMacosCapture(
   return { status: "recording", timeLimitSeconds: params.timeLimitSeconds, outputFile };
 }
 
-/** Ends the recording in the app, which writes the video to the start's path. */
-async function endInApp(app: MacosAppApi): Promise<EndedMacosRecording> {
-  const reply = await app.call<MacosStopReply>(
-    "ScreenRecording.stop",
-    {},
-    { timeoutMs: STOP_TIMEOUT_MS }
-  );
+/**
+ * Ends the recording in the app over the connection that started it, which
+ * has the app write the video to `appFile`, then copies it to `outputFile`.
+ */
+async function endInApp(
+  app: MacosAppApi,
+  connection: MacosAppConnection,
+  appFile: string,
+  outputFile: string
+): Promise<EndedMacosRecording> {
+  if (!connection.isOpen) throw recordingLost(app.bundleId);
+  let reply: MacosStopReply;
+  try {
+    reply = await app.call<MacosStopReply>(
+      "ScreenRecording.stop",
+      {},
+      { timeoutMs: STOP_TIMEOUT_MS, connection }
+    );
+  } catch (err) {
+    const lost = !connection.isOpen;
+    // What the app wrote before the failure is copied out of its path, as a
+    // finished video is, so no error names a file the app can still change.
+    // That includes a video the app finished just before its connection
+    // closed, whose answer never arrived.
+    const salvaged = await copyAppOutput(appFile, outputFile).then(
+      () => true,
+      () => false
+    );
+    if (!salvaged) throw lost ? recordingLost(app.bundleId, err) : err;
+    const signal = getFailureSignal(err);
+    const reason = lost
+      ? `The connection to ${app.bundleId} closed as the recording ended, so the app's answer ` +
+        `did not arrive.`
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    throw new FailureError(
+      `${reason} What the app wrote before the failure is at ${outputFile}; it may be incomplete.`,
+      (!lost && signal) || {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
+        failure_stage: "screen_recording_macos_stop",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      },
+      err instanceof Error ? { cause: err } : undefined
+    );
+  }
+  const sizeBytes = await copyAppOutput(appFile, outputFile);
   return {
+    sizeBytes,
     durationMs: num(reply?.durationMs),
     wallClockMs: num(reply?.wallClockMs),
     trimmedMs: num(reply?.trimmedMs),
@@ -230,24 +423,18 @@ export async function stopMacosCapture(api: ScreenRecordingSessionApi): Promise<
       );
     }
     warnings.push(...ended.warnings);
-    const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
     // The app cuts still stretches only when the start asked it to.
     const trimmed = ended.trimmedMs > 0;
     return {
       outputFile,
-      sizeBytes: size,
+      sizeBytes: ended.sizeBytes,
       durationMs: ended.durationMs,
       ...(trimmed ? { wallClockMs: ended.wallClockMs, trimmedMs: ended.trimmedMs } : {}),
       ...(warnings.length ? { warning: warnings.join(" ") } : {}),
     };
   } catch (err) {
-    // Nothing usable came back, so the path is ours to clean up. Gated on the
-    // file genuinely being empty or absent, so no error can delete a real video.
-    const empty = await fs
-      .stat(outputFile)
-      .then((s) => s.size === 0)
-      .catch(() => true);
-    if (empty) await fs.rm(outputFile, { force: true }).catch(() => {});
+    // The end removed the app's file whatever happened, and copied out what
+    // the app wrote before a failure.
     if (getFailureSignal(err)) throw err;
     throw new FailureError(
       `The Mac app's screen recording could not be retrieved: ${err instanceof Error ? err.message : String(err)}`,
