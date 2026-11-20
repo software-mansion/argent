@@ -54,12 +54,13 @@ export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
 /**
  * For the `react-profiler-*` tools and the `profiler-*` tools that read their
  * data: RN_ONLY_TOOL_CAPABILITY plus Mac apps. A Debug build of a
- * react-native-macos app serves the same Hermes runtime through Metro, and
- * `selectTarget` finds it by the bundle id in the Mac app id.
+ * react-native-macos app, or of React Native built for Mac Catalyst, serves the
+ * same Hermes runtime through Metro, and `selectTarget` finds it by the bundle
+ * id in the Mac app id (and a Mac Catalyst app's identifierForVendor).
  */
 export const REACT_PROFILER_TOOL_CAPABILITY: ToolCapability = {
   ...RN_ONLY_TOOL_CAPABILITY,
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 /**

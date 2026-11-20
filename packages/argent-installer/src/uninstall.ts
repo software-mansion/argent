@@ -124,8 +124,11 @@ export function removeBundledContent(sourceDir: string, targetDir: string): Bund
   for (const relativePath of files) {
     const targetPath = path.join(targetDir, relativePath);
     try {
-      if (!fs.existsSync(targetPath)) continue;
-      if (fs.lstatSync(targetPath).isDirectory()) continue;
+      // lstat, not existsSync: a link to another managed target (e.g.
+      // .opencode/agents/x.md -> ../../.claude/agents/x.md) dangles once that
+      // target is cleaned first, and existsSync would report it missing.
+      const entry = fs.lstatSync(targetPath, { throwIfNoEntry: false });
+      if (!entry || entry.isDirectory()) continue;
       removePath(targetPath);
       removedPaths.push(relativePath);
     } catch {

@@ -452,7 +452,7 @@ Modes:
   capability: {
     apple: { simulator: true },
     android: { emulator: true, device: true, unknown: true },
-    macos: { app: true },
+    macos: { app: true, catalyst: true },
   },
   // The Android branch re-queries the .pftrace, so a cold trace-processor engine
   // re-pays the full parse past the 30s MCP fetch timeout, whose abort replays

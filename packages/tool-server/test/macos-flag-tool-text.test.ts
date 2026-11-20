@@ -170,7 +170,9 @@ describe("the React profiler tools' Mac app text", () => {
 
   it("react-profiler-start documents Mac setup and native capture only with the flag on", () => {
     const on = advertised("react-profiler-start", true).description;
-    expect(on).toMatch(/react-native-macos.*Debug build.*Metro/);
+    expect(on).toMatch(
+      /Mac app, use a Debug build that loads JavaScript from Metro: react-native-macos 0\.76\+, or React Native built for Mac Catalyst\./
+    );
     expect(on).toContain("without debugger-connect");
     expect(on).toMatch(/Mac app[^.\n]*native-profiler-start/);
     const off = advertised("react-profiler-start", false).description;

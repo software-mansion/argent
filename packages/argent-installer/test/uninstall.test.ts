@@ -563,6 +563,32 @@ describe("uninstall — prune bundled content", () => {
     expect(fs.readdirSync(linkedDir)).toEqual(["notes.md"]);
   });
 
+  it("removes a bundled file link left dangling by an earlier target's cleanup", () => {
+    // .opencode/agents/<file> links to the Claude copy, which uninstall removes
+    // first, so by the time opencode is cleaned the link is dangling.
+    const bundledDir = path.join(tmpDir, "bundled");
+    const claudeDir = path.join(tmpDir, ".claude", "agents");
+    const opencodeDir = path.join(tmpDir, ".opencode", "agents");
+
+    writeFile(path.join(bundledDir, "argent-agent.md"));
+    writeFile(path.join(claudeDir, "argent-agent.md"), "argent");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    fs.symlinkSync(
+      path.join("..", "..", ".claude", "agents", "argent-agent.md"),
+      path.join(opencodeDir, "argent-agent.md")
+    );
+
+    expect(removeBundledContent(bundledDir, claudeDir).removedPaths).toEqual(["argent-agent.md"]);
+    // Dangling now: gone for existsSync, present for lstat.
+    expect(fs.existsSync(path.join(opencodeDir, "argent-agent.md"))).toBe(false);
+
+    const result = removeBundledContent(bundledDir, opencodeDir);
+
+    expect(result).toEqual({ removedPaths: ["argent-agent.md"], removedRoot: true });
+    expect(fs.existsSync(opencodeDir)).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".opencode"))).toBe(false);
+  });
+
   it("handles missing source or target directories gracefully", () => {
     const result = removeBundledContent(path.join(tmpDir, "missing"), path.join(tmpDir, "target"));
     expect(result).toEqual({ removedPaths: [], removedRoot: false });
