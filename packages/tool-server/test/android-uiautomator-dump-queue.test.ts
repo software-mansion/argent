@@ -207,33 +207,25 @@ describe("describeAndroid uiautomator fallback", () => {
     expect(pending).toHaveLength(1);
   });
 
-  it("fails a read behind a running dump at once while the device reports a never-idle screen", async () => {
+  it("queues a read behind a running dump after an earlier dump reported a never-idle screen", async () => {
     const earlier = read("emulator-5562");
     const earlierFailed = expect(earlier).rejects.toThrow("could not get idle state");
     await tick();
     pending[0]!.finish(NEVER_IDLE);
     await earlierFailed;
 
-    const abandoned = read("emulator-5562");
+    const running = read("emulator-5562");
     await vi.advanceTimersByTimeAsync(1_500);
     const next = read("emulator-5562");
-    await expect(next).rejects.toThrow("could not get idle state");
+    await tick();
     expect(pending).toHaveLength(2);
 
     pending[1]!.finish();
-    await abandoned;
-    await vi.advanceTimersByTimeAsync(0);
-    const fresh = read("emulator-5562");
-    await vi.advanceTimersByTimeAsync(1_000);
-    const queued = read("emulator-5562");
+    await running;
     await tick();
     expect(pending).toHaveLength(3);
     pending[2]!.finish();
-    await fresh;
-    await tick();
-    expect(pending).toHaveLength(4);
-    pending[3]!.finish();
-    await queued;
+    expect(JSON.stringify((await next).tree)).toContain("Continue");
   });
 
   it("starts an Android TV dump only after the describe dump on that device finished", async () => {
