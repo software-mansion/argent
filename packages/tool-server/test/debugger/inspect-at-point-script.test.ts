@@ -65,7 +65,7 @@ function makeHook(entries: Array<[number, unknown, unknown[]]>) {
 
 function runInspect(
   hook: unknown,
-  opts: { fabric?: boolean } = {}
+  opts: { fabric?: boolean; nativeFabricUIManager?: unknown; subtractRootOffset?: boolean } = {}
 ): {
   type: string;
   items?: Array<{ name: string; frame?: { file: string; line: number; col: number } | null }>;
@@ -85,13 +85,13 @@ function runInspect(
   // useFabric is `typeof nativeFabricUIManager !== 'undefined'`. Defining it (even
   // as {}) selects the new-arch branch; deleting it selects the old-arch (Paper)
   // branch so findHostFiber must recognise stateNode._nativeTag host fibers.
-  if (fabric) g.nativeFabricUIManager = {};
+  if (fabric) g.nativeFabricUIManager = opts.nativeFabricUIManager ?? {};
   else delete g.nativeFabricUIManager;
   g.__argent_callback = (payload: string) => {
     captured = JSON.parse(payload);
   };
   try {
-    (0, eval)(makeInspectScript(50, 90, "t"));
+    (0, eval)(makeInspectScript(50, 90, "t", { subtractRootOffset: opts.subtractRootOffset }));
     return captured;
   } finally {
     g.window = saved.window;
@@ -240,5 +240,55 @@ describe("makeInspectScript — Fabric host fiber with unrealized public instanc
     expect(rn.fn).toHaveBeenCalledTimes(1);
     expect(rn.fn.mock.calls[0][0]).toBe(null);
     expect(rn.fn.mock.calls[0][0]).not.toBe(host.stateNode);
+  });
+});
+
+describe("makeInspectScript — root view offset in the window", () => {
+  type MeasureCb = (x: number, y: number, w: number, h: number, px: number, py: number) => void;
+
+  /** A Fabric root host whose window and page positions differ by (dx, dy). */
+  function offsetRoot(dx: number, dy: number) {
+    const node = {};
+    const pi = {
+      measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) =>
+        cb(10 + dx, 20 + dy, 300, 400),
+    };
+    const nf = { measure: (_n: unknown, cb: MeasureCb) => cb(0, 0, 300, 400, 10, 20) };
+    const host = {
+      type: "RCTView",
+      stateNode: { node, canonical: { nativeTag: 1, publicInstance: pi } },
+      child: null,
+      sibling: null,
+    };
+    return { root: rootOf(comp("App", host)), nf };
+  }
+
+  it("on a Mac app, hit-tests a window point in the root view's own points (a title bar of 32)", () => {
+    const { root, nf } = offsetRoot(0, 32);
+    const rn = makeRenderer(comp("MyButton", null));
+    const result = runInspect(makeHook([[1, rn.renderer, [root]]]), {
+      nativeFabricUIManager: nf,
+      subtractRootOffset: true,
+    });
+    expect(result?.type).toBe("inspect_result");
+    expect(rn.fn.mock.calls[0].slice(1, 3)).toEqual([50, 58]);
+  });
+
+  it("elsewhere, keeps the point even when the viewport offset is not zero", () => {
+    // An edge-to-edge Android app reports minus the status bar here.
+    const { root, nf } = offsetRoot(0, -24);
+    const rn = makeRenderer(comp("MyButton", null));
+    runInspect(makeHook([[1, rn.renderer, [root]]]), { nativeFabricUIManager: nf });
+    expect(rn.fn.mock.calls[0].slice(1, 3)).toEqual([50, 90]);
+  });
+
+  it("on a Mac app, keeps the point when the runtime has no nativeFabricUIManager.measure", () => {
+    const { root } = offsetRoot(0, 32);
+    const rn = makeRenderer(comp("MyButton", null));
+    runInspect(makeHook([[1, rn.renderer, [root]]]), {
+      nativeFabricUIManager: {},
+      subtractRootOffset: true,
+    });
+    expect(rn.fn.mock.calls[0].slice(1, 3)).toEqual([50, 90]);
   });
 });

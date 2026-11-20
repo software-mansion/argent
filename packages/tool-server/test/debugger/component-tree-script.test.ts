@@ -50,7 +50,8 @@ function makeHook(rootsByRenderer: Record<number, unknown[]>) {
 
 async function runScript(
   hook: unknown,
-  nativeFabricUIManager: unknown
+  nativeFabricUIManager: unknown,
+  opts: { addRootOffset?: boolean } = {}
 ): Promise<{ result: string } | null> {
   const g = globalThis as Record<string, unknown>;
   const saved = {
@@ -70,7 +71,7 @@ async function runScript(
   };
   try {
     // indirect eval keeps access to the globalThis the script reads
-    await (0, eval)(makeComponentTreeScript({ requestId: "t" }));
+    await (0, eval)(makeComponentTreeScript({ requestId: "t", ...opts }));
     return captured;
   } finally {
     g.window = saved.window;
@@ -263,5 +264,69 @@ describe("makeComponentTreeScript — Fabric hosts WITHOUT a numeric nativeTag (
     // collapse onto the first host's rect.
     const distinctY = new Set(comps.map((c) => c.rect?.y).filter((y) => y != null));
     expect(distinctY.size).toBe(3);
+  });
+});
+
+describe("makeComponentTreeScript — a Text measured by page position", () => {
+  type MeasureCb = (x: number, y: number, w: number, h: number, px: number, py: number) => void;
+
+  // A View host whose window position is 32 points below its page position, as
+  // in a react-native-macos window with a title bar, and a Text host under it
+  // with no measureInWindow, which falls back to nativeFabricUIManager.measure.
+  function tree() {
+    const viewNode = {};
+    const textNode = {};
+    const textHost: Record<string, unknown> = {
+      type: "RCTText",
+      stateNode: { node: textNode, canonical: { nativeTag: 2, publicInstance: null } },
+      memoizedProps: {},
+      child: null,
+      sibling: null,
+    };
+    const title: Record<string, unknown> = comp("Title", "title", textHost);
+    const viewHost: Record<string, unknown> = {
+      type: "RCTView",
+      stateNode: {
+        node: viewNode,
+        canonical: {
+          nativeTag: 1,
+          publicInstance: {
+            measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) =>
+              cb(0, 84, 400, 32),
+          },
+        },
+      },
+      memoizedProps: { testID: "header" },
+      child: title,
+      sibling: null,
+    };
+    textHost.return = title;
+    title.return = viewHost;
+    const page = new Map<object, [number, number, number, number]>([
+      [viewNode, [0, 52, 400, 32]],
+      [textNode, [20, 44, 125, 30]],
+    ]);
+    const nf = {
+      measure: (node: object, cb: MeasureCb) => {
+        const [px, py, w, h] = page.get(node)!;
+        cb(0, 0, w, h, px, py);
+      },
+    };
+    return { root: rootOf(viewHost), nf };
+  }
+
+  it("on a Mac app, adds its ancestor's window offset, so it shares the window's coordinates", async () => {
+    const { root, nf } = tree();
+    const comps = components(await runScript(makeHook({ 1: [root] }), nf, { addRootOffset: true }));
+    const byId = Object.fromEntries(comps.map((c) => [c.testID, c.rect]));
+    expect(byId.header).toEqual({ x: 0, y: 84, w: 400, h: 32 });
+    expect(byId.title).toEqual({ x: 20, y: 76, w: 125, h: 30 });
+  });
+
+  it("elsewhere, keeps its page position", async () => {
+    const { root, nf } = tree();
+    const comps = components(await runScript(makeHook({ 1: [root] }), nf));
+    const byId = Object.fromEntries(comps.map((c) => [c.testID, c.rect]));
+    expect(byId.title).toEqual({ x: 20, y: 44, w: 125, h: 30 });
   });
 });

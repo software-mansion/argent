@@ -28,6 +28,13 @@ export const INSPECT_NO_FIBER_ROOT_ERROR =
  * subtree that does not contain the point (Paper builds without a containerTag
  * fall back to the host fiber).
  *
+ * (x, y) are screen points. Fabric hit-tests in the React Native root view's own
+ * points. With subtractRootOffset (a Mac app, whose x and y count from the window's
+ * corner, title bar included), the script subtracts the root view's offset in the
+ * window (the anchor's measureInWindow minus its page position): the title bar
+ * height in a react-native-macos window. Other platforms pass the point as given:
+ * on Android an edge-to-edge app's viewport offset is minus the status bar.
+ *
  * Frames come from _debugStack (bundled, needs symbolication) or _debugSource,
  * which is already a real source path and is flagged `original: true`.
  *
@@ -35,7 +42,12 @@ export const INSPECT_NO_FIBER_ROOT_ERROR =
  * channel instead of throwing, so a release build yields a diagnosis rather
  * than a TypeError.
  */
-export function makeInspectScript(x: number, y: number, requestId: string): string {
+export function makeInspectScript(
+  x: number,
+  y: number,
+  requestId: string,
+  opts: { subtractRootOffset?: boolean } = {}
+): string {
   const noHookMsg = JSON.stringify(INSPECT_NO_DEVTOOLS_HOOK_ERROR);
   const noRendererMsg = JSON.stringify(INSPECT_NO_RENDERER_ERROR);
   const noRootMsg = JSON.stringify(INSPECT_NO_FIBER_ROOT_ERROR);
@@ -197,18 +209,40 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
   // pre-container-anchor code did, rather than reporting no host fiber).
   var inspectRef = null;
   var foundAnchor = false;
+  var hostFiberForOffset = null;
   var containerInfo = root.current && root.current.stateNode && root.current.stateNode.containerInfo;
   if (!useFabric && containerInfo && typeof containerInfo.containerTag === 'number') {
     inspectRef = { _nativeTag: containerInfo.containerTag, _internalFiberInstanceHandleDEV: root.current };
     foundAnchor = true;
   } else {
     var hostFiber = findHostFiber(root.current.child, 0);
-    if (hostFiber) { inspectRef = getInspectRef(hostFiber); foundAnchor = true; }
+    if (hostFiber) { inspectRef = getInspectRef(hostFiber); foundAnchor = true; hostFiberForOffset = hostFiber; }
   }
   if (!foundAnchor) { __argent_callback(JSON.stringify({requestId:${ridLiteral},type:'inspect_result',error:'no host fiber'})); return; }
 
+  // Calls done(dx, dy) with the root view's offset in the window, or (0, 0)
+  // when it is not wanted or cannot be measured (Paper, or no measure API).
+  function withRootOffset(done) {
+    var _called = false;
+    function finish(dx, dy) { if (_called) return; _called = true; done(dx, dy); }
+    var anchorNode = hostFiberForOffset && hostFiberForOffset.stateNode && hostFiberForOffset.stateNode.node;
+    if (!${opts.subtractRootOffset ? "true" : "false"} || !useFabric || !inspectRef ||
+        typeof inspectRef.measureInWindow !== 'function' || !anchorNode ||
+        typeof nativeFabricUIManager.measure !== 'function') { finish(0, 0); return; }
+    setTimeout(function() { finish(0, 0); }, 600);
+    try {
+      inspectRef.measureInWindow(function(wx, wy) {
+        nativeFabricUIManager.measure(anchorNode, function(_x, _y, _w, _h, px, py) {
+          finish(wx - px, wy - py);
+        });
+      });
+    } catch (e) { finish(0, 0); }
+  }
+
+  withRootOffset(function(dx, dy) {
+  try {
   renderer.rendererConfig.getInspectorDataForViewAtPoint(
-    inspectRef, ${Math.round(x)}, ${Math.round(y)},
+    inspectRef, Math.round(${x} - dx), Math.round(${y} - dy),
     function(data) {
       var items = [];
       var fiber = data.closestInstance;
@@ -236,6 +270,10 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
       __argent_callback(JSON.stringify({ requestId:${ridLiteral}, type:'inspect_result', x:${Math.round(x)}, y:${Math.round(y)}, items:items }));
     }
   );
+  } catch (e) {
+    __argent_fail('Inspect script crashed: ' + (e && e.message ? e.message : String(e)));
+  }
+  });
   return 'ok';
   } catch (e) {
     __argent_fail('Inspect script crashed: ' + (e && e.message ? e.message : String(e)));

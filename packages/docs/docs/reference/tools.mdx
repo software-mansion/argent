@@ -177,6 +177,8 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
 
+For react-native-macos and Mac Catalyst apps, see [JavaScript debugging on a Mac app](#javascript-debugging-on-a-mac-app).
+
 ## Native devtools
 
 On a Mac app, these tools read the app through the Argent library:
@@ -598,7 +600,8 @@ A short recording may end before a leak check finishes. Follow the report's warn
 
 Start a [supported Debug build](/docs/features/mac-apps#profile-a-react-native-app) through Argent.
 Pass `id` from the app's `list-devices` entry as `device_id`, even on a shared Metro. The profiler
-connects directly to Metro. The `debugger-*` tools are unavailable for Mac apps.
+connects directly to Metro. The [JavaScript debugger tools](#javascript-debugging-on-a-mac-app) use
+the same `device_id` and `port`.
 
 Use the same `device_id` and Metro `port` for the React profiler and query tools. The default port
 is 8081. To reopen a saved React profile, use `profiler-load` with `mode: "load_react"`. To compare
@@ -621,23 +624,33 @@ files without a platform suffix. If the recording lacks architecture information
 `macos/Podfile`. A Mac Catalyst app runs the iOS bundle, so its report uses `.ios.*` files and
 `ios/Podfile`.
 
+### JavaScript debugging on a Mac app
+
+The `debugger-*` tools, `view-network-logs`, and `view-network-request-details` accept a Mac app ID. They need the same [Debug build](/docs/features/mac-apps#profile-a-react-native-app) as the React profiler. Start Metro before you start the app.
+
+- **Device ID.** Pass the Mac app ID (`macos-app-<bundle id>`) as `device_id`. Pass `port` if Metro does not use port 8081. Keep the Mac app ID for all calls. Do not use the `logicalDeviceId` that `debugger-connect` returns.
+- **Target.** The tools connect only to the runtime of the Mac app. They do not use another runtime on the same Metro. If Metro cannot find the Mac app, the tools return `DEBUGGER_TARGET_DEVICE_MISMATCH` and list the available targets. `debugger-status` returns `reason: "device_mismatch"`.
+- **Component tree.** The tap points of `debugger-component-tree` are fractions of the app window, title bar included. `describe` and `gesture-tap` use the same coordinates.
+- **Inspect element.** `debugger-inspect-element` takes `x` and `y` in points from the top-left corner of the window, title bar included. To convert a tap point, multiply it by the `Screen: WxH` size that `debugger-component-tree` prints.
+- **Network.** `view-network-logs` records the `XMLHttpRequest` and `fetch()` requests of the JavaScript code. `native-network-logs` records the same `fetch()` requests from `URLSession`. Thus the two lists overlap. Use `view-network-logs` for the JavaScript view.
+
 ### Additional limitations
 
 See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types and features.
 
-| Area                      | Limitation or workaround                                                                                                                                                                                                                                                                                   |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Background windows        | Hiding the app does not pause automation. The next action shows it again without activating it.                                                                                                                                                                                                            |
-| Multiple windows          | Input and menu commands target the agent's current window. Panels beside that window may be inaccessible; panels over it can be controlled.                                                                                                                                                                |
-| Menus                     | Context and pop-up menus can bring the window forward temporarily. Only one menu can stay open on the Mac; another click can close it.                                                                                                                                                                     |
-| Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                                                                                                          |
-| Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                                                                                                     |
-| Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                                                                                                          |
-| Keyboard layout           | Mac Catalyst uses the current keyboard layout for the key codes of typed characters. Other Mac apps receive US-layout codes.                                                                                                                                                                               |
-| SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                                                                                             |
-| SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                                                                                                        |
-| Protected windows         | Capture protection blocks screenshots, screenshot diffs, and e2e snapshots. Inspection and input still work.                                                                                                                                                                                               |
-| Other tools               | Hardware buttons, device rotation, shake, fold, TV remote, permission settings, screen recording, JavaScript debugger tools, and Chromium tools are unsupported. Use `native-network-logs` for traffic; `view-network-logs`, `view-network-request-details`, and `native-devtools-status` are unavailable. |
+| Area                      | Limitation or workaround                                                                                                                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Background windows        | Hiding the app does not pause automation. The next action shows it again without activating it.                                                                                                                                                               |
+| Multiple windows          | Input and menu commands target the agent's current window. Panels beside that window may be inaccessible; panels over it can be controlled.                                                                                                                   |
+| Menus                     | Context and pop-up menus can bring the window forward temporarily. Only one menu can stay open on the Mac; another click can close it.                                                                                                                        |
+| Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                                                             |
+| Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                                                        |
+| Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                                                             |
+| Keyboard layout           | Mac Catalyst uses the current keyboard layout for the key codes of typed characters. Other Mac apps receive US-layout codes.                                                                                                                                  |
+| SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                                                |
+| SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                                                           |
+| Protected windows         | Capture protection blocks screenshots, screenshot diffs, and e2e snapshots. Inspection and input still work.                                                                                                                                                  |
+| Other tools               | Hardware buttons, device rotation, shake, fold, TV remote, permission settings, screen recording, `native-devtools-status`, and Chromium tools are unsupported. Use `native-network-logs` for native traffic and `view-network-logs` for JavaScript requests. |
 
 ## Profiling
 

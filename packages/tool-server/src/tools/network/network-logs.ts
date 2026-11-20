@@ -188,7 +188,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect."
+      "Device id from list-devices (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial), the same id used with debugger-connect."
     ),
   pageIndex: z
     .union([z.coerce.number().int().nonnegative(), z.literal("latest")])
@@ -204,7 +204,7 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 A size with "~" is estimated from the body's length in characters; on React Native, "→ <url>" is the final URL after a redirect.
 Pass an entry's requestId to view-network-request-details for full details.
-On React Native (iOS / Android / Vega) an interceptor injected into the JS runtime records each request once, from XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and, in a Metro development build, a fetch library that sends through React Native's network module itself, such as react-native-fetch-api. Capture starts at the first network-tool call; a reload clears it. On Chromium it reads the CDP Network domain of the active tab (all request types).
+On React Native (iOS / Android / Vega<flag:macos-apps> / Mac apps</flag:macos-apps>) an interceptor injected into the JS runtime records each request once, from XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and, in a Metro development build, a fetch library that sends through React Native's network module itself, such as react-native-fetch-api. Capture starts at the first network-tool call; a reload clears it.<flag:macos-apps> On a Mac app, native-network-logs records the same fetch requests again from NSURLSession.</flag:macos-apps> On Chromium it reads the CDP Network domain of the active tab (all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   zodSchema,

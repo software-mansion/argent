@@ -13,18 +13,28 @@
  * UIManager.measureInWindow with native tags. Measurement is batched via Promise.all
  * with a per-host cache because Paper's measureInWindow is async.
  *
+ * The fallback's pageX/pageY count from the React Native root view, not the window.
+ * With addRootOffset (a Mac app), a host measured that way (one whose public instance
+ * was never created, such as a Text) gets the window offset of its nearest ancestor
+ * host that has measureInWindow: the title bar height in a react-native-macos window.
+ * Other platforms keep page coordinates: on Android an edge-to-edge app's viewport
+ * offset is minus the status bar, which would move hosts that are placed right today.
+ *
  * includeSkipped additionally reports totalFibers and a per-name count of skipped
  * components.
  */
 export function makeComponentTreeScript(opts: {
   includeSkipped?: boolean;
   requestId: string;
+  addRootOffset?: boolean;
 }): string {
   const trackSkipped = opts?.includeSkipped ? "true" : "false";
+  const addRootOffset = opts?.addRootOffset ? "true" : "false";
   const requestId = JSON.stringify(opts.requestId);
   return `(async function() {
   var REQUEST_ID = ${requestId};
   var TRACK_SKIPPED = ${trackSkipped};
+  var ADD_ROOT_OFFSET = ${addRootOffset};
   // Deliver errors through the SAME binding channel as the success path. The
   // consumer (evaluateWithBinding) runs Runtime.evaluate WITHOUT returnByValue/
   // awaitPromise, so the IIFE's return value is discarded — a 'return' here never
@@ -195,12 +205,14 @@ export function makeComponentTreeScript(opts: {
       // a primitive id (numeric nativeTag, WeakMap-by-identity fallback) per above.
       var _canon = fiber.stateNode.canonical;
       var _sn = fiber.stateNode.node || null;
+      var _pi = _canon.publicInstance || null;
       return {
         f: true,
         n: typeof _canon.nativeTag === 'number' ? _canon.nativeTag : _sn,
         key: fabricKey(_canon.nativeTag, _sn),
-        pi: _canon.publicInstance || null,
-        sn: _sn
+        pi: _pi,
+        sn: _sn,
+        anchor: !ADD_ROOT_OFFSET || (_pi && typeof _pi.measureInWindow === 'function') ? null : findOffsetAnchor(fiber.return)
       };
     }
     if (useFabric && fiber.stateNode.node) {
@@ -214,6 +226,20 @@ export function makeComponentTreeScript(opts: {
         return { f: false, n: fiber.stateNode.canonical.nativeTag, key: 'p' + fiber.stateNode.canonical.nativeTag };
       if (typeof fiber.stateNode._nativeTag === 'number')
         return { f: false, n: fiber.stateNode._nativeTag, key: 'p' + fiber.stateNode._nativeTag };
+    }
+    return null;
+  }
+
+  // The nearest ancestor Fabric host whose public instance has measureInWindow:
+  // it is in the same root view as the host below it, so the difference between
+  // its window and page coordinates is that root view's offset in the window.
+  function findOffsetAnchor(fiber) {
+    for (var _d = 0; fiber && _d < 5000; _d++, fiber = fiber.return) {
+      if (typeof fiber.type !== 'string' || !fiber.stateNode || !fiber.stateNode.canonical) continue;
+      var _apn = fiber.stateNode.canonical.publicInstance;
+      if (_apn && typeof _apn.measureInWindow === 'function' && fiber.stateNode.node) {
+        return { key: fabricKey(fiber.stateNode.canonical.nativeTag, fiber.stateNode.node), pi: _apn, sn: fiber.stateNode.node };
+      }
     }
     return null;
   }
@@ -340,6 +366,27 @@ export function makeComponentTreeScript(opts: {
     }
   }
 
+  // Window offset of an anchor's root view, cached per anchor. Zero when it
+  // cannot be measured, which keeps the page coordinates as they were.
+  var offsetCache = {};
+  function anchorOffset(anchor) {
+    if (!anchor) return Promise.resolve({ dx: 0, dy: 0 });
+    if (offsetCache[anchor.key]) return offsetCache[anchor.key];
+    offsetCache[anchor.key] = new Promise(function(_resolve) {
+      var _done = false;
+      function resolve(v) { if (_done) return; _done = true; _resolve(v); }
+      setTimeout(function() { resolve({ dx: 0, dy: 0 }); }, 600);
+      try {
+        anchor.pi.measureInWindow(function(wx, wy) {
+          nativeFabricUIManager.measure(anchor.sn, function(x, y, w, h, px, py) {
+            resolve({ dx: wx - px, dy: wy - py });
+          });
+        });
+      } catch (e) { resolve({ dx: 0, dy: 0 }); }
+    });
+    return offsetCache[anchor.key];
+  }
+
   function measureOne(info) {
     return new Promise(function(_resolve) {
       // Guard against measure callbacks that never fire (detached / off-screen
@@ -358,8 +405,10 @@ export function makeComponentTreeScript(opts: {
             });
           } else if (typeof nativeFabricUIManager !== 'undefined' && typeof nativeFabricUIManager.measure === 'function') {
             nativeFabricUIManager.measure(info.sn || info.n, function(x, y, w, h, px, py) {
-              if (w > 0 && h > 0) resolve({ x: Math.round(px), y: Math.round(py), w: Math.round(w), h: Math.round(h) });
-              else resolve(null);
+              if (!(w > 0 && h > 0)) { resolve(null); return; }
+              anchorOffset(info.anchor).then(function(o) {
+                resolve({ x: Math.round(px + o.dx), y: Math.round(py + o.dy), w: Math.round(w), h: Math.round(h) });
+              });
             });
           } else {
             resolve(null);

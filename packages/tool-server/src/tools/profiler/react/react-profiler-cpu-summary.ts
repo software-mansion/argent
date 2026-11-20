@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import type {
   HermesProfileNode,
@@ -137,7 +137,7 @@ Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
       `Failed to summarize React CPU profile: ${failureSignal.error_code}`,
   },
   // RN-only: reads a Hermes CPU profile; Chromium's V8 sample format differs.
-  capability: REACT_PROFILER_TOOL_CAPABILITY,
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const sessionPaths = getCachedProfilerPaths(metroPort(params), params.device_id);

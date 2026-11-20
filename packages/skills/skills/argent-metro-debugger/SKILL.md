@@ -1,6 +1,6 @@
 ---
 name: argent-metro-debugger
-description: Debug a JS runtime via CDP using argent debugger tools. Primary path is React Native via Metro (iOS / Android / Vega); a subset of the tools (debugger-connect, debugger-status, debugger-evaluate, debugger-log-registry) also drive a Chromium (CDP) app's renderer (an Electron app, or any Chromium browser exposing CDP) through the same surface. Use when connecting to the runtime, inspecting React components, reading console logs, or evaluating JavaScript.
+description: Debug a JS runtime via CDP using argent debugger tools. Primary path is React Native via Metro (iOS / Android / Vega / Mac apps); a subset of the tools (debugger-connect, debugger-status, debugger-evaluate, debugger-log-registry) also drive a Chromium (CDP) app's renderer (an Electron app, or any Chromium browser exposing CDP) through the same surface. Use when connecting to the runtime, inspecting React components, reading console logs, or evaluating JavaScript.
 ---
 
 ## 1. Prerequisites
@@ -8,18 +8,19 @@ description: Debug a JS runtime via CDP using argent debugger tools. Primary pat
 Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`.
 
 - **React Native (iOS / Android)**: Metro running (default `localhost:8081`) and the app connected to it. Verify with `debugger-status`.
+- **Mac app** (`macos-app-<bundle id>`): a Debug Hermes build loading JS from Metro, react-native-macos 0.76+ or React Native for Mac Catalyst. Start Metro before `boot-device`; pass `port` if Metro is not on 8081. The tools never fall back to another runtime on Metro: if the app is not there, they say so and list what Metro has.
 - **Android**: a physical device, a TV emulator, or a dev client that loads from `localhost` needs `adb -s <serial> reverse tcp:<port> tcp:<port>` (default 8081). If `list-devices` returns a `hint` about the adb server, prefix the command as the hint shows. Run it again after a reboot or an adb restart; Argent doesn't restore it. A bare RN app on a phone emulator uses `10.0.2.2` and doesn't need it; `react-native run-android` and `expo run:android` set it up themselves.
 - **Vega (Fire TV)**: a **Debug `.vpkg`** (a Release build never attaches) and Metro reachable from the device (`vega device start-port-forwarding --port 8081 --forward false`). `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools are unavailable there; see `references/vega.md` of the `argent-tv-interact` skill.
 - **Chromium (CDP)**: an Electron app booted with `boot-device` `electronAppPath`, or a Chromium browser exposing a CDP port (`list-devices` finds it). Pass its `chromium-cdp-<port>` id as `device_id`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry`, `view-network-logs` and `view-network-request-details` work there; the other debugger and profiler tools are React Native only.
 
 ## 2. Tools
 
-Pass the same `device_id`, the id from `list-devices`, to every call. With two or more devices on one Metro, `debugger-connect` refuses a udid or serial and returns a `logicalDeviceId`: use that as `device_id` from then on, and include it in `stop-all-simulator-servers`' `devices` at teardown, or the debugger session outlives yours.
+Pass the same `device_id`, the id from `list-devices`, to every call. With two or more devices on one Metro, `debugger-connect` refuses a udid or serial and returns a `logicalDeviceId`: use that as `device_id` from then on (a Mac app keeps its Mac app id; never switch to the `logicalDeviceId`), and include it in `stop-all-simulator-servers`' `devices` at teardown, or the debugger session outlives yours.
 
 | Tool                                                 | Use for                                                                                                                |
 | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `debugger-status`                                    | Diagnosing the connection. Call it first when anything fails                                                           |
-| `debugger-connect`                                   | Connecting to the runtime's CDP (Metro on iOS / Android / Vega; the page session on Chromium)                          |
+| `debugger-connect`                                   | Connecting to the runtime's CDP (Metro on iOS / Android / Vega / Mac apps; the page session on Chromium)               |
 | `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                             |
 | `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                  |
 | `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                |
@@ -27,6 +28,8 @@ Pass the same `device_id`, the id from `list-devices`, to every call. With two o
 | `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                         |
 | `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                             |
 | `view-network-logs` → `view-network-request-details` | JS-level HTTP traffic, then the headers and body of one request                                                        |
+
+On a Mac app, `debugger-component-tree` tap fractions are fractions of the app window, title bar included, the same space as `describe` and `gesture-tap`. `debugger-inspect-element` takes points from the window's top-left corner, title bar included: multiply a tap fraction by the `Screen: WxH` the tree prints. `view-network-logs` is the JS view; `native-network-logs` lists the same `fetch` requests again from `NSURLSession`.
 
 A component missing from `debugger-component-tree`? `includeSkipped` only adds counts of what was pruned. Use `onScreenOnly: false` for one off screen, or `debugger-inspect-element` at its point for one on screen.
 

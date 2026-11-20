@@ -172,7 +172,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect. An android- ID needs no debugger connection."
+      "Device id from list-devices (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial), the same id used with debugger-connect. An android- ID needs no debugger connection."
     ),
   requestId: z
     .string()
@@ -365,14 +365,15 @@ Returns an error message string if the requestId is not found.`,
 
 /**
  * The answer to an android- ID no inspector holds names a tool the caller's
- * device can list with: native-network-logs refuses Chromium and Vega. There it
- * also says where the ID came from, because view-network-logs never lists one.
+ * device can list with: native-network-logs refuses Chromium and Vega, and on a
+ * Mac app it lists that app's own requests. There it also says where the ID came
+ * from, because view-network-logs never lists one.
  * An iOS-shaped ID keeps the native hint: it can be the logicalDeviceId of an
  * Android device on a shared Metro, and native-network-logs accepts it.
  */
 function androidNativeNotFound(requestId: string, deviceId: string): string {
   const { platform } = resolveDevice(deviceId);
-  return platform === "chromium" || platform === "vega"
+  return platform === "chromium" || platform === "vega" || platform === "macos"
     ? `Request ${requestId} not found. An android- ID comes from an Android device. Use view-network-logs to list this device's requests.`
     : `Request ${requestId} not found. Use native-network-logs to list the requests the Android native layer recorded.`;
 }

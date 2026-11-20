@@ -10,7 +10,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (Metro's own per-connection handle, absent on Vega); you do not switch to it. Forwarding it still resolves here, but the list-devices id is the stable one."
+      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), <flag:macos-apps>Mac app id (macos-app-<bundle id>), </flag:macos-apps>or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (Metro's own per-connection handle, absent on Vega); you do not switch to it. Forwarding it still resolves here, but the list-devices id is the stable one."
     ),
 });
 
@@ -29,7 +29,7 @@ export const debuggerConnectTool: ToolDefinition<
 > = {
   id: "debugger-connect",
   description: `Connect to a JS runtime CDP debugger.
-iOS / Android / Vega: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device.
+iOS / Android / Vega<flag:macos-apps> / Mac apps</flag:macos-apps>: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device.<flag:macos-apps> A Mac app needs a Debug build that loads JavaScript from Metro: react-native-macos 0.76+, or React Native built for Mac Catalyst.</flag:macos-apps>
 Returns connection info including port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId, and isNewDebugger, plus a note naming the kept log file when the previous session ended because the app crashed. If already connected, returns the existing connection.
 Use when starting a debug session or before calling other debugger-* tools. Fails if the runtime is unreachable (Metro down, or Chromium CDP terminated).`,
   zodSchema,
