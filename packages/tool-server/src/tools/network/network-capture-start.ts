@@ -75,7 +75,20 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer the call names can capture 
     capability: CAPTURE_CAPABILITY,
     interaction: {
       startedMsg: ({ params }) => `Starting ${captureName(params.layer)} for ${params.bundleId}`,
-      completedMsg: ({ params }) => `Started ${captureName(params.layer)} for ${params.bundleId}`,
+      completedMsg: ({ params, result }) => {
+        const started = `Started ${captureName(params.layer)} for ${params.bundleId}`;
+        const waiting = result.layers.filter((entry) => !entry.armed);
+        if (waiting.length === 0) return started;
+        const names = waiting.map((entry) => entry.layer).join(" and ");
+        if (waiting.length === 1) {
+          const reason = waiting[0]!.reason;
+          return `${started}, but ${names} is not armed yet${reason ? `: ${reason}` : ""}`;
+        }
+        const reasons = waiting
+          .map((entry) => (entry.reason ? `${entry.layer}: ${entry.reason}` : entry.layer))
+          .join("; ");
+        return `${started}, but ${names} are not armed yet (${reasons})`;
+      },
       failedMsg: ({ params, failureSignal }) =>
         `Failed to start ${captureName(params.layer)} for ${params.bundleId}: ${failureSignal.error_code}`,
     },
@@ -296,7 +309,7 @@ async function startJsLayer(
         layer: "js",
         armed: false,
         reason:
-          "the app's JavaScript has not loaded yet; call network-capture-start again once it has",
+          "the app's JavaScript has not loaded yet; call network-capture-start again once it has, before you trigger the requests to inspect",
       };
     }
     return {

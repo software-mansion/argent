@@ -136,6 +136,8 @@ const OTHER = "com.example.other";
 const PORT = 8081;
 const NOT_STARTED = "capture was not started for this app";
 const METRO_DOWN = `Metro is not running on port ${PORT}; start it, or pass the port of the app's Metro`;
+const JS_NOT_LOADED =
+  "the app's JavaScript has not loaded yet; call network-capture-start again once it has, before you trigger the requests to inspect";
 const RESTART_REASON =
   "no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now, then network-capture-start again, since a relaunch ends the JS layer's capture; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app";
 
@@ -906,12 +908,7 @@ describe("network-capture-start", () => {
 
       const before = await start(IOS_UDID, APP);
 
-      expect(layer(before, "js")).toEqual({
-        layer: "js",
-        armed: false,
-        reason:
-          "the app's JavaScript has not loaded yet; call network-capture-start again once it has",
-      });
+      expect(layer(before, "js")).toEqual({ layer: "js", armed: false, reason: JS_NOT_LOADED });
       expect(findJsCapture(IOS_UDID, APP)).toMatchObject({
         intent: "started",
         mark: { install: null },
@@ -3874,6 +3871,28 @@ describe("the tool definitions", () => {
       expect(urns()).toEqual([]);
     }
   );
+
+  it("says a start is not armed yet, with the reason, when a layer it starts did not arm", () => {
+    const tool = createNetworkCaptureStartTool(new Registry());
+    const msg = (layers: StartedLayer[], captureLayer?: "js" | "native") =>
+      tool.interaction?.completedMsg?.({
+        params: { udid: SERIAL, bundleId: APP, ...(captureLayer ? { layer: captureLayer } : {}) },
+        result: { status: "ok", layers },
+      });
+
+    expect(msg([{ layer: "js", armed: true }], "js")).toBe(`Started JS network capture for ${APP}`);
+    expect(msg([{ layer: "js", armed: false, reason: JS_NOT_LOADED }], "js")).toBe(
+      `Started JS network capture for ${APP}, but js is not armed yet: ${JS_NOT_LOADED}`
+    );
+    expect(
+      msg([
+        { layer: "js", armed: false, reason: JS_NOT_LOADED },
+        { layer: "android-native", armed: false, reason: "x" },
+      ])
+    ).toBe(
+      `Started network capture for ${APP}, but js and android-native are not armed yet (js: ${JS_NOT_LOADED}; android-native: x)`
+    );
+  });
 
   it("says a stop is unconfirmed when a layer it stops may still record", () => {
     const tool = createNetworkCaptureStopTool(new Registry());
