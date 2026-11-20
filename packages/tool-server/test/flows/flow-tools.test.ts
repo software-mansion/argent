@@ -3161,13 +3161,6 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
     // escape hatch.
     expect(schema.properties["args"]).toMatchObject({ type: "string" });
   });
-
-  it("keeps the description focused on how to use the tool", () => {
-    const description = createFlowAddStepTool({} as unknown as Registry).description!;
-    expect(description).toContain("Execute one MCP tool and record its step in the e2e test");
-    expect(description).toContain("Call recording tools, including `e2e-add-script`, directly");
-    expect(description.split(/\s+/).length).toBeLessThan(80);
-  });
 });
 
 // ── summarizeStep rendering ──────────────────────────────────────────

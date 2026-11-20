@@ -17,7 +17,7 @@ import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 const capability = {
   apple: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 } as const;
 
 /**

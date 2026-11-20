@@ -199,7 +199,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 // The matching engine lives in utils/ui-tree-match so the flow directives and

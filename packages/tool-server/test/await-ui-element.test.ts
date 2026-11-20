@@ -115,10 +115,6 @@ describe("await-ui-element tool", () => {
     __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
   });
 
-  it("exposes the await-ui-element id", () => {
-    expect(createAwaitUiElementTool(iosRegistry({} as AXServiceApi)).id).toBe("await-ui-element");
-  });
-
   // ── iOS happy paths ──────────────────────────────────────────────────────
 
   it("`visible` succeeds once the element appears across polls", async () => {

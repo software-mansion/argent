@@ -38,6 +38,7 @@ import {
 export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { MACOS_APPS_FLAG, isFlagOffered } from "../../utils/capability";
+import { MACOS_MODIFIERS, type MacosModifier } from "../../utils/macos-modifiers";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
@@ -756,6 +757,8 @@ export type FlowStep =
       // Only the non-default right button is ever stored: absent is the left
       // one, so parse/serialize stay exact inverses (as `times: 1` is absent).
       button?: "right";
+      // Nonempty, unique modifier keys in MACOS_MODIFIERS order.
+      modifiers?: MacosModifier[];
     }
   | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
   | {
@@ -1011,9 +1014,10 @@ type YamlTarget = YamlSelector | { x: number; y: number };
  * A tap targets an element or a raw point. The options form nests the target
  * under `on` so option keys never mix with target fields:
  * `{ on: <target>, times: 2 }` is a double-tap, `{ on: <target>, button: right }`
- * a right-click.
+ * a right-click, `{ on: <target>, modifiers: [command] }` a Command-click.
  */
-type TapBody = YamlTarget | { on: YamlTarget; times?: number; button?: "right" };
+type TapBody =
+  YamlTarget | { on: YamlTarget; times?: number; button?: "right"; modifiers?: MacosModifier[] };
 
 /**
  * A `swipe` body: a bare direction (`swipe: left`) or the options form. The
@@ -1591,16 +1595,17 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { when, steps: step.steps.map(toYamlStep) };
     }
     case "tap": {
-      // The options form appears only when an option is present (`times` is
-      // never stored as 1, `button` never as left - see parseTapTimes and
-      // parseTapButton), so a plain tap round-trips to the plain selector/point body.
+      // Parsing strips default options, so a plain tap serializes as just its target.
       const target = targetToYaml(step);
-      if (step.times === undefined && step.button === undefined) return { tap: target };
+      if (step.times === undefined && step.button === undefined && step.modifiers === undefined) {
+        return { tap: target };
+      }
       return {
         tap: {
           on: target,
           ...(step.times !== undefined ? { times: step.times } : {}),
           ...(step.button !== undefined ? { button: step.button } : {}),
+          ...(step.modifiers !== undefined ? { modifiers: [...step.modifiers] } : {}),
         },
       };
     }
@@ -2655,6 +2660,16 @@ function parseTapButton(raw: unknown, entry: unknown): "right" | undefined {
   return "right";
 }
 
+function parseTapModifiers(raw: unknown, entry: unknown): MacosModifier[] | undefined {
+  if (raw === undefined) return undefined;
+  const names: readonly string[] = MACOS_MODIFIERS;
+  if (!Array.isArray(raw) || !raw.every((m) => typeof m === "string" && names.includes(m))) {
+    badEntry(entry, `tap.modifiers must be a list of ${MACOS_MODIFIERS.join(", ")}`);
+  }
+  const held = MACOS_MODIFIERS.filter((m) => (raw as unknown[]).includes(m));
+  return held.length > 0 ? held : undefined;
+}
+
 /**
  * Does this map carry any selector key (the `any` marker and the relational
  * scopes included)? Tells a selector map apart from the point/option forms in
@@ -2717,7 +2732,12 @@ function parseTarget(raw: unknown, where: string): GestureTarget {
 function parseTap(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
-  if (obj.on !== undefined || obj.times !== undefined || obj.button !== undefined) {
+  if (
+    obj.on !== undefined ||
+    obj.times !== undefined ||
+    obj.button !== undefined ||
+    obj.modifiers !== undefined
+  ) {
     if (hasSelectorField(obj)) {
       badEntry(
         entry,
@@ -2730,13 +2750,17 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
         "the tap options form takes a nested point — e.g. tap: { on: { x: 0.5, y: 0.5 }, times: 2 }"
       );
     }
-    if (!Object.keys(obj).every((k) => k === "on" || k === "times" || k === "button")) {
-      badEntry(entry, "the tap options form accepts only { on, times, button }");
+    if (
+      !Object.keys(obj).every(
+        (k) => k === "on" || k === "times" || k === "button" || k === "modifiers"
+      )
+    ) {
+      badEntry(entry, "the tap options form accepts only { on, times, button, modifiers }");
     }
     if (obj.on === undefined) {
       badEntry(
         entry,
-        'tap with times or button needs a target - e.g. tap: { on: "Photo", times: 2 }'
+        'tap with times, button or modifiers needs a target - e.g. tap: { on: "Photo", times: 2 }'
       );
     }
     const step: FlowStep = { kind: "tap", ...parseTarget(obj.on, "tap.on") };
@@ -2744,6 +2768,8 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
     if (times !== undefined) step.times = times;
     const button = parseTapButton(obj.button, entry);
     if (button !== undefined) step.button = button;
+    const modifiers = parseTapModifiers(obj.modifiers, entry);
+    if (modifiers !== undefined) step.modifiers = modifiers;
     return step;
   }
 
@@ -3345,15 +3371,15 @@ function* argFields(
  * and `long-press` take both, and the parsed step keeps no record of which was
  * written — `duration` is optional in long-press's options form and `times: 1`
  * normalizes to `undefined`, so a step carrying neither could have been spelled
- * either way (`button: left` normalizes away too). Naming one spelling there
- * would name a path that is not in the author's file, so `alt` carries the
- * other and the refusal offers both.
+ * either way (`button: left` and `modifiers: []` normalize away too). The
+ * refusal uses `alt` to offer both paths when the original spelling is unknown.
  */
 function gestureTargetPath(
   step: Extract<FlowStep, { kind: "tap" | "long-press" | "pinch" | "rotate" }>
 ): { path: string; alt?: string } {
   if (step.kind === "pinch" || step.kind === "rotate") return { path: `${step.kind}.on` };
-  const option = step.kind === "tap" ? (step.times ?? step.button) : step.duration;
+  const option =
+    step.kind === "tap" ? (step.times ?? step.button ?? step.modifiers) : step.duration;
   if (option !== undefined) return { path: `${step.kind}.on` };
   return { path: step.kind, alt: `${step.kind}.on` };
 }
@@ -3936,7 +3962,10 @@ export function serializeFlow(flow: FlowFile): string {
   // multi-line values as double-quoted scalars (escape-exact both ways);
   // single-line values still serialize plain, and legacy files containing block
   // scalars still parse.
-  return yamlStringify(doc, { blockQuote: false });
+  // doubleQuotedMinMultiLineLength: Infinity — keep every newline as a `\n`
+  // escape. Otherwise yaml writes a long value's newlines as line breaks and
+  // escapes a line of exactly one space twice (`\\ `), so " " came back as "\".
+  return yamlStringify(doc, { blockQuote: false, doubleQuotedMinMultiLineLength: Infinity });
 }
 
 export function validateFlow(flow: FlowFile): void {

@@ -848,6 +848,10 @@ describe("parseFlow", () => {
       "\t\n",
       "  hi  ",
       "plain single line",
+      // Long enough to be written over several lines: a line of one space must
+      // still come back as a space, not a backslash.
+      "x".repeat(78) + "\n \nb",
+      "x".repeat(30) + " " + "y".repeat(60) + "\n \n z",
     ];
     for (const value of values) {
       const flow: FlowFile = {
@@ -1305,6 +1309,9 @@ describe("output references", () => {
       "`tap.on.id`"
     );
     expect(
+      locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, modifiers: [command] }\n')
+    ).toBe("`tap.on.id`");
+    expect(
       locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
     ).toBe("`long-press.on.id`");
     expect(locatorNamed('steps:\n  - pinch: { on: { id: "{{output:map}}" }, scale: 2 }\n')).toBe(
@@ -1338,6 +1345,9 @@ describe("output references", () => {
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, button: left }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, modifiers: [] }\n')).toBe(
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n')).toBe(

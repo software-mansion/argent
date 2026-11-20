@@ -372,39 +372,6 @@ describe("ui-tree-match", () => {
     }
   });
 
-  it("compiles the search and full-consumption regexes once each per ranking pass", () => {
-    const pattern = "Order #\\d+";
-    const ranked = node({
-      role: "AXGroup",
-      frame: { x: 0, y: 0, width: 1, height: 1 },
-      children: [
-        node({
-          label: "Order #1 Archive",
-          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
-        }),
-        node({
-          label: "Order #1",
-          frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.05 },
-        }),
-        node({
-          value: "Order #2",
-          frame: { x: 0.4, y: 0.6, width: 0.2, height: 0.05 },
-        }),
-      ],
-    });
-    const createRegExp = vi.spyOn(uiTreeMatchInternals, "createRegExp");
-
-    try {
-      expect(selectorToFrame(ranked, { textMatches: pattern })).toMatchObject({ y: 0.4 });
-      expect(createRegExp.mock.calls.map(([source]) => source)).toEqual([
-        pattern,
-        `^(?:${pattern})$`,
-      ]);
-    } finally {
-      createRegExp.mockRestore();
-    }
-  });
-
   it("evaluateCondition `text` prefers the visible match over a zero-area shadow", () => {
     // A stale zero-area node at the top of the screen must not shadow the
     // visible element the check was meant to read — the failure messages

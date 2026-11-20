@@ -180,7 +180,7 @@ export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | 
   return kind;
 }
 
-async function findIosSimulator(udid: string): Promise<IosSimulator | undefined> {
+export async function findIosSimulator(udid: string): Promise<IosSimulator | undefined> {
   /**
    * An external provider's simulator is not in any configured set, so the
    * all-sets listing cannot see it. Scope to the set the provider declared and

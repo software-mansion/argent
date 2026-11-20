@@ -78,6 +78,12 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   "open-url",
   // The keyboard backend's XCTest typeText: Delete presses, then the text.
   "fill",
+  // Build and launch through xcodebuild / xctrace --device, which target hardware directly.
+  "native-profiler-launch-analysis",
+  // Host-side readers of the xctrace session native-profiler-launch-analysis
+  // writes in profile mode; the native-profiler capture tools stay simulator-only.
+  "profiler-load",
+  "profiler-stack-query",
 ];
 
 describe("apple.device capability ratchet", () => {
@@ -88,5 +94,15 @@ describe("apple.device capability ratchet", () => {
       .tools.filter((id) => registry.getTool(id)?.capability?.apple?.device === true)
       .filter((id) => !PHYSICAL_IOS_PORTED_TOOLS.includes(id));
     expect(offenders).toEqual([]);
+  });
+
+  it("every ported tool keeps apple.device", () => {
+    // The other direction: dropping apple.device from a listed tool must fail too,
+    // or e.g. the profiler-load step after a launch profile on an iPhone breaks unnoticed.
+    const registry = createRegistry();
+    const lost = PHYSICAL_IOS_PORTED_TOOLS.filter(
+      (id) => registry.getTool(id) && registry.getTool(id)?.capability?.apple?.device !== true
+    );
+    expect(lost).toEqual([]);
   });
 });

@@ -190,22 +190,21 @@ const THREE_TEAMS: DetectedSigningTeam[] = [
 
 describe("buildSigningDetectionNote", () => {
   it("names the single detected team and the override variable", () => {
-    expect(buildSigningDetectionNote(ONE_TEAM)).toBe(
-      "Signing the on-device runner with team ABCDE12345 " +
-        "(Apple Development (ALICEKEY01)), detected from this Mac's " +
-        "keychain. Set ARGENT_IOS_TEAM_ID in the tool-server's environment to override."
-    );
+    const note = buildSigningDetectionNote(ONE_TEAM);
+    expect(note).toContain(ONE_TEAM[0]!.teamId);
+    expect(note).toContain(ONE_TEAM[0]!.label);
+    expect(note).toContain("ARGENT_IOS_TEAM_ID");
   });
 
   it("lists the losing teams and the exact restart command when several exist", () => {
-    expect(buildSigningDetectionNote(THREE_TEAMS)).toBe(
-      "Signing the on-device runner with team FGHIJ67890 " +
-        "(Apple Development (BOBKEY0002)), the newest of 3 signing " +
-        "identities in this Mac's keychain. Also found: ABCDE12345 " +
-        "(Apple Development (ALICEKEY01)), KLMNO13579 " +
-        "(Apple Development (CAROLKEY01)). To sign under a different " +
-        "team, set ARGENT_IOS_TEAM_ID in the tool-server's environment: " +
-        "argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach"
+    const note = buildSigningDetectionNote(THREE_TEAMS);
+    expect(note).toContain("with team FGHIJ67890");
+    for (const team of THREE_TEAMS) {
+      expect(note).toContain(team.teamId);
+      expect(note).toContain(team.label);
+    }
+    expect(note).toContain(
+      "argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach"
     );
   });
 

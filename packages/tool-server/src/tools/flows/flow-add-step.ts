@@ -64,6 +64,7 @@ import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
+import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
 import {
   MACOS_DESCRIBE_LIMITS,
   MACOS_JUDGING_LIMITS,
@@ -1780,11 +1781,21 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A right-click must survive it as `button`, or replay would left-click.
       // Left is the default (absent).
       const tapButton = isTap && args.button === "right" ? { button: "right" as const } : {};
+      const heldKeys = Array.isArray(args.modifiers)
+        ? MACOS_MODIFIERS.filter((m) => (args.modifiers as unknown[]).includes(m))
+        : [];
+      const tapModifiers = isTap && heldKeys.length > 0 ? { modifiers: heldKeys } : {};
 
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
-        step = { kind: "tap", selector: captured.selector, ...tapTimes, ...tapButton };
+        step = {
+          kind: "tap",
+          selector: captured.selector,
+          ...tapTimes,
+          ...tapButton,
+          ...tapModifiers,
+        };
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
@@ -1795,6 +1806,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           y: args.y as number,
           ...tapTimes,
           ...tapButton,
+          ...tapModifiers,
         };
         warning = captured?.warning;
       } else if (isLaunch) {

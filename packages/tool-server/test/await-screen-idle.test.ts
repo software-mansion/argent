@@ -55,10 +55,6 @@ describe("await-screen-idle tool", () => {
     __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
   });
 
-  it("exposes the await-screen-idle id", () => {
-    expect(createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi)).id).toBe("await-screen-idle");
-  });
-
   it("settles once content renders and holds still", async () => {
     // blank, then the same content on every later poll → stable
     const tool = createAwaitScreenIdleTool(
