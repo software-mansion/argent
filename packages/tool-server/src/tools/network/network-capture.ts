@@ -62,7 +62,10 @@ export function withLayerInRetries<L extends { reason?: string }>(
 ): L[] {
   if (layer === undefined) return layers;
   return layers.map((entry) =>
-    entry.reason && /network-capture-(start|stop)/.test(entry.reason)
+    // A reason that already names the layer to pass is left as it is.
+    entry.reason &&
+    /network-capture-(start|stop)/.test(entry.reason) &&
+    !/layer "(js|native)"/.test(entry.reason)
       ? {
           ...entry,
           reason: `${entry.reason}; pass layer "${layer}" to that call, so it leaves the other layer as it is`,

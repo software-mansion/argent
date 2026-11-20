@@ -143,7 +143,13 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer the call names can capture 
             ? [
                 device.platform === "android"
                   ? startAndroidLayer(registry, device, params.bundleId, port)
-                  : startIosLayer(registry, device, params.bundleId, port, run.js),
+                  : startIosLayer(
+                      registry,
+                      device,
+                      params.bundleId,
+                      port,
+                      run.js ? "this call" : jsStartedBefore(params) ? "earlier" : undefined
+                    ),
               ]
             : []),
         ]);
@@ -163,6 +169,13 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer the call names can capture 
       return { status: "ok", layers: withLayerInRetries(layers, params.layer) };
     },
   };
+}
+
+/** An earlier start turned on the app's JS capture on this device, and no stop ended it. */
+function jsStartedBefore(params: CaptureParams): boolean {
+  const jsDeviceId = params.logicalDeviceId ?? params.udid;
+  const device = canonicalDeviceId(jsDeviceId) ?? jsDeviceId;
+  return findJsCapture(device, params.bundleId)?.intent === "started";
 }
 
 function unavailable(layer: StartedLayer["layer"], reason: string): StartedLayer {
@@ -352,8 +365,8 @@ async function startIosLayer(
   device: DeviceInfo,
   bundleId: string,
   port: number,
-  /** The call starts the JS layer too, whose capture a relaunch ends. */
-  jsToo: boolean
+  /** Which start turned on the app's JS capture, which a relaunch ends: this call or an earlier one. */
+  jsCaptureBy: "this call" | "earlier" | undefined
 ): Promise<StartedLayer> {
   if (!isInjectableBundleId(bundleId)) {
     return unavailable(
@@ -413,12 +426,18 @@ async function startIosLayer(
       reason: "the app has not connected through the device's devtools agent; it arms when it does",
     };
   }
+  const jsAfterRelaunch =
+    jsCaptureBy === "this call"
+      ? ", then network-capture-start again, since a relaunch ends the JS layer's capture"
+      : jsCaptureBy === "earlier"
+        ? `; a relaunch also ends the JS capture that an earlier start turned on, so if you need it, call network-capture-start with layer "js" once the app's JavaScript loads (for native requests alone, restart-app is enough)`
+        : "";
   return {
     layer: "ios-native",
     armed: false,
     reason:
       block?.status === "restart_required"
-        ? `no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now${jsToo ? ", then network-capture-start again, since a relaunch ends the JS layer's capture" : ""}; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app`
+        ? `no running process of the app can be armed; capture arms at its next launch, so call restart-app to capture it now${jsAfterRelaunch}; if restart-app fails rather than starting the app, the bundle id is not installed on this simulator: check it, or install the app`
         : "the app has not connected yet; capture arms when it does",
   };
 }
