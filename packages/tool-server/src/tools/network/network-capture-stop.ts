@@ -63,7 +63,12 @@ Returns { status, layers }: per layer the call stopped, armed (false once the la
     capability: CAPTURE_CAPABILITY,
     interaction: {
       startedMsg: ({ params }) => `Stopping ${captureName(params.layer)} for ${params.bundleId}`,
-      completedMsg: ({ params }) => `Stopped ${captureName(params.layer)} for ${params.bundleId}`,
+      completedMsg: ({ params, result }) => {
+        const recording = result.layers.filter((entry) => entry.armed).map((entry) => entry.layer);
+        return recording.length === 0
+          ? `Stopped ${captureName(params.layer)} for ${params.bundleId}`
+          : `Stop of ${captureName(params.layer)} for ${params.bundleId} is unconfirmed: ${recording.join(" and ")} may still record`;
+      },
       failedMsg: ({ params, failureSignal }) =>
         `Failed to stop ${captureName(params.layer)} for ${params.bundleId}: ${failureSignal.error_code}`,
     },

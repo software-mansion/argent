@@ -3850,6 +3850,28 @@ describe("the tool definitions", () => {
     }
   );
 
+  it("says a stop is unconfirmed when a layer it stops may still record", () => {
+    const tool = createNetworkCaptureStopTool(new Registry());
+    const msg = (layers: StoppedLayer[], captureLayer?: "js" | "native") =>
+      tool.interaction?.completedMsg?.({
+        params: { udid: SERIAL, bundleId: APP, ...(captureLayer ? { layer: captureLayer } : {}) },
+        result: { status: "ok", layers },
+      });
+
+    expect(msg([{ layer: "js", armed: true, total: 0, reason: "x" }], "js")).toBe(
+      `Stop of JS network capture for ${APP} is unconfirmed: js may still record`
+    );
+    expect(
+      msg([
+        { layer: "js", armed: false, total: 3 },
+        { layer: "android-native", armed: true, total: 1, reason: "x" },
+      ])
+    ).toBe(`Stop of network capture for ${APP} is unconfirmed: android-native may still record`);
+    expect(msg([{ layer: "js", armed: false, total: 3 }], "js")).toBe(
+      `Stopped JS network capture for ${APP}`
+    );
+  });
+
   it.each(tools)(
     "network-capture-$verb.2 runs on iOS simulators, remote simulators and Android, and refuses the rest",
     ({ make }) => {
