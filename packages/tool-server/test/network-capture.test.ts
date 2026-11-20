@@ -2911,6 +2911,33 @@ describe("a Metro that several devices share", () => {
     expect(findJsCapture(SHARED_ID, APP)).toMatchObject({ intent: "stopped" });
   });
 
+  it("keeps a JS stop without the logicalDeviceId unconfirmed also when an earlier capture under the udid was stopped", async () => {
+    serve(PORT, IOS_UDID, new FakeRuntime(APP));
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP, undefined, "js");
+    await stop(IOS_UDID, APP, undefined, "js");
+    expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "stopped", paused: true });
+    // A second device joins the Metro: the udid no longer names one runtime.
+    const rt = new FakeRuntime(APP);
+    await reconnect(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH);
+    serve(PORT, SHARED_ID, rt);
+    await start(IOS_UDID, APP, undefined, "js", SHARED_ID);
+
+    const without = await stop(IOS_UDID, APP, undefined, "js");
+
+    expect(without.layers).toEqual([
+      {
+        layer: "js",
+        armed: true,
+        total: 0,
+        reason: `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; pass this device's logicalDeviceId (in parentheses: ${SHARED_DEVICES}), or give each device its own Metro port; a JS capture of ${APP} on this Metro may still record, so call network-capture-stop again with this device's logicalDeviceId before you rely on the stop; pass layer "js" to that call, so it leaves the other layer as it is`,
+      },
+    ]);
+    expect(rt.paused).toBe(false);
+    expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "stopped", paused: true });
+    expect(findJsCapture(SHARED_ID, APP)).toMatchObject({ intent: "started" });
+  });
+
   it("names the logicalDeviceIds to pass when the start gives none, and the native layer still arms", async () => {
     shared();
 
