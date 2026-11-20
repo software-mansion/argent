@@ -298,17 +298,9 @@ function notRunningError(bundleId: string): FailureError {
   );
 }
 
-function catalystRefusal(bundleId: string): string {
-  return (
-    `${bundleId} is a Mac Catalyst (UIKit) app, which argent does not drive: typing, ` +
-    `paste and scrolling do not reach its views. Test its UI on an iOS simulator instead.`
-  );
-}
-
 /**
- * Why argent refuses to start the app, so that no launch arms its capture: a
- * Mac Catalyst app, an Electron app or a build that the hardened runtime keeps
- * the library out of. Undefined while argent's own copy runs, and when argent
+ * Why argent refuses to start the app, so that no launch arms its capture: an
+ * Electron app or a build that the hardened runtime keeps the library out of. Undefined while argent's own copy runs, and when argent
  * cannot tell, for example when Spotlight does not know the app. Before argent
  * started the app, Spotlight's copy is only a guess at the build that runs
  * next, so its hardened runtime does not refuse: a Debug build can still run.
@@ -325,11 +317,7 @@ export async function macosLaunchRefusal(bundleId: string): Promise<string | und
     return undefined;
   }
   if (info.bundleId !== bundleId) return undefined;
-  return (
-    (info.catalyst ? catalystRefusal(bundleId) : chromiumRefusal(info)) ??
-    (tracked ? hardenedRuntimeRefusal(info) : undefined) ??
-    undefined
-  );
+  return chromiumRefusal(info) ?? (tracked ? hardenedRuntimeRefusal(info) : undefined) ?? undefined;
 }
 
 function errorMessage(err: unknown): string {

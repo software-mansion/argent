@@ -42,7 +42,7 @@ export const CAPTURE_CAPABILITY: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 type CaptureLayer = "js" | "ios-native" | "android-native" | "macos-native";

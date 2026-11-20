@@ -246,7 +246,7 @@ A native layer that is not armed often arms later without a new start. For examp
 | `android-native` | The app did not run at the start. `launch-app` or `restart-app` attaches the in-app agent to its next process.                               | absent        |
 | `android-native` | The in-app agent captures no requests in this process, for example because R8 fully minified OkHttp.                                         | `true`        |
 | `macos-native`   | The app is an Apple app. Argent does not load its library into an Apple app.                                                                 | `true`        |
-| `macos-native`   | Argent does not start the app: a Mac Catalyst app, an Electron app, or a build that the hardened runtime keeps the library out of.           | `true`        |
+| `macos-native`   | Argent does not start the app: an Electron app, or a build that the hardened runtime keeps the library out of.                               | `true`        |
 | `macos-native`   | The app does not run. `boot-device`, `launch-app` or `restart-app` starts it, and Argent arms its process.                                   | absent        |
 
 On iOS, Argent cannot tell an app that does not run from an app that is not installed. Thus the `ios-native` reason that tells you to call `restart-app` also says this: if `restart-app` cannot start the app, the bundle ID is not installed on the simulator.
@@ -828,7 +828,7 @@ Use `describe` or `native-describe-screen` to inspect UIKit controls through the
 - **Toolbar menus.** With **Optimize Interface for Mac**, some UIKit toolbar menu buttons have no identifier. Select them by label.
 - **Drag and drop.** Pan and drag gestures work. UIKit drag and drop between views is unsupported.
 - **File dialogs.** [`file-panel`](#file-panel) works with the UIKit document picker and SwiftUI's `fileImporter` and `fileExporter`.
-- **Web views.** `describe` includes `WKWebView` content. Typing, paste, scrolling, and text selection work in it. `native-network-logs` captures the app's `URLSession` requests only. It does not capture `WKWebView` traffic.
+- **Web views.** `describe` includes `WKWebView` content. Typing, paste, scrolling, and text selection work in it. `network-capture-start` and `native-network-logs` capture the app's `URLSession` requests only. They do not capture `WKWebView` traffic.
 - **Password fields.** Focusing an empty password field can show the macOS Passwords AutoFill pop-up. Input still works.
 - **Modifier clicks.** UIKit controls can respond to modifier clicks. React Native `Pressable` handlers receive the press without modifier keys. SwiftUI `List` row selection stays single-select with Command-click or Shift-click.
 

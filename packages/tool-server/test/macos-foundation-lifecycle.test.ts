@@ -98,6 +98,7 @@ vi.mock("../src/utils/external-devices", async (importOriginal) => ({
   listExternalDevices: vi.fn(async () => []),
 }));
 
+import supertest from "supertest";
 import { setFlag } from "@argent/configuration-core";
 import { FAILURE_CODES, getFailureSignal, Registry, type ToolDefinition } from "@argent/registry";
 import { macosAppBlueprint, macosAppRef } from "../src/blueprints/macos-app";
@@ -116,6 +117,7 @@ import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-a
 import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
 import { assertSupported } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
+import { createHttpApp } from "../src/http";
 import { pollPidsUntilGone } from "../src/utils/process-kill";
 import { PROCESS_ENDED } from "../src/utils/native-network-record";
 import { MACOS_CONNECTION_DROPPED, MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
@@ -1479,33 +1481,81 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect((err as Error).message).toContain("macos-native: com.apple.TextEdit is an Apple app");
     });
 
-    it("fails with NETWORK_CAPTURE_UNAVAILABLE for a Mac Catalyst or an Electron app, which argent never starts", async () => {
-      const catalystId = `${BUNDLE_ID}.catalyst`;
-      const catalyst = writeBundle(path.join(root, `catalyst-${Date.now()}`), catalystId);
-      // A 64-bit Mach-O header and one LC_BUILD_VERSION load command for platform 6, Mac Catalyst.
-      const thin = Buffer.alloc(56);
-      [0xfeedfacf, 0x0100000c, 0, 2, 1, 24].forEach((v, i) => thin.writeUInt32LE(v, i * 4));
-      [0x32, 24, 6].forEach((v, i) => thin.writeUInt32LE(v, 32 + i * 4));
-      fs.writeFileSync(path.join(catalyst, "Contents", "MacOS", "FakeApp"), thin);
+    it("fails with NETWORK_CAPTURE_UNAVAILABLE for an Electron app, which argent never starts", async () => {
       const electronId = `${BUNDLE_ID}.electron`;
       const electron = writeBundle(path.join(root, `electron-${Date.now()}`), electronId);
       fs.mkdirSync(path.join(electron, "Contents", "Frameworks", "Electron Framework.framework"), {
         recursive: true,
       });
-      searched.spotlight = { [catalystId]: catalyst, [electronId]: electron };
-      for (const [bundleId, refusal] of [
-        [catalystId, "is a Mac Catalyst (UIKit) app"],
-        [electronId, "is an Electron app"],
-      ] as const) {
-        const err = await run("network-capture-start", {
-          udid: `macos-app-${bundleId}`,
-          bundleId,
-        }).catch((e: unknown) => e);
-        expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
-        expect((err as Error).message).toContain(`macos-native: ${bundleId} ${refusal}`);
-      }
+      searched.spotlight = { [electronId]: electron };
+      const err = await run("network-capture-start", {
+        udid: `macos-app-${electronId}`,
+        bundleId: electronId,
+      }).catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect((err as Error).message).toContain(`macos-native: ${electronId} is an Electron app`);
     });
 
+    it("starts, lists, details and stops the capture of a Mac Catalyst app over HTTP", async () => {
+      const catalyst = writeBundle(path.join(root, `catalyst-net-${Date.now()}`), BUNDLE_ID);
+      fs.writeFileSync(
+        path.join(catalyst, "Contents", "MacOS", "FakeApp"),
+        machO(PLATFORM_MACCATALYST)
+      );
+      // Over HTTP, so the capability of each tool applies.
+      const http = createHttpApp(registry).app;
+      const post = async (tool: string, body: Record<string, unknown>): Promise<any> => {
+        const res = await supertest(http).post(`/tools/${tool}`).send(body);
+        expect({ tool, status: res.status, error: res.body.error }).toEqual({
+          tool,
+          status: 200,
+          error: undefined,
+        });
+        return res.body.data;
+      };
+      const app = { udid: DEVICE_ID, bundleId: BUNDLE_ID };
+      const { pid } = await post("boot-device", { macosAppPath: catalyst });
+      expect(resolveDevice(DEVICE_ID).kind).toBe("catalyst");
+      // The read names network-capture-start, which takes the app.
+      expect((await post("native-network-logs", app)).header).toContain(
+        "call network-capture-start for it"
+      );
+      expect(await post("network-capture-start", app)).toEqual({
+        status: "ok",
+        layers: [{ layer: "macos-native", armed: true }],
+      });
+      expect(await request("https://example.com/catalyst")).toEqual({
+        active: true,
+        activations: 1,
+      });
+      const log = await post("native-network-logs", app);
+      expect(log).toMatchObject({ armed: true, total: 1 });
+      const [line] = log.requests;
+      expect(line).toMatchObject({ url: "https://example.com/catalyst", state: "complete" });
+      expect(
+        await post("view-network-request-details", { device_id: DEVICE_ID, requestId: line.id })
+      ).toMatchObject({
+        requestId: line.id,
+        request: { url: "https://example.com/catalyst", method: "GET" },
+        response: { status: 200 },
+      });
+
+      expect(await post("network-capture-stop", app)).toEqual({
+        status: "ok",
+        layers: [{ layer: "macos-native", armed: false, total: 1 }],
+      });
+      expect(await request("https://example.com/after-stop")).toEqual({
+        active: false,
+        activations: 1,
+      });
+      expect(await post("native-network-logs", app)).toMatchObject({ stopped: true, total: 1 });
+
+      // A start while the app does not run waits for its next launch, as for an AppKit app.
+      await quit(pid);
+      expect((await post("network-capture-start", app)).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+    });
     it("refuses to read an Apple app instead of naming network-capture-start, which fails for it", async () => {
       const err = await run("native-network-logs", {
         udid: "macos-app-com.apple.TextEdit",

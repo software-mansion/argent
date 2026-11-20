@@ -236,7 +236,7 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
   // A Mac app has only native IDs, which need no debugger.
-  capability: { ...DEBUGGER_TOOL_CAPABILITY, macos: { app: true } },
+  capability: { ...DEBUGGER_TOOL_CAPABILITY, macos: { app: true, catalyst: true } },
   services: (params): Record<string, ServiceRef> => {
     /**
      * A native ID names its record without the device, so it
