@@ -536,7 +536,7 @@ async function readNativeBody(
   }
   if (!body.available) return `[unavailable: ${body.reason ?? "no body"}]`;
   if (body.inlineChars !== undefined) {
-    return inlineBody(body.body, body.inlineChars, mimeType, framing);
+    return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing);
   }
   if (!body.base64Encoded) {
     const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
@@ -567,28 +567,40 @@ async function readNativeBody(
  * decode in the declared charset, as the bytes of a base64 body do.
  */
 function inDeclaredCharset(text: string, contentType: string, truncated: boolean): string {
+  if (namesUtf8(contentType)) return text;
+  return decodeText(Buffer.from(text, "utf8"), charsetOf(contentType), truncated) ?? text;
+}
+
+/** A Content-Type that names no charset, or UTF-8: a text body reads as the agent sent it. */
+function namesUtf8(contentType: string): boolean {
   const charset = charsetOf(contentType);
-  if (!charset || /^utf-?8$/i.test(charset)) return text;
-  return decodeText(Buffer.from(text, "utf8"), charset, truncated) ?? text;
+  return !charset || /^utf-?8$/i.test(charset);
 }
 
 /**
  * A request body that came with the request, which the host holds. The agent
  * sends a body this way only when it is UTF-8 text, so a body of a binary type
- * is omitted by its type.
+ * is omitted by its type. Its bytes decode in the declared charset, as those of
+ * a body the agent gives by a read do. `truncated` says the host kept only the
+ * start of the body, which is `wholeChars` long when read as UTF-8.
  */
 function inlineBody(
   text: string,
   wholeChars: number,
+  truncated: boolean,
   mimeType: string,
   framing: NativeBodyFraming
 ): string {
   if (BINARY_BODY_TYPES.test(mimeType.toLowerCase())) {
     return `[body omitted: binary ${mimeType}, ${framing.wholeSize ?? "size unknown"}]`;
   }
-  return wholeChars > MAX_BODY_SIZE
-    ? `${cutMarker(`${wholeChars} chars`, mimeType)}\n${text.slice(0, MAX_BODY_SIZE)}...`
-    : text;
+  const decoded = inDeclaredCharset(text, framing.contentType, truncated);
+  if (!truncated) return truncateBody(decoded, mimeType);
+  // In another charset, the whole body has more chars than its kept start, but how many is unknown.
+  const fullSize = namesUtf8(framing.contentType)
+    ? `${wholeChars} chars`
+    : `more than ${decoded.length} chars`;
+  return `${cutMarker(fullSize, mimeType)}\n${decoded.slice(0, MAX_BODY_SIZE)}...`;
 }
 
 /**

@@ -392,6 +392,43 @@ describe("view-network-request-details: an iOS request body that came with the r
     );
   });
 
+  it("decodes a body in the charset its Content-Type names, as a body read from the agent", async () => {
+    // The UTF-16LE bytes of "OK" are valid UTF-8, so the agent can send them inline.
+    const utf16 = Buffer.from("OK", "utf16le");
+    serve(post({ "Content-Type": "text/plain; charset=utf-16le" }));
+    requestPostData.mockResolvedValue(inlineBody(utf16.toString("utf8")));
+    expect((await details()).request.postData).toBe("OK");
+
+    requestPostData.mockResolvedValue(base64Body(utf16));
+    expect((await details()).request.postData).toBe("OK");
+  });
+
+  it("counts the chars of a body in its charset to decide on a cut", async () => {
+    serve(post({ "Content-Type": "text/plain; charset=utf-16le" }));
+    requestPostData.mockResolvedValue(
+      inlineBody(Buffer.from("a".repeat(600), "utf16le").toString("utf8"))
+    );
+    expect((await details()).request.postData).toBe("a".repeat(600));
+
+    requestPostData.mockResolvedValue(
+      inlineBody(Buffer.from("b".repeat(1500), "utf16le").toString("utf8"))
+    );
+    expect((await details()).request.postData).toBe(
+      `[TRUNCATED: first 1000 chars shown, full size: 1500 chars, MIME: text/plain]\n${"b".repeat(1000)}...`
+    );
+  });
+
+  it("gives only a lower bound for the length of a body in another charset that the host kept the start of", async () => {
+    // 70000 bytes; the host keeps the first MAX_VALUE_CHARS, which decode to half as many chars.
+    const sent = Buffer.from("c".repeat(35_000), "utf16le").toString("utf8");
+    serve(post({ "Content-Type": "text/plain; charset=utf-16le" }));
+    requestPostData.mockResolvedValue(inlineBody(sent.slice(0, MAX_VALUE_CHARS), sent.length));
+
+    expect((await details()).request.postData).toBe(
+      `[TRUNCATED: first 1000 chars shown, full size: more than ${MAX_VALUE_CHARS / 2} chars, MIME: text/plain]\n${"c".repeat(1000)}...`
+    );
+  });
+
   it("names no MIME type in the cut line of a body the app sent without a Content-Type", async () => {
     serve(post({}));
     requestPostData.mockResolvedValue(inlineBody("z".repeat(1500)));
