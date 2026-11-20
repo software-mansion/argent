@@ -535,13 +535,15 @@ async function readNativeBody(
     return `[unavailable: ${err instanceof Error ? err.message : String(err)}]`;
   }
   if (!body.available) return `[unavailable: ${body.reason ?? "no body"}]`;
+  // A request body that the upload cut has no known whole size.
+  if (body.incomplete) framing = { ...framing, wholeSize: undefined };
   if (body.inlineChars !== undefined) {
     return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing);
   }
   if (!body.base64Encoded) {
     const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
     return body.truncated
-      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing)
+      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing, body.incomplete)
       : truncateBody(text, mimeType);
   }
 
@@ -553,11 +555,11 @@ async function readNativeBody(
   const text = decodeText(bytes, charsetOf(framing.contentType), body.truncated);
   if (text === null) {
     return body.truncated
-      ? `[body omitted: binary ${mimeType || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length)}]`
+      ? `[body omitted: binary ${mimeType || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length, body.incomplete)}]`
       : `[body omitted: binary ${mimeType || "data"}, ${bytes.length} bytes]`;
   }
   return body.truncated
-    ? cutByAgent(text, mimeType, kept.length, framing)
+    ? cutByAgent(text, mimeType, kept.length, framing, body.incomplete)
     : truncateBody(text, mimeType);
 }
 
@@ -604,22 +606,26 @@ function inlineBody(
 }
 
 /**
- * A body the agent cut short: its own length is the cut's, so the size shown
- * is the whole body's, in bytes, when the record knows it.
+ * A body the agent cut short, or a request body that the upload cut: its own
+ * length is the cut's, so the size shown is the whole body's, in bytes, when
+ * the record knows it.
  */
 function cutByAgent(
   text: string,
   mimeType: string,
   keptBytes: number,
-  framing: NativeBodyFraming
+  framing: NativeBodyFraming,
+  incomplete?: boolean
 ): string {
   const shown = Math.min(text.length, MAX_BODY_SIZE);
-  const fullSize = `${framing.wholeSize ?? "unknown"}; ${agentKept(keptBytes)}`;
+  const fullSize = `${framing.wholeSize ?? "unknown"}; ${agentKept(keptBytes, incomplete)}`;
   return `${cutMarker(fullSize, mimeType, shown)}\n${text.slice(0, shown)}${text.length > shown ? "..." : ""}`;
 }
 
-function agentKept(keptBytes: number): string {
-  return `the agent kept only the first ${keptBytes} bytes`;
+function agentKept(keptBytes: number, incomplete?: boolean): string {
+  return incomplete
+    ? `the upload ended after the first ${keptBytes} bytes, before the app's body stream reached its end`
+    : `the agent kept only the first ${keptBytes} bytes`;
 }
 
 function sizeInBytes(bytes: number, how: string): string | undefined {

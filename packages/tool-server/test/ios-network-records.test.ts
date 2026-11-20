@@ -1139,6 +1139,28 @@ describe("iOS native network records: body reads", () => {
     expect(app.request).toHaveBeenCalledTimes(1);
   });
 
+  it.each<[string, Record<string, unknown>, Partial<NativeNetworkBody>]>([
+    [
+      "marks a request body as incomplete and cut",
+      { incomplete: true },
+      { truncated: true, incomplete: true },
+    ],
+    ["reads a request body as whole", { incomplete: false }, {}],
+    ["reads a request body as whole from an agent that sends no incomplete field", {}, {}],
+  ])("%s by the incomplete field of the reply", async (_name, fields, expected) => {
+    const { app, store, agent } = bodyStore();
+    agent.requestWillBeSent("r", "https://api.example.com/upload", {
+      method: "POST",
+      hasPostData: true,
+    });
+
+    const read = store.requestPostData(idOf(store, "r"));
+    await settle();
+    app.sent[0]!.reply({ postData: "a".repeat(800), base64Encoded: false, ...fields });
+
+    expect(await read).toEqual(body("a".repeat(800), expected));
+  });
+
   it.each<[string, "response" | "post", (read: SentRead) => void, string]>([
     [
       "the agent no longer holding a response body",

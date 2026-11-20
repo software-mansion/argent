@@ -8,6 +8,7 @@ import {
 } from "../../src/blueprints/ios-network-records";
 import {
   MAX_VALUE_CHARS,
+  toBody,
   unavailable,
   type NativeNetworkBody,
   type NativeNetworkRecord,
@@ -363,6 +364,65 @@ describe("view-network-request-details: iOS bodies and Content-Encoding", () => 
 
     expect((await details()).request.postData).toBe(json);
     expect(requestPostData).toHaveBeenCalledWith(ID);
+  });
+});
+
+describe("view-network-request-details: an iOS request body that the upload cut", () => {
+  const ENDED = (bytes: number) =>
+    `the upload ended after the first ${bytes} bytes, before the app's body stream reached its end`;
+
+  /** The agent's reply to Network.getRequestPostData, read as the store reads it. */
+  function postReply(fields: Record<string, unknown>): NativeNetworkBody {
+    return toBody(fields, "post");
+  }
+
+  it("says that the body is incomplete and gives no whole size, not even the Content-Length", async () => {
+    serve(post({ "Content-Type": "text/plain", "Content-Length": "2000" }));
+    requestPostData.mockResolvedValue(
+      postReply({ postData: "a".repeat(800), base64Encoded: false, incomplete: true })
+    );
+
+    expect((await details()).request.postData).toBe(
+      `[TRUNCATED: first 800 chars shown, full size: unknown; ${ENDED(800)}, MIME: text/plain]\n${"a".repeat(800)}`
+    );
+  });
+
+  it("cuts a long incomplete body to 1000 chars and gives the length the app wrote", async () => {
+    serve(post({ "Content-Type": "text/plain" }));
+    requestPostData.mockResolvedValue(
+      postReply({ postData: "b".repeat(675_840), base64Encoded: false, incomplete: true })
+    );
+
+    expect((await details()).request.postData).toBe(
+      `[TRUNCATED: first 1000 chars shown, full size: unknown; ${ENDED(675_840)}, MIME: text/plain]\n${"b".repeat(1000)}...`
+    );
+  });
+
+  it("omits an incomplete binary body and says that the upload cut it", async () => {
+    serve(post({ "Content-Type": "application/octet-stream", "Content-Length": "4096" }));
+    requestPostData.mockResolvedValue(
+      postReply({
+        postData: Buffer.from([0xff, 0xfe, 0x00, 0x81]).toString("base64"),
+        base64Encoded: true,
+        incomplete: true,
+      })
+    );
+
+    expect((await details()).request.postData).toBe(
+      `[body omitted: binary application/octet-stream, size unknown; ${ENDED(4)}]`
+    );
+  });
+
+  it.each([
+    ["incomplete: false", { incomplete: false }],
+    ["no incomplete field, as an older agent sends", {}],
+  ])("shows a body with %s as the whole body", async (_name, fields) => {
+    serve(post({ "Content-Type": "text/plain", "Content-Length": "800" }));
+    requestPostData.mockResolvedValue(
+      postReply({ postData: "a".repeat(800), base64Encoded: false, ...fields })
+    );
+
+    expect((await details()).request.postData).toBe("a".repeat(800));
   });
 });
 

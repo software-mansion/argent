@@ -61,6 +61,12 @@ export interface NativeNetworkBody {
   body: string;
   base64Encoded: boolean;
   truncated: boolean;
+  /**
+   * Set on a request body whose upload ended before the app's body stream
+   * reached its end, for example as the app cancelled the task: `body` is
+   * only what the app wrote by then, and `truncated` is set too.
+   */
+  incomplete?: boolean;
   reason?: string;
   /**
    * Set on a request body that came with the request itself and that the host
@@ -188,7 +194,10 @@ export function recordSize(record: NativeNetworkRecord): number {
   return chars;
 }
 
-/** A body reply of an in-app agent: `{body | postData, base64Encoded, wasTruncated}`. */
+/**
+ * A body reply of an in-app agent: `{body | postData, base64Encoded, wasTruncated}`.
+ * A request body reply of the iOS agent can also have `incomplete`.
+ */
 export function toBody(result: unknown, kind: "response" | "post"): NativeNetworkBody {
   const r = asObject(result);
   const text = kind === "response" ? r.body : r.postData;
@@ -199,11 +208,13 @@ export function toBody(result: unknown, kind: "response" | "post"): NativeNetwor
         : "the agent holds no body for this request"
     );
   }
+  const incomplete = kind === "post" && r.incomplete === true;
   return {
     available: true,
     body: text,
     base64Encoded: r.base64Encoded === true,
-    truncated: r.wasTruncated === true,
+    truncated: r.wasTruncated === true || incomplete,
+    ...(incomplete ? { incomplete } : {}),
   };
 }
 
