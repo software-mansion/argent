@@ -404,13 +404,14 @@ async function resolveLocalFile(handle: ArtifactHandle): Promise<string | null> 
 async function downloadAndExtractArchive(
   handle: ArtifactHandle,
   data: Buffer,
-  dir: string
+  dir: string,
+  signal?: AbortSignal
 ): Promise<string | null> {
   const tarball = join(dir, `${sanitizeSegment(handle.filename)}.tar.gz`);
   try {
     await writeFile(tarball, data);
     // Slip-hardened: a `../` member must not write outside the cache.
-    return await safeExtractArchive(tarball, dir, handle.filename);
+    return await safeExtractArchive(tarball, dir, handle.filename, signal);
   } catch {
     return null;
   } finally {
@@ -538,7 +539,7 @@ export async function materializeArtifacts(
         await ensureDir();
         // Directory bundle: unpack the tar rather than writing it as a file.
         if (value.archive === "tar.gz") {
-          return await downloadAndExtractArchive(value, data, dir);
+          return await downloadAndExtractArchive(value, data, dir, ctx.signal);
         }
         // Don't persist a cleanly-truncated download as if it were whole.
         // Skipped when size is unknown (0, e.g. a lazily-produced file).

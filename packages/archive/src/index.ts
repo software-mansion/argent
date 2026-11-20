@@ -274,8 +274,9 @@ export function tarEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * stdout. A listing past {@link MAX_LISTING_BYTES} or {@link MAX_LISTING_LINES}
  * stops tar and throws.
  */
-async function runTar(archive: Archive, args: string[]): Promise<string> {
+async function runTar(archive: Archive, args: string[], signal?: AbortSignal): Promise<string> {
   const child = spawn("tar", [...args, "-f", "-"], {
+    signal,
     env: tarEnv(process.env),
   });
   const exited = new Promise<number | null>((res, rej) => {
@@ -359,10 +360,15 @@ function isSafeTarMember(memberPath: string, destDir: string): boolean {
 }
 
 /** {@link runTar} for a vetting pass, whose failure means the archive can't be read. */
-async function readListing(archive: Archive, args: string[]): Promise<string> {
+async function readListing(
+  archive: Archive,
+  args: string[],
+  signal?: AbortSignal
+): Promise<string> {
   try {
-    return await runTar(archive, args);
+    return await runTar(archive, args, signal);
   } catch (err) {
+    signal?.throwIfAborted();
     throw new ArchiveError(
       `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
     );
@@ -370,8 +376,8 @@ async function readListing(archive: Archive, args: string[]): Promise<string> {
 }
 
 /** List an archive's members without extracting, so they can be vetted first. */
-async function listTarMembers(archive: Archive): Promise<string[]> {
-  const stdout = await readListing(archive, ["-t"]);
+async function listTarMembers(archive: Archive, signal?: AbortSignal): Promise<string[]> {
+  const stdout = await readListing(archive, ["-t"], signal);
   return stdout
     .split("\n")
     .map((line) => line.trim())
@@ -386,8 +392,8 @@ async function listTarMembers(archive: Archive): Promise<string[]> {
  * ` -> <target>` are read — the column-formatted name is not stable across tar
  * variants.
  */
-async function assertSafeMemberTypes(archive: Archive): Promise<void> {
-  const stdout = await readListing(archive, ["-tv"]);
+async function assertSafeMemberTypes(archive: Archive, signal?: AbortSignal): Promise<void> {
+  const stdout = await readListing(archive, ["-tv"], signal);
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const type = line[0];
@@ -412,8 +418,12 @@ async function assertSafeMemberTypes(archive: Archive): Promise<void> {
 }
 
 /** Throw {@link ArchiveError} unless every member is safe to extract into `destDir`. */
-async function assertSafeArchive(archive: Archive, destDir: string): Promise<void> {
-  const members = await listTarMembers(archive);
+async function assertSafeArchive(
+  archive: Archive,
+  destDir: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const members = await listTarMembers(archive, signal);
   if (members.length === 0) {
     throw new ArchiveError("Archive is empty.");
   }
@@ -422,7 +432,7 @@ async function assertSafeArchive(archive: Archive, destDir: string): Promise<voi
       throw new ArchiveError(`Archive contains an unsafe path "${member}" — refusing extraction.`);
     }
   }
-  await assertSafeMemberTypes(archive);
+  await assertSafeMemberTypes(archive, signal);
 }
 
 /**
@@ -455,18 +465,31 @@ async function resolveMember(destDir: string, expectedName: string): Promise<str
 export async function safeExtractArchive(
   archivePath: string,
   destDir: string,
-  expectedName: string
+  expectedName: string,
+  signal?: AbortSignal
 ): Promise<string> {
+  signal?.throwIfAborted();
   let archive: Archive;
   try {
     archive = { path: archivePath, format: await sniffFormat(archivePath) };
     if (archive.format === "zstd") await assertSingleCompleteZstdFrame(archivePath);
   } catch (err) {
+    signal?.throwIfAborted();
     throw new ArchiveError(
       `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
     );
   }
-  await assertSafeArchive(archive, destDir);
-  await runTar(archive, ["-x", "-C", destDir]);
+  await assertSafeArchive(archive, destDir, signal);
+  signal?.throwIfAborted();
+  try {
+    await runTar(archive, ["-x", "-C", destDir], signal);
+    signal?.throwIfAborted();
+  } catch (err) {
+    if (basename(expectedName) === expectedName && isSafeTarMember(expectedName, destDir)) {
+      await rm(join(destDir, expectedName), { recursive: true, force: true }).catch(() => {});
+    }
+    signal?.throwIfAborted();
+    throw err;
+  }
   return resolveMember(destDir, expectedName);
 }

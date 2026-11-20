@@ -295,6 +295,97 @@ describe.each(ARCHIVE_FORMATS)("createArchiveFile (%s)", (format) => {
 });
 
 describe("safeExtractArchive input", () => {
+  it("rejects with the original reason before extraction", async () => {
+    const reason = new Error("cancelled");
+    await expect(
+      safeExtractArchive(
+        path.join(tmpDir, "missing"),
+        tmpDir,
+        "Bundle.app",
+        AbortSignal.abort(reason)
+      )
+    ).rejects.toBe(reason);
+    await expect(fs.stat(path.join(tmpDir, "Bundle.app"))).rejects.toThrow();
+  });
+
+  it.each(["-t", "-tv"])(
+    "stops tar on %s without starting -x or removing an existing member",
+    async (pass) => {
+      const archivePath = path.join(tmpDir, "small.archive");
+      await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "zstd"));
+      const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+      await fs.mkdir(path.join(dest, "Bundle.app"));
+      await fs.writeFile(path.join(dest, "Bundle.app", "cached"), "keep");
+      const listed = path.join(tmpDir, "listed");
+      const extracted = path.join(tmpDir, "extracted");
+      await tarOnPath(
+        [
+          `[ "$1" = -x ] && touch "${extracted}"`,
+          `if [ "$1" = ${pass} ]; then touch "${listed}"; exec sleep 30; fi`,
+          UNREADING_TAR,
+        ].join("\n")
+      );
+      const started = performance.now();
+      await expect(
+        safeExtractArchive(archivePath, dest, "Bundle.app", AbortSignal.timeout(300))
+      ).rejects.toMatchObject({ name: "TimeoutError" });
+      expect(performance.now() - started).toBeLessThan(5_000);
+      expect(existsSync(listed)).toBe(true);
+      expect(existsSync(extracted)).toBe(false);
+      expect(await fs.readFile(path.join(dest, "Bundle.app", "cached"), "utf8")).toBe("keep");
+    }
+  );
+
+  it("stops tar and removes only the partial member when extraction is aborted", async () => {
+    const archivePath = path.join(tmpDir, "small.archive");
+    await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "zstd"));
+    const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+    await fs.writeFile(path.join(dest, "sibling.txt"), "keep");
+    await fs.mkdir(path.join(dest, "Other.app"));
+    await fs.writeFile(path.join(dest, "Other.app", "info"), "other");
+    const extracted = path.join(tmpDir, "extracted");
+    await tarOnPath(
+      [
+        UNREADING_TAR,
+        `if [ "$1" = -x ]; then touch "$3/Bundle.app/partial" "${extracted}"; exec sleep 30; fi`,
+      ].join("\n")
+    );
+    const started = performance.now();
+    await expect(
+      safeExtractArchive(archivePath, dest, "Bundle.app", AbortSignal.timeout(500))
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(existsSync(extracted)).toBe(true);
+    await expect(fs.stat(path.join(dest, "Bundle.app"))).rejects.toThrow();
+    expect(await fs.readFile(path.join(dest, "sibling.txt"), "utf8")).toBe("keep");
+    expect(await fs.readFile(path.join(dest, "Other.app", "info"), "utf8")).toBe("other");
+  });
+
+  it("keeps the abort reason or tar error when cleanup rm fails", async () => {
+    const archivePath = path.join(tmpDir, "small.archive");
+    await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "zstd"));
+    // `rm(join(notADir, "Bundle.app"))` rejects with ENOTDIR.
+    const notADir = path.join(tmpDir, "not-a-dir");
+    await fs.writeFile(notADir, "x");
+
+    await tarOnPath(`if [ "$1" = -x ]; then exec sleep 30; fi\n${UNREADING_TAR}`);
+    const controller = new AbortController();
+    const reason = new Error("gave up");
+    const timer = setTimeout(() => controller.abort(reason), 200);
+    try {
+      await expect(
+        safeExtractArchive(archivePath, notADir, "Bundle.app", controller.signal)
+      ).rejects.toBe(reason);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    await tarOnPath(`if [ "$1" = -x ]; then echo "boom" >&2; exit 2; fi\n${UNREADING_TAR}`);
+    await expect(safeExtractArchive(archivePath, notADir, "Bundle.app")).rejects.toThrow(
+      /^tar -x -C .* exited with code 2: boom$/
+    );
+  });
+
   it("extracts a gzipped tar written by the system tar", async () => {
     await fs.mkdir(path.join(tmpDir, "Legacy.app"));
     await fs.writeFile(path.join(tmpDir, "Legacy.app", "Info.plist"), "<plist/>");

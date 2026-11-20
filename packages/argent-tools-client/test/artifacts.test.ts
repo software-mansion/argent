@@ -435,6 +435,23 @@ describe("materializeArtifacts directory bundles", () => {
     expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
   });
 
+  it("reads a directory bundle as missing when aborted before extraction", async () => {
+    const { tarGz } = await makeBundle();
+    const controller = new AbortController();
+    const { result } = await materializeArtifacts(
+      { traceFile: archiveHandle("t2", join(hostDir, "gone.trace")) },
+      {
+        toolsUrl: "http://remote:3001",
+        signal: controller.signal,
+        fetchImpl: async () => {
+          controller.abort();
+          return new Response(new Uint8Array(tarGz));
+        },
+      }
+    );
+    expect(result).toEqual({ traceFile: null });
+  });
+
   it("remote: asks for zstd and unpacks a zstd bundle", async () => {
     const { tarGz } = await makeBundle();
     const zst = zstdCompressSync(gunzipSync(tarGz));
