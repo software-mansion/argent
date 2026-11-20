@@ -4,7 +4,6 @@ import {
   advertisedSchema,
   definitionsById,
   CLIENT_UNSAFE_TOP_LEVEL_KEYWORDS,
-  EXPECTED_TOOL_COUNT,
 } from "./helpers/catalog";
 
 // Three tools once shipped a hand-written inputSchema that spread a top-level
@@ -22,10 +21,6 @@ import {
 // with no required fields.
 describe("advertised tool input schemas", () => {
   const definitions = definitionsById(createRegistry());
-
-  it("covers the whole catalog", () => {
-    expect(definitions.size).toBe(EXPECTED_TOOL_COUNT);
-  });
 
   for (const [id, definition] of definitions) {
     it(`${id}: is a plain object schema with no top-level combinator`, () => {

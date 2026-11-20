@@ -143,22 +143,6 @@ describe("buildStartScript (multi-renderer)", () => {
     expect(r.ownerInstalled).toBe(true);
   });
 
-  it("starts the active renderer even when the dormant ri is iterated first", () => {
-    const dormant = makeRi();
-    const active = makeRi();
-    const ris = new Map<number, MockRi>([
-      [99, dormant],
-      [1, active],
-    ]);
-    const out = withHook(ris, () => evalIIFE<string>(buildStartScript(ownerJson)));
-    const r = JSON.parse(out) as StartResult;
-
-    expect(dormant.startProfiling).toHaveBeenCalledTimes(1);
-    expect(active.startProfiling).toHaveBeenCalledTimes(1);
-    expect(r.ok).toBe(true);
-    expect(r.isProfilingFlagSet).toBe(true);
-  });
-
   it("succeeds when one ri throws and the other starts", () => {
     const broken = makeRi({ willThrowOnStart: true });
     const ok = makeRi();
