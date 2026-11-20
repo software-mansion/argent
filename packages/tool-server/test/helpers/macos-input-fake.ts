@@ -46,16 +46,21 @@ export function fakeMacosApp(handlers: Handlers = {}) {
 }
 
 /**
- * A registry with `tools`, gated on the real flags, whose only service is
- * `app`. Every URN a tool resolves is recorded, so a test can prove a Mac id
- * reaches no other backend.
+ * A registry with `tools`, gated on the real flags, whose services are `app`
+ * and `services` (by URN). Every URN a tool resolves is recorded, so a test can
+ * prove a Mac id reaches no other backend.
  */
-export function macosToolRegistry(app: MacosAppApi, tools: (registry: Registry) => unknown[]) {
+export function macosToolRegistry(
+  app: MacosAppApi,
+  tools: (registry: Registry) => unknown[],
+  services: Record<string, unknown> = {}
+) {
   const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
   const urns: string[] = [];
   vi.spyOn(registry, "resolveService").mockImplementation(async (urn: string) => {
     urns.push(urn);
     if (urn === MAC_URN) return app as never;
+    if (urn in services) return services[urn] as never;
     throw new Error(`a Mac id reached ${urn}`);
   });
   for (const tool of tools(registry)) registry.registerTool(tool as never);

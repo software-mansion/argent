@@ -295,14 +295,14 @@ The result contains `platform: "macos"`, `id`, `kind`, `bundleId`, `pid`, `appPa
 
 A `note` reports conditions that need attention, such as no open window or arguments that differ from the request. Launch tools wait up to 10 seconds for a window. Use `force` to apply changed arguments to an already running app.
 
-| Tool                                                  | macOS behavior                                                                                      |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                     |
-| `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                           |
-| `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                 |
-| `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                         |
-| `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                         |
-| `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent. The app keeps running; network capture stops and its recorded requests are lost. |
+| Tool                                                  | macOS behavior                                                                                                                                                             |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                                                                                            |
+| `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                                                                                                  |
+| `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                                                                                        |
+| `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                                                                                                |
+| `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                                                                                                |
+| `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent. The app keeps running; network capture stops and its recorded requests are lost. A screen recording ends; Argent first asks the app to write the video. |
 
 For `launch-app` and `restart-app`, `bundleId` must match the device. Both accept `launchArgs` and otherwise reuse the previous arguments. Both report `appPath` and `args`.
 
@@ -572,6 +572,22 @@ Use `describe` or `native-describe-screen` to inspect UIKit controls through the
 
 If typing, paste, or scrolling reports success without changing the app, check that your Argent build includes the native library with Mac Catalyst input support.
 
+### Screen recording on a Mac app
+
+`screen-recording-start` and `screen-recording-stop` take a Mac app ID. The Argent library in the app records the window that `screenshot` captures. The recording needs no permission and no `ffmpeg`.
+
+- **Content.** The video shows the window with the menus, sheets, popovers and alerts of the app over it. The video ends at the edge of the window, also where a menu extends past it.
+- **Size.** The video has the pixel size of the window at the start. Argent scales down a window larger than 3840 x 2160. When the window changes size, Argent keeps its proportions and adds black bars.
+- **Frames.** The video has a variable frame rate.
+- **Markers.** With `showTouches`, the video shows the pointer of the agent, a ring for each click (orange for a right-click), and a dot while the agent holds a mouse button. The pointer moves to each click before the click occurs. `screenshot` does not show the markers.
+- **Locked Mac.** The recording continues while the Mac is locked, also when the display sleeps. The video can be less sharp while the Mac is locked.
+- **Gaps.** If the window is minimized, protected from capture, not fully on one display, or closed, `screen-recording-start` fails. During a recording, the video holds its last frame, and `screen-recording-stop` returns a `warning`. A sheet or menu that the app protects from capture is missing from the video, and the `warning` says so.
+- **App Sandbox.** Argent gives a sandboxed app access to the output file only.
+- **Old library.** On an app that a previous Argent version started, `screen-recording-start` returns `MACOS_APP_LIBRARY_OUTDATED`. Run `restart-app` and start the recording again.
+- **App restart.** If the app quits or restarts during a recording, `screen-recording-stop` fails and Argent loses the video.
+- **Disconnect.** `stop-simulator-server` and `stop-all-simulator-servers` end the recording. Argent first asks the app to write the video and waits up to 5 seconds, and the next `screen-recording-stop` says where the video is.
+- **Cost.** The recording uses about 10% of one processor core in the app, and more for a large window. A native profile of the app counts this time. Do not record during a profile.
+
 ### Profiling a Mac app
 
 Pass the Mac app's `device_id` to `native-profiler-start`, `native-profiler-stop`, `native-profiler-analyze`, and `profiler-stack-query`. Use `profiler-load` with `mode: "load_native"` to reopen a saved native session. See [Profiling](#profiling) for shared behavior.
@@ -625,19 +641,19 @@ files without a platform suffix. If the recording lacks architecture information
 
 See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types and features.
 
-| Area                      | Limitation or workaround                                                                                                                                                                                                                                                                                   |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Background windows        | Hiding the app does not pause automation. The next action shows it again without activating it.                                                                                                                                                                                                            |
-| Multiple windows          | Input and menu commands target the agent's current window. Panels beside that window may be inaccessible; panels over it can be controlled.                                                                                                                                                                |
-| Menus                     | Context and pop-up menus can bring the window forward temporarily. Only one menu can stay open on the Mac; another click can close it.                                                                                                                                                                     |
-| Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                                                                                                          |
-| Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                                                                                                     |
-| Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                                                                                                          |
-| Keyboard layout           | Mac Catalyst uses the current keyboard layout for the key codes of typed characters. Other Mac apps receive US-layout codes.                                                                                                                                                                               |
-| SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                                                                                             |
-| SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                                                                                                        |
-| Protected windows         | Capture protection blocks screenshots, screenshot diffs, and e2e snapshots. Inspection and input still work.                                                                                                                                                                                               |
-| Other tools               | Hardware buttons, device rotation, shake, fold, TV remote, permission settings, screen recording, JavaScript debugger tools, and Chromium tools are unsupported. Use `native-network-logs` for traffic; `view-network-logs`, `view-network-request-details`, and `native-devtools-status` are unavailable. |
+| Area                      | Limitation or workaround                                                                                                                                                                                                                                                                 |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Background windows        | Hiding the app does not pause automation. The next action shows it again without activating it.                                                                                                                                                                                          |
+| Multiple windows          | Input and menu commands target the agent's current window. Panels beside that window may be inaccessible; panels over it can be controlled.                                                                                                                                              |
+| Menus                     | Context and pop-up menus can bring the window forward temporarily. Only one menu can stay open on the Mac; another click can close it.                                                                                                                                                   |
+| Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                                                                                        |
+| Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                                                                                   |
+| Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                                                                                        |
+| Keyboard layout           | Mac Catalyst uses the current keyboard layout for the key codes of typed characters. Other Mac apps receive US-layout codes.                                                                                                                                                             |
+| SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                                                                           |
+| SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                                                                                      |
+| Protected windows         | Capture protection blocks screenshots, screenshot diffs, e2e snapshots, and screen recordings. Inspection and input still work.                                                                                                                                                          |
+| Other tools               | Hardware buttons, device rotation, shake, fold, TV remote, permission settings, JavaScript debugger tools, and Chromium tools are unsupported. Use `native-network-logs` for traffic; `view-network-logs`, `view-network-request-details`, and `native-devtools-status` are unavailable. |
 
 ## Profiling
 

@@ -43,6 +43,7 @@ Context menus and pop-up menus can temporarily bring the app window to the front
 - **Inspect network traffic:** read requests made through `URLSession`.
 - **Profile performance:** find CPU hotspots, UI hangs, and memory leaks. In React Native apps, you can also find slow React renders. See [Profile your app](#profile-your-app).
 - **Test workflows:** record and replay [e2e tests](/docs/features/e2e), including screenshot comparisons.
+- **Record the screen:** make a [video](/docs/features/screen-recording#mac-apps) of the app window, with the clicks of the agent.
 
 Text input supports accented characters and emoji. Argent disables automatic text correction so the app receives the text the agent types.
 
@@ -139,6 +140,6 @@ Most distributed or notarized apps do not allow Argent to control them. Use your
 - **Windows:** the app needs a standard window. Apps with only a menu bar icon, panels, or borderless windows are unsupported.
 - **System dialogs:** the agent cannot control macOS permission prompts or content shown by another process, such as share sheets.
 - **Input:** hover, pinch, and rotate gestures are unavailable. Drag and drop works only within the app.
-- **Developer tools:** screen recording and the JavaScript debugger tools are unavailable.
+- **Developer tools:** the JavaScript debugger tools are unavailable.
 
 See the [Mac app tools reference](/docs/reference/tools#mac-apps) for tool parameters and additional limitations.

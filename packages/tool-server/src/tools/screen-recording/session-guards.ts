@@ -1,7 +1,17 @@
+import * as os from "os";
+import * as path from "path";
 import { promises as fs } from "fs";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
 import { describeReapedSession, takeReapedSession } from "../../utils/reaped-sessions";
+
+/** Where a capture writes its video: a new file in `dir`, named after the device and the time. */
+export function recordingOutputPath(deviceId: string, dir: string = os.tmpdir()): string {
+  return path.join(
+    dir,
+    `argent-screen-recording-${deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
+  );
+}
 
 export interface StartRecordingResult {
   status: "recording";
@@ -152,9 +162,10 @@ export function assertNotDisposed(api: ScreenRecordingSessionApi, stage: string)
   if (api.disposed) {
     throw new FailureError(
       `The screen-recording session for device ${api.deviceId} was torn down while this start ` +
-        `was still initializing, so nothing was recorded. That is either the tool-server shutting ` +
-        `down or a stop-all-simulator-servers reaping this device (e.g. another agent ending its ` +
-        `session). If the device is still up, start the recording again.`,
+        `was still initializing, so nothing was recorded. That is the tool-server shutting down, ` +
+        `a stop-all-simulator-servers reaping this device, or a stop-simulator-server on a Mac ` +
+        `app (e.g. another agent ending its session). If the device is still up, start the ` +
+        `recording again.`,
       {
         error_code: FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN,
         failure_stage: stage,
