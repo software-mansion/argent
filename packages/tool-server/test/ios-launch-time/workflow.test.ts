@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRegistry } from "../../src/utils/setup-registry";
@@ -123,6 +123,18 @@ User Info: {
   });
 });
 
+it("finishes a logged command whose log cannot be written", async () => {
+  directory = await mkdtemp(join(tmpdir(), "argent-launch-log-"));
+  // A directory at the log path fails the write stream with EISDIR.
+  await mkdir(join(directory, "child.log"));
+  const error = await runLogged("/bin/sh", ["-c", "echo started; exit 3"], {
+    cwd: directory,
+    logPath: join(directory, "child.log"),
+  }).catch((e: unknown) => e);
+  expect(error).toMatchObject({ code: 3 });
+  expect((error as Error).message).toContain("started");
+});
+
 it("reports the free-profile cap from a failed logged command, not a signing hint", async () => {
   directory = await mkdtemp(join(tmpdir(), "argent-launch-free-"));
   const script =
@@ -176,6 +188,45 @@ it("runs runner builds that share a DerivedData one at a time", async () => {
   release();
   await Promise.all([first, second]);
   expect(order).toEqual(["first start", "other", "first end", "second"]);
+});
+
+it("stops waiting for the runner build lock once the call is cancelled", async () => {
+  let release!: () => void;
+  const first = withRunnerBuildLock("/dd/c", () => new Promise<void>((r) => (release = r)));
+  const controller = new AbortController();
+  let ran = false;
+  const queued = withRunnerBuildLock(
+    "/dd/c",
+    async () => {
+      ran = true;
+    },
+    controller.signal
+  );
+  controller.abort();
+  await expect(queued).rejects.toBe(controller.signal.reason);
+  release();
+  await first;
+  await withRunnerBuildLock("/dd/c", async () => undefined);
+  expect(ran).toBe(false);
+});
+
+it("waits for a started runner build to settle after a cancel", async () => {
+  let release!: () => void;
+  const controller = new AbortController();
+  let settled = false;
+  const running = withRunnerBuildLock(
+    "/dd/d",
+    () => new Promise<void>((r) => (release = r)),
+    controller.signal
+  ).finally(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(settled).toBe(false);
+  release();
+  await running;
 });
 
 it("keeps runner build caches in Argent's home directory", () => {

@@ -502,7 +502,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const profilerLoadTool: ToolDefinition<Params, string> = {
   id: "profiler-load",
-  description: `Fetch and restore a profiling session that react-profiler-stop or native-profiler-stop saved to disk, so the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query) can read it.
+  description: `Fetch and restore a profiling session that react-profiler-stop, native-profiler-stop or native-profiler-launch-analysis saved to disk, so the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query) can read it.
 Use when you need to revisit past session data without capturing a new recording.
 Modes:
 - list: Show all available profiling sessions in the project's debug directory.

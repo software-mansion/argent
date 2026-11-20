@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { iosDeviceRunnerBlueprint } from "../../src/blueprints/ios-device-runner";
-import { reserveLaunchMeasurement } from "../../src/utils/ios-device/runner-reservation";
+import { reserveLaunchAnalysis } from "../../src/utils/ios-device/runner-reservation";
 import { IosDeviceTransportError } from "../../src/utils/ios-device/usbmux-protocol";
 import {
   createRunnerClient,
@@ -109,11 +109,11 @@ it("reserves the phone from runner startup until its child exits", async () => {
   const device: DeviceInfo = { id: "launch-reservation-test", platform: "ios", kind: "device" };
   const { child } = stubLaunch();
   const starting = iosDeviceRunnerBlueprint.factory({}, device, { device });
-  expect(() => reserveLaunchMeasurement(device.id)).toThrow(/device runner is active/);
+  expect(() => reserveLaunchAnalysis(device.id, "measure")).toThrow(/device runner is active/);
   await starting;
-  expect(() => reserveLaunchMeasurement(device.id)).toThrow(/device runner is active/);
+  expect(() => reserveLaunchAnalysis(device.id, "measure")).toThrow(/device runner is active/);
   child.emit("exit", 0);
-  const release = reserveLaunchMeasurement(device.id);
+  const release = reserveLaunchAnalysis(device.id, "measure");
   release();
 });
 

@@ -5,7 +5,7 @@ import {
   cpuTableXpath,
   earliestDyldStartNs,
   launchEndNs,
-  launchedProcessName,
+  launchedProcess,
   parseFirstFrameSignpostNs,
   parseLifecyclePhases,
   keepRunningRows,
@@ -110,22 +110,21 @@ describe("truncateCpuXml", () => {
     expect(xml.match(/<frame id="10"/g)).toHaveLength(1);
   });
 
-  it("counts the samples the CPU parser reads, not rows with a sample-time ref", () => {
-    // A second sample at the same instant refs the first one's sample-time; the
-    // parser skips it as a sample but still reads the stack it defines.
+  it("counts a sample that shares its sample-time with another thread's", () => {
+    // A second thread sampled at the same instant refs the first one's sample-time.
     const xml = CPU.replace(
       "</node>",
       `<row><sample-time ref="7"/><thread id="11" fmt="Worker"/><weight ref="3"/><tagged-backtrace id="12"><frame id="13" name="work()"/></tagged-backtrace></row>\n` +
         `<row><sample-time id="14">250000000</sample-time><thread ref="11"/><weight ref="3"/><tagged-backtrace ref="12"/></row>\n</node>`
     );
     const cut = truncateCpuXml(xml, 305_000_000);
-    expect(cut.keptRows).toBe(3);
-    expect(parseCpuXml(cut.xml)).toHaveLength(cut.keptRows);
-    expect(
-      parseCpuXml(cut.xml)
-        .at(-1)!
-        .stack.map((f) => f.name)
-    ).toEqual(["work()"]);
+    expect(cut.keptRows).toBe(4);
+    const samples = parseCpuXml(cut.xml);
+    expect(samples).toHaveLength(cut.keptRows);
+    expect(samples.slice(2).map((s) => [s.threadFmt, s.timestampNs, s.stack[0]!.name])).toEqual([
+      ["Worker", 200_000_000, "work()"],
+      ["Worker", 250_000_000, "work()"],
+    ]);
   });
 
   it("only counts with an endless window", () => {
@@ -141,13 +140,24 @@ describe("truncateCpuXml", () => {
 
 /** `count` samples per thread, `gapNs` apart, all weighing 1 ms as xctrace exports them. */
 function ticks(gapNs: number, count: number, threads = ["Main Thread"]): string {
+  return recording(
+    Object.fromEntries(
+      threads.map((name, index) => [
+        name,
+        Array.from({ length: count }, (_, tick) => 100_000_000 + index * 300_000 + tick * gapNs),
+      ])
+    )
+  );
+}
+
+/** One sample per listed time of each thread, all weighing 1 ms as xctrace exports them. */
+function recording(timesByThread: Record<string, number[]>): string {
   let id = 0;
   const rows: string[] = [];
   const weight = ++id;
-  threads.forEach((name, index) => {
+  Object.entries(timesByThread).forEach(([name, times]) => {
     const thread = ++id;
-    for (let tick = 0; tick < count; tick++) {
-      const time = 100_000_000 + index * 300_000 + tick * gapNs;
+    for (const [tick, time] of times.entries()) {
       const threadCell =
         tick === 0 ? `<thread id="${thread}" fmt="${name}"/>` : `<thread ref="${thread}"/>`;
       const weightCell =
@@ -170,6 +180,14 @@ describe("weighSamplesByPeriod", () => {
     const samples = parseCpuXml(xml);
     expect(samples).toHaveLength(60);
     expect(new Set(samples.map((sample) => sample.weightNs))).toEqual(new Set([5_000_000]));
+  });
+
+  it("weighs a 5 ms recording whose thread goes idle after launch", () => {
+    // A busy launch, then sparse wake-ups whose gaps span several ticks.
+    const busy = Array.from({ length: 20 }, (_, tick) => 100_000_000 + tick * 5_000_000);
+    const idle = Array.from({ length: 40 }, (_, tick) => 200_000_000 + tick * 35_000_000);
+    const { periodNs } = weighSamplesByPeriod(recording({ "Main Thread": [...busy, ...idle] }), "");
+    expect(periodNs).toBe(5_000_000);
   });
 
   it("leaves a 1 ms recording as it is", () => {
@@ -278,30 +296,22 @@ const SIGNPOST = `<?xml version="1.0"?>
 
 describe("parseFirstFrameSignpostNs", () => {
   it("takes the first-frame End row of the launched process, resolving refs", () => {
-    expect(parseFirstFrameSignpostNs(SIGNPOST, "Ledger")).toBe(400_000_000);
+    expect(parseFirstFrameSignpostNs(SIGNPOST, "Ledger (14775)")).toBe(400_000_000);
   });
 
-  it("matches the process name, not a prefix of another process", () => {
-    // "App" is a prefix of "AppleSpell (123)" but not that process's name.
-    expect(parseFirstFrameSignpostNs(SIGNPOST, "App")).toBeNull();
-    expect(parseFirstFrameSignpostNs(SIGNPOST, "AppleSpell")).toBe(100_000_000);
-    expect(parseFirstFrameSignpostNs(SIGNPOST, "Ledg")).toBeNull();
-  });
-
-  it("escapes regex characters in the process name", () => {
-    const dotted = SIGNPOST.replace(/Ledger \(14775\)/, "My.App (14775)");
-    expect(parseFirstFrameSignpostNs(dotted, "My.App")).toBe(400_000_000);
-    expect(parseFirstFrameSignpostNs(dotted, "My.Ap")).toBeNull();
-    expect(
-      parseFirstFrameSignpostNs(SIGNPOST.replace(/Ledger \(14775\)/, "MyXApp (14775)"), "My.App")
-    ).toBeNull();
+  it("matches the whole process cell, not a prefix or another pid of the same app", () => {
+    expect(parseFirstFrameSignpostNs(SIGNPOST, "AppleSpell (123)")).toBe(100_000_000);
+    expect(parseFirstFrameSignpostNs(SIGNPOST, "Ledger (1477)")).toBeNull();
+    // The same app launched on another simulator, earlier.
+    const twin = SIGNPOST.replace("AppleSpell (123)", "Ledger (999)");
+    expect(parseFirstFrameSignpostNs(twin, "Ledger (14775)")).toBe(400_000_000);
   });
 
   it("ignores the ApplicationFirstFramePresentationResponsive signpost", () => {
     // The Responsive row of Ledger (350 ms) is earlier than its first frame.
-    expect(parseFirstFrameSignpostNs(SIGNPOST, "Ledger")).not.toBe(350_000_000);
+    expect(parseFirstFrameSignpostNs(SIGNPOST, "Ledger (14775)")).not.toBe(350_000_000);
     const responsiveOnly = SIGNPOST.replace(/<row><event-time id="16".*?<\/row>/s, "");
-    expect(parseFirstFrameSignpostNs(responsiveOnly, "Ledger")).toBeNull();
+    expect(parseFirstFrameSignpostNs(responsiveOnly, "Ledger (14775)")).toBeNull();
   });
 
   it("takes the earliest matching row when no process is given", () => {
@@ -310,16 +320,16 @@ describe("parseFirstFrameSignpostNs", () => {
 
   it("keeps rows that have no process cell", () => {
     const noProcess = `<node><row><event-time id="1">250000000</event-time><event-type id="2" fmt="End">End</event-type><subsystem id="3">com.apple.app_launch_measurement</subsystem><signpost-name id="4">ApplicationFirstFramePresentation</signpost-name></row></node>`;
-    expect(parseFirstFrameSignpostNs(noProcess, "Ledger")).toBe(250_000_000);
+    expect(parseFirstFrameSignpostNs(noProcess, "Ledger (14775)")).toBe(250_000_000);
   });
 
   it("returns null without a matching End signpost", () => {
-    expect(parseFirstFrameSignpostNs(SIGNPOST, "Missing")).toBeNull();
+    expect(parseFirstFrameSignpostNs(SIGNPOST, "Missing (1)")).toBeNull();
     expect(parseFirstFrameSignpostNs("<trace-query-result></trace-query-result>")).toBeNull();
   });
 });
 
-describe("launchedProcessName", () => {
+describe("launchedProcess", () => {
   it("reads the launched process from the trace TOC, not the executable name", () => {
     // Trimmed from a simulator trace of an app whose executable is DeclutterPoC.
     const toc = `<target>
@@ -328,9 +338,9 @@ describe("launchedProcessName", () => {
 <processes>
   <process name="kernel" pid="0" path="/System/Library/Kernels/kernel.release.t6050"/>
 </processes>`;
-    expect(launchedProcessName(toc)).toBe("Declutter PoC");
-    expect(launchedProcessName(toc.replace("Declutter PoC", "R&amp;D"))).toBe("R&D");
-    expect(launchedProcessName("<processes></processes>")).toBeNull();
+    expect(launchedProcess(toc)).toBe("Declutter PoC (84653)");
+    expect(launchedProcess(toc.replace("Declutter PoC", "R&amp;D"))).toBe("R&D (84653)");
+    expect(launchedProcess("<processes></processes>")).toBeNull();
   });
 });
 
@@ -347,8 +357,8 @@ describe("earliestDyldStartNs", () => {
       "utf8"
     );
     expect(earliestDyldStartNs(xml)).toBe(403_229_208);
-    expect(earliestDyldStartNs(xml, "Ledger")).toBe(403_229_208);
-    expect(earliestDyldStartNs(xml, "Ledg")).toBeNull();
+    expect(earliestDyldStartNs(xml, "Ledger (32143)")).toBe(403_229_208);
+    expect(earliestDyldStartNs(xml, "Ledger (3214)")).toBeNull();
   });
 
   // Xcode 27.2, iOS 27.2 simulator: one process, inline "Ledger (52072)" in the
@@ -356,10 +366,10 @@ describe("earliestDyldStartNs", () => {
   it("matches the launched process of a real simulator trace to its dyld rows", () => {
     const fixture = (name: string) =>
       readFileSync(join(__dirname, "..", "fixtures", "ios-launch-time", name), "utf8");
-    const processName = launchedProcessName(fixture("xcode-27.2-simulator-toc.xml"));
-    expect(processName).toBe("Ledger");
+    const process = launchedProcess(fixture("xcode-27.2-simulator-toc.xml"));
+    expect(process).toBe("Ledger (52072)");
     const xml = fixture("xcode-27.2-simulator-dyld.xml");
-    expect(earliestDyldStartNs(xml, processName!)).toBe(536_392_750);
+    expect(earliestDyldStartNs(xml, process!)).toBe(536_392_750);
     expect(earliestDyldStartNs(xml)).toBe(536_392_750);
   });
 
@@ -372,13 +382,13 @@ describe("earliestDyldStartNs", () => {
 </node>`;
 
   it("ignores dyld rows of other processes, resolving process refs", () => {
-    expect(earliestDyldStartNs(TWO_PROCESSES, "Ledger")).toBe(120_000_000);
-    expect(earliestDyldStartNs(TWO_PROCESSES, "AppleSpell")).toBe(50_000_000);
+    expect(earliestDyldStartNs(TWO_PROCESSES, "Ledger (14775)")).toBe(120_000_000);
+    expect(earliestDyldStartNs(TWO_PROCESSES, "AppleSpell (123)")).toBe(50_000_000);
   });
 
   it("returns null when no dyld row belongs to the process", () => {
-    expect(earliestDyldStartNs(TWO_PROCESSES, "Missing")).toBeNull();
-    expect(earliestDyldStartNs(TWO_PROCESSES, "App")).toBeNull();
+    expect(earliestDyldStartNs(TWO_PROCESSES, "Missing (1)")).toBeNull();
+    expect(earliestDyldStartNs(TWO_PROCESSES, "Ledger (999)")).toBeNull();
   });
 
   it("takes every process when no process is given", () => {

@@ -40,8 +40,30 @@ export function runnerBuildCacheDir(key: string): string {
 // Concurrent builds into one DerivedData fail with "database is locked".
 const runnerBuildLocks = new Map<string, Promise<unknown>>();
 
-export function withRunnerBuildLock<T>(derivedDataPath: string, fn: () => Promise<T>): Promise<T> {
-  return withKeyedLock(runnerBuildLocks, derivedDataPath, fn);
+/**
+ * A cancelled caller stops queueing, but once `fn` starts the call settles only
+ * with it, so a device reservation never outlives its xcodebuild.
+ */
+export function withRunnerBuildLock<T>(
+  derivedDataPath: string,
+  fn: () => Promise<T>,
+  signal?: AbortSignal
+): Promise<T> {
+  let started = false;
+  const run = withKeyedLock(runnerBuildLocks, derivedDataPath, () => {
+    started = true;
+    signal?.throwIfAborted();
+    return fn();
+  });
+  if (!signal) return run;
+  const queuedAbort = new Promise<never>((_, reject) => {
+    const onAbort = () => {
+      if (!started) reject(signal.reason as Error);
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return Promise.race([run, queuedAbort]);
 }
 
 /** A new run directory beside the other native-profiler traces. */
@@ -231,6 +253,8 @@ export async function runLogged(
   await fsp.mkdir(path.dirname(options.logPath), { recursive: true });
   options.signal?.throwIfAborted();
   const log = fs.createWriteStream(options.logPath);
+  // Best effort: an unhandled stream error would crash the tool-server.
+  log.on("error", () => undefined);
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,
