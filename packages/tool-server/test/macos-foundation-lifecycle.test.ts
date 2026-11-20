@@ -1670,6 +1670,38 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       );
     }, 20_000);
 
+    it("keeps the unconfirmed stop in the listing while a retried stop waits", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=disable-silent"] });
+      await start();
+      expect((await stop()).layers).toEqual([
+        expect.objectContaining({ layer: "macos-native", armed: true }),
+      ]);
+      const retrying = stop();
+      await new Promise((r) => setTimeout(r, 300));
+      // The app still intercepts its requests.
+      expect((await readLog()).header).toContain("did not acknowledge Network.disable");
+      expect((await retrying).layers).toEqual([
+        expect.objectContaining({ layer: "macos-native", armed: true }),
+      ]);
+      expect((await readLog()).header).toContain("did not acknowledge Network.disable");
+    }, 20_000);
+
+    it("confirms a retried stop when the app acknowledges the Network.disable of the stop before", async () => {
+      // Each CDP request is answered 6.2 s after the one before it. The start and
+      // the first stop stop waiting before their acknowledgements, and the retried
+      // stop gets the acknowledgement of the first stop.
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--cdp-delay=6200"] });
+      expect((await start()).layers).toEqual([expect.objectContaining({ armed: false })]);
+      expect((await stop()).layers).toEqual([
+        expect.objectContaining({ layer: "macos-native", armed: true }),
+      ]);
+      expect((await stop()).layers).toEqual([{ layer: "macos-native", armed: false, total: 0 }]);
+      expect((await readLog()).header).toBe(
+        "macos-native: stopped, 0 requests (capture stopped by network-capture-stop; network-capture-start turns it on again)"
+      );
+      expect(await request("https://example.com/after-stop")).toMatchObject({ active: false });
+    }, 30_000);
+
     it("names a copy of the app that argent did not start and says that it must be quit", async () => {
       searched.spotlight[BUNDLE_ID] = appPath;
       const outside = await startOutsideCopy();

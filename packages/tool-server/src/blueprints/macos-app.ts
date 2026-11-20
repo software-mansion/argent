@@ -530,12 +530,17 @@ class LibraryChannel {
   enableFailure?: string;
   /** A stop's Network.disable timed out, and no acknowledgement of a Network.disable came since. */
   stopUnconfirmed = false;
+  /** Confirms the waiting stop when the acknowledgement of an earlier Network.disable comes first. */
+  confirmDisabling?: () => void;
   /**
    * The CDP ids of the Network.enable requests sent on this channel since its
    * last Network.disable: an acknowledgement of any of them arms it.
    */
   private readonly enableIds = new Set<number>();
-  /** The CDP ids of the Network.disable requests sent on this channel. */
+  /**
+   * The CDP ids of the Network.disable requests sent on this channel since its
+   * last Network.enable: an acknowledgement of any of them confirms a stop.
+   */
   private readonly disableIds = new Set<number>();
   private readonly pending = new Map<number, PendingCall>();
   private nextId = 1;
@@ -564,7 +569,10 @@ class LibraryChannel {
       label: `macos-app ${bundleId}`,
       send: (frame) => {
         const p = (frame as { payload: { id: number; method: string } }).payload;
-        if (p.method === "Network.enable") this.enableIds.add(p.id);
+        if (p.method === "Network.enable") {
+          this.disableIds.clear();
+          this.enableIds.add(p.id);
+        }
         if (p.method === "Network.disable") {
           this.enableIds.clear();
           this.disableIds.add(p.id);
@@ -675,6 +683,7 @@ class LibraryChannel {
       }
       if (p && typeof p.id === "number" && this.disableIds.has(p.id) && "result" in p) {
         this.stopUnconfirmed = false;
+        this.confirmDisabling?.();
       }
       if (this.cdp.handleResponse(p)) return;
       if (p && typeof p.method === "string" && p.id === undefined) {
@@ -1729,9 +1738,18 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       ch.enabling = undefined;
       ch.armEnabling = undefined;
       delete ch.enableFailure;
-      ch.stopUnconfirmed = false;
+      // An unconfirmed earlier stop stays in the listing while this one waits.
+      // The late acknowledgement of its Network.disable also confirms this stop.
+      let confirm!: () => void;
+      const disabling = new Promise<void>((resolve, reject) => {
+        confirm = resolve;
+        ch.cdp
+          .request("Network.disable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS })
+          .then(() => resolve(), reject);
+      });
+      ch.confirmDisabling = confirm;
       try {
-        await ch.cdp.request("Network.disable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS });
+        await disabling;
         return { confirmed: true };
       } catch (err) {
         // A stop of the app's services during this stop closed the channel and dropped the records.
@@ -1753,6 +1771,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
               : `the app did not disable capture (${errorMessage(err)})`
           }; argent records none of its new requests, and its next process starts without capture`,
         };
+      } finally {
+        if (ch.confirmDisabling === confirm) ch.confirmDisabling = undefined;
       }
     },
     isNetworkCaptureStarted: () => captureStarted,
