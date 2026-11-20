@@ -162,8 +162,9 @@ type ListDevicesResult = {
    * Present only when it applies, unlike the description, which is read once
    * per session: why local iOS targets are missing while Xcode's component
    * install is pending, a retry notice when `simctl` timed out, the rules for a
-   * provider's device when one is listed, and how to reach the adb server when
-   * it is not adb's default.
+   * provider's device when one is listed, a retry notice when the foldable
+   * check of a provider's simulator timed out, and how to reach the adb server
+   * when it is not adb's default.
    */
   hint?: string;
 };
@@ -178,6 +179,13 @@ const EXTERNAL_DEVICES_HINT =
   `drops argent's cached handles, which is the recovery when calls keep failing against an endpoint the provider has ` +
   `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
   `withheld fails with a clear message naming the provider.`;
+
+function foldableCheckTimedOutHint(names: readonly string[]): string {
+  return (
+    `The foldable check did not finish in time for ${names.join(", ")}, so 'foldable: true' may be ` +
+    `missing there. Call list-devices again to retry the check.`
+  );
+}
 
 function iosListTimedOutHint(): string {
   return `iOS simulators may be missing from this list: ${simctlListTimeoutAdvice("list-devices")}`;
@@ -361,7 +369,11 @@ function toListedExternal(device: ExternalDevice, foldable: boolean): ExternalLi
   };
 }
 
-type ExternalEntry = { device: ExternalDevice; foldable: boolean };
+/**
+ * `foldableTimedOut`: the foldable check ran past its budget, so `foldable` is
+ * unknown.
+ */
+type ExternalEntry = { device: ExternalDevice; foldable: boolean; foldableTimedOut: boolean };
 
 /**
  * How long the external branch waits for the foldable check of its lent
@@ -369,8 +381,9 @@ type ExternalEntry = { device: ExternalDevice; foldable: boolean };
  * device type is seen) the device-type list and profile. Each of those `simctl`
  * and `plutil` calls has its own timeout and in series they can outlast
  * `BRANCH_DEADLINE_MS`, which would drop every lent device, Android ones
- * included. Past this budget a lent simulator is listed without the flag. The
- * check keeps running and caches what it finds, so a later call gets the flag.
+ * included. Past this budget a lent simulator is listed without the flag and
+ * the result's hint says so. The check keeps running and caches what it finds,
+ * so a later call gets the flag once the device set answers in time.
  */
 export const EXTERNAL_FOLDABLE_BUDGET_MS = 5_000;
 
@@ -389,22 +402,39 @@ async function withFoldableFlags(external: readonly ExternalDevice[]): Promise<E
     (device) => device.platform === "ios" && device.kind === "simulator"
   );
 
-  if (simulators.length === 0) return external.map((device) => ({ device, foldable: false }));
+  if (simulators.length === 0) {
+    return external.map((device) => ({ device, foldable: false, foldableTimedOut: false }));
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const budget = new Promise<false>((resolve) => {
-    timer = setTimeout(() => resolve(false), EXTERNAL_FOLDABLE_BUDGET_MS);
+  const budget = new Promise<"timed-out">((resolve) => {
+    timer = setTimeout(() => resolve("timed-out"), EXTERNAL_FOLDABLE_BUDGET_MS);
   });
 
   try {
     return await Promise.all(
-      external.map(async (device) => ({
-        device,
-        foldable:
-          simulators.includes(device) &&
-          (await Promise.race([isFoldableSimulator(device.id).catch(() => false), budget])),
-      }))
+      external.map(async (device) => {
+        if (!simulators.includes(device)) {
+          return { device, foldable: false, foldableTimedOut: false };
+        }
+
+        /**
+         * A rejection (`XcodeFirstLaunchPendingError` while Xcode's component
+         * install is pending) must not escape: the branch's own `.catch` runs
+         * before this step, so it would fail the whole call.
+         */
+        const verdict = await Promise.race([
+          isFoldableSimulator(device.id).catch(() => false),
+          budget,
+        ]);
+
+        return {
+          device,
+          foldable: verdict === true,
+          foldableTimedOut: verdict === "timed-out",
+        };
+      })
     );
   } finally {
     clearTimeout(timer);
@@ -629,11 +659,16 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
       foldableAvds.has(a.name) ? { ...a, foldable: true as const } : a
     );
 
+    const foldableTimedOut = external
+      .filter((entry) => entry.foldableTimedOut)
+      .map(({ device }) => device.name);
+
     const adbPrefix = adbCommandPrefix(process.env);
     const hints = [
       ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
       ...(ios.timedOut ? [iosListTimedOutHint()] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
+      ...(foldableTimedOut.length > 0 ? [foldableCheckTimedOutHint(foldableTimedOut)] : []),
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];
 

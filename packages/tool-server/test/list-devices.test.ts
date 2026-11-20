@@ -137,6 +137,7 @@ import {
   EXTERNAL_FOLDABLE_BUDGET_MS,
   listDevicesTool,
 } from "../src/tools/devices/list-devices";
+import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import {
   __resetSimulatorRuntimeKindCacheForTesting,
@@ -1136,9 +1137,57 @@ describe("list-devices — external provider shadows", () => {
         expect.arrayContaining([`ext:acme-3f2a9c:${CLAIMED_UDID}`, "ext:acme-3f2a9c:emulator-5554"])
       );
       expect(lent.some((device) => "foldable" in device)).toBe(false);
+      expect(result.hint).toContain("The foldable check did not finish in time for iPhone 16");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("adds no foldable retry notice when the check settles in time", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.some((device) => "external" in device)).toBe(true);
+    expect(result.hint ?? "").not.toContain("foldable check");
+  });
+
+  it("lists every device when the foldable check rejects", async () => {
+    /**
+     * While Xcode's component install is pending, reading the provider's set
+     * throws. The external branch catches errors before this check, so a
+     * rejection that escaped would fail the whole call, plain devices included.
+     */
+    vi.mocked(isFoldableSimulator).mockRejectedValueOnce(
+      new XcodeFirstLaunchPendingError("simctl")
+    );
+
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\nemulator-5556\tdevice\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const claimed = result.devices.find(
+      (device) => "udid" in device && device.udid === `ext:acme-3f2a9c:${CLAIMED_UDID}`
+    );
+
+    expect(claimed).toBeDefined();
+    expect(claimed).not.toHaveProperty("foldable");
+    expect(
+      result.devices.some((device) => "serial" in device && device.serial === "emulator-5556")
+    ).toBe(true);
+    expect(result.hint ?? "").not.toContain("foldable check");
   });
 
   it("marks a foldable whose check settles on a later timer, well inside the budget", async () => {
