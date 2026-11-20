@@ -174,27 +174,46 @@ describe("network-conditions on an Android emulator", () => {
     ]);
   });
 
-  it("fails offline and turns the radios back on when a network stays up", async () => {
-    vi.useFakeTimers();
-    try {
-      const offline = networkConditionsTool
-        .execute({} as never, { udid: androidEmulator, offline: true })
-        .catch((err: unknown) => err);
-      await vi.advanceTimersByTimeAsync(6_000);
-      const err = await offline;
+  it.each([
+    {
+      network: "Ethernet",
+      agent:
+        "NetworkAgentInfo{network{100}  handle{1}  ni{ETHERNET CONNECTED} nc{[ Transports: ETHERNET Capabilities: INTERNET]}",
+      message: /Android TV emulator connects over Ethernet/,
+      code: FAILURE_CODES.ANDROID_OFFLINE_UNSUPPORTED,
+    },
+    {
+      network: "Wi-Fi",
+      agent:
+        "NetworkAgentInfo{network{100}  handle{1}  ni{WIFI CONNECTED} nc{[ Transports: WIFI Capabilities: INTERNET]}",
+      message: /still up after 15 s/,
+      code: FAILURE_CODES.ANDROID_OFFLINE_TIMEOUT,
+    },
+  ])(
+    "fails offline and turns the radios back on when the $network network stays up",
+    async ({ agent, message, code }) => {
+      vi.mocked(adbShell).mockResolvedValue(`Active default network: 100\n  ${agent}\n`);
+      vi.useFakeTimers();
+      try {
+        const offline = networkConditionsTool
+          .execute({} as never, { udid: androidEmulator, offline: true })
+          .catch((err: unknown) => err);
+        await vi.advanceTimersByTimeAsync(16_000);
+        const err = await offline;
 
-      expect((err as Error).message).toMatch(/still has a network/);
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_OFFLINE_UNSUPPORTED);
-      expect(adbArgs()).toEqual([
-        ["-s", androidEmulator, "shell", "svc", "wifi", "disable"],
-        ["-s", androidEmulator, "shell", "svc", "data", "disable"],
-        ["-s", androidEmulator, "shell", "svc", "wifi", "enable"],
-        ["-s", androidEmulator, "shell", "svc", "data", "enable"],
-      ]);
-    } finally {
-      vi.useRealTimers();
+        expect((err as Error).message).toMatch(message);
+        expect(getFailureSignal(err)?.error_code).toBe(code);
+        expect(adbArgs()).toEqual([
+          ["-s", androidEmulator, "shell", "svc", "wifi", "disable"],
+          ["-s", androidEmulator, "shell", "svc", "data", "disable"],
+          ["-s", androidEmulator, "shell", "svc", "wifi", "enable"],
+          ["-s", androidEmulator, "shell", "svc", "data", "enable"],
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
     }
-  });
+  );
 
   it("turns the radios on at a reset and waits until a network is up", async () => {
     vi.mocked(adbShell)
