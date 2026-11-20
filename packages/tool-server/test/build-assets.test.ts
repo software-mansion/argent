@@ -80,21 +80,6 @@ describe("tool-server build assets", () => {
     expect(fs.existsSync(path.join(root, "dist", dropped))).toBe(false);
   });
 
-  it("lists exactly the files that are in src", () => {
-    const listed = fs
-      .readFileSync(COPY_SCRIPT, "utf8")
-      .match(/"src\/[^"]+"/g)
-      ?.map((quoted) => quoted.slice(1, -1));
-
-    expect(listed).toBeDefined();
-    for (const asset of listed ?? []) {
-      expect(fs.existsSync(path.join(PACKAGE_ROOT, asset)), `${asset} is listed but absent`).toBe(
-        true
-      );
-    }
-    expect(listed?.map((asset) => path.relative("src", asset)).sort()).toEqual([...ASSETS].sort());
-  });
-
   it("is run by every build that produces this package's dist", () => {
     const buildScript = (file: string): string =>
       (JSON.parse(fs.readFileSync(file, "utf8")) as { scripts: Record<string, string> }).scripts

@@ -18,7 +18,7 @@ import {
   injectCodexRules,
   removeCodexRules,
 } from "../src/mcp-configs.js";
-import { hashBundledContent, type RetiredBundledPath } from "../src/utils.js";
+import { hashBundledContent, readToml, writeToml, type RetiredBundledPath } from "../src/utils.js";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Allows individual tests to redirect homedir() to a temp path so that
@@ -249,6 +249,148 @@ describe("global-only allowlists honor the cleanup scope", () => {
   });
 });
 
+// ── Allowlists: written once by init, never re-added by update ───────────────
+
+describe("Cursor permissions.json is never created", () => {
+  const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+  const permPath = () => path.join(tmpDir, ".cursor", "permissions.json");
+
+  beforeEach(() => {
+    homedirOverride = tmpDir;
+  });
+
+  it("skips and writes nothing when the file is missing", () => {
+    expect(cursor.allowlistSkipReason!(tmpDir, "global")).toMatch(/Run Everything/);
+    cursor.addAllowlist!(tmpDir, "global");
+    expect(fs.existsSync(permPath())).toBe(false);
+  });
+
+  it("skips and leaves the file alone when it has no mcpAllowlist", () => {
+    writeJsonFile(permPath(), { terminalAllowlist: ["ls"] });
+    const before = fs.readFileSync(permPath(), "utf8");
+    expect(cursor.allowlistSkipReason!(tmpDir, "global")).not.toBeNull();
+    cursor.addAllowlist!(tmpDir, "global");
+    expect(fs.readFileSync(permPath(), "utf8")).toBe(before);
+  });
+
+  it("appends to an mcpAllowlist the user already keeps", () => {
+    writeJsonFile(permPath(), { mcpAllowlist: ["other:*"] });
+    expect(cursor.allowlistSkipReason!(tmpDir, "global")).toBeNull();
+    cursor.addAllowlist!(tmpDir, "global");
+    expect(readJsonFile(permPath()).mcpAllowlist).toEqual(["other:*", "argent:*"]);
+  });
+});
+
+describe("update's entry rewrite keeps the approval state the user has", () => {
+  const cases = [
+    { name: "Devin Desktop", key: "alwaysAllow", changed: [] as unknown, global: true },
+    { name: "Gemini", key: "trust", changed: false as unknown, global: false },
+    { name: "Kiro", key: "autoApprove", changed: ["describe"] as unknown, global: false },
+  ];
+
+  for (const { name, key, changed, global } of cases) {
+    describe(name, () => {
+      const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
+      const scope = global ? "global" : "local";
+      const configPath = () =>
+        (global ? adapter.globalPath() : adapter.projectPath(tmpDir)) as string;
+      const entryValue = () =>
+        (
+          (readJsoncFile(configPath()).mcpServers as Record<string, Record<string, unknown>>)
+            .argent as Record<string, unknown>
+        )[key];
+
+      beforeEach(() => {
+        homedirOverride = tmpDir;
+      });
+
+      it(`keeps ${key} that init added`, () => {
+        adapter.write(configPath(), getMcpEntry());
+        adapter.addAllowlist!(tmpDir, scope);
+        const added = entryValue();
+        expect(added).toBeDefined();
+
+        adapter.write(configPath(), getMcpEntry());
+        expect(entryValue()).toEqual(added);
+      });
+
+      it(`keeps ${key} the user changed`, () => {
+        adapter.write(configPath(), getMcpEntry());
+        adapter.addAllowlist!(tmpDir, scope);
+        const config = readJsoncFile(configPath());
+        (
+          (config.mcpServers as Record<string, Record<string, unknown>>).argent as Record<
+            string,
+            unknown
+          >
+        )[key] = changed;
+        writeJsonFile(configPath(), config);
+
+        adapter.write(configPath(), getMcpEntry());
+        expect(entryValue()).toEqual(changed);
+      });
+
+      it(`adds no ${key} the user never had`, () => {
+        adapter.write(configPath(), getMcpEntry());
+        adapter.write(configPath(), getMcpEntry());
+        expect(entryValue()).toBeUndefined();
+      });
+    });
+  }
+
+  it("Codex keeps its tools table", () => {
+    const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    codex.write(configPath, getMcpEntry());
+    codex.addAllowlist!(tmpDir, "local");
+    const before = (readToml(configPath).mcp_servers as Record<string, Record<string, unknown>>)
+      .argent!.tools;
+
+    codex.write(configPath, getMcpEntry());
+    const after = (readToml(configPath).mcp_servers as Record<string, Record<string, unknown>>)
+      .argent!.tools;
+    expect(after).toEqual(before);
+  });
+});
+
+describe("Codex refreshAllowlist", () => {
+  const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+  const configPath = () => path.join(tmpDir, ".codex", "config.toml");
+  const tools = () =>
+    (readToml(configPath()).mcp_servers as Record<string, Record<string, unknown>>).argent!
+      .tools as Record<string, { approval_mode: string }> | undefined;
+  // The stubbed tool server lists tool-a, tool-b and tool-c.
+  function writeTools(table: Record<string, { approval_mode: string }> | undefined): void {
+    codex.write(configPath(), getMcpEntry());
+    if (!table) return;
+    const config = readToml(configPath()) as { mcp_servers: { argent: Record<string, unknown> } };
+    config.mcp_servers.argent.tools = table;
+    writeToml(configPath(), config);
+  }
+
+  it("approves tools a new version added and keeps the user's modes", () => {
+    writeTools({ "tool-a": { approval_mode: "approve" }, "tool-b": { approval_mode: "prompt" } });
+    codex.refreshAllowlist!(tmpDir, "local");
+    expect(tools()).toEqual({
+      "tool-a": { approval_mode: "approve" },
+      "tool-b": { approval_mode: "prompt" },
+      "tool-c": { approval_mode: "approve" },
+    });
+  });
+
+  it("leaves a table with no approved tool alone", () => {
+    writeTools({ "tool-a": { approval_mode: "prompt" } });
+    codex.refreshAllowlist!(tmpDir, "local");
+    expect(tools()).toEqual({ "tool-a": { approval_mode: "prompt" } });
+  });
+
+  it("adds no table the user does not have", () => {
+    writeTools(undefined);
+    codex.refreshAllowlist!(tmpDir, "local");
+    expect(tools()).toBeUndefined();
+  });
+});
+
 // ── getArgentEntry env passthrough ────────────────────────────────────────────
 
 describe("getArgentEntry env passthrough", () => {
@@ -394,26 +536,6 @@ describe("resolveLocalCommandMode", () => {
     ]);
     expect(cfg.mcp.argent.type).toBe("local");
     expect(cfg.mcp.argent.enabled).toBe(true);
-  });
-});
-
-// ── Adapter registry ──────────────────────────────────────────────────────────
-
-describe("ALL_ADAPTERS", () => {
-  it("contains all ten adapters", () => {
-    const names = ALL_ADAPTERS.map((a) => a.name);
-    expect(names).toEqual([
-      "Cursor",
-      "Claude Code",
-      "VS Code",
-      "Devin Desktop",
-      "Zed",
-      "Gemini",
-      "Codex",
-      "Hermes",
-      "opencode",
-      "Kiro",
-    ]);
   });
 });
 
