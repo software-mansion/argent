@@ -17,6 +17,10 @@
  * With addRootOffset (a Mac app), a host measured that way (one whose public instance
  * was never created, such as a Text) gets the window offset of its nearest ancestor
  * host that has measureInWindow: the title bar height in a react-native-macos window.
+ * Paper's UIManager.measureInWindow counts from a react-native-macos window's content
+ * view, below the title bar. With addRootOffset, Paper rects get the window height
+ * (Dimensions 'window', the window frame) minus the height of a root container that
+ * fills the content view's width from its top-left corner; any other root adds 0.
  * Other platforms keep page coordinates: on Android an edge-to-edge app's viewport
  * offset is minus the status bar, which would move hosts that are placed right today.
  *
@@ -387,6 +391,27 @@ export function makeComponentTreeScript(opts: {
     return offsetCache[anchor.key];
   }
 
+  // Paper on a Mac app: the title bar height above the content view, or 0.
+  function paperTitleBar() {
+    if (!ADD_ROOT_OFFSET || useFabric || !(screenW > 0)) return Promise.resolve(0);
+    var _ci = root.current && root.current.stateNode && root.current.stateNode.containerInfo;
+    var _tag = _ci && typeof _ci.containerTag === 'number' ? _ci.containerTag : (typeof _ci === 'number' ? _ci : null);
+    if (_tag === null || typeof UIManagerMod.measureInWindow !== 'function') return Promise.resolve(0);
+    return new Promise(function(_resolve) {
+      var _done = false;
+      function resolve(v) { if (_done) return; _done = true; _resolve(v); }
+      setTimeout(function() { resolve(0); }, 600);
+      try {
+        UIManagerMod.measureInWindow(_tag, function(cx, cy, cw, ch) {
+          var bar = screenH - ch;
+          var fills = Math.abs(cx) < 1 && Math.abs(cy) < 1 && Math.abs(cw - screenW) <= 1;
+          resolve(fills && bar > 0 && bar <= 120 ? bar : 0);
+        });
+      } catch (e) { resolve(0); }
+    });
+  }
+  var paperDy = await paperTitleBar();
+
   function measureOne(info) {
     return new Promise(function(_resolve) {
       // Guard against measure callbacks that never fire (detached / off-screen
@@ -415,7 +440,7 @@ export function makeComponentTreeScript(opts: {
           }
         } else {
           UIManagerMod.measureInWindow(info.n, function(x, y, w, h) {
-            if (w > 0 && h > 0) resolve({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
+            if (w > 0 && h > 0) resolve({ x: Math.round(x), y: Math.round(y + paperDy), w: Math.round(w), h: Math.round(h) });
             else resolve(null);
           });
         }

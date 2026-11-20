@@ -180,7 +180,7 @@ Returns components from the tapped element upward through its parent hierarchy,
 each with its source file:line and a code fragment.
 The first items (lowest indices) are the most specific: the exact component under
 the tap point and its direct parents. Higher indices are broader context (page, navigator).
-Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
+Use when you need the source file and line for a component at a tap coordinate.<flag:macos-apps> A Mac app with React Native in several windows: it inspects the window with the most components, which can differ from the one describe reads.</flag:macos-apps> Fails if the app is not connected or the coordinate is outside the screen.`,
   zodSchema,
   readOnly: true,
   interaction: {

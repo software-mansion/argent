@@ -509,7 +509,7 @@ Use when you need what describe does not show: a testID for a selector (on Andro
 the testID of a view that has no label and is not tappable), or the component names and nesting
 behind the screen before editing code. To find what to tap, use describe.
 
-Returns a compact text tree; call again after navigation. Fails if the Metro debugger is not connected.`,
+Returns a compact text tree; call again after navigation.<flag:macos-apps> A Mac app with React Native in several windows: it reads the window with the most components, which can differ from the one describe reads.</flag:macos-apps> Fails if the Metro debugger is not connected.`,
     zodSchema,
     searchHint: "react native component tree testID testIDs selector component names hierarchy",
     readOnly: true,

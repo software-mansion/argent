@@ -65,7 +65,12 @@ function makeHook(entries: Array<[number, unknown, unknown[]]>) {
 
 function runInspect(
   hook: unknown,
-  opts: { fabric?: boolean; nativeFabricUIManager?: unknown; subtractRootOffset?: boolean } = {}
+  opts: {
+    fabric?: boolean;
+    nativeFabricUIManager?: unknown;
+    subtractRootOffset?: boolean;
+    metroRequire?: unknown;
+  } = {}
 ): {
   type: string;
   items?: Array<{ name: string; frame?: { file: string; line: number; col: number } | null }>;
@@ -78,6 +83,7 @@ function runInspect(
     hook: g.__REACT_DEVTOOLS_GLOBAL_HOOK__,
     nf: g.nativeFabricUIManager,
     cb: g.__argent_callback,
+    r: g.__r,
   };
   let captured: { type: string } | null = null;
   g.window = g;
@@ -87,6 +93,7 @@ function runInspect(
   // branch so findHostFiber must recognise stateNode._nativeTag host fibers.
   if (fabric) g.nativeFabricUIManager = opts.nativeFabricUIManager ?? {};
   else delete g.nativeFabricUIManager;
+  if (opts.metroRequire) g.__r = opts.metroRequire;
   g.__argent_callback = (payload: string) => {
     captured = JSON.parse(payload);
   };
@@ -98,6 +105,7 @@ function runInspect(
     g.__REACT_DEVTOOLS_GLOBAL_HOOK__ = saved.hook;
     g.nativeFabricUIManager = saved.nf;
     g.__argent_callback = saved.cb;
+    g.__r = saved.r;
   }
 }
 
@@ -107,6 +115,7 @@ afterEach(() => {
   delete g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   delete g.nativeFabricUIManager;
   delete g.__argent_callback;
+  delete g.__r;
 });
 
 describe("makeInspectScript — multi-renderer renderer selection (argent#317)", () => {
@@ -290,5 +299,75 @@ describe("makeInspectScript — root view offset in the window", () => {
       subtractRootOffset: true,
     });
     expect(rn.fn.mock.calls[0].slice(1, 3)).toEqual([50, 90]);
+  });
+});
+
+describe("makeInspectScript — Paper title bar on a Mac app", () => {
+  /**
+   * A Paper root (container tag 11). Paper's measureInWindow counts from the
+   * content view, so the container reports (0, 0) and its own size; the window
+   * (Dimensions 'window') is 32 pt taller, the title bar.
+   */
+  function paperRoot(opts: { withContainer?: boolean; containerWidth?: number } = {}) {
+    const fn = vi.fn((_ref: unknown, _x: number, _y: number, cb: (d: unknown) => void) =>
+      cb({ closestInstance: comp("PaperButton", null) })
+    );
+    const renderer = { rendererConfig: { getInspectorDataForViewAtPoint: fn } };
+    const root = {
+      current: {
+        type: null,
+        stateNode: opts.withContainer === false ? {} : { containerInfo: { containerTag: 11 } },
+        child: paperHostFiber(13),
+        sibling: null,
+      },
+    };
+    const measured: number[] = [];
+    const UIManager = {
+      measureInWindow: (tag: number, cb: (x: number, y: number, w: number, h: number) => void) => {
+        measured.push(tag);
+        cb(0, 0, opts.containerWidth ?? 300, 400);
+      },
+    };
+    const Dimensions = { get: () => ({ width: 300, height: 432 }) };
+    const metroRequire = Object.assign(
+      (id: number) => (id === 5 ? { UIManager } : id === 6 ? { Dimensions } : {}),
+      {
+        getModules: () => [
+          [4, { isInitialized: true }],
+          [5, { isInitialized: true }],
+          [6, { isInitialized: true }],
+        ],
+      }
+    );
+    const hook = { renderers: new Map([[1, renderer]]), getFiberRoots: () => new Set([root]) };
+    return { hook, fn, metroRequire, measured };
+  }
+
+  it("subtracts the window height minus the root container height", () => {
+    const { hook, fn, metroRequire, measured } = paperRoot();
+    const out = runInspect(hook, { fabric: false, subtractRootOffset: true, metroRequire });
+    expect(out?.type).toBe("inspect_result");
+    expect(measured).toEqual([11]);
+    expect(fn.mock.calls[0].slice(1, 3)).toEqual([50, 58]);
+  });
+
+  it("keeps the point when the root container does not span the window", () => {
+    const { hook, fn, metroRequire } = paperRoot({ containerWidth: 200 });
+    runInspect(hook, { fabric: false, subtractRootOffset: true, metroRequire });
+    expect(fn.mock.calls[0].slice(1, 3)).toEqual([50, 90]);
+  });
+
+  it("elsewhere, keeps the point and does not measure", () => {
+    const { hook, fn, metroRequire, measured } = paperRoot();
+    runInspect(hook, { fabric: false, metroRequire });
+    expect(measured).toEqual([]);
+    expect(fn.mock.calls[0].slice(1, 3)).toEqual([50, 90]);
+  });
+
+  it("without a root container tag, keeps the point", () => {
+    const { hook, fn, metroRequire, measured } = paperRoot({ withContainer: false });
+    runInspect(hook, { fabric: false, subtractRootOffset: true, metroRequire });
+    expect(measured).toEqual([]);
+    expect(fn.mock.calls[0].slice(1, 3)).toEqual([50, 90]);
   });
 });

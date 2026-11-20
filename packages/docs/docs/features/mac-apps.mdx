@@ -116,6 +116,8 @@ The JavaScript debugger tools work with the same Debug builds as the React profi
 
 Argent connects only to the runtime of the Mac app. If Metro does not have this runtime, the agent reports the runtimes that Metro has.
 
+The debugger tools connect through Metro and do not use the Argent library. Thus they also work on a react-native-macos Debug build that Argent cannot launch, for example a build with the hardened runtime. Start that build yourself, for example from Xcode. The screen tools, such as `describe` and `gesture-tap`, do not work on it.
+
 See [Debugging](/docs/features/debugging) for the debugger features and the [Mac app debugger reference](/docs/reference/tools#javascript-debugging-on-a-mac-app) for the tool details.
 
 <a id="several-builds-at-the-same-time" />

@@ -51,7 +51,8 @@ function makeHook(rootsByRenderer: Record<number, unknown[]>) {
 async function runScript(
   hook: unknown,
   nativeFabricUIManager: unknown,
-  opts: { addRootOffset?: boolean } = {}
+  opts: { addRootOffset?: boolean } = {},
+  metroRequire?: unknown
 ): Promise<{ result: string } | null> {
   const g = globalThis as Record<string, unknown>;
   const saved = {
@@ -65,7 +66,7 @@ async function runScript(
   g.window = g;
   g.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
   g.nativeFabricUIManager = nativeFabricUIManager;
-  g.__r = function () {}; // metro require stub; the Dimensions block is try/caught
+  g.__r = metroRequire ?? function () {}; // metro require stub; the Dimensions block is try/caught
   g.__argent_callback = (payload: string) => {
     captured = JSON.parse(payload);
   };
@@ -328,5 +329,72 @@ describe("makeComponentTreeScript — a Text measured by page position", () => {
     const comps = components(await runScript(makeHook({ 1: [root] }), nf));
     const byId = Object.fromEntries(comps.map((c) => [c.testID, c.rect]));
     expect(byId.title).toEqual({ x: 20, y: 44, w: 125, h: 30 });
+  });
+});
+
+describe("makeComponentTreeScript — Paper on a Mac app with a title bar", () => {
+  /**
+   * Paper's measureInWindow counts from the content view: the root container
+   * (tag 11) is at (0, 0) and 400 tall, while the window (Dimensions 'window') is
+   * 432 tall, so 32 pt of title bar sit above it.
+   */
+  function paper(containerWidth = 300) {
+    const button = {
+      type: "RCTView",
+      stateNode: { _nativeTag: 21 },
+      memoizedProps: {},
+      child: null,
+      sibling: null,
+    };
+    const root = {
+      current: {
+        type: null,
+        stateNode: { containerInfo: { containerTag: 11 } },
+        memoizedProps: null,
+        child: comp("Button", "btn", button),
+        sibling: null,
+      },
+    };
+    const rects: Record<number, [number, number, number, number]> = {
+      11: [0, 0, containerWidth, 400],
+      21: [10, 0, 200, 40],
+    };
+    const UIManager = {
+      measureInWindow: (tag: number, cb: (x: number, y: number, w: number, h: number) => void) =>
+        cb(...rects[tag]!),
+    };
+    const Dimensions = { get: () => ({ width: 300, height: 432 }) };
+    const metroRequire = Object.assign(
+      (id: number) => (id === 5 ? { UIManager } : id === 6 ? { Dimensions } : {}),
+      {
+        getModules: () => [
+          [5, { isInitialized: true }],
+          [6, { isInitialized: true }],
+        ],
+      }
+    );
+    return { root, metroRequire };
+  }
+
+  it("adds the title bar height to Paper rects", async () => {
+    const { root, metroRequire } = paper();
+    const comps = components(
+      await runScript(makeHook({ 1: [root] }), undefined, { addRootOffset: true }, metroRequire)
+    );
+    expect(comps.find((c) => c.testID === "btn")?.rect).toEqual({ x: 10, y: 32, w: 200, h: 40 });
+  });
+
+  it("adds nothing when the root container does not span the window", async () => {
+    const { root, metroRequire } = paper(200);
+    const comps = components(
+      await runScript(makeHook({ 1: [root] }), undefined, { addRootOffset: true }, metroRequire)
+    );
+    expect(comps.find((c) => c.testID === "btn")?.rect).toEqual({ x: 10, y: 0, w: 200, h: 40 });
+  });
+
+  it("elsewhere, keeps Paper rects as measured", async () => {
+    const { root, metroRequire } = paper();
+    const comps = components(await runScript(makeHook({ 1: [root] }), undefined, {}, metroRequire));
+    expect(comps.find((c) => c.testID === "btn")?.rect).toEqual({ x: 10, y: 0, w: 200, h: 40 });
   });
 });
