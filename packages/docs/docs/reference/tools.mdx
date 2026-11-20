@@ -249,6 +249,7 @@ A native layer that is not armed often arms later without a new start. For examp
 | `macos-native`   | Argent does not start the app: an Electron app, or a build that the hardened runtime keeps the library out of.                               | `true`        |
 | `macos-native`   | The app does not run. `boot-device`, `launch-app` or `restart-app` starts it, and Argent arms its process.                                   | absent        |
 | `macos-native`   | A copy of the app that Argent did not start runs. The reason gives its process ID. Quit this copy, then start the app with Argent.           | absent        |
+| `macos-native`   | No copy that Argent started runs. Argent cannot find the app build, so it cannot find other copies. Use `boot-device` with `macosAppPath`.   | absent        |
 
 On iOS, Argent cannot tell an app that does not run from an app that is not installed. Thus the `ios-native` reason that tells you to call `restart-app` also says this: if `restart-app` cannot start the app, the bundle ID is not installed on the simulator.
 

@@ -304,11 +304,33 @@ function notRunningError(bundleId: string): FailureError {
   );
 }
 
+/** The stage of the not-running error when argent has no build of the app to look for a copy of. */
+const BUILD_UNKNOWN_STAGE = "macos_app_locate";
+
+/**
+ * No copy that argent started runs, and argent has no build to look for
+ * another copy of: a copy can run, so the error does not say that the app does
+ * not run. launch-app cannot find the build either, so only boot-device with
+ * the path starts it, and boot-device reports a copy that runs.
+ */
+function buildUnknownError(bundleId: string): FailureError {
+  return macosFailure(
+    `No copy of ${bundleId} that argent started is running. argent cannot find the app's ` +
+      `build, so it cannot tell whether a copy that it did not start runs. Start the app ` +
+      `with boot-device with macosAppPath (the .app path) on the device ` +
+      `${macosAppIdFromBundleId(bundleId)}: boot-device reports a copy that already runs.`,
+    FAILURE_CODES.MACOS_APP_NOT_RUNNING,
+    BUILD_UNKNOWN_STAGE,
+    "not_found"
+  );
+}
+
 /**
  * The error for a call while no copy that argent started runs: a copy that
  * argent did not start, as launch-app finds it, must quit before a launch can
  * start one with the library. The build is the one argent started last, else
- * Spotlight's. With no such copy, or no build to look for, the app is not running.
+ * Spotlight's. With no such copy the app is not running; with no build to look
+ * for, argent cannot tell.
  */
 async function noLaunchedCopyError(bundleId: string): Promise<FailureError> {
   const appPath = getTrackedMacosApp(bundleId)?.appPath ?? (await findMacosAppByBundleId(bundleId));
@@ -318,7 +340,7 @@ async function noLaunchedCopyError(bundleId: string): Promise<FailureError> {
   } catch {
     info = undefined;
   }
-  if (!info || info.bundleId !== bundleId) return notRunningError(bundleId);
+  if (!info || info.bundleId !== bundleId) return buildUnknownError(bundleId);
   const copies = await findRunningCopies(bundleId, info.executable);
   const refuse = (message: string) =>
     macosFailure(
@@ -1704,6 +1726,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         if (disposed) return servicesStopped;
         const code = errorCode(err);
         const notRunning = code === FAILURE_CODES.MACOS_APP_NOT_RUNNING;
+        const buildUnknown =
+          notRunning && getFailureSignal(err)?.failure_stage === BUILD_UNKNOWN_STAGE;
         // A copy that argent did not start: capture arms only in a copy that argent starts.
         const notOurs = code === FAILURE_CODES.MACOS_APP_ALREADY_RUNNING;
         // The app runs, so its requests before this start are not recorded, also
@@ -1711,11 +1735,13 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         if (!notRunning && !notOurs && startedNow && !armedSinceLaunch) captureGap = true;
         return {
           armed: false,
-          reason: notRunning
-            ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
-            : notOurs
-              ? `capture arms when argent starts ${bundleId}, which needs the copy that runs now to quit first: ${errorMessage(err)}`
-              : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
+          reason: buildUnknown
+            ? `no copy of ${bundleId} that argent started is running, and argent cannot find the app's build to look for another copy; capture arms when boot-device with macosAppPath starts it`
+            : notRunning
+              ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
+              : notOurs
+                ? `capture arms when argent starts ${bundleId}, which needs the copy that runs now to quit first: ${errorMessage(err)}`
+                : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
         };
       }
       // A launch this start waited for armed its process from the start.
