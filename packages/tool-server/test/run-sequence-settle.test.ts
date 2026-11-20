@@ -173,8 +173,9 @@ describe("run-sequence settle", () => {
     expect(log).toEqual(["gesture-tap", "read"]);
   });
 
+  let reads = 0;
   it.each([
-    ["the tree keeps changing", () => sheetAt(Math.random())],
+    ["the tree keeps changing", () => sheetAt(reads++ % 2)],
     ["a read never returns", () => new Promise<DescribeTreeData>(() => {})],
   ])("moves on after about a second when %s", async (_case, read) => {
     readTree.mockImplementation(async () => read());
