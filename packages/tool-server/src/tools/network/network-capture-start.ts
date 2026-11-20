@@ -41,10 +41,12 @@ import { ensureDeps } from "../../utils/check-deps";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
+  captureName,
   captureSchema,
   errorMessage,
   jsNotReached,
   otherPortHint,
+  requestedLayers,
   runLayers,
   withCaptureLock,
   type CaptureParams,
@@ -62,17 +64,17 @@ export function createNetworkCaptureStartTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StartedLayer>> {
   return {
     id: "network-capture-start",
-    description: `Start network capture for an app on every layer that sees its requests: the app's JS runtime and the native layer (NSURLProtocol on iOS; OkHttp on Android, which needs a debuggable build).
+    description: `Start network capture for an app on every layer that sees its requests: the app's JS runtime and the native layer (NSURLProtocol on iOS; OkHttp on Android, which needs a debuggable build). Pass layer js or native to start only that layer; the other layer stays as it is, and a later call can start it.
 Use when you are about to trigger requests you need to inspect, also as a step of an e2e test. Unlike native-network-logs and view-network-logs, which on iOS and Android only read and say capture is not started until this runs, this turns capture on and waits a few seconds for each layer to arm. A second call keeps the requests captured so far.
-Returns { status, layers }: per layer, armed, and a reason when it is not armed (unavailable: true when nothing arms it without a change you must make). A native layer that is not armed yet arms by itself, for example at the app's next launch (on Android, only a launch by launch-app or restart-app), and native capture follows the app into later processes that launch-app and restart-app start, until network-capture-stop. On a device whose devtools agent argent attached to, a relaunch ends native capture: call this tool again after it. The JS layer arms only at a call of this tool: call it again once the app's JavaScript has loaded, and after a reload or relaunch. Capture can slow the app.
-Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
+Returns { status, layers }: per layer the call started, armed, and a reason when it is not armed (unavailable: true when nothing arms it without a change you must make). A native layer that is not armed yet arms by itself, for example at the app's next launch (on Android, only a launch by launch-app or restart-app), and native capture follows the app into later processes that launch-app and restart-app start, until network-capture-stop. On a device whose devtools agent argent attached to, a relaunch ends native capture: call this tool again after it. The JS layer arms only at a call of this tool: call it again once the app's JavaScript has loaded, and after a reload or relaunch. Capture can slow the app.
+Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer the call names can capture this app.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
     interaction: {
-      startedMsg: ({ params }) => `Starting network capture for ${params.bundleId}`,
-      completedMsg: ({ params }) => `Started network capture for ${params.bundleId}`,
+      startedMsg: ({ params }) => `Starting ${captureName(params.layer)} for ${params.bundleId}`,
+      completedMsg: ({ params }) => `Started ${captureName(params.layer)} for ${params.bundleId}`,
       failedMsg: ({ params, failureSignal }) =>
-        `Failed to start network capture for ${params.bundleId}: ${failureSignal.error_code}`,
+        `Failed to start ${captureName(params.layer)} for ${params.bundleId}: ${failureSignal.error_code}`,
     },
     // Each layer resolves its own service, so one that fails leaves the others running.
     services: () => ({}),
@@ -88,22 +90,33 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
             : ["xcrun"]
       );
       const port = metroPort({ device_id: params.udid, port: params.port });
-      if (device.platform === "ios" && isInjectableBundleId(params.bundleId)) {
+      const run = requestedLayers(params.layer);
+      // Only the iOS native layer needs simctl to arm.
+      if (run.native && device.platform === "ios" && isInjectableBundleId(params.bundleId)) {
         await refuseWhileXcodeInstalls(registry, device, params.bundleId);
       }
+      // A layer the call does not name stays as it is.
       const layers = await withCaptureLock(params.udid, params.bundleId, () =>
         runLayers([
-          device.platform !== "android" && !isInjectableBundleId(params.bundleId)
-            ? Promise.resolve(
-                unavailable(
-                  "js",
-                  `${params.bundleId} is an Apple system app, which runs no React Native JS`
-                )
-              )
-            : startJsLayer(registry, params.udid, params.bundleId, port),
-          device.platform === "android"
-            ? startAndroidLayer(registry, device, params.bundleId, port)
-            : startIosLayer(registry, device, params.bundleId, port),
+          ...(run.js
+            ? [
+                device.platform !== "android" && !isInjectableBundleId(params.bundleId)
+                  ? Promise.resolve(
+                      unavailable(
+                        "js",
+                        `${params.bundleId} is an Apple system app, which runs no React Native JS`
+                      )
+                    )
+                  : startJsLayer(registry, params.udid, params.bundleId, port),
+              ]
+            : []),
+          ...(run.native
+            ? [
+                device.platform === "android"
+                  ? startAndroidLayer(registry, device, params.bundleId, port)
+                  : startIosLayer(registry, device, params.bundleId, port),
+              ]
+            : []),
         ])
       );
       if (layers.every((layer) => layer.unavailable)) {

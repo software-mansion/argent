@@ -46,7 +46,7 @@ Native code does not use these functions. For native code, use a native layer. I
 
 ## Start and stop the capture
 
-On iOS and Android, the agent starts and stops the network capture of an app. One start covers the JS runtime layer and the native layer of the app. The start waits until each layer is ready, for at most a few seconds. The result tells the agent which layers are ready. For a layer that is not ready, the result gives the reason.
+On iOS and Android, the agent starts and stops the network capture of an app. One start covers the JS runtime layer and the native layer of the app. The agent can also start or stop one of these layers alone. The other layer stays as it is. The start waits until each layer is ready, for at most a few seconds. The result tells the agent which layers are ready. For a layer that is not ready, the result gives the reason.
 
 Before a start, a read of the network log tells the agent that the capture is not started. The read does nothing else. Thus the agent starts the capture before the action that sends the requests.
 

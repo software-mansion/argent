@@ -16,9 +16,29 @@ export const captureSchema = z.object({
   port: metroPortField.describe(
     "The app's Metro port: the JS layer is reached through it, and the native layers leave its requests out. Omit it to use this device's port, 8081 by default."
   ),
+  layer: z
+    .enum(["js", "native"])
+    .optional()
+    .describe(
+      "The layer to act on: js (the app's JS runtime, read with view-network-logs) or native (NSURLProtocol on iOS, OkHttp on Android, read with native-network-logs). Omit it to act on both. The other layer stays as it is."
+    ),
 });
 
 export type CaptureParams = z.infer<typeof captureSchema>;
+
+/** The layers a call acts on: both when it names none. */
+export function requestedLayers(layer: CaptureParams["layer"]): { js: boolean; native: boolean } {
+  return { js: layer !== "native", native: layer !== "js" };
+}
+
+/** The capture a call acts on, as its interaction messages name it. */
+export function captureName(layer: CaptureParams["layer"]): string {
+  return layer === "js"
+    ? "JS network capture"
+    : layer === "native"
+      ? "native network capture"
+      : "network capture";
+}
 
 /** The devices native-network-logs reads, where every layer start covers can run. */
 export const CAPTURE_CAPABILITY: ToolCapability = {

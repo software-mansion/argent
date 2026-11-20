@@ -194,6 +194,22 @@ The two tools do not support Chromium, Vega and Mac apps. There, Argent starts t
 | `udid`     | The UDID of the iOS simulator, or the serial of the Android device                                                                                                                                                          |
 | `bundleId` | The bundle ID of the app on iOS, or the package name of the app on Android                                                                                                                                                  |
 | `port`     | The Metro port of the app. Argent reaches the JS runtime of the app through this port. The native layers remove the requests to this port on a local address from their lists. The default is the Metro port of the device. |
+| `layer`    | The layer that the call starts or stops: `js` for the JS runtime layer, or `native` for the `ios-native` or `android-native` layer. Without `layer`, the call starts or stops both layers.                                  |
+
+#### One layer
+
+With `layer`, a call starts or stops only that layer. The call does not change the other layer, and `layers` in the result contains only the entry of that layer. A later call can start or stop the other layer, or both layers:
+
+| Calls                                                                 | Result                                                                                                |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| A start with `layer: "native"`, then a start with `layer: "js"`       | Both layers capture. The second start does not change the native layer.                               |
+| A start with `layer: "js"`, then a start without `layer`              | Both layers capture. The JS runtime layer keeps its requests, as after each second start.             |
+| A start without `layer`, then a stop with `layer: "native"`           | The JS runtime layer continues to capture. The native layer stops and keeps its requests.             |
+| A start without `layer`, then a stop with `layer: "js"`               | The native layer continues to capture. The JS runtime layer stops and keeps its requests.             |
+| A start with `layer: "js"`, then a stop with `layer: "native"`        | The stop changes nothing. The `reason` of the native entry is `capture was not started for this app`. |
+| A stop with `layer: "js"`, then a start with `layer: "js"` or without | The JS runtime layer captures again.                                                                  |
+
+One start or stop of an app runs at a time, also when the calls name different layers.
 
 #### Start
 
@@ -231,7 +247,7 @@ A native layer that is not armed often arms later without a new start. For examp
 
 On iOS, Argent cannot tell an app that does not run from an app that is not installed. Thus the `ios-native` reason that tells you to call `restart-app` also says this: if `restart-app` cannot start the app, the bundle ID is not installed on the simulator.
 
-When all layers are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each layer. An Apple system app runs no React Native JS, so both of its layers are unavailable, and a start for it always fails.
+When all layers that the call starts are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each of these layers. A start with `layer` fails when its layer is unavailable, also when the other layer can capture. An Apple system app runs no React Native JS, so both of its layers are unavailable, and a start for it always fails.
 
 A second call of `network-capture-start` keeps the requests that Argent recorded.
 
@@ -247,7 +263,7 @@ Until then, `view-network-logs` says that the capture stopped recording at the r
 
 #### Stop
 
-`network-capture-stop` stops the capture of the app on each layer. The capture of a different app continues. Argent keeps the requests that it recorded. Their IDs stay valid in `view-network-request-details` until the JS runtime of the app reloads or restarts. Until the next `network-capture-start`, `view-network-request-details` says for an ID of the JS runtime layer that the reload cleared the requests. After the next `network-capture-start`, the new JS runtime numbers its requests from `rn-net-1` again. Then an earlier ID of the JS runtime layer can name a new request. A reload or a restart does not change the IDs of the native layers.
+`network-capture-stop` stops the capture of the app on each layer, or only on the layer that `layer` names. The capture of a different app continues. Argent keeps the requests that it recorded. Their IDs stay valid in `view-network-request-details` until the JS runtime of the app reloads or restarts. Until the next `network-capture-start`, `view-network-request-details` says for an ID of the JS runtime layer that the reload cleared the requests. After the next `network-capture-start`, the new JS runtime numbers its requests from `rn-net-1` again. Then an earlier ID of the JS runtime layer can name a new request. A reload or a restart does not change the IDs of the native layers.
 
 The result contains `status` and `layers`. Each entry of `layers` contains these fields:
 

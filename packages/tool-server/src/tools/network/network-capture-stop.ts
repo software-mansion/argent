@@ -30,11 +30,13 @@ import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../utils/simctl-config";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
+  captureName,
   captureSchema,
   errorMessage,
   isLiveService,
   jsNotReached,
   otherPortHint,
+  requestedLayers,
   runLayers,
   withCaptureLock,
   type CaptureParams,
@@ -51,17 +53,17 @@ export function createNetworkCaptureStopTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StoppedLayer>> {
   return {
     id: "network-capture-stop",
-    description: `Stop network capture for an app on every layer and keep what was captured.
+    description: `Stop network capture for an app on every layer and keep what was captured. Pass layer js or native to stop only that layer; the other layer keeps capturing.
 Use when you have the requests you need, before you profile, or to end capture in an e2e test. Unlike stop-all-simulator-servers, the requests stay listed in native-network-logs and view-network-logs, and their ids keep working in view-network-request-details (a view-network-logs id until the app's JS runtime reloads).
 Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. A request in flight at the stop completes in the list on iOS and in the JS runtime; on Android the list marks it failed, while the app's own request goes on. On Android, a body that view-network-request-details did not read before the stop is no longer available.
-Returns { status, layers }: per layer, armed (false once the layer confirmed the stop), total (the requests it keeps for the app, or 0 when the stop could not count them, as on a JS runtime it did not reach) and a reason when the layer was not reached or was not started.`,
+Returns { status, layers }: per layer the call stopped, armed (false once the layer confirmed the stop), total (the requests it keeps for the app, or 0 when the stop could not count them, as on a JS runtime it did not reach) and a reason when the layer was not reached or was not started.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
     interaction: {
-      startedMsg: ({ params }) => `Stopping network capture for ${params.bundleId}`,
-      completedMsg: ({ params }) => `Stopped network capture for ${params.bundleId}`,
+      startedMsg: ({ params }) => `Stopping ${captureName(params.layer)} for ${params.bundleId}`,
+      completedMsg: ({ params }) => `Stopped ${captureName(params.layer)} for ${params.bundleId}`,
       failedMsg: ({ params, failureSignal }) =>
-        `Failed to stop network capture for ${params.bundleId}: ${failureSignal.error_code}`,
+        `Failed to stop ${captureName(params.layer)} for ${params.bundleId}: ${failureSignal.error_code}`,
     },
     // A stop must not create the services it stops, so each layer looks them up itself.
     services: () => ({}),
@@ -70,19 +72,29 @@ Returns { status, layers }: per layer, armed (false once the layer confirmed the
       // Only the HTTP gate checks the capability, and an e2e `tool:` step does not pass it.
       assertSupported("network-capture-stop", CAPTURE_CAPABILITY, device);
       const port = metroPort({ device_id: params.udid, port: params.port });
+      const run = requestedLayers(params.layer);
+      // A layer the call does not name stays as it is.
       const layers = await withCaptureLock(params.udid, params.bundleId, () =>
         runLayers([
-          device.platform !== "android" && !isInjectableBundleId(params.bundleId)
-            ? Promise.resolve<StoppedLayer>({
-                layer: "js",
-                armed: false,
-                total: 0,
-                reason: `${params.bundleId} is an Apple system app, which runs no React Native JS`,
-              })
-            : stopJsLayer(registry, params.udid, params.bundleId, port),
-          device.platform === "android"
-            ? stopAndroidLayer(registry, device, params.bundleId, port)
-            : stopIosLayer(registry, device, params.bundleId, port),
+          ...(run.js
+            ? [
+                device.platform !== "android" && !isInjectableBundleId(params.bundleId)
+                  ? Promise.resolve<StoppedLayer>({
+                      layer: "js",
+                      armed: false,
+                      total: 0,
+                      reason: `${params.bundleId} is an Apple system app, which runs no React Native JS`,
+                    })
+                  : stopJsLayer(registry, params.udid, params.bundleId, port),
+              ]
+            : []),
+          ...(run.native
+            ? [
+                device.platform === "android"
+                  ? stopAndroidLayer(registry, device, params.bundleId, port)
+                  : stopIosLayer(registry, device, params.bundleId, port),
+              ]
+            : []),
         ])
       );
       return { status: "ok", layers };

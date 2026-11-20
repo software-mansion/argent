@@ -481,19 +481,23 @@ afterEach(async () => {
   __resetDepCacheForTests();
 });
 
-function start(udid: string, bundleId: string, port?: number) {
+type CaptureLayerParam = "js" | "native";
+
+function start(udid: string, bundleId: string, port?: number, captureLayer?: CaptureLayerParam) {
   return registry.invokeTool<CaptureResult<StartedLayer>>("network-capture-start", {
     udid,
     bundleId,
     ...(port !== undefined ? { port } : {}),
+    ...(captureLayer !== undefined ? { layer: captureLayer } : {}),
   });
 }
 
-function stop(udid: string, bundleId: string, port?: number) {
+function stop(udid: string, bundleId: string, port?: number, captureLayer?: CaptureLayerParam) {
   return registry.invokeTool<CaptureResult<StoppedLayer>>("network-capture-stop", {
     udid,
     bundleId,
     ...(port !== undefined ? { port } : {}),
+    ...(captureLayer !== undefined ? { layer: captureLayer } : {}),
   });
 }
 
@@ -545,6 +549,8 @@ const PLATFORMS = [
     nativeRecord: () => ios.record(APP),
     nativeMark: () => ios.networkCaptureMark(APP),
     nativeCalls: () => ios.calls,
+    nativeStarted: () => ios.isNetworkCaptureStarted(APP),
+    nativeStopped: () => ios.isNetworkCaptureStopped(APP),
   },
   {
     platform: "Android",
@@ -554,6 +560,8 @@ const PLATFORMS = [
     nativeRecord: () => androidFor(APP).record(),
     nativeMark: () => androidFor(APP).captureMark(),
     nativeCalls: () => androidFor(APP).calls,
+    nativeStarted: () => androidFor(APP).isStarted(),
+    nativeStopped: () => androidFor(APP).isStopped(),
   },
 ] as const;
 
@@ -3011,6 +3019,345 @@ describe("a device the capture tools do not cover", () => {
   );
 });
 
+describe("the layer option", () => {
+  describe.each(PLATFORMS)("on $platform", (p) => {
+    let rt: FakeRuntime;
+
+    beforeEach(() => {
+      rt = new FakeRuntime(APP);
+      serve(PORT, p.udid, rt);
+      p.connect();
+    });
+
+    it("starts only the JS layer with layer js, and creates no native service", async () => {
+      const result = await start(p.udid, APP, undefined, "js");
+
+      expect(result).toEqual({ status: "ok", layers: [{ layer: "js", armed: true }] });
+      expect(nativeUrns()).toEqual([]);
+      expect(p.nativeStarted()).toBe(false);
+      rt.send("/a");
+      expect(await read(p.udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+    });
+
+    it("starts only the native layer with layer native, and installs nothing in the JS runtime", async () => {
+      const result = await start(p.udid, APP, undefined, "native");
+
+      expect(result).toEqual({ status: "ok", layers: [{ layer: p.native, armed: true }] });
+      expect(p.nativeStarted()).toBe(true);
+      expect(rt.evaluated).toEqual([]);
+      expect(findJsCapture(p.udid, APP)).toBeUndefined();
+      rt.send("/a");
+      expect(await read(p.udid)).toContain("Network capture is not started for this app");
+    });
+
+    it.each([
+      { first: "native", then: "js" },
+      { first: "js", then: "native" },
+    ] as const)(
+      "starts the $then layer beside the $first layer, and leaves the $first layer as it is",
+      async ({ first, then }) => {
+        await start(p.udid, APP, undefined, first);
+        const evaluatedBefore = rt.evaluated.length;
+        const nativeCallsBefore = p.nativeCalls().length;
+
+        const result = await start(p.udid, APP, undefined, then);
+
+        expect(result.layers.map((l) => l.layer)).toEqual([then === "js" ? "js" : p.native]);
+        expect(result.layers[0]?.armed).toBe(true);
+        expect(p.nativeStarted()).toBe(true);
+        expect(findJsCapture(p.udid, APP)).toMatchObject({ intent: "started", installed: true });
+        // The layer the second call does not name gets no call.
+        if (then === "js") expect(p.nativeCalls().length).toBe(nativeCallsBefore);
+        else expect(rt.evaluated.length).toBe(evaluatedBefore);
+        rt.send("/a");
+        p.nativeRecord();
+        expect(await read(p.udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+        expect(layer(await stop(p.udid, APP), p.native)).toMatchObject({ armed: false, total: 1 });
+      }
+    );
+
+    it.each(["js", "native"] as const)(
+      "starts both layers after a start of the %s layer alone, and keeps what that layer recorded",
+      async (first) => {
+        await start(p.udid, APP, undefined, first);
+        rt.send("/before");
+        p.nativeRecord();
+
+        const result = await start(p.udid, APP);
+
+        expect(result).toEqual({
+          status: "ok",
+          layers: [
+            { layer: "js", armed: true },
+            { layer: p.native, armed: true },
+          ],
+        });
+        rt.send("/after");
+        p.nativeRecord();
+        const stopped = await stop(p.udid, APP);
+        // Only the layer started first saw the request before the second start.
+        expect(layer(stopped, "js").total).toBe(first === "js" ? 2 : 1);
+        expect(layer(stopped, p.native).total).toBe(first === "native" ? 2 : 1);
+      }
+    );
+
+    it("stops only the JS layer with layer js, and the native layer keeps capturing", async () => {
+      await start(p.udid, APP);
+      rt.send("/a");
+
+      const result = await stop(p.udid, APP, undefined, "js");
+
+      expect(result).toEqual({ status: "ok", layers: [{ layer: "js", armed: false, total: 1 }] });
+      expect(rt.paused).toBe(true);
+      expect(p.nativeStarted()).toBe(true);
+      expect(p.nativeCalls().filter((c) => c.startsWith("stop"))).toEqual([]);
+      rt.send("/b");
+      p.nativeRecord();
+      expect(await read(p.udid)).toContain(
+        "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ==="
+      );
+      expect(layer(await stop(p.udid, APP, undefined, "native"), p.native)).toEqual({
+        layer: p.native,
+        armed: false,
+        total: 1,
+      });
+    });
+
+    it("stops only the native layer with layer native, and the JS layer keeps capturing", async () => {
+      await start(p.udid, APP);
+      p.nativeRecord();
+
+      const result = await stop(p.udid, APP, undefined, "native");
+
+      expect(result).toEqual({
+        status: "ok",
+        layers: [{ layer: p.native, armed: false, total: 1 }],
+      });
+      expect(p.nativeStopped()).toBe(true);
+      expect(rt.paused).not.toBe(true);
+      expect(findJsCapture(p.udid, APP)).toMatchObject({ intent: "started" });
+      rt.send("/a");
+      p.nativeRecord();
+      expect(await read(p.udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+      expect(await stop(p.udid, APP, undefined, "js")).toEqual({
+        status: "ok",
+        layers: [{ layer: "js", armed: false, total: 1 }],
+      });
+    });
+
+    it.each(["js", "native"] as const)(
+      "starts the %s layer again after a stop of it alone, with the other layer still capturing",
+      async (which) => {
+        await start(p.udid, APP);
+        await stop(p.udid, APP, undefined, which);
+
+        const result = await start(p.udid, APP, undefined, which);
+
+        expect(result).toEqual({
+          status: "ok",
+          layers: [{ layer: which === "js" ? "js" : p.native, armed: true }],
+        });
+        expect(p.nativeStarted()).toBe(true);
+        expect(rt.paused).toBe(false);
+        rt.send("/a");
+        expect(await read(p.udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+      }
+    );
+
+    it.each(["js", "native"] as const)(
+      "stops both layers after a stop of the %s layer alone",
+      async (which) => {
+        await start(p.udid, APP);
+        rt.send("/a");
+        p.nativeRecord();
+        await stop(p.udid, APP, undefined, which);
+
+        const result = await stop(p.udid, APP);
+
+        expect(result).toEqual({
+          status: "ok",
+          layers: [
+            { layer: "js", armed: false, total: 1 },
+            { layer: p.native, armed: false, total: 1 },
+          ],
+        });
+        expect(rt.paused).toBe(true);
+        expect(p.nativeStarted()).toBe(false);
+      }
+    );
+
+    it("says the native layer was not started on a native stop after a start of the JS layer alone", async () => {
+      await start(p.udid, APP, undefined, "js");
+
+      const result = await stop(p.udid, APP, undefined, "native");
+
+      expect(result).toEqual({
+        status: "ok",
+        layers: [{ layer: p.native, armed: false, total: 0, reason: NOT_STARTED }],
+      });
+      expect(nativeUrns()).toEqual([]);
+      expect(rt.paused).not.toBe(true);
+    });
+
+    it("says the JS layer was not started on a JS stop after a start of the native layer alone, and stores nothing", async () => {
+      await start(p.udid, APP, undefined, "native");
+
+      const result = await stop(p.udid, APP, undefined, "js");
+
+      expect(result).toEqual({
+        status: "ok",
+        layers: [{ layer: "js", armed: false, total: 0, reason: NOT_STARTED }],
+      });
+      expect(p.nativeStarted()).toBe(true);
+    });
+  });
+
+  describe("when the named layer cannot capture", () => {
+    it("fails a JS start whose Metro is down with NETWORK_CAPTURE_UNAVAILABLE, and starts no native layer", async () => {
+      const err = await start(SERIAL, APP, undefined, "js").then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect(err?.message).toContain(
+        `Network capture cannot start for ${APP} on ${SERIAL}: js: ${METRO_DOWN}`
+      );
+      expect(err?.message).not.toContain("android-native");
+      expect(nativeUrns()).toEqual([]);
+    });
+
+    it("fails a native start of an app that cannot be attached, and installs nothing in its JS runtime", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, SERIAL, rt);
+      androidFor(APP).startAnswer = () => ({
+        armed: false,
+        unavailable: true,
+        reason: `${APP} is not debuggable`,
+      });
+
+      const err = await start(SERIAL, APP, undefined, "native").then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect(err?.message).toContain(`: android-native: ${APP} is not debuggable`);
+      expect(err?.message).not.toContain("js:");
+      expect(rt.evaluated).toEqual([]);
+      expect(findJsCapture(SERIAL, APP)).toBeUndefined();
+    });
+
+    it.each(["js", "native"] as const)(
+      "fails a %s start of an Apple system app, and creates no native service",
+      async (which) => {
+        const systemApp = "com.apple.mobilesafari";
+
+        const err = await start(IOS_UDID, systemApp, undefined, which).then(
+          () => undefined,
+          (e: unknown) => e as Error
+        );
+
+        expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+        expect(err?.message).toContain(
+          which === "js"
+            ? `: js: ${systemApp} is an Apple system app, which runs no React Native JS`
+            : `: ios-native: ${systemApp} is an Apple system app, which native network capture never covers`
+        );
+        expect(err?.message).not.toContain(which === "js" ? "ios-native:" : "js:");
+        expect(nativeUrns()).toEqual([]);
+      }
+    );
+
+    it("does not fail a start of both layers when only the layer a call left out could capture before", async () => {
+      // The native layer arms; the JS layer cannot, so a JS-only start fails and a full start does not.
+      ios.connected.add(APP);
+      const both = await start(IOS_UDID, APP);
+      expect(layer(both, "js")).toMatchObject({ armed: false, unavailable: true });
+      expect(layer(both, "ios-native")).toEqual({ layer: "ios-native", armed: true });
+
+      const err = await start(IOS_UDID, APP, undefined, "js").then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      // The failed JS start leaves the native capture on.
+      expect(ios.isNetworkCaptureStarted(APP)).toBe(true);
+    });
+  });
+
+  describe("while Xcode's first launch is pending", () => {
+    beforeEach(() => {
+      xcode.pending = true;
+      ios.envError = new XcodeFirstLaunchPendingError("simctl");
+    });
+
+    it("starts the JS layer alone, which needs no simctl", async () => {
+      serve(PORT, IOS_UDID, new FakeRuntime(APP));
+
+      const result = await start(IOS_UDID, APP, undefined, "js");
+
+      expect(result).toEqual({ status: "ok", layers: [{ layer: "js", armed: true }] });
+      expect(ios.calls).toEqual([]);
+    });
+
+    it("refuses a native start before it runs", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+
+      const err = await start(IOS_UDID, APP, undefined, "native").then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(rt.evaluated).toEqual([]);
+      expect(ios.calls).toEqual([]);
+    });
+  });
+
+  it.each([
+    { verb: "start", call: start },
+    { verb: "stop", call: stop },
+  ])("refuses a layer it does not know on $verb before any layer runs", async ({ call }) => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+
+    const err = await call(IOS_UDID, APP, undefined, "both" as CaptureLayerParam).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+    expect(rt.evaluated).toEqual([]);
+    expect(urns()).toEqual([]);
+  });
+
+  it("runs one call at a time per app, also when two calls name different layers", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    let release!: () => void;
+    androidFor(APP).startAnswer = () =>
+      new Promise((resolve) => (release = () => resolve({ armed: true })));
+
+    const nativeStart = start(SERIAL, APP, undefined, "native");
+    await settle();
+    const jsStop = stop(SERIAL, APP, undefined, "js");
+    await settle();
+    // The stop waits for the start under way.
+    expect(rt.evaluated).toEqual([]);
+    release();
+
+    expect((await nativeStart).layers).toEqual([{ layer: "android-native", armed: true }]);
+    expect((await jsStop).layers).toEqual([
+      { layer: "js", armed: false, total: 0, reason: NOT_STARTED },
+    ]);
+    expect(androidFor(APP).isStarted()).toBe(true);
+  });
+});
+
 describe("the tool definitions", () => {
   const tools = [
     { make: createNetworkCaptureStartTool, verb: ["Starting", "Started", "start"] },
@@ -3036,6 +3383,18 @@ describe("the tool definitions", () => {
     expect(tool.interaction?.failedMsg?.({ params, error: new Error("x"), failureSignal })).toBe(
       `Failed to ${verb[2]} network capture for ${APP}: ${FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE}`
     );
+    for (const [captureLayer, name] of [
+      ["js", "JS network capture"],
+      ["native", "native network capture"],
+    ] as const) {
+      const named = { ...params, layer: captureLayer };
+      expect(tool.interaction?.startedMsg?.({ params: named })).toBe(
+        `${verb[0]} ${name} for ${APP}`
+      );
+      expect(
+        tool.interaction?.completedMsg?.({ params: named, result: { status: "ok", layers: [] } })
+      ).toBe(`${verb[1]} ${name} for ${APP}`);
+    }
   });
 
   it.each(tools)(
