@@ -193,6 +193,15 @@ describe("network-conditions on an Android emulator", () => {
     expect(calls).toEqual(["svc wifi enable", "svc data enable", "throttle"]);
   });
 
+  it("installs no proxy for a latency of zero alone", async () => {
+    const { api, calls, services } = fakeNetworkShaper();
+
+    await networkConditionsTool.execute(services, { udid: androidEmulator, latencyMs: 0 });
+
+    expect(calls).toEqual(["clear"]);
+    expect(api.throttle).not.toHaveBeenCalled();
+  });
+
   it("leaves the Metro port named by port unshaped", async () => {
     const { api, services } = fakeNetworkShaper();
 
@@ -287,6 +296,17 @@ describe("network-conditions on an Android emulator", () => {
       }
     }
   );
+
+  it("reads an adb error during the offline wait as a network that is still up", async () => {
+    const { services } = fakeNetworkShaper();
+    vi.mocked(adbShell)
+      .mockRejectedValueOnce(new Error("adb: device offline"))
+      .mockResolvedValue("Active default network: none\n");
+
+    await networkConditionsTool.execute(services, { udid: androidEmulator, offline: true });
+
+    expect(adbShell).toHaveBeenCalledTimes(2);
+  });
 
   it("removes the proxy and leaves the radios alone at a reset when a network is up", async () => {
     const { calls, services } = fakeNetworkShaper();
