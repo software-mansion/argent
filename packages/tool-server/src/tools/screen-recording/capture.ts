@@ -385,6 +385,24 @@ function withCloseHook(stream: MjpegStream, onClose: (() => void) | undefined): 
   };
 }
 
+/** The ffmpeg path; throws the not-installed failure when there is none. */
+export async function requireFfmpeg(): Promise<string> {
+  const ffmpeg = await resolveFfmpeg();
+  if (!ffmpeg) {
+    throw new FailureError(
+      "`ffmpeg` was not found on PATH. Install a build with libx264 (`brew install ffmpeg` on macOS, `apt install ffmpeg` on Debian/Ubuntu) and retry.",
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_FFMPEG_NOT_FOUND,
+        failure_stage: "screen_recording_resolve_ffmpeg",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+        failure_command: "ffmpeg",
+      }
+    );
+  }
+  return ffmpeg;
+}
+
 export async function startCapture(
   api: ScreenRecordingSessionApi,
   params: {
@@ -444,19 +462,7 @@ async function startCaptureLocked(
     releaseStreamSource?: () => void;
   }
 ): Promise<StartRecordingResult> {
-  const ffmpeg = await resolveFfmpeg();
-  if (!ffmpeg) {
-    throw new FailureError(
-      "`ffmpeg` was not found on PATH. Install a build with libx264 (`brew install ffmpeg` on macOS, `apt install ffmpeg` on Debian/Ubuntu) and retry.",
-      {
-        error_code: FAILURE_CODES.SCREEN_RECORDING_FFMPEG_NOT_FOUND,
-        failure_stage: "screen_recording_resolve_ffmpeg",
-        failure_area: "tool_server",
-        error_kind: "dependency_missing",
-        failure_command: "ffmpeg",
-      }
-    );
-  }
+  const ffmpeg = await requireFfmpeg();
 
   const outputFile = path.join(
     os.tmpdir(),

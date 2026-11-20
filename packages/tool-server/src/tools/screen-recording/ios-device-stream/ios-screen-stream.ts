@@ -49,10 +49,10 @@ export interface IosScreenStream {
 // __dirname differs by build: bundled it is argent/dist/ (sources copied to
 // argent/assets/ios-screen-stream/); in dev the build copies them beside this
 // module in tool-server/dist, and ts-node and vitest read them from src.
-function resolveSourceDir(): string {
+export function resolveSourceDir(moduleDir: string = __dirname): string {
   const candidates = [
-    path.resolve(__dirname, "..", "assets", "ios-screen-stream"),
-    path.resolve(__dirname),
+    path.resolve(moduleDir, "..", "assets", "ios-screen-stream"),
+    path.resolve(moduleDir),
   ];
   for (const dir of candidates) {
     if (existsSync(path.join(dir, SOURCE_FILE))) return dir;
@@ -78,8 +78,7 @@ function cacheRoot(): string {
  * not the compiler version: macOS ties the camera grant to the binary, so a
  * rebuild after an Xcode update would ask the user again for nothing.
  */
-async function ensureHelperBinary(): Promise<string> {
-  const sourceDir = resolveSourceDir();
+export async function ensureHelperBinary(sourceDir: string = resolveSourceDir()): Promise<string> {
   const source = await fs.readFile(path.join(sourceDir, SOURCE_FILE));
   const plist = await fs.readFile(path.join(sourceDir, PLIST_FILE));
   const key = crypto.createHash("sha256").update(source).update(plist).digest("hex").slice(0, 16);
@@ -199,7 +198,7 @@ export async function startIosScreenStream(
   return new Promise<IosScreenStream>((resolve, reject) => {
     let settled = false;
     let buffered = "";
-    let timer = setTimeout(() => onTimeout(), READY_TIMEOUT_MS);
+    let timer = setTimeout(() => onTimeout(READY_TIMEOUT_MS), READY_TIMEOUT_MS);
 
     const settle = (fn: () => void) => {
       if (settled) return;
@@ -212,10 +211,10 @@ export async function startIosScreenStream(
         stopChild(child);
         reject(err);
       });
-    const onTimeout = () =>
+    const onTimeout = (waitedMs: number) =>
       failWith(
         new FailureError(
-          `The iPhone screen-capture helper did not start within ${READY_TIMEOUT_MS / 1000}s.` +
+          `The iPhone screen-capture helper did not start within ${waitedMs / 1000}s.` +
             (stderr ? ` stderr: ${stderr.trim().slice(-600)}` : ""),
           {
             error_code: FAILURE_CODES.SCREEN_RECORDING_DEVICE_HELPER_FAILED,
@@ -230,7 +229,7 @@ export async function startIosScreenStream(
     const onEvent = (evt: HelperEvent) => {
       if (evt.event === "awaiting_permission") {
         clearTimeout(timer);
-        timer = setTimeout(() => onTimeout(), PERMISSION_TIMEOUT_MS);
+        timer = setTimeout(() => onTimeout(PERMISSION_TIMEOUT_MS), PERMISSION_TIMEOUT_MS);
       } else if (evt.event === "error") {
         failWith(helperFailure(evt.code, evt.message));
       } else if (evt.event === "ready") {

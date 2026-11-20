@@ -14,9 +14,8 @@ import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client
 import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "../../utils/foldable";
 import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import { startRemoteCapture } from "./capture-remote";
-import { assertNoActiveRecording, type StartRecordingResult } from "./session-guards";
-import { startIosScreenStream } from "./ios-device-stream/ios-screen-stream";
-import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
+import type { StartRecordingResult } from "./session-guards";
+import { startIosDeviceCapture } from "./ios-device-stream/start-device-capture";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
 const MAX_TIME_LIMIT_SECONDS = 600;
@@ -141,27 +140,12 @@ Fails if a recording is already running on the device, the device is not booted,
       }
 
       if (device.platform === "ios" && device.kind === "device") {
-        // Checked before the helper starts: it may compile, or open the macOS
-        // camera prompt, for a start that would be refused anyway.
-        assertNoActiveRecording(api, "screen_recording_start");
-        const name = (await listIosPhysicalDevices()).find((d) => d.udid === device.id)?.name;
-        const source = await startIosScreenStream(name);
-        // No touch markers: those are drawn by simulator-server, which a
-        // physical iPhone does not run.
-        const started = await startCapture(api, {
-          streamUrl: source.streamUrl,
+        return startIosDeviceCapture(api, device.id, {
           timeLimitSeconds,
           watermark,
           trimStatic: params.trimStatic ?? true,
-          releaseStreamSource: source.close,
+          showTouches: params.showTouches,
         });
-        return params.showTouches === true
-          ? {
-              ...started,
-              warning:
-                "Touch markers are not drawn on a physical iPhone; the video shows the raw screen.",
-            }
-          : started;
       }
 
       // The same simulator-server instance `screenshot` and the input tools use;
