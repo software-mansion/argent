@@ -76,6 +76,38 @@ function lockDevice(udid: string): string {
   return deviceKeyOf(udid).toLowerCase();
 }
 
+/**
+ * Why the last network-capture-start of an app found the iOS native layer unavailable before it
+ * turned capture on, by device and app, so native-network-logs can say why it has no capture, as
+ * the Android layer keeps its reason. A start that turns capture on, and a teardown of the device,
+ * drop it.
+ */
+const iosUnavailable = new Map<string, string>();
+
+function iosUnavailableKey(udid: string, bundleId: string): string {
+  return `${lockDevice(udid)}:${bundleId}`;
+}
+
+/** Keeps why a start found the app's iOS layer unavailable, or drops it without a reason. */
+export function setIosUnavailable(udid: string, bundleId: string, reason?: string): void {
+  if (reason === undefined) iosUnavailable.delete(iosUnavailableKey(udid, bundleId));
+  else iosUnavailable.set(iosUnavailableKey(udid, bundleId), reason);
+}
+
+/** Why the last start of the app found its iOS layer unavailable, if it did. */
+export function iosUnavailableReason(udid: string, bundleId: string): string | undefined {
+  return iosUnavailable.get(iosUnavailableKey(udid, bundleId));
+}
+
+/** Forgets why a start found the iOS layer unavailable on the devices, or on every device. */
+export function forgetIosUnavailableOf(devices?: readonly string[]): void {
+  const covered = devices && new Set(devices.map(lockDevice));
+  for (const key of iosUnavailable.keys()) {
+    // A key is `<device>:<bundleId>`, and a bundle id has no colon.
+    if (!covered || covered.has(key.slice(0, key.lastIndexOf(":")))) iosUnavailable.delete(key);
+  }
+}
+
 export function withCaptureLock<T>(
   udid: string,
   bundleId: string,

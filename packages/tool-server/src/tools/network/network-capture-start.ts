@@ -48,6 +48,7 @@ import {
   jsNotReached,
   otherPortHint,
   runLayers,
+  setIosUnavailable,
   withCaptureLock,
   type CaptureParams,
   type CaptureResult,
@@ -357,12 +358,17 @@ async function startIosLayer(
       `${bundleId} is an Apple system app, which native network capture never covers`
     );
   }
+  // Capture stays off here, so a read says why, rather than to call this tool again.
+  const notTurnedOn = (reason: string): StartedLayer => {
+    setIosUnavailable(device.id, bundleId, reason);
+    return unavailable("ios-native", reason);
+  };
   let api: NativeDevtoolsApi;
   try {
     const ref = nativeDevtoolsRef(device);
     api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
   } catch (err) {
-    return unavailable("ios-native", errorMessage(err));
+    return notTurnedOn(errorMessage(err));
   }
 
   let block: NativeDevtoolsPrecheckBlock | null = null;
@@ -372,13 +378,14 @@ async function startIosLayer(
     } catch (err) {
       // Its message says what to do, as every tool that needs simctl says it.
       if (err instanceof XcodeFirstLaunchPendingError) throw err;
-      return unavailable("ios-native", errorMessage(err));
+      return notTurnedOn(errorMessage(err));
     }
     if (block?.status === "service_stale" || block?.status === "init_failed") {
-      return unavailable("ios-native", block.message);
+      return notTurnedOn(block.message);
     }
   }
 
+  setIosUnavailable(device.id, bundleId);
   const armed = await api.startNetworkCapture(
     bundleId,
     port,
