@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -336,54 +336,32 @@ describe("safeExtractArchive input", () => {
     }
   );
 
-  it("stops tar and removes only the partial member when extraction is aborted", async () => {
+  it("waits for tar to close before rejecting an interrupted extraction", async () => {
     const archivePath = path.join(tmpDir, "small.archive");
-    await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "zstd"));
-    const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
-    await fs.writeFile(path.join(dest, "sibling.txt"), "keep");
-    await fs.mkdir(path.join(dest, "Other.app"));
-    await fs.writeFile(path.join(dest, "Other.app", "info"), "other");
-    const extracted = path.join(tmpDir, "extracted");
+    await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "gzip"));
+    const ready = path.join(tmpDir, "extracting");
+    const stopped = path.join(tmpDir, "stopped");
     await tarOnPath(
       [
         UNREADING_TAR,
-        `if [ "$1" = -x ]; then touch "$3/Bundle.app/partial" "${extracted}"; exec sleep 30; fi`,
+        'if [ "$1" = -x ]; then',
+        `  trap 'sleep 0.2; touch "${stopped}"; exit 0' TERM`,
+        `  touch "${ready}"`,
+        "  while :; do sleep 0.05; done",
+        "fi",
       ].join("\n")
     );
-    const started = performance.now();
-    await expect(
-      safeExtractArchive(archivePath, dest, "Bundle.app", AbortSignal.timeout(500))
-    ).rejects.toMatchObject({ name: "TimeoutError" });
-    expect(performance.now() - started).toBeLessThan(5_000);
-    expect(existsSync(extracted)).toBe(true);
-    await expect(fs.stat(path.join(dest, "Bundle.app"))).rejects.toThrow();
-    expect(await fs.readFile(path.join(dest, "sibling.txt"), "utf8")).toBe("keep");
-    expect(await fs.readFile(path.join(dest, "Other.app", "info"), "utf8")).toBe("other");
-  });
 
-  it("keeps the abort reason or tar error when cleanup rm fails", async () => {
-    const archivePath = path.join(tmpDir, "small.archive");
-    await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "zstd"));
-    // `rm(join(notADir, "Bundle.app"))` rejects with ENOTDIR.
-    const notADir = path.join(tmpDir, "not-a-dir");
-    await fs.writeFile(notADir, "x");
-
-    await tarOnPath(`if [ "$1" = -x ]; then exec sleep 30; fi\n${UNREADING_TAR}`);
     const controller = new AbortController();
-    const reason = new Error("gave up");
-    const timer = setTimeout(() => controller.abort(reason), 200);
+    const reason = new Error("cancelled during extraction");
+    const extraction = safeExtractArchive(archivePath, tmpDir, "Bundle.app", controller.signal);
     try {
-      await expect(
-        safeExtractArchive(archivePath, notADir, "Bundle.app", controller.signal)
-      ).rejects.toBe(reason);
+      await vi.waitFor(() => expect(existsSync(ready)).toBe(true));
     } finally {
-      clearTimeout(timer);
+      controller.abort(reason);
+      await expect(extraction).rejects.toBe(reason);
     }
-
-    await tarOnPath(`if [ "$1" = -x ]; then echo "boom" >&2; exit 2; fi\n${UNREADING_TAR}`);
-    await expect(safeExtractArchive(archivePath, notADir, "Bundle.app")).rejects.toThrow(
-      /^tar -x -C .* exited with code 2: boom$/
-    );
+    expect(existsSync(stopped)).toBe(true);
   });
 
   it("extracts a gzipped tar written by the system tar", async () => {

@@ -17,9 +17,21 @@
  * - session  — minted once per client process, keeping re-runs apart and old
  *              sessions trivially GC-able.
  * - device   — udid / serial when the artifact is device-scoped.
+ *
+ * Downloaded bundles have a private subdirectory within the device cache so
+ * retries and concurrent downloads can share a filename.
  */
 
-import { copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
@@ -407,15 +419,20 @@ async function downloadAndExtractArchive(
   dir: string,
   signal?: AbortSignal
 ): Promise<string | null> {
-  const tarball = join(dir, `${sanitizeSegment(handle.filename)}.tar.gz`);
+  signal?.throwIfAborted();
+  const attemptDir = await mkdtemp(join(dir, "bundle-"));
+  const tarball = join(attemptDir, "download.tar");
+  const extractDir = join(attemptDir, "files");
   try {
-    await writeFile(tarball, data);
-    // Slip-hardened: a `../` member must not write outside the cache.
-    return await safeExtractArchive(tarball, dir, handle.filename, signal);
+    await writeFile(tarball, data, { signal });
+    await mkdir(extractDir);
+    const member = await safeExtractArchive(tarball, extractDir, handle.filename, signal);
+    await rm(tarball);
+    signal?.throwIfAborted();
+    return member;
   } catch {
+    await rm(attemptDir, { recursive: true, force: true }).catch(() => {});
     return null;
-  } finally {
-    await rm(tarball, { force: true }).catch(() => {});
   }
 }
 

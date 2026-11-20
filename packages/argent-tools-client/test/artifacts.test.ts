@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { gunzipSync, zstdCompressSync } from "node:zlib";
-import { join } from "node:path";
+import { basename, delimiter, join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, mkdir, rm, readFile, writeFile, stat, symlink, readdir } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
@@ -373,6 +373,7 @@ describe("materializeArtifacts directory bundles", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     delete process.env.ARGENT_ARTIFACTS_DIR;
     await rm(root, { recursive: true, force: true });
     await rm(hostDir, { recursive: true, force: true });
@@ -429,7 +430,8 @@ describe("materializeArtifacts directory bundles", () => {
     );
 
     const extracted = (result as { traceFile: string }).traceFile;
-    expect(extracted).toBe(join(artifactDir(), "session.trace"));
+    expect(basename(extracted)).toBe("session.trace");
+    expect(extracted.startsWith(artifactDir() + sep)).toBe(true);
     expect((await stat(extracted)).isDirectory()).toBe(true);
     expect(await readFile(join(extracted, "top.txt"), "utf8")).toBe("top");
     expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
@@ -451,6 +453,43 @@ describe("materializeArtifacts directory bundles", () => {
     );
     expect(result).toEqual({ traceFile: null });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves a cached trace when a same-name retry is cancelled during extraction",
+    async () => {
+      const { tarGz } = await makeBundle();
+      const handle = archiveHandle("trace", join(hostDir, "gone.trace"));
+      const ctx = { toolsUrl: "http://remote:3001", fetchImpl: fakeFetchBuffer({ trace: tarGz }) };
+      const { result: first } = await materializeArtifacts(handle, ctx);
+      const entries = await readdir(artifactDir());
+      const ready = join(hostDir, "extracting");
+      await writeFile(
+        join(hostDir, "tar"),
+        [
+          "#!/bin/sh",
+          'case "$1" in',
+          "  -t) echo session.trace/ ;;",
+          '  -tv) echo "drwxr-xr-x session.trace/" ;;',
+          `  -x) mkdir -p "$3/session.trace"; echo partial > "$3/session.trace/top.txt"; touch "${ready}"; exec sleep 30 ;;`,
+          "esac",
+        ].join("\n"),
+        { mode: 0o755 }
+      );
+
+      vi.stubEnv("PATH", `${hostDir}${delimiter}${process.env.PATH}`);
+      const controller = new AbortController();
+      const retry = materializeArtifacts(handle, { ...ctx, signal: controller.signal });
+      try {
+        await vi.waitFor(() => stat(ready));
+      } finally {
+        controller.abort();
+        expect((await retry).result).toBeNull();
+      }
+
+      expect(await readFile(join(first as string, "top.txt"), "utf8")).toBe("top");
+      expect(await readdir(artifactDir())).toEqual(entries);
+    }
+  );
 
   it("remote: asks for zstd and unpacks a zstd bundle", async () => {
     const { tarGz } = await makeBundle();

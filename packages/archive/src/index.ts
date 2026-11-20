@@ -203,7 +203,10 @@ const ZSTD_FRAME_MAGIC = 0xfd2fb528;
  * decoder can accept a truncated frame (nodejs/node#64592) and drop a later one
  * (nodejs/node#64741).
  */
-async function assertSingleCompleteZstdFrame(archivePath: string): Promise<void> {
+async function assertSingleCompleteZstdFrame(
+  archivePath: string,
+  signal?: AbortSignal
+): Promise<void> {
   const fh = await open(archivePath, "r");
   try {
     const { size } = await fh.stat();
@@ -214,6 +217,7 @@ async function assertSingleCompleteZstdFrame(archivePath: string): Promise<void>
     let pos = 0;
     const read = async (n: number): Promise<Buffer> => {
       if (pos < windowStart || pos + n > windowEnd) {
+        signal?.throwIfAborted();
         const { bytesRead } = await fh.read(window, 0, window.length, pos);
         windowStart = pos;
         windowEnd = pos + bytesRead;
@@ -279,10 +283,13 @@ async function runTar(archive: Archive, args: string[], signal?: AbortSignal): P
     signal,
     env: tarEnv(process.env),
   });
-  const exited = new Promise<number | null>((res, rej) => {
-    child.on("error", rej);
-    child.on("close", res);
+  // An abort emits "error" as soon as SIGTERM is sent. Tar can still be writing
+  // until "close", so remember the error and wait before releasing the destination.
+  let childError: Error | undefined;
+  child.on("error", (err) => {
+    childError = err;
   });
+  const closed = new Promise<number | null>((resolve) => child.once("close", resolve));
   const stdout = collect(child.stdout, MAX_LISTING_BYTES, {
     maxLines: MAX_LISTING_LINES,
     onOverflow: () => child.kill(),
@@ -312,12 +319,15 @@ async function runTar(archive: Archive, args: string[], signal?: AbortSignal): P
         if (err) child.stdin?.destroy();
         done(err);
       },
-    })
+    }),
+    { signal }
   ).then(
     () => null,
     (err: Error) => err
   );
-  const [code, feedError] = await Promise.all([exited, fed]);
+  const [code, feedError] = await Promise.all([closed, fed]);
+  signal?.throwIfAborted();
+  if (childError) throw childError;
   if (stdout.overflowed()) {
     throw new Error(
       `tar ${args.join(" ")} listed more than ${MAX_LISTING_LINES} members or ${MAX_LISTING_BYTES >> 20} MiB`
@@ -436,10 +446,7 @@ async function assertSafeArchive(
 }
 
 /**
- * Path to the extracted bundle. Prefers the entry named `expectedName` —
- * required on the download path, where `destDir` is a shared cache holding
- * other artifacts. Otherwise falls back to the sole real entry, erroring rather
- * than handing back an arbitrary one.
+ * Prefer the expected bundle name, falling back to the sole real entry.
  */
 async function resolveMember(destDir: string, expectedName: string): Promise<string> {
   const entries = await readdir(destDir);
@@ -472,7 +479,7 @@ export async function safeExtractArchive(
   let archive: Archive;
   try {
     archive = { path: archivePath, format: await sniffFormat(archivePath) };
-    if (archive.format === "zstd") await assertSingleCompleteZstdFrame(archivePath);
+    if (archive.format === "zstd") await assertSingleCompleteZstdFrame(archivePath, signal);
   } catch (err) {
     signal?.throwIfAborted();
     throw new ArchiveError(
@@ -481,15 +488,8 @@ export async function safeExtractArchive(
   }
   await assertSafeArchive(archive, destDir, signal);
   signal?.throwIfAborted();
-  try {
-    await runTar(archive, ["-x", "-C", destDir], signal);
-    signal?.throwIfAborted();
-  } catch (err) {
-    if (basename(expectedName) === expectedName && isSafeTarMember(expectedName, destDir)) {
-      await rm(join(destDir, expectedName), { recursive: true, force: true }).catch(() => {});
-    }
-    signal?.throwIfAborted();
-    throw err;
-  }
-  return resolveMember(destDir, expectedName);
+  await runTar(archive, ["-x", "-C", destDir], signal);
+  const member = await resolveMember(destDir, expectedName);
+  signal?.throwIfAborted();
+  return member;
 }
