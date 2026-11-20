@@ -204,7 +204,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   /** The last element tree returned to the agent per device, as `treeText` renders it. */
-  const lastTreeByUdid = new Map<string, string>();
+  const baselineByUdid = new Map<string, TreeBaseline>();
 
   /**
    * The element tree the agent would otherwise have to fetch with a `describe`
@@ -221,8 +221,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     try {
       const d = await callTool("describe", { udid }, { signal });
       const tree = treeText(d.result);
-      const change =
-        tree === undefined ? undefined : renderTreeChange(lastTreeByUdid.get(udid), tree);
+      const baseline = baselineByUdid.get(udid);
+      const previous =
+        baseline && baseline.changesSent < MAX_CHANGES_IN_A_ROW ? baseline.tree : undefined;
+      const change = tree === undefined ? undefined : renderTreeChange(previous, tree);
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_describe",
@@ -231,7 +233,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         chars: tree?.length ?? 0,
         mode: change?.mode,
       });
-      return { blocks: change ? [{ type: "text" as const, text: change.text }] : [], tree };
+      return {
+        blocks: change ? [{ type: "text" as const, text: change.text }] : [],
+        tree,
+        inFull: change?.mode === "full",
+      };
     } catch (e) {
       await spyLog({
         ts: new Date().toISOString(),
@@ -240,7 +246,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         durationMs: Date.now() - t1,
         error: String(e instanceof Error ? e.message : e),
       });
-      return { blocks: [] };
+      return { blocks: [], inFull: false };
     }
   }
 
@@ -319,6 +325,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
       const udid = getUdidFromArgs(params.arguments);
       let shownTree = canonicalToolId(params.name) === "describe" ? treeText(result) : undefined;
+      let shownInFull = true;
       const wantScreenshot =
         autoScreenshotOn && shouldAutoScreenshot(params.name, params.arguments);
       const wantTree = autoDescribeOn && shouldAutoDescribe(params.name, params.arguments);
@@ -359,8 +366,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         if (!screenSettled) await screenshot;
         const captured: CapturedTree = wantTree
           ? await captureTreeBlocks(udid, params.name, signal)
-          : { blocks: [] };
-        shownTree = captured.tree ?? shownTree;
+          : { blocks: [], inFull: false };
+        if (captured.tree !== undefined) {
+          shownTree = captured.tree;
+          shownInFull = captured.inFull;
+        }
         content = [...content, ...(await screenshot), ...captured.blocks];
       }
 
@@ -370,7 +380,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
       // A cancelled call never reaches the agent, so its tree cannot be the next baseline.
       if (udid && shownTree !== undefined && !extra.signal.aborted) {
-        lastTreeByUdid.set(udid, shownTree);
+        const changesSent = shownInFull ? 0 : (baselineByUdid.get(udid)?.changesSent ?? 0) + 1;
+        baselineByUdid.set(udid, { tree: shownTree, changesSent });
       }
       return { content };
     } catch (err) {
@@ -430,8 +441,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 }
 
+/**
+ * A reader that never saw the full tree, or lost it from its context, gets it
+ * again after this many results in a row that held only a change.
+ */
+const MAX_CHANGES_IN_A_ROW = 4;
+
+interface TreeBaseline {
+  tree: string;
+  changesSent: number;
+}
+
 interface CapturedTree {
   blocks: ContentBlock[];
+  inFull: boolean;
   /** The full tree the blocks stand for, undefined when none was read. */
   tree?: string;
 }

@@ -135,6 +135,7 @@ The MCP server keeps the last element tree that it returned for each device, fro
 - The header `--- Elements changed since the last tree ... ---`, then a `-` line for each element that is gone and a `+` line for each new element. An element that changed shows as one `-` line and one `+` line.
 - The line `--- Elements after action: same as the last tree (call describe for the full tree) ---` when no element changed.
 - The full tree when the change is not shorter than the full tree, for example after a scroll or on a new screen.
+- The full tree again after four results in a row that did not include it.
 
 `describe` always returns the full tree.
 

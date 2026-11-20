@@ -623,6 +623,14 @@ describe("startMcpServer screen capture after an interaction", () => {
       expect(treeOf(await tap())).toBe(TREE_UNCHANGED_TEXT);
     });
 
+    it("sends the full tree again after four results in a row without it", async () => {
+      await tap();
+      for (let i = 0; i < 4; i++) expect(treeOf(await tap())).toBe(TREE_UNCHANGED_TEXT);
+
+      expect(treeOf(await tap())).toBe(`${AUTO_DESCRIBE_HEADER}\n${LIST}`);
+      expect(treeOf(await tap())).toBe(TREE_UNCHANGED_TEXT);
+    });
+
     it("sends the full tree to a device it has not sent a tree for", async () => {
       await tapOn("u");
 
