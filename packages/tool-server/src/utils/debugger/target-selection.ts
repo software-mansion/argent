@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { MACOS_APP_ID_PREFIX } from "../device-info";
+import { trackedMacosAppKind, trackedMacosAppVendorId } from "../macos-app-kind";
 import type { CDPTarget } from "./discovery";
 
 interface SelectedTarget {
@@ -44,16 +45,33 @@ function deviceKey(target: CDPTarget): string | undefined {
  * React Native's Apple inspector registers its device as the first 40 hex
  * digits of `sha256("apple-<identifierForVendor>-<bundle id>-<fusebox|legacy>")`.
  * A Mac has no identifierForVendor, and react-native-macos 0.76 and later
- * leave it empty, so a Mac app's id follows from its bundle id alone. An iOS
- * app's id holds a vendor id argent cannot know, so it never matches.
+ * leave it empty, so a react-native-macos app's id follows from its bundle id
+ * alone. A Mac Catalyst app runs UIKit, which gives it a real one: argent's
+ * library reports it, and the app's record keeps it. The record's kind picks
+ * the one vendor id: when argent last started a Mac Catalyst build, a runtime
+ * of an empty vendor id is another process (a react-native-macos build of the
+ * same bundle id). An iOS app's id holds a vendor id argent cannot know, so it
+ * never matches.
  */
 function macosAppBundleIdOf(target: CDPTarget): string | undefined {
   const logicalId = target.reactNative?.logicalDeviceId;
   const bundleId = target.appId ?? target.description;
   if (!logicalId || !bundleId) return undefined;
-  for (const mode of ["fusebox", "legacy"]) {
-    const id = createHash("sha256").update(`apple--${bundleId}-${mode}`).digest("hex").slice(0, 40);
-    if (id === logicalId) return bundleId;
+  const catalystVendorId = trackedMacosAppVendorId(bundleId);
+  const vendorIds =
+    trackedMacosAppKind(bundleId) === "catalyst"
+      ? catalystVendorId
+        ? [catalystVendorId]
+        : []
+      : [""];
+  for (const vendorId of vendorIds) {
+    for (const mode of ["fusebox", "legacy"]) {
+      const id = createHash("sha256")
+        .update(`apple-${vendorId}-${bundleId}-${mode}`)
+        .digest("hex")
+        .slice(0, 40);
+      if (id === logicalId) return bundleId;
+    }
   }
   return undefined;
 }
@@ -83,13 +101,25 @@ function macosAppTargets(pool: CDPTarget[], bundleId: string, port: number): CDP
     const key = deviceKey(t);
     if (key && !devices.has(key)) devices.set(key, describeDevice(t));
   }
+  const catalyst = trackedMacosAppKind(bundleId) === "catalyst";
+  // Without the vendor id argent cannot tell the Mac Catalyst app's runtime
+  // from an iOS device's runtime of the same app.
+  const noVendorId =
+    catalyst && !trackedMacosAppVendorId(bundleId)
+      ? `argent does not know the identifierForVendor of the Mac Catalyst app ${bundleId}, ` +
+        `which React Native puts in the runtime's id: argent's library reports it when argent ` +
+        `starts the app, and the library of this start did not. Run restart-app, then retry; ` +
+        `if this message stays, update argent. `
+      : "";
   throw new FailureError(
     `No JS runtime of the Mac app ${bundleId} is connected to Metro on port ${port}. ` +
       `Metro lists: ${[...devices.values()].join(", ")}. ` +
+      noVendorId +
       `If the app does not run, start it (launch-app), wait a few seconds for the bundle ` +
-      `to load, then retry. Otherwise the app must be a Debug build of react-native-macos ` +
-      `0.76 or later that loads its bundle from this Metro; a Release build has no JS ` +
-      `debugger. If the app uses another Metro, pass that port.`,
+      `to load, then retry. Otherwise the app must be a Debug build that loads its bundle ` +
+      `from this Metro, ${
+        catalyst ? "React Native built for Mac Catalyst" : "react-native-macos 0.76 or later"
+      }; a Release build has no JS debugger. If the app uses another Metro, pass that port.`,
     {
       error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
       failure_stage: "debugger_select_target",

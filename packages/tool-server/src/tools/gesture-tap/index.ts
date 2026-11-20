@@ -63,7 +63,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 // Timings keep a multi-tap inside the OS double-tap window, which separate
