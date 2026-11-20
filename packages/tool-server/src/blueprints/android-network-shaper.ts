@@ -75,8 +75,8 @@ export const androidNetworkShaperBlueprint: ServiceBlueprint<AndroidNetworkShape
         withKeyedLock(locks, serial, async () => {
           metroPort = port;
           proxy.setConditions(conditions);
-          await setArgentProxy(serial, proxy.port);
           proxyOnDevice = true;
+          await setArgentProxy(serial, proxy.port);
         }),
       clear: () => withKeyedLock(locks, serial, clear),
     };
