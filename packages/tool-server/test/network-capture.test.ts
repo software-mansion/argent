@@ -2499,6 +2499,26 @@ describe("the tool-server's exit", () => {
     );
   });
 
+  it("lets another tool-server's exit end a capture it started after this one stopped its own", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    rt.send("/a");
+    await stop(IOS_UDID, APP);
+    const other = await otherServerStarts(rt);
+    rt.send("/b");
+
+    rt.evaluate(other.NETWORK_CAPTURE_RELEASE_SCRIPT);
+    rt.send("/c");
+
+    expect(rt.paused).toBe(true);
+    // This tool-server still reads what its stop kept.
+    const text = await read(IOS_UDID);
+    expect(text).toContain("=== NETWORK LOGS (page 1/1, 2 total; capture stopped) ===");
+    expect(text).not.toContain("/c");
+  });
+
   it("lets another tool-server's exit end the capture once stop-all-simulator-servers ended this one's", async () => {
     const rt = new FakeRuntime(APP);
     serve(PORT, IOS_UDID, rt);
