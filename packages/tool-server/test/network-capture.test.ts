@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EventEmitter } from "node:events";
+import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter, once } from "node:events";
+import { hostname } from "node:os";
 import { createContext, runInContext, type Context } from "node:vm";
 import {
   FAILURE_CODES,
@@ -51,14 +53,13 @@ import {
   makeNetworkCaptureControlScript,
   makeNetworkLogReadScript,
 } from "../src/utils/debugger/scripts/network-interceptor";
-import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
+import {
+  DependencyMissingError,
+  XcodeFirstLaunchPendingError,
+} from "../src/utils/dependency-errors";
 import { BUNDLE_ID_MESSAGE } from "../src/utils/bundle-id";
 import { forgetDeviceAlias, rememberDeviceAlias } from "../src/utils/debugger/device-alias";
-import {
-  __primeDepCacheForTests,
-  __resetDepCacheForTests,
-  DependencyMissingError,
-} from "../src/utils/check-deps";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import { readAppProcesses } from "../src/blueprints/android-network-inspector-device";
@@ -79,22 +80,36 @@ vi.mock("../src/utils/ios-host", async (importOriginal) => {
   };
 });
 
-// A lookup of adb that a test holds open, a host without it, or the real one.
+// A lookup of adb that a test holds open, or that finds no adb; otherwise the real one.
 const adbLookup = vi.hoisted(() => ({
   hold: undefined as Promise<void> | undefined,
   reached: false,
+  missing: false,
 }));
 vi.mock("../src/utils/android-binary", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/android-binary")>();
   return {
     ...actual,
     resolveAndroidBinary: async (name: "adb" | "emulator") => {
-      if (hostTools.missing) return null;
+      if (hostTools.missing || adbLookup.missing) return null;
       if (!adbLookup.hold) return actual.resolveAndroidBinary(name);
       adbLookup.reached = true;
       await adbLookup.hold;
       return `/fake/${name}`;
     },
+  };
+});
+
+// Whether the host lacks adb, xcrun and sim-remote, and the commands a test removes from
+// PATH; the others resolve as on this host. The suite-wide setup marks them present.
+const hostTools = vi.hoisted(() => ({ missing: false }));
+const notOnPath = vi.hoisted(() => new Set<string>());
+vi.mock("../src/utils/command-on-path", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/command-on-path")>();
+  return {
+    ...actual,
+    commandOnPath: async (name: string) =>
+      hostTools.missing || notOnPath.has(name) ? null : actual.commandOnPath(name),
   };
 });
 
@@ -110,17 +125,6 @@ vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/xcode-first-launch")>()),
   xcodeFirstLaunchPending: () => xcode.pending,
 }));
-
-// Whether the host lacks adb, xcrun and sim-remote. The suite-wide setup marks them present.
-const hostTools = vi.hoisted(() => ({ missing: false }));
-vi.mock("../src/utils/command-on-path", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/utils/command-on-path")>();
-  return {
-    ...actual,
-    commandOnPath: (name: string) =>
-      hostTools.missing ? Promise.resolve(null) : actual.commandOnPath(name),
-  };
-});
 
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
 const REMOTE_UDID = "remote:66666666-7777-8888-9999-000000000000";
@@ -535,6 +539,8 @@ beforeEach(() => {
   hostTools.missing = false;
   adbLookup.hold = undefined;
   adbLookup.reached = false;
+  adbLookup.missing = false;
+  notOnPath.clear();
   __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
 });
 
@@ -701,7 +707,94 @@ describe("network-capture-start", () => {
     expect(layer(result, "js")).toEqual({ layer: "js", armed: true });
   });
 
+  it("arms the JS layer without adb and reports the Android native layer unavailable with the install hint", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    adbLookup.missing = true;
+    __resetDepCacheForTests();
+
+    const result = await start(SERIAL, APP);
+
+    expect(result).toEqual({
+      status: "ok",
+      layers: [
+        { layer: "js", armed: true },
+        {
+          layer: "android-native",
+          armed: false,
+          unavailable: true,
+          reason: expect.stringContaining("Android SDK Platform Tools not found"),
+        },
+      ],
+    });
+    expect(rt.evaluated).toContain("install");
+    expect(androidFactoryCalls).toBe(0);
+  });
+
+  it("arms the JS layer without xcrun and reports the iOS native layer unavailable with the install hint", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    notOnPath.add("xcrun");
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["adb", "sim-remote"]);
+
+    const result = await start(IOS_UDID, APP);
+
+    expect(result).toEqual({
+      status: "ok",
+      layers: [
+        { layer: "js", armed: true },
+        {
+          layer: "ios-native",
+          armed: false,
+          unavailable: true,
+          reason: expect.stringContaining("Xcode command-line tools not found"),
+        },
+      ],
+    });
+    expect(rt.evaluated).toContain("install");
+    expect(ios.calls).toEqual([]);
+  });
+
+  it("fails without sim-remote on a remote iOS simulator before it reaches either layer", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, REMOTE_UDID, rt);
+    notOnPath.add("sim-remote");
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["adb", "xcrun"]);
+
+    const err = await start(REMOTE_UDID, APP).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    // The JS layer reaches a remote simulator's Metro over the sim-remote tunnel too.
+    expect(err?.cause).toBeInstanceOf(DependencyMissingError);
+    expect((err?.cause as DependencyMissingError).missing).toEqual(["sim-remote"]);
+    expect(rt.evaluated).toEqual([]);
+    expect(ios.calls).toEqual([]);
+  });
+
   describe("when no layer can capture", () => {
+    it("fails with TOOL_DEPENDENCY_MISSING and each layer's reason when adb is missing", async () => {
+      adbLookup.missing = true;
+      __resetDepCacheForTests();
+
+      const err = await start(SERIAL, APP).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(err?.cause).toBeInstanceOf(DependencyMissingError);
+      expect((err?.cause as DependencyMissingError).missing).toEqual(["adb"]);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_DEPENDENCY_MISSING);
+      expect(err?.message).toContain(
+        `Network capture cannot start for ${APP} on ${SERIAL}: js: ${METRO_DOWN}; android-native: Android SDK Platform Tools not found`
+      );
+      expect(androidFactoryCalls).toBe(0);
+    });
+
     it("fails with NETWORK_CAPTURE_UNAVAILABLE and each layer's reason on iOS", async () => {
       const systemApp = "com.apple.mobilesafari";
 
@@ -2625,16 +2718,98 @@ describe("the tool-server's exit", () => {
   /** What the exit runs in each app's JS runtime, as src/index.ts calls it. */
   const exit = () => pauseJsCapturesOf(registry, undefined, { atExit: true });
 
-  /** Another tool-server process starts the app's capture in the same JS runtime. */
+  /**
+   * Another tool-server process starts the app's capture in the same JS runtime. `pid` is that
+   * process; it is this test's process without it.
+   */
   async function otherServerStarts(
-    rt: FakeRuntime
+    rt: FakeRuntime,
+    pid = process.pid
   ): Promise<typeof import("../src/utils/debugger/scripts/network-interceptor")> {
-    vi.resetModules();
-    const other = await import("../src/utils/debugger/scripts/network-interceptor");
-    rt.evaluate(other.makeNetworkCaptureControlScript(false));
-    rt.evaluate(other.NETWORK_INTERCEPTOR_SCRIPT);
-    return other;
+    const own = Object.getOwnPropertyDescriptor(process, "pid")!;
+    Object.defineProperty(process, "pid", { ...own, value: pid });
+    try {
+      vi.resetModules();
+      const other = await import("../src/utils/debugger/scripts/network-interceptor");
+      rt.evaluate(other.makeNetworkCaptureControlScript(false));
+      rt.evaluate(other.NETWORK_INTERCEPTOR_SCRIPT);
+      return other;
+    } finally {
+      Object.defineProperty(process, "pid", own);
+    }
   }
+
+  /** The pid of a process that has exited. */
+  const exitedPid = () => spawnSync(process.execPath, ["-e", ""]).pid!;
+
+  it("ends the capture that a tool-server which exited without its own exit left in the app", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    // The other tool-server starts the capture, then exits while it cannot reach the app.
+    await otherServerStarts(rt, exitedPid());
+    rt.send("/a");
+    await start(IOS_UDID, APP);
+
+    await exit();
+    rt.send("/b");
+
+    expect(rt.paused).toBe(true);
+    expect(JSON.parse(String(rt.evaluate(makeNetworkLogReadScript(0, 10, PORT))))).toMatchObject({
+      total: 0,
+      paused: true,
+    });
+  });
+
+  it("leaves the capture as it is while another tool-server process still runs, and ends it once that process exits", async () => {
+    const peer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    try {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.connected.add(APP);
+      await otherServerStarts(rt, peer.pid!);
+      await start(IOS_UDID, APP);
+      rt.send("/a");
+
+      await exit();
+      rt.send("/b");
+
+      expect(rt.paused).toBe(false);
+      expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 2 total) ===");
+
+      peer.kill("SIGKILL");
+      await once(peer, "exit");
+      await start(IOS_UDID, APP);
+      await exit();
+
+      expect(rt.paused).toBe(true);
+      expect(JSON.parse(String(rt.evaluate(makeNetworkLogReadScript(0, 10, PORT))))).toMatchObject({
+        total: 0,
+      });
+    } finally {
+      peer.kill("SIGKILL");
+    }
+  });
+
+  it("leaves the capture of a tool-server on another host as it is", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    rt.evaluate(
+      `globalThis.__argent_network_holders.peer = ${JSON.stringify({
+        capturing: true,
+        pid: exitedPid(),
+        host: `not-${hostname()}`,
+      })}`
+    );
+
+    await exit();
+    rt.send("/a");
+
+    expect(rt.paused).toBe(false);
+    expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+  });
 
   it("pauses and empties the JS log of an app no other tool-server captures", async () => {
     const rt = new FakeRuntime(APP);
@@ -2691,7 +2866,7 @@ describe("the tool-server's exit", () => {
     const other = await otherServerStarts(rt);
     rt.send("/b");
 
-    rt.evaluate(other.NETWORK_CAPTURE_RELEASE_SCRIPT);
+    rt.evaluate(other.makeNetworkCaptureReleaseScript([]));
     rt.send("/c");
 
     expect(rt.paused).toBe(true);
@@ -2712,7 +2887,7 @@ describe("the tool-server's exit", () => {
     rt.evaluate(other.makeNetworkCaptureControlScript(false));
     rt.send("/a");
 
-    rt.evaluate(other.NETWORK_CAPTURE_RELEASE_SCRIPT);
+    rt.evaluate(other.makeNetworkCaptureReleaseScript([]));
 
     expect(rt.paused).toBe(true);
     expect(JSON.parse(String(rt.evaluate(makeNetworkLogReadScript(0, 10, PORT))))).toMatchObject({
@@ -3218,7 +3393,8 @@ describe("a start and a stop of one app", () => {
     await vi.waitFor(() => expect(adbLookup.reached).toBe(true));
     const stopping = stop(SERIAL, APP);
     await settle();
-    expect(rt.evaluated).toEqual([]);
+    // The start's JS layer does not wait for adb, but the stop waits for the whole start.
+    expect(rt.evaluated).not.toContain("pause");
 
     release();
     await starting;
@@ -3240,7 +3416,8 @@ describe("a start and a stop of one app", () => {
     await vi.waitFor(() => expect(adbLookup.reached).toBe(true));
     const stopping = stop(SERIAL, APP, undefined, "js");
     await settle();
-    expect(rt.evaluated).toEqual([]);
+    // The start's JS layer does not wait for adb, but the stop waits for the whole start.
+    expect(rt.evaluated).not.toContain("pause");
 
     release();
     await starting;
@@ -3435,16 +3612,59 @@ describe("the layer option", () => {
       expect(await read(udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
     });
 
+    // adb and xcrun serve only the native layer, so a start of both layers arms the JS layer.
+    it.each([
+      {
+        platform: "Android",
+        udid: SERIAL,
+        native: "android-native",
+        hint: "Android SDK Platform Tools not found",
+      },
+      {
+        platform: "a local iOS simulator",
+        udid: IOS_UDID,
+        native: "ios-native",
+        hint: "Xcode command-line tools not found",
+      },
+    ])(
+      "starts the JS layer of a start of both layers on $platform, and the native layer says what is missing",
+      async ({ udid, native, hint }) => {
+        const rt = new FakeRuntime(APP);
+        serve(PORT, udid, rt);
+
+        const result = await start(udid, APP);
+
+        expect(result).toEqual({
+          status: "ok",
+          layers: [
+            { layer: "js", armed: true },
+            {
+              layer: native,
+              armed: false,
+              unavailable: true,
+              reason: expect.stringContaining(hint),
+            },
+          ],
+        });
+        rt.send("/a");
+        expect(await read(udid)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+      }
+    );
+
     it.each([
       { platform: "Android", udid: SERIAL, tool: "adb", layer: "native" as const },
-      { platform: "Android", udid: SERIAL, tool: "adb", layer: undefined },
       {
         platform: "a local iOS simulator",
         udid: IOS_UDID,
         tool: "xcrun",
         layer: "native" as const,
       },
-      { platform: "a local iOS simulator", udid: IOS_UDID, tool: "xcrun", layer: undefined },
+      {
+        platform: "a remote iOS simulator",
+        udid: REMOTE_UDID,
+        tool: "sim-remote",
+        layer: undefined,
+      },
       {
         platform: "a remote iOS simulator",
         udid: REMOTE_UDID,

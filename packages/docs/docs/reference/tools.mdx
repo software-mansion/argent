@@ -226,7 +226,7 @@ With `layer`, a call starts or stops only that layer. The call does not change t
 
 One start or stop of an app runs at a time, also when the calls name different layers.
 
-A start with `layer: "js"` does not need `adb` or the Xcode command-line tools, because the JS runtime layer reaches Metro directly. On a remote iOS simulator, it needs `sim-remote`.
+The `js` layer does not need `adb` or the Xcode command-line tools, because it reaches Metro directly. Thus a start with `layer: "js"` does not need them either. On a remote iOS simulator, the `js` layer needs `sim-remote`.
 
 #### Start
 
@@ -257,9 +257,11 @@ A native layer that is not armed often arms later without a new start. For examp
 | `js`             | No app is connected to Metro yet, or the JS runtime did not answer.                                                                          | absent        |
 | `js`             | The JavaScript of the app did not load yet.                                                                                                  | absent        |
 | `ios-native`     | The app is an Apple system app.                                                                                                              | `true`        |
+| `ios-native`     | The Xcode command-line tools are not installed. The `js` layer starts without them.                                                          | `true`        |
 | `ios-native`     | The device provider has the capture off. Turn the capture on in the provider.                                                                | `true`        |
 | `ios-native`     | Argent cannot arm the running process. Argent arms the next process. To capture now, call `restart-app`, then `network-capture-start` again. | absent        |
 | `android-native` | Argent cannot attach the in-app agent to the app, for example because the app is not debuggable.                                             | `true`        |
+| `android-native` | Argent cannot find `adb`. The `js` layer starts without it, for example for an app that connects to Metro over Wi-Fi.                        | `true`        |
 | `android-native` | The app did not run at the start. `launch-app` or `restart-app` attaches the in-app agent to its next process.                               | absent        |
 | `android-native` | The in-app agent captures no requests in this process, for example because R8 fully minified OkHttp.                                         | `true`        |
 
@@ -275,7 +277,7 @@ When two or more devices use one Metro server, Argent cannot find the JS runtime
 
 The `js` layer uses `logicalDeviceId`. The native layer always uses `udid`, so a call with `layer: "native"` does not use `logicalDeviceId`. A stop without `logicalDeviceId` does not stop the `js` layer that a start with `logicalDeviceId` started. The result of such a stop gives the `js` layer `armed: true`. Its `reason` tells the agent to call `network-capture-stop` again with the `logicalDeviceId`. `stop-all-simulator-servers` with `udid` in `devices` does not stop it either: also put the `logicalDeviceId` in `devices`. Alternatively, give each device its own Metro port.
 
-When all layers that the call starts are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each of these layers. A start with `layer` fails when its layer is unavailable, also when the other layer can capture. An Apple system app runs no React Native JS, so both of its layers are unavailable, and a start for it always fails.
+When all layers that the call starts are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each of these layers. A start with `layer` fails when its layer is unavailable, also when the other layer can capture. An Apple system app runs no React Native JS, so both of its layers are unavailable, and a start for it always fails. When the native layer is unavailable because Argent cannot find `adb` or the Xcode command-line tools, the error is `TOOL_DEPENDENCY_MISSING`. On a remote iOS simulator, both layers use `sim-remote`. Without `sim-remote`, the start fails with the error `TOOL_DEPENDENCY_MISSING` before it starts a layer.
 
 A second call of `network-capture-start` keeps the requests that Argent recorded.
 
