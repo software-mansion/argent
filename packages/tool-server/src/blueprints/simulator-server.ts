@@ -23,6 +23,7 @@ import { openMjpegStream } from "../tools/screen-recording/mjpeg-stream";
 import {
   createMoqTransport,
   fetchDisplayState,
+  KEY_ACK_TIMEOUT_MS,
   sendCommand,
   type SimulatorDisplayState,
 } from "../utils/simulator-client";
@@ -96,11 +97,13 @@ export interface SimulatorServerApi {
    * Send a key Down or Up event by USB HID keycode.
    *
    * Awaitable because the transports differ in what they can promise. On a
-   * provider's server the key rides the WebSocket, which acknowledges it, so
-   * the returned promise rejects on a lost or refused press. MoQ has no ack,
-   * but a write the session refuses still rejects. The spawned path has
-   * neither and resolves as soon as the write is handed off. The callers await
-   * uniformly and each transport reports what it actually knows.
+   * spawned or a provider's server the key rides the WebSocket, which
+   * acknowledges it, so the returned promise rejects on a lost or refused
+   * press. MoQ has no ack, but a write the session refuses still rejects. The
+   * callers await uniformly and each transport reports what it actually knows.
+   *
+   * The ack says the server took the key, not that the app applied it: the
+   * keyboard tool reads the field back for that.
    */
   pressKey(direction: "Down" | "Up", keyCode: number): Promise<void>;
   /**
@@ -204,7 +207,11 @@ async function buildRemoteInstance(
     // session refuses reports the same failure as a refused touch instead of a
     // bare SDK error the caller cannot classify.
     pressKey: async (direction, keyCode) => {
-      await sendCommand(api, { cmd: "key", code: keyCode, direction });
+      await sendCommand(
+        api,
+        { cmd: "key", code: keyCode, direction },
+        { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+      );
     },
     transport,
   };
@@ -228,9 +235,8 @@ async function buildRemoteInstance(
  *
  *  - `dispose()` is a no-op. Argent must never kill a process it did not
  *    start.
- *  - `pressKey` cannot use `stdin`, which an attached server has none of. The
- *    WebSocket protocol carries the same command, so route it through
- *    `sendCommand`. Without this, `keyboard` would silently no-op.
+ *  - `pressKey` goes through `sendCommand`, as on a spawned server: an
+ *    attached server has no `stdin` Argent could write to.
  */
 async function buildAttachedInstance(
   device: DeviceInfo,
@@ -257,7 +263,7 @@ async function buildAttachedInstance(
     deviceId: device.id,
     external: true,
     pressKey: async (direction, code) => {
-      await sendCommand(api, { cmd: "key", code, direction });
+      await sendCommand(api, { cmd: "key", code, direction }, { ackTimeoutMs: KEY_ACK_TIMEOUT_MS });
     },
     streamUrl: externalDevice.simulatorServer.streamUrl,
     /** `transport: undefined`, so the WS + HTTP path is reused unchanged. */
@@ -658,20 +664,28 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       events.emit("terminated", err);
     });
 
-    const instance: ServiceInstance<SimulatorServerApi> = {
-      api: {
-        apiUrl,
-        streamUrl,
-        deviceId: device.id,
-        pressKey: (direction: "Down" | "Up", keyCode: number) => {
-          /**
-           * simulator-server never replies on stdin, so there is nothing to
-           * await here. The press is reported delivered once it is written.
-           */
-          proc.stdin?.write(`key ${direction} ${keyCode}\n`);
-          return Promise.resolve();
-        },
+    const api: SimulatorServerApi = {
+      apiUrl,
+      streamUrl,
+      deviceId: device.id,
+      /**
+       * Over the WebSocket, not stdin: simulator-server never replies on
+       * stdin, so a stdin write resolved at once and a stalled server let keys
+       * pile up and land in a burst while `keyboard` reported them typed
+       * (#2030). The ack holds each press until the server has taken it, and
+       * a server that stops answering for KEY_ACK_TIMEOUT_MS fails the press
+       * with SIMULATOR_COMMAND_ACK_TIMEOUT.
+       */
+      pressKey: async (direction, keyCode) => {
+        await sendCommand(
+          api,
+          { cmd: "key", code: keyCode, direction },
+          { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+        );
       },
+    };
+    const instance: ServiceInstance<SimulatorServerApi> = {
+      api,
       dispose: async () => {
         proc.kill();
       },

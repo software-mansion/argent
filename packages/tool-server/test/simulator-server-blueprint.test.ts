@@ -354,7 +354,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(spawnMock.mock.calls[0]![1]![0]).toBe("android");
   });
 
-  it("pressKey writes the shared stdin command protocol regardless of platform", async () => {
+  it("pressKey sends the key over the acknowledged websocket, not stdin (#2030)", async () => {
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
@@ -367,8 +367,28 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     await instance.api.pressKey("Down", 0x29);
     await instance.api.pressKey("Up", 0x29);
 
-    expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(1, "key Down 41\n");
-    expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");
+    // With the longer key budget: a key that times out loses its Up (#2030).
+    const { KEY_ACK_TIMEOUT_MS } = await import("../src/utils/simulator-client");
+    const budget = { ackTimeoutMs: KEY_ACK_TIMEOUT_MS };
+    expect(sendCommandMock.mock.calls).toEqual([
+      [instance.api, { cmd: "key", code: 0x29, direction: "Down" }, budget],
+      [instance.api, { cmd: "key", code: 0x29, direction: "Up" }, budget],
+    ]);
+    expect(fakeProc.stdin.write).not.toHaveBeenCalled();
+  });
+
+  it("pressKey rejects when the server does not acknowledge the key", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55559);
+    const instance = await factoryPromise;
+
+    sendCommandMock.mockRejectedValueOnce(new Error("no ack"));
+    await expect(instance.api.pressKey("Down", 0x04)).rejects.toThrow("no ack");
   });
 
   it("sends capture_on_demand while a profiler records, and nothing once disposed", async () => {

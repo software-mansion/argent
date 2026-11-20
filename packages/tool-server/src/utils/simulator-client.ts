@@ -85,6 +85,15 @@ export interface SimulatorServerTransport {
 // healthy run.
 const COMMAND_ACK_TIMEOUT_MS = 5_000;
 
+/**
+ * The ack budget for a `keyboard` key. A key that times out is worse than a
+ * late one: the timeout drops the socket, so the key's Up and the keys after
+ * it are lost while its Down still lands once the server resumes, leaving the
+ * key held (#2030). A host under load stalls the server for longer than
+ * COMMAND_ACK_TIMEOUT_MS, so a key waits this long before it fails.
+ */
+export const KEY_ACK_TIMEOUT_MS = 15_000;
+
 interface PendingCommand {
   settle: (err?: FailureError) => void;
   cmd: string;
@@ -266,7 +275,7 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  *
  * Rejects — rather than reporting a phantom success — when the server answers
  * `status: "error"`, when the socket fails or closes with the command in
- * flight, or when no reply arrives within `COMMAND_ACK_TIMEOUT_MS`. Awaiting
+ * flight, or when no reply arrives within `COMMAND_ACK_TIMEOUT_MS` (or `options.ackTimeoutMs`). Awaiting
  * the ack is what separates a delivered input from a lost one: every one of
  * those cases used to be indistinguishable from a landed tap
  * (https://github.com/software-mansion/argent/issues/932).
@@ -279,8 +288,10 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  */
 export async function sendCommand(
   api: SimulatorServerApi,
-  cmd: Record<string, unknown>
+  cmd: Record<string, unknown>,
+  options: { ackTimeoutMs?: number } = {}
 ): Promise<SendCommandOutcome> {
+  const ackTimeoutMs = options.ackTimeoutMs ?? COMMAND_ACK_TIMEOUT_MS;
   const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
   // The UI turns with the device, and a button (home, app switcher, lock) can
   // bring another app or the home screen to the front: either way what was
@@ -318,7 +329,7 @@ export async function sendCommand(
         settleAndDropConnection(
           new FailureError(
             `simulator-server did not acknowledge the '${cmdName}' command within ` +
-              `${COMMAND_ACK_TIMEOUT_MS}ms. The command may not have reached the device — ` +
+              `${ackTimeoutMs}ms. The command may not have reached the device — ` +
               `the simulator may be wedged or the simulator-server unresponsive.`,
             {
               error_code: FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT,
@@ -330,7 +341,7 @@ export async function sendCommand(
             }
           )
         ),
-      COMMAND_ACK_TIMEOUT_MS
+      ackTimeoutMs
     );
     // `unref` so a pending ack never holds the process open on shutdown.
     timer.unref?.();
