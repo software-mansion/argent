@@ -41,6 +41,7 @@ import {
   flowNameCasingError,
   isBlockStep,
   parseFlow,
+  flowFormatVersion,
   precedesLeadingLaunch,
   runTargetName,
   type BlockStep,
@@ -68,7 +69,7 @@ import {
   type ToolFileFix,
 } from "./flow-tool-inputs";
 import { RECORDING_TOOL_IDS } from "./flow-add-step";
-import { runFlowScriptStep } from "./flow-script-step";
+import { runFlowScriptStep, typeScriptScriptRefusal } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
@@ -86,6 +87,8 @@ import {
   type FlowPlatform,
 } from "./flow-device";
 import { isNestedOrchestratorTool } from "./flow-nested-outcome";
+import { uprightLegacyPoints } from "./flow-legacy-points";
+import { inCoordinateSpace } from "../../utils/ios-ui-orientation";
 import { toolResultVerdict } from "../../utils/tool-result-verdict";
 import {
   runDirective,
@@ -653,6 +656,15 @@ function networkCaptureWarning(
 }
 
 /**
+ * Re-resolve a Mac app device after a start of the app. Its kind, AppKit or Mac
+ * Catalyst, is the one that start recorded: the run resolved the device before
+ * it, possibly before the app's first start.
+ */
+function refreshMacosDeviceKind(state: ExecState): void {
+  if (state.device?.platform === "macos") state.device = resolveDevice(state.device.id);
+}
+
+/**
  * Execute a `launch` step: start the app from a clean state — terminate and
  * relaunch via `restart-app`, so a copy left running by a prior run can't leak
  * state in — then settle and wait for the platform's full-hierarchy tree source
@@ -714,6 +726,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   if (isNativeDevtoolsBlockResult("restart-app", restart)) {
     return { ok: false, reason: `restart-app did not start ${bundleId}: ${restart.message}` };
   }
+  refreshMacosDeviceKind(state);
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
   // The gate returns null (ready) on abort — check the signal before trusting
@@ -1314,20 +1327,41 @@ function retiredArgReason(use: RetiredArgUse): string {
 }
 
 /**
+ * The refusal for the first `script:` step in these steps that this host cannot
+ * run, or undefined: a TypeScript file, on a Node.js that does not run
+ * TypeScript (see `typeScriptScriptRefusal`).
+ *
+ * Nothing a step does changes that answer, so it is asked before any of them
+ * runs, a `when:` block's included. Left to the step, the refusal lands after
+ * earlier steps have seeded data and driven the device, and a step under a
+ * `when:` guard passes or errors by the branch the device happens to take.
+ */
+async function findUnrunnableScript(steps: FlowStep[]): Promise<string | undefined> {
+  for (const { step } of walkSteps(steps)) {
+    if (step.kind !== "script") continue;
+    const refusal = await typeScriptScriptRefusal(step.path);
+    if (refusal !== undefined) return refusal;
+  }
+  return undefined;
+}
+
+/**
  * Why a loaded `run:` fragment is refused before any of its steps runs, or
- * undefined: the root flow's load-time gate, applied to the fragment at the
+ * undefined: the root flow's load-time gates, applied to the fragment at the
  * only moment its steps exist. One function for both callers:
  * {@link execRunStep}, which charges the refusal to the `run:` step, and
  * {@link scanLeadingLaunch}, which must not follow a launch into a fragment
  * the executor refuses.
  */
-function fragmentLoadRefusal(
+async function fragmentLoadRefusal(
   registry: Registry,
   fragment: FlowFile,
   target: string
-): string | undefined {
+): Promise<string | undefined> {
   const retiredArg = findRetiredToolArg(registry, fragment.steps);
-  return retiredArg ? `fragment "${target}" ${retiredArgReason(retiredArg)}` : undefined;
+  if (retiredArg) return `fragment "${target}" ${retiredArgReason(retiredArg)}`;
+  const unrunnableScript = await findUnrunnableScript(fragment.steps);
+  return unrunnableScript ? `fragment "${target}" cannot run. ${unrunnableScript}` : undefined;
 }
 
 /**
@@ -1337,7 +1371,7 @@ function fragmentLoadRefusal(
  * in the flow or in any flow its `run:` and nested `tool: flow-execute` steps
  * reach — before anything executes, so a mid-run or guard-gated error cannot
  * execute half the flow first. All of them read or write project files, which
- * stay on the client: a script step's `.mjs` (and whatever it imports), a
+ * stay on the client: a script step's file (and whatever it imports), a
  * snapshot's baselines (against a per-call temp materialization a plain
  * snapshot can only fail, while updateBaselines writes PNGs no later run can
  * find), the flow a nested `flow-execute` names under the client's
@@ -1666,6 +1700,18 @@ Without a link, every step kind runs.`,
           error_kind: "validation",
         });
       }
+      // Refused here for the same reason, though the file is sound: it is this
+      // host that cannot run the step (see findUnrunnableScript). A validation
+      // failure all the same, so a directory run goes on to its next e2e test.
+      const unrunnableScript = await findUnrunnableScript(flow.steps);
+      if (unrunnableScript) {
+        throw new FailureError(`E2E test "${flowName}" was not run. ${unrunnableScript}`, {
+          error_code: FAILURE_CODES.FLOW_SCRIPT_TYPESCRIPT_UNSUPPORTED,
+          failure_stage: "flow_run_validate",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
+      }
       // One seed for all three `run:` walks — the prerequisite guard, the
       // chromium hoist, and the executor itself — so none can accept a chain
       // another refuses. In client mode the seed is the root flow's CLIENT
@@ -1817,9 +1863,6 @@ Without a link, every step kind runs.`,
         // its own, which is why that step spends this verdict rather than
         // inheriting whatever the sub-run proved.
         treeOutage: {},
-        // Same shape and sharing as `treeOutage`: what the last read said about
-        // the UI's orientation, for the directives that turn a direction.
-        lastRead: {},
         flowsDir,
         viaUpload,
         project,
@@ -1855,6 +1898,7 @@ Without a link, every step kind runs.`,
           runStack: seed,
           rootDisplay: rootEntry.display,
           depth: 0,
+          legacyPoints: flowFormatVersion(flow) < 2,
         });
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
@@ -2155,7 +2199,7 @@ async function scanLeadingLaunch(
     } catch {
       return null;
     }
-    if (fragmentLoadRefusal(env.registry, nested, step.flow) !== undefined) return null;
+    if ((await fragmentLoadRefusal(env.registry, nested, step.flow)) !== undefined) return null;
     const inner = await scanLeadingLaunch(
       nested,
       [...stack, { canonical, display: runDisplayFor(step.flow, rootDisplay) }],
@@ -2380,6 +2424,12 @@ interface StepScope {
   runStack: RunStackEntry[];
   rootDisplay: string;
   depth: number;
+  /**
+   * The steps are from a version 1 file, whose raw points and raw tool steps
+   * are in an iOS simulator's portrait-native space (flow-legacy-points.ts).
+   * Set per file: a fragment of either version can run from the other.
+   */
+  legacyPoints: boolean;
 }
 
 /** The e2e test steps in this scope are attributed to (StepReport.e2eTest). */
@@ -2543,7 +2593,13 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       state.hoistedBootMs = undefined;
     }
     if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
-    const report = await execLeafStep(state, step, index, scope);
+    // A version 1 file's raw tool step runs in the native coordinates it was
+    // recorded in; everything else, also a nested run such a step starts, in
+    // the upright ones.
+    const report = await inCoordinateSpace(
+      scope.legacyPoints && step.kind === "tool" ? "native" : "upright",
+      () => execLeafStep(state, step, index, scope)
+    );
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
       const screen = await captureFailureScreen(state);
@@ -2822,7 +2878,7 @@ async function execRunStep(
 
   // Charged to the run: step, so the fragment is refused whole rather than
   // part-executed up to the offending step.
-  const refusal = fragmentLoadRefusal(state.registry, fragment, target);
+  const refusal = await fragmentLoadRefusal(state.registry, fragment, target);
   if (refusal !== undefined) return fail(refusal);
 
   // A failure, not a skip: a fragment that silently did not run would leave a green report.
@@ -2851,7 +2907,10 @@ async function execRunStep(
   await execSteps(
     state,
     fragment.steps,
-    childScope(scope, { runStack: [...scope.runStack, { canonical, display }] })
+    childScope(scope, {
+      runStack: [...scope.runStack, { canonical, display }],
+      legacyPoints: flowFormatVersion(fragment) < 2,
+    })
   );
 }
 
@@ -2905,18 +2964,13 @@ async function runScriptStep(
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
 
-/** Raw tool steps that can change how the UI lies on the screen. */
-const UI_TURNING_TOOLS = new Set(["rotate", "fold"]);
-
 /**
  * A `fold:` step runs the `fold` tool on the run device. The app survives a
  * fold, so the pinned tree target stays; what changes is the panel and its
  * coordinate space, and the runner caches no screen geometry — every gesture
  * that needs the screen aspect reads it afresh (`fetchScreenAspect`). A proven
  * tree outage is retired the way a relaunch retires it: the screen the verdict
- * was proven on is gone. So is the UI orientation the last read reported: a
- * fold can turn the UI, and until a read reports the new one, a direction must
- * not be turned by the old one.
+ * was proven on is gone.
  */
 async function runFold(
   state: ExecState,
@@ -2926,7 +2980,6 @@ async function runFold(
   const device = deviceEnv(state).device;
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (state.treeOutage) state.treeOutage.proven = undefined;
-  if (state.lastRead) state.lastRead.uiOrientation = undefined;
   const args = bindDeviceArgs(registry, "fold", device.id, {
     ...(step.posture !== undefined ? { posture: step.posture } : {}),
     ...(step.angle !== undefined ? { angle: step.angle } : {}),
@@ -3013,7 +3066,12 @@ async function execLeafStep(
       // land in the structured report rather than abort the whole run
       // unreported.
       try {
-        const r = await runDirective(deviceEnv(state), step);
+        const env = deviceEnv(state);
+        const legacy = scope.legacyPoints
+          ? await uprightLegacyPoints(env.device, step)
+          : { step, warning: undefined };
+        const r = await runDirective(env, legacy.step);
+        const warning = [legacy.warning, r.warning].filter((w) => w !== undefined).join(" ");
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
@@ -3037,7 +3095,7 @@ async function execLeafStep(
           ...base,
           status: r.ok ? "pass" : "fail",
           reason: r.reason,
-          ...(r.warning !== undefined ? { warning: r.warning } : {}),
+          ...(warning ? { warning } : {}),
         };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
@@ -3138,11 +3196,6 @@ async function execLeafStep(
       if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
         state.treeOutage.proven = undefined;
       }
-      // A raw `rotate` or `fold` can turn the UI, like the `fold:` directive
-      // (see runFold): the orientation the last read reported no longer holds.
-      if (UI_TURNING_TOOLS.has(step.name) && state.lastRead) {
-        state.lastRead.uiOrientation = undefined;
-      }
       // A file argument the client sent becomes a file on this host for the
       // invoke only; the report keeps the client path the flow names. So does
       // the flow a nested `flow-execute` names, which gets the files the client
@@ -3152,9 +3205,15 @@ async function execLeafStep(
         // `Registry.invokeTool` does not assert capabilities (only the HTTP edge
         // does), and most tools pick their backend by elimination: on a Mac app
         // a raw `tool: gesture-pinch` would reach the simulator-server. Refuse it
-        // here with the tool's own capability message instead.
+        // here with the tool's own capability message instead. The kind is read
+        // again: any raw step can start the app (`tool: boot-device` does its
+        // first start), and the start records the kind.
         if (device?.platform === "macos") {
-          assertSupported(step.name, registry.getTool(step.name)?.capability, device);
+          assertSupported(
+            step.name,
+            registry.getTool(step.name)?.capability,
+            resolveDevice(device.id)
+          );
         }
         prepared = await prepareToolStepInputs(
           registry,
@@ -3198,6 +3257,10 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
           warning = networkCaptureWarning(state, launched, result);
+          refreshMacosDeviceKind(state);
+        } else if (FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))) {
+          // A launch in the nested run updates the record, not this run's device.
+          refreshMacosDeviceKind(state);
         }
         return {
           ...base,

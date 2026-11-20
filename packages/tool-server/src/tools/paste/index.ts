@@ -1,6 +1,7 @@
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
+import { noteTypedSecrets } from "../../utils/typed-secrets";
 import { pasteZodSchema } from "./schema";
 import type { PasteDispatchParams, PasteParams, PasteResult, PasteServices } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
@@ -18,7 +19,7 @@ const capability: ToolCapability = {
   android: { emulator: true, unknown: true },
   // A Mac app shares the host pasteboard, so its branch inserts the text
   // and never touches the pasteboard.
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
   // No `chromium`: its only clipboard is the HOST one, so a paste would
   // overwrite what the user copied. No `vega`: VVD exposes no clipboard API.
   //
@@ -87,6 +88,7 @@ Tap the field first so it has focus. Returns { pasted: true }, plus via: "keyboa
       });
       return serializedPerDevice(params.udid, async () => {
         if (secrets.length === 0) return dispatch(services, params, options);
+        noteTypedSecrets(params.udid, secrets);
         try {
           return await dispatch(services, { ...params, text, hasSecrets: true }, options);
         } catch (err) {

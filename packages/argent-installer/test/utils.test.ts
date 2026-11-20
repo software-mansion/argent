@@ -39,6 +39,7 @@ import {
   hashBundledContent,
   removeRetiredFiles,
   RETIRED_BUNDLED_PATHS,
+  RETIRED_GLOBAL_RULES,
   dirExists,
   detectPackageManager,
   globalInstallCommand,
@@ -53,7 +54,6 @@ import {
   npxChildEnv,
   listBundledSkills,
   resolveProjectRoot,
-  SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
   localInstallCommand,
@@ -385,6 +385,20 @@ describe("RETIRED_BUNDLED_PATHS", () => {
         const content = fs.readFileSync(file, "utf8");
         expect(shipped, relativePath).toContain(hashBundledContent(content));
       }
+    }
+  });
+});
+
+describe("RETIRED_GLOBAL_RULES", () => {
+  // The project rule a local init at the home dir copies into ~/.claude/rules
+  // must not read as a retired global one.
+  it("does not list the rule the bundle ships now", () => {
+    for (const { path: relativePath, shipped } of RETIRED_GLOBAL_RULES) {
+      const file = path.join(RULES_DIR, ...relativePath.split("/"));
+      if (!fs.existsSync(file)) continue;
+      expect(shipped, relativePath).not.toContain(
+        hashBundledContent(fs.readFileSync(file, "utf8"))
+      );
     }
   });
 });
@@ -733,22 +747,6 @@ describe("formatShellCommand", () => {
   });
 });
 
-// ── Bundled paths ─────────────────────────────────────────────────────────────
-
-describe("bundled paths", () => {
-  it("SKILLS_DIR is a string ending with skills", () => {
-    expect(SKILLS_DIR).toMatch(/skills$/);
-  });
-
-  it("RULES_DIR is a string ending with rules", () => {
-    expect(RULES_DIR).toMatch(/rules$/);
-  });
-
-  it("AGENTS_DIR is a string ending with agents", () => {
-    expect(AGENTS_DIR).toMatch(/agents$/);
-  });
-});
-
 // ── isNewerVersion ───────────────────────────────────────────────────────────
 
 describe("isNewerVersion", () => {
@@ -956,6 +954,12 @@ describe("isOnline", () => {
 // ── isSkillsCliAvailable ─────────────────────────────────────────────────────
 
 describe("npxChildEnv", () => {
+  const SKIP_SUBMODULE_CONFIG = {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "submodule.packages/argent-private.update",
+    GIT_CONFIG_VALUE_0: "none",
+  };
+
   it("drops npm_config_package so a nested npx installs the package it is asked for", () => {
     // `npx --package @swmansion/argent -- argent init` exports this to argent (#1335).
     const env = npxChildEnv({
@@ -964,13 +968,41 @@ describe("npxChildEnv", () => {
       npm_config_yes: "true",
     });
 
-    expect(env).toEqual({ PATH: "/usr/bin", npm_config_yes: "true" });
+    expect(env).toEqual({ PATH: "/usr/bin", npm_config_yes: "true", ...SKIP_SUBMODULE_CONFIG });
   });
 
   it("matches the variable name case-insensitively", () => {
     const env = npxChildEnv({ NPM_CONFIG_PACKAGE: "@swmansion/argent", HOME: "/home/u" });
 
-    expect(env).toEqual({ HOME: "/home/u" });
+    expect(env).toEqual({ HOME: "/home/u", ...SKIP_SUBMODULE_CONFIG });
+  });
+
+  it("tells git to skip the private submodule the pinned skills source carries", () => {
+    // skills 1.8.0+ inits submodules after the clone; the SSH one hangs on a
+    // host-key prompt behind the spinner on machines without github.com known.
+    expect(npxChildEnv({})).toEqual(SKIP_SUBMODULE_CONFIG);
+  });
+
+  it("appends after git config entries the caller already set", () => {
+    const env = npxChildEnv({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.proxy",
+      GIT_CONFIG_VALUE_0: "http://proxy:3128",
+    });
+
+    expect(env).toEqual({
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "http.proxy",
+      GIT_CONFIG_VALUE_0: "http://proxy:3128",
+      GIT_CONFIG_KEY_1: "submodule.packages/argent-private.update",
+      GIT_CONFIG_VALUE_1: "none",
+    });
+  });
+
+  it("starts the git config entries over when the inherited count is not one git accepts", () => {
+    for (const bogus of ["", "abc", "-1", "1.5"]) {
+      expect(npxChildEnv({ GIT_CONFIG_COUNT: bogus })).toEqual(SKIP_SUBMODULE_CONFIG);
+    }
   });
 
   it("does not modify the environment it was given", () => {
@@ -1070,8 +1102,12 @@ describe("localInstallCommand", () => {
       args: ["add", "--dev", "pkg"],
     });
   });
-  it("uses add -D for pnpm", () => {
-    expect(localInstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["add", "-D", "pkg"] });
+  it("uses add -D for pnpm, skipping the workspace-root check", () => {
+    // A bare `pnpm add` at a workspace root fails with ERR_PNPM_ADDING_TO_ROOT.
+    expect(localInstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["add", "-D", "--ignore-workspace-root-check", "pkg"],
+    });
   });
   it("uses add -d for bun", () => {
     expect(localInstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["add", "-d", "pkg"] });

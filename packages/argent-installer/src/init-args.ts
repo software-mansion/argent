@@ -6,6 +6,8 @@ interface InitArgs {
   nonInteractive: boolean;
   /** --no-telemetry */
   noTelemetry: boolean;
+  /** --no-allowlist: skip the editor auto-approve step */
+  noAllowlist: boolean;
   /** --from <path>: reinstall from a local tarball (developer flow) */
   fromTar: string | null;
   /** --local: the devDependency install mode */
@@ -28,6 +30,7 @@ export function parseInitArgs(args: string[]): InitArgs {
   return {
     nonInteractive: args.includes("--yes") || args.includes("-y"),
     noTelemetry: args.includes("--no-telemetry"),
+    noAllowlist: args.includes("--no-allowlist"),
     fromTar,
     wantsLocal: args.includes("--local"),
     wantsGlobal: args.includes("--global"),
