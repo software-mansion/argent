@@ -511,7 +511,14 @@ const zodSchema = z.object({
   time_range_ms: timeRangeSchema
     .optional()
     .describe("Time range in ms since profiling started, the clock this tool prints"),
-  commit_index: z.coerce.number().int().optional().describe("Commit index"),
+  // Without `.nullable()`, `z.coerce.number()` reads null as commit 0.
+  commit_index: z.coerce
+    .number()
+    .int()
+    .nullable()
+    .transform((value) => value ?? undefined)
+    .optional()
+    .describe("Commit index"),
   top_n: z.coerce
     .number()
     .int()
