@@ -294,11 +294,14 @@ function catalystRefusal(bundleId: string): string {
  * Why argent refuses to start the app, so that no launch arms its capture: a
  * Mac Catalyst app, an Electron app or a build that the hardened runtime keeps
  * the library out of. Undefined while argent's own copy runs, and when argent
- * cannot tell, for example when Spotlight does not know the app.
+ * cannot tell, for example when Spotlight does not know the app. Before argent
+ * started the app, Spotlight's copy is only a guess at the build that runs
+ * next, so its hardened runtime does not refuse: a Debug build can still run.
  */
 export async function macosLaunchRefusal(bundleId: string): Promise<string | undefined> {
   if (await runningTrackedApp(bundleId)) return undefined;
-  const appPath = getTrackedMacosApp(bundleId)?.appPath ?? (await findMacosAppByBundleId(bundleId));
+  const tracked = getTrackedMacosApp(bundleId)?.appPath;
+  const appPath = tracked ?? (await findMacosAppByBundleId(bundleId));
   if (!appPath) return undefined;
   let info: MacosAppInfo;
   try {
@@ -309,7 +312,7 @@ export async function macosLaunchRefusal(bundleId: string): Promise<string | und
   if (info.bundleId !== bundleId) return undefined;
   return (
     (info.catalyst ? catalystRefusal(bundleId) : chromiumRefusal(info)) ??
-    hardenedRuntimeRefusal(info) ??
+    (tracked ? hardenedRuntimeRefusal(info) : undefined) ??
     undefined
   );
 }

@@ -1247,6 +1247,24 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       });
     });
 
+    it("arms the build boot-device starts after a start while Spotlight's copy of the app is a hardened Release build", async () => {
+      const release = writeBundle(path.join(root, `release-${Date.now()}`), BUNDLE_ID);
+      execFileSync("codesign", ["--force", "--sign", "-", "--options", "runtime", release], {
+        stdio: "ignore",
+      });
+      searched.spotlight = { [BUNDLE_ID]: release };
+      // argent has not started the app, so which copy runs next is not known.
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      expect(await request("https://example.com/x")).toEqual({ active: true, activations: 1 });
+      expect(await readLog()).toMatchObject({
+        armed: true,
+        header: `macos-native: armed, 1 request (pid ${pid})`,
+      });
+    });
+
     it("arms the app when restart-app starts it after a start that found it not running", async () => {
       await quit((await run("boot-device", { macosAppPath: appPath })).pid);
       expect((await start()).layers).toEqual([
