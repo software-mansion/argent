@@ -34,12 +34,14 @@ import type { IosNetworkRecords } from "../src/blueprints/ios-network-records";
 import type { NativeNetworkRecord } from "../src/utils/native-network-record";
 import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
 import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
-import type {
-  CaptureResult,
-  StartedLayer,
-  StoppedLayer,
+import {
+  forgetIosUnavailableOf,
+  type CaptureResult,
+  type StartedLayer,
+  type StoppedLayer,
 } from "../src/tools/network/network-capture";
 import { networkLogsTool } from "../src/tools/network/network-logs";
+import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import {
@@ -468,6 +470,7 @@ beforeEach(() => {
   metro.clear();
   connectDelayMs = 0;
   forgetJsCapturesOf();
+  forgetIosUnavailableOf();
   ios = new FakeIos();
   android.clear();
   androidFactoryCalls = 0;
@@ -2035,6 +2038,76 @@ describe("network-capture-stop", () => {
       expect(nativeCalls().filter((call) => call.startsWith("stop"))).toHaveLength(2);
     }
   );
+});
+
+describe("native-network-logs after a start that found the iOS layer unavailable", () => {
+  beforeEach(() => {
+    registry.registerTool(createNativeNetworkLogsTool(registry));
+    serve(PORT, IOS_UDID, new FakeRuntime(APP));
+  });
+
+  function readNative() {
+    return registry.invokeTool<Record<string, unknown>>("native-network-logs", {
+      udid: IOS_UDID,
+      bundleId: APP,
+    });
+  }
+
+  it("says why the start found it unavailable, until a start turns capture on", async () => {
+    ios.appState = "unregistered";
+    const { reason } = layer(await start(IOS_UDID, APP), "ios-native");
+
+    expect(await readNative()).toEqual({
+      status: "ok",
+      header: `ios-native: unavailable, 0 requests (${reason})`,
+      armed: false,
+      started: false,
+      count: 0,
+      total: 0,
+      requests: [],
+    });
+
+    ios.appState = "stale_process";
+    await start(IOS_UDID, APP);
+    expect(await readNative()).toMatchObject({ status: "restart_required" });
+  });
+
+  it("says why when the start could not start the service", async () => {
+    ios.factoryError = new Error("the simulator is not booted");
+    const { reason } = layer(await start(IOS_UDID, APP), "ios-native");
+
+    expect(reason).toContain("the simulator is not booted");
+    expect(await readNative()).toMatchObject({
+      header: `ios-native: unavailable, 0 requests (${reason})`,
+      started: false,
+    });
+  });
+
+  it("keeps the stop, and says why, after a start that found it unavailable", async () => {
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    await stop(IOS_UDID, APP);
+    ios.connected.delete(APP);
+    ios.appState = "unregistered";
+    const { reason } = layer(await start(IOS_UDID, APP), "ios-native");
+
+    expect(await readNative()).toMatchObject({
+      header: `ios-native: stopped, 0 requests (capture stopped by network-capture-stop; a later network-capture-start found the layer unavailable: ${reason})`,
+      stopped: true,
+    });
+  });
+
+  it("forgets why at a teardown of the device", async () => {
+    ios.appState = "unregistered";
+    await start(IOS_UDID, APP);
+
+    await stopAll([IOS_UDID]);
+
+    expect(await readNative()).toMatchObject({
+      header: expect.stringContaining("ios-native: not started"),
+      started: false,
+    });
+  });
 });
 
 describe("stop-all-simulator-servers", () => {
