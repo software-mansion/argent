@@ -93,7 +93,7 @@ A file starts playing on this call, so call it right before the action that make
       const ref = nativeDevtoolsRef(device);
       const devtools = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
       const session = await resolveAudioSession(registry, device);
-      // Every call arms, including the release, so apps launched from now on carry the hook.
+      // Every call arms, including the release: recording the speaker needs the hook but no input override.
       await armAudio(session, devtools);
       // An app on an older hook cannot be driven: say so before changing anything.
       const hook = params.bundleId ? await readAppHook(session, params.bundleId) : undefined;

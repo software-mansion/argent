@@ -74,6 +74,8 @@ import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/nat
 import { nativeProfilerLaunchAnalysisTool } from "../tools/profiler/native-profiler/native-profiler-launch-analysis";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
 import { createAudioInputTool } from "../tools/audio/audio-input";
+import { createAudioRecordStartTool } from "../tools/audio/audio-record-start";
+import { createAudioRecordStopTool } from "../tools/audio/audio-record-stop";
 import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
 import { iosAudioSessionBlueprint } from "../blueprints/ios-audio-session";
 import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
@@ -152,6 +154,8 @@ export function createRegistry(): Registry {
   registry.registerTool(createScreenRecordingStartTool(registry));
   registry.registerTool(screenRecordingStopTool);
   registry.registerTool(createAudioInputTool(registry));
+  registry.registerTool(createAudioRecordStartTool(registry));
+  registry.registerTool(createAudioRecordStopTool(registry));
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);
   registry.registerTool(chromiumCookiesTool);

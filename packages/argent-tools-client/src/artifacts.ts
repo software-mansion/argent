@@ -44,6 +44,7 @@ export type ArtifactKind =
   | "screenshot-diff"
   | "screenshot-diff-context"
   | "screen-recording"
+  | "audio-recording"
   | "native-profile-trace"
   | "native-profile-cpu"
   | "native-profile-hangs"

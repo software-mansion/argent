@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   InputFeeder,
+  OutputRecorder,
   readClipInfo,
   STREAM_RATE,
   type FeederSource,
@@ -320,9 +321,109 @@ describe("InputFeeder", () => {
   });
 });
 
+describe("OutputRecorder", () => {
+  /** Plays the app: stores frames of `channels` float32 samples and publishes the counters. */
+  function appWrites(ringPath: string, channels: number, from: number, frames: number[][]): number {
+    const app = new FakeApp(ringPath);
+    const b = Buffer.alloc(channels * 4);
+    frames.forEach((f, i) => {
+      b.fill(0);
+      f.forEach((v, k) => b.writeFloatLE(v, k * 4));
+      fs.writeSync(app.fd, b, 0, b.length, HDR + ((from + i) & (CAP - 1)) * b.length);
+    });
+    app.set(16, channels);
+    app.set(20, STREAM_RATE);
+    app.set(24, from + frames.length);
+    app.close();
+    return from + frames.length;
+  }
+
+  function samples(wav: string): number[] {
+    const b = fs.readFileSync(wav);
+    return Array.from({ length: (b.length - 44) / 2 }, (_, i) => b.readInt16LE(44 + i * 2));
+  }
+
+  it("writes a 16-bit WAV of what the app played", () => {
+    const rec = new OutputRecorder(path.join(dir, "out.ring"), path.join(dir, "out.wav"));
+    rec.step();
+    expect(fs.existsSync(path.join(dir, "out.wav"))).toBe(false); // nothing played yet
+    const w = appWrites(rec.ringPath, 2, 0, [
+      [0.5, -0.5],
+      [1.5, -1.5], // clipped
+      [0, 0.25],
+    ]);
+    rec.step();
+    const done = rec.finish();
+    expect(done).toMatchObject({
+      frames: w,
+      droppedFrames: 0,
+      channels: 2,
+      sampleRate: STREAM_RATE,
+    });
+    expect(samples(done.path)).toEqual([16384, -16383, 32767, -32767, 0, 8192]);
+
+    const h = fs.readFileSync(done.path);
+    expect(h.toString("ascii", 0, 4)).toBe("RIFF");
+    expect(h.readUInt32LE(40)).toBe(3 * 2 * 2); // data length
+    expect(h.readUInt16LE(22)).toBe(2);
+    expect(h.readUInt32LE(24)).toBe(STREAM_RATE);
+    expect(fs.existsSync(rec.ringPath)).toBe(false); // the ring is removed
+  });
+
+  it("appends across drains", () => {
+    const rec = new OutputRecorder(path.join(dir, "out.ring"), path.join(dir, "out.wav"));
+    const w = appWrites(rec.ringPath, 1, 0, [[0.25], [0.5]]);
+    rec.step();
+    appWrites(rec.ringPath, 1, w, [[-0.25]]);
+    rec.step();
+    expect(samples(rec.finish().path)).toEqual([8192, 16384, -8192]);
+  });
+
+  it("counts frames the app wrote faster than they were drained", () => {
+    const rec = new OutputRecorder(path.join(dir, "out.ring"), path.join(dir, "out.wav"));
+    appWrites(rec.ringPath, 1, 0, [[0.1]]);
+    rec.step();
+    const app = new FakeApp(rec.ringPath);
+    app.set(24, 1 + CAP + 100); // the app ran a full ring ahead
+    app.close();
+    const done = rec.finish();
+    expect(done.droppedFrames).toBe(CAP + 100 - CAP / 2);
+    expect(done.frames).toBe(1 + CAP / 2);
+  });
+
+  it("keeps draining after a lag of more than 2^31 frames", () => {
+    const rec = new OutputRecorder(path.join(dir, "out.ring"), path.join(dir, "out.wav"));
+    appWrites(rec.ringPath, 1, 0, [[0.1]]);
+    rec.step();
+    const app = new FakeApp(rec.ringPath);
+    app.set(24, (1 + 2 ** 31 + 5) >>> 0); // the host slept for 12 hours
+    app.close();
+    const done = rec.finish();
+    expect(done.frames).toBe(1 + CAP / 2);
+    expect(done.droppedFrames).toBe(2 ** 31 + 5 - CAP / 2);
+  });
+
+  it("leaves a valid empty file when the app never played", () => {
+    const rec = new OutputRecorder(path.join(dir, "out.ring"), path.join(dir, "out.wav"));
+    const done = rec.finish();
+    expect(done).toMatchObject({ frames: 0, channels: 1, sampleRate: STREAM_RATE });
+    expect(fs.readFileSync(done.path).length).toBe(44);
+  });
+
+  it("abort removes both files", () => {
+    const rec = new OutputRecorder(path.join(dir, "out.ring"), path.join(dir, "out.wav"));
+    appWrites(rec.ringPath, 1, 0, [[0.1]]);
+    rec.step();
+    rec.abort();
+    expect(fs.existsSync(rec.ringPath)).toBe(false);
+    expect(fs.existsSync(path.join(dir, "out.wav"))).toBe(false);
+  });
+});
+
 /**
- * The hook in the app maps the in ring with its own copy of the layout (ArgentAudio.c in argent-private:
- * `InRing`, `RING_HDR`, `MAGIC_IN`). Neither side can see the other's constants, so they are pinned here.
+ * The hook in the app maps these files with its own copy of the layout (ArgentAudio.c in argent-private:
+ * `InRing`, `OutRing`, `RING_HDR`, `MAGIC_IN`, `MAGIC_OUT`, `OUT_MAX_CH`). Neither side can see the other's
+ * constants, so they are pinned here.
  */
 describe("ring layout shared with the hook", () => {
   const header = (ringPath: string) => {
@@ -350,6 +451,15 @@ describe("ring layout shared with the hook", () => {
     feeder.stop();
   });
 
+  it("out ring: magic, version, cap, max channels 8, then the app's counters at 16/20/24", () => {
+    const rec = new OutputRecorder(path.join(dir, "out.ring"), path.join(dir, "out.wav"));
+    expect(fs.statSync(rec.ringPath).size).toBe(HDR + CAP * 8 * 4);
+    const h = header(rec.ringPath);
+    expect(h.slice(0, 4)).toEqual([0x4f475241, 1, 65_536, 8]);
+    expect(h.slice(4, 7)).toEqual([0, 0, 0]); // channels, rate, writeFrame
+    rec.abort();
+  });
+
   const source = path.resolve(
     __dirname,
     "../../argent-private/packages/native-devtools-ios/Sources/NativeDevtoolsIos/ArgentAudio.c"
@@ -359,6 +469,8 @@ describe("ring layout shared with the hook", () => {
     const define = (name: string) => new RegExp(`#define ${name} ([^\\s/]+)`).exec(c)?.[1];
     expect(define("RING_HDR")).toBe(String(HDR));
     expect(define("MAGIC_IN")).toBe("0x49475241u");
+    expect(define("MAGIC_OUT")).toBe("0x4F475241u");
+    expect(define("OUT_MAX_CH")).toBe("8u");
     const { AUDIO_HOOK_PROTO } = await import("../src/utils/ios-audio");
     expect(define("PROTO")).toBe(String(AUDIO_HOOK_PROTO));
     // The hook refuses a ring larger than this.
