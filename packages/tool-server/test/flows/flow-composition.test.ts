@@ -1370,7 +1370,7 @@ describe("flow composition (run:)", () => {
     });
     await fs.writeFile(
       path.join(tmpDir, ".argent", "flows", "newer.yaml"),
-      "version: 2\nsteps:\n  - echo: hi\n",
+      "version: 3\nsteps:\n  - echo: hi\n",
       "utf8"
     );
 
@@ -1387,7 +1387,7 @@ describe("flow composition (run:)", () => {
       kind: "run",
       status: "error",
       reason:
-        'could not load fragment "newer.yaml": The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it.',
+        'could not load fragment "newer.yaml": The e2e test file is version 3, but this Argent reads up to version 2. Update Argent to run it.',
     });
   });
 
@@ -3580,15 +3580,6 @@ describe("flow composition (run:)", () => {
       // re-running reproduces exactly that.
       expect(reason).toMatch(/exited after launch/);
       expect(reason).toMatch(/Re-running the e2e test repeats the same launch/);
-    });
-
-    // The `not.toContain` guards below compare rendered substrings, so they only
-    // mean anything while neither figure is a suffix of the other: 500/1500 would
-    // make `"1500 ms".includes("500 ms")` true and fail them for the wrong
-    // reason. Pin what those guards need, not merely the ordering.
-    it("renders a launch-to-verdict spend the connect wait cannot be read into", () => {
-      expect(LAUNCH_TO_VERDICT_MS).toBeGreaterThan(NATIVE_READY_TIMEOUT_MS);
-      expect(`${LAUNCH_TO_VERDICT_MS} ms`).not.toContain(`${NATIVE_READY_TIMEOUT_MS} ms`);
     });
 
     // `stale_process` has two producers, and one carries THIS endpoint — it

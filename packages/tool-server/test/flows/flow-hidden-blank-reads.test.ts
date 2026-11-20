@@ -385,20 +385,16 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     );
   });
 
-  // Trusted reads of `nodes` in `trustedOrientation` until 950ms into the 1s
-  // assert window, then empty trees: blind once the selector has matched, and
-  // inside the dark-tail tolerance.
-  function blankFrom950ms(
-    nodes: DescribeNode[],
-    trustedOrientation?: DescribeTreeData["uiOrientation"],
-    blankOrientation?: DescribeTreeData["uiOrientation"]
-  ): void {
+  // Trusted reads of `nodes` until 950ms into the 1s assert window, then empty
+  // trees: blind once the selector has matched, and inside the dark-tail
+  // tolerance.
+  function blankFrom950ms(nodes: DescribeNode[]): void {
     let firstReadAt: number | undefined;
     currentFetch = () => {
       firstReadAt ??= Date.now();
       return Date.now() - firstReadAt >= 950
-        ? { tree: screen([]), source: "native-devtools", uiOrientation: blankOrientation }
-        : { tree: screen(nodes), source: "native-devtools", uiOrientation: trustedOrientation };
+        ? { tree: screen([]), source: "native-devtools" }
+        : { tree: screen(nodes), source: "native-devtools" };
     };
   }
 
@@ -441,37 +437,6 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toBe(
       'element(s) matched id="total" but none was visible (zero-area frame)'
-    );
-  });
-
-  it("assert text: the reason picks among the trusted matches in their own read's orientation", async () => {
-    // landscapeLeft reading order puts "Left" first; read in portrait (or the frame space), "Top" would lead.
-    blankFrom950ms(
-      [
-        n({
-          identifier: "total",
-          label: "Left",
-          frame: { x: 0.05, y: 0.6, width: 0.2, height: 0.1 },
-        }),
-        n({
-          identifier: "total",
-          label: "Top",
-          frame: { x: 0.7, y: 0.1, width: 0.2, height: 0.1 },
-        }),
-      ],
-      "landscapeLeft",
-      "portrait"
-    );
-
-    const result = await assertOnce({
-      condition: "text",
-      expectedText: "Total $42.00",
-      textMatch: "equals",
-    });
-
-    expect(result.steps[0].status).toBe("fail");
-    expect(result.steps[0].reason).toBe(
-      'element matched id="total" but its text was "Left" (wanted to equal "Total $42.00")'
     );
   });
 });

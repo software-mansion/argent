@@ -138,7 +138,7 @@ describe("parsing a requires block", () => {
       requires: { platform: ["ios"] },
       steps: [{ kind: "echo", message: "hi" }],
     });
-    expect(yaml).toMatch(/^version: 1\nrequires:\n {2}platform: ios\nsteps:/);
+    expect(yaml).toMatch(/^version: 2\nrequires:\n {2}platform: ios\nsteps:/);
   });
 
   it.each([
@@ -427,9 +427,9 @@ describe("the prerequisite notice", () => {
 });
 
 describe("a file with a newer format version", () => {
-  const NEWER = "version: 2\nrequires:\n  platform: ios\nsteps:\n  - tap: {}\n";
+  const NEWER = "version: 3\nrequires:\n  platform: ios\nsteps:\n  - tap: {}\n";
   const NEWER_MESSAGE =
-    "The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it.";
+    "The e2e test file is version 3, but this Argent reads up to version 2. Update Argent to run it.";
 
   async function writeRaw(name: string, content: string): Promise<void> {
     const dir = path.join(tmpDir, ".argent", "e2e");

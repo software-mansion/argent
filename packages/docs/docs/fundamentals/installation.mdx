@@ -42,7 +42,9 @@ The installation wizard:
 
 - installs `@swmansion/argent` globally,
 - detects your editor and registers the MCP server,
-- copies skills and rules into your workspace.
+- copies skills into your workspace.
+
+The MCP server gives the agent its usage guidance in the server instructions. When the wizard configures the MCP server globally, it writes no rule file. When the wizard configures the MCP server for one project, it also writes a short rule into that project. This rule tells the agent what to do when the project uses Argent but Argent is not installed.
 
 <Video
   src="/video/installation-wizard.mp4"
