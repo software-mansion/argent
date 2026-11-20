@@ -341,21 +341,27 @@ describe("network-conditions on an iOS simulator", () => {
     }
   );
 
-  it.each([{ offline: true }, {}])(
-    "returns restart_required for %j when the running app lost its connection",
-    async (conditions) => {
-      const { api, services } = fakeNativeDevtools("stale_process");
+  it("returns restart_required when the running app lost its connection", async () => {
+    const { api, services } = fakeNativeDevtools("stale_process");
 
-      const result = await networkConditionsTool.execute(services, {
-        udid: iosUdid,
-        bundleId,
-        ...conditions,
-      });
+    const result = await networkConditionsTool.execute(services, {
+      udid: iosUdid,
+      bundleId,
+      offline: true,
+    });
 
-      expect(result).toMatchObject({ status: "restart_required" });
-      expect(api.setNetworkConditions).not.toHaveBeenCalled();
-    }
-  );
+    expect(result).toMatchObject({ status: "restart_required" });
+    expect(api.setNetworkConditions).not.toHaveBeenCalled();
+  });
+
+  it("drops the stored conditions at a reset when the running app lost its connection", async () => {
+    const { api, services } = fakeNativeDevtools("stale_process");
+
+    const result = await networkConditionsTool.execute(services, { udid: iosUdid, bundleId });
+
+    expect(result).toMatchObject({ status: "restart_required" });
+    expect(api.setNetworkConditions).toHaveBeenCalledWith(bundleId, null);
+  });
 
   it("clears the stored conditions when the app is not running", async () => {
     const { api, services } = fakeNativeDevtools("not_running");
