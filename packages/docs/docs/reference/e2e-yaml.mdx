@@ -222,6 +222,8 @@ To target a key, select it by its id:
 
 A key without an id, for example the delete key of a number pad, needs a scope. Record the tap: the recorder adds the scope.
 
+The recorder keeps the coordinates of a tap between two keys. The element under that tap is the container of the keys, and the runner taps the center of an element. The center of the container is a different key.
+
 To enter text, use a `type` step, not taps on the letter keys. The `type` step also presses Enter, unless `submit: false`.
 
 ### Selectors on Mac apps

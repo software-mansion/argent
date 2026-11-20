@@ -103,7 +103,7 @@ With the software keyboard up, its keys, prediction bar and other buttons are in
 - An exact match still beats a substring, also on a key: `{ text: Go }` taps the return key `go`, not a `Google` link. Use the button's full text or id.
 - A key is the target when no app element matches as exactly. A bare string tries `text` when its `id` finds only keys, so on iOS `tap: Delete` means the app's `Delete`, not the delete key (id `delete`).
 - Conditions (`await`, `assert`, `when:`) and `scroll-to`'s stop check do not see the keyboard: `assert: { hidden: { text: Done } }` passes while the return key shows `done`. To wait for the keyboard itself, use a `tool: await-ui-element` step: it reads the `describe` tree, which has the keys.
-- To target a key, select it by id: on iOS `Done`, `Go` or the letter keyboard's `delete` (English in every keyboard language), on Android Gboard's `key_pos_ime_action` or `key_pos_del`. A key without an id, such as a number pad's delete key, needs a scope; recording the tap adds one. Enter text with `type`, not with taps on letter keys.
+- To target a key, select it by id: on iOS `Done`, `Go` or the letter keyboard's `delete` (English in every keyboard language), on Android Gboard's `key_pos_ime_action` or `key_pos_del`. A key without an id, such as a number pad's delete key, needs a scope; recording the tap adds one. A recorded tap between two keys keeps its coordinates: the element there is the keys' container, whose centre is another key. Enter text with `type`, not with taps on letter keys.
 
 When several nodes match, the directive decides:
 

@@ -714,6 +714,24 @@ function inTextArea(tree: DescribeNode, node: DescribeNode): boolean {
 }
 
 /**
+ * Whether `node` holds two elements of the on-screen keyboard side by side,
+ * neither inside the other: a container of keys, not a key with its label or icon.
+ */
+function holdsKeys(tree: DescribeNode, node: DescribeNode): boolean {
+  const inside: DescribeNode[] = [];
+  const walk = (n: DescribeNode): void => {
+    if (n.keyboard === true && isVisible(n) && frameWithin(n.frame, node.frame)) {
+      inside.push(n);
+    }
+    n.children.forEach(walk);
+  };
+  tree.children.forEach(walk);
+  return inside.some((a) =>
+    inside.some((b) => !frameWithin(a.frame, b.frame) && !frameWithin(b.frame, a.frame))
+  );
+}
+
+/**
  * Whether a click is away from the centre of `frame` by more than `tolerance`:
  * the rounding of describe's 3-decimal frames (0.0015), or of a centre that an
  * agent rounds to 2 decimals as well (0.006).
@@ -784,6 +802,18 @@ async function captureTapSelector(
     }
     // The frame replay acts on: the derived selector resolves to it.
     const resolved = selectorToFrame(tree, selector, uiOrientation) ?? node.frame;
+    // Replay taps the centre. A tap between keys finds the container of the
+    // keys, whose centre is another key. A key keeps its selector: the label or
+    // icon at its centre is part of the key.
+    if (
+      node.keyboard === true &&
+      nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node &&
+      holdsKeys(tree, node)
+    ) {
+      return {
+        warning: `the tap is between elements of the on-screen keyboard, and replay taps the centre of ${describeSelector(selector)}, where another element lies; kept coordinates (brittle)`,
+      };
+    }
     // Replay clicks the centre. On a Mac app, a click anywhere else on a slider,
     // a stepper, a text view or the text in it, a disclosure group, a canvas,
     // chart, map or seek bar, or a container's empty space does something else

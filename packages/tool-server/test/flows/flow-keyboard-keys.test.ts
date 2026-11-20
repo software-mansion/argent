@@ -537,8 +537,13 @@ describe("e2e recorder: a recorded tap replays on the tapped element", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function recordTap(tree: DescribeNode, point: { x: number; y: number }) {
-    serve(tree);
+  async function recordTap(
+    tree: DescribeNode,
+    point: { x: number; y: number },
+    device = IOS,
+    source: DescribeTreeData["source"] = "ax-service"
+  ) {
+    serve(tree, source);
     const registry = {
       invokeTool: vi.fn(async (id: string) => {
         if (id === "gesture-tap") return { tapped: true };
@@ -552,7 +557,7 @@ describe("e2e recorder: a recorded tap replays on the tapped element", () => {
         name: FLOW,
         project_root: tmpDir,
         command: "gesture-tap",
-        args: JSON.stringify({ udid: IOS, ...point }),
+        args: JSON.stringify({ udid: device, ...point }),
       }
     );
     const yaml = await fs.readFile(path.join(tmpDir, ".argent", "e2e", `${FLOW}.yaml`), "utf8");
@@ -588,6 +593,51 @@ describe("e2e recorder: a recorded tap replays on the tapped element", () => {
     expect(at.x).toBeCloseTo(centre(key).x, 5);
     expect(at.y).toBeCloseTo(centre(key).y, 5);
   });
+
+  it("keeps coordinates for a tap between keys, where replay would press another key", async () => {
+    // The margin of a key row holds only the container of the keys, and the
+    // centre of the container is the key G.
+    const tree = iosTree("ios-27-iphone-name");
+    const point = { x: 0.03, y: 0.77 };
+    const container = leaf(tree, { identifier: "UIKeyboardLayoutStar Preview" });
+    expect(nodeAtPoint(tree, point)).toBe(container);
+    expect(nodeAtPoint(tree, centre(container))).toBe(leaf(tree, { label: "G", keyboard: true }));
+    const step = await recordTap(tree, point);
+    expect(step).toEqual({ kind: "tap", ...point });
+  });
+
+  it("records a key tapped beside its label, which replays on the key", async () => {
+    // Gboard's key "a" holds its label inside a frame, `host`. A tap left of
+    // them finds the key, and replay taps the label at the centre of the key,
+    // which is the key. Two app elements behind the key change nothing.
+    const captured = androidTree("android-36-settings-search");
+    const key = leaf(captured, { role: "FrameLayout", label: "a" });
+    const behind = (x: number): DescribeNode => ({
+      role: "Image",
+      frame: { x, y: key.frame.y + 0.002, width: 0.02, height: 0.02 },
+      children: [],
+    });
+    const tree = {
+      ...captured,
+      children: [...captured.children, behind(key.frame.x + 0.01), behind(key.frame.x + 0.12)],
+    };
+    const point = { x: key.frame.x + key.frame.width * 0.15, y: centre(key).y };
+    expect(nodeAtPoint(tree, point)).toBe(key);
+    expect(nodeAtPoint(tree, centre(key))).toBe(leaf(tree, { role: "StaticText", label: "a" }));
+    const step = await recordTap(tree, point, ANDROID, "android-devtools");
+    expect(step).toEqual({ kind: "tap", selector: { identifier: key.identifier } });
+  });
+
+  it("records a suggestion that holds the dividers beside it, which replays on it", async () => {
+    // The frame of Gboard's suggestion "found" holds the dividers at its edges,
+    // but the centre of the suggestion is the suggestion.
+    const tree = androidTree("android-36-settings-results");
+    const word = leaf(tree, { role: "StaticText", label: "found" });
+    expect(nodeAtPoint(tree, centre(word))).toBe(word);
+    const step = await recordTap(tree, centre(word), ANDROID, "android-devtools");
+    expect(step).toEqual({ kind: "tap", selector: { text: "found" } });
+  });
+
   it("records the return key by its id, which replays on the key", async () => {
     const tree = iosTree("ios-27-iphone-name");
     const key = leaf(tree, { identifier: "Done" });
