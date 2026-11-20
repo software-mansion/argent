@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { forgettingUiOrientation } from "../../utils/ios-ui-orientation";
 import { resolveDevice } from "../../utils/device-info";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { macosAppRef } from "../../blueprints/macos-app";
@@ -32,7 +33,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 const zodSchema = z.object({
@@ -97,11 +98,11 @@ Returns { opened, url, note? }. \`note\` explains the routing caveat when a web 
   >({
     toolId: "open-url",
     capability,
-    ios: iosImpl,
+    ios: forgettingUiOrientation(iosImpl),
     iosDevice: iosDeviceImpl,
     android: androidImpl,
     harmony: harmonyImpl,
-    iosRemote: iosRemoteImpl,
+    iosRemote: forgettingUiOrientation(iosRemoteImpl),
     chromium: chromiumImpl,
     macos: macosImpl,
   }),

@@ -71,8 +71,11 @@ import { reactProfilerFiberTreeTool } from "../tools/profiler/react/react-profil
 import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/native-profiler-start";
 import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
 import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
+import { nativeProfilerLaunchAnalysisTool } from "../tools/profiler/native-profiler/native-profiler-launch-analysis";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
+import { createAudioInputTool } from "../tools/audio/audio-input";
 import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
+import { iosAudioSessionBlueprint } from "../blueprints/ios-audio-session";
 import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
 import { screenRecordingStopTool } from "../tools/screen-recording/screen-recording-stop";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
@@ -104,6 +107,7 @@ import { menuBarTool } from "../tools/menu-bar";
 import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
 import { resolveDevice } from "./device-info";
 import { setLivePanelSourceProvider } from "./foldable";
+import { setUiOrientationSourceProvider } from "./ios-ui-orientation";
 
 export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
@@ -118,6 +122,12 @@ export function createRegistry(): Registry {
     const ref = axServiceRef(resolveDevice(udid));
     return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
   });
+  // The same daemon names the interface orientation, which the tools turn
+  // captures, frames and touches by on an iOS simulator (`utils/ios-ui-orientation.ts`).
+  setUiOrientationSourceProvider((udid) => {
+    const ref = axServiceRef(resolveDevice(udid));
+    return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
+  });
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(iosDeviceRunnerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
@@ -125,6 +135,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(nativeProfilerSessionBlueprint);
   registry.registerBlueprint(screenRecordingSessionBlueprint);
+  registry.registerBlueprint(iosAudioSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
@@ -147,6 +158,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createScreenshotDiffTool(registry));
   registry.registerTool(createScreenRecordingStartTool(registry));
   registry.registerTool(screenRecordingStopTool);
+  registry.registerTool(createAudioInputTool(registry));
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);
   registry.registerTool(chromiumCookiesTool);
@@ -171,7 +183,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createDebuggerStatusTool(registry));
   registry.registerTool(debuggerEvaluateTool);
   registry.registerTool(debuggerReloadMetroTool);
-  registry.registerTool(createDebuggerComponentTreeTool(registry));
+  registry.registerTool(createDebuggerComponentTreeTool());
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(createDebuggerLogRegistryTool(registry));
   registry.registerTool(networkLogsTool);
@@ -193,6 +205,7 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeProfilerStartTool);
   registry.registerTool(nativeProfilerStopTool);
   registry.registerTool(nativeProfilerAnalyzeTool);
+  registry.registerTool(nativeProfilerLaunchAnalysisTool);
   registry.registerTool(profilerCpuQueryTool);
   registry.registerTool(profilerCommitQueryTool);
   registry.registerTool(profilerStackQueryTool);

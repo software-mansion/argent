@@ -89,7 +89,7 @@ afterEach(() => {
 describe("menu-bar", () => {
   it("is hidden behind the macos-apps flag and declared for Mac apps only", async () => {
     expect(menuBarTool.featureFlag).toBe("macos-apps");
-    expect(menuBarTool.capability).toEqual({ macos: { app: true } });
+    expect(menuBarTool.capability).toEqual({ macos: { app: true, catalyst: true } });
     expect(() =>
       assertSupported("menu-bar", menuBarTool.capability, resolveDevice("emulator-5554"))
     ).toThrow(UnsupportedOperationError);
