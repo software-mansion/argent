@@ -23,7 +23,7 @@ import {
   readUiOrientation,
   unknownOrientationNote,
 } from "./ios-ui-orientation";
-import { isTurned, uiPointToNative } from "./ui-orientation";
+import { isTurned, uiEdgeToNative, uiPointToNative, type ScreenEdge } from "./ui-orientation";
 import type { UiOrientation } from "../tools/describe/contract";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -84,6 +84,9 @@ export interface SimulatorServerTransport {
 // not for normal latency, so it can be generous without ever being reached in a
 // healthy run.
 const COMMAND_ACK_TIMEOUT_MS = 5_000;
+// The first edge Down activates the guest digitizer. Its barrier can take 30s
+// after another simulator-server exits. Leave time for setup and the reply.
+const EDGE_DOWN_ACK_TIMEOUT_MS = 35_000;
 
 interface PendingCommand {
   settle: (err?: FailureError) => void;
@@ -302,6 +305,10 @@ export async function sendCommand(
       : (screenWarning ?? turnWarning);
   const id = String(++cmdId);
   const payload = JSON.stringify({ id, ...targeted });
+  const ackTimeoutMs =
+    cmdName === "edgeTouch" && cmd.type === "Down"
+      ? EDGE_DOWN_ACK_TIMEOUT_MS
+      : COMMAND_ACK_TIMEOUT_MS;
 
   await new Promise<void>((resolve, reject) => {
     let done = false;
@@ -318,7 +325,7 @@ export async function sendCommand(
         settleAndDropConnection(
           new FailureError(
             `simulator-server did not acknowledge the '${cmdName}' command within ` +
-              `${COMMAND_ACK_TIMEOUT_MS}ms. The command may not have reached the device — ` +
+              `${ackTimeoutMs}ms. The command may not have reached the device — ` +
               `the simulator may be wedged or the simulator-server unresponsive.`,
             {
               error_code: FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT,
@@ -330,7 +337,7 @@ export async function sendCommand(
             }
           )
         ),
-      COMMAND_ACK_TIMEOUT_MS
+      ackTimeoutMs
     );
     // `unref` so a pending ack never holds the process open on shutdown.
     timer.unref?.();
@@ -394,7 +401,7 @@ async function withNativeTouchSpace(
   cmd: Record<string, unknown>
 ): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
   if (
-    cmd.cmd !== "touch" ||
+    (cmd.cmd !== "touch" && cmd.cmd !== "edgeTouch") ||
     !api.deviceId ||
     inNativeCoordinates() ||
     !isIosSimulator(resolveDevice(api.deviceId))
@@ -418,6 +425,7 @@ async function withNativeTouchSpace(
 
   const turned: Record<string, unknown> = { ...cmd };
   const first = uiPointToNative({ x: cmd.x as number, y: cmd.y as number }, orientation);
+  if (cmd.cmd === "edgeTouch") turned.edge = uiEdgeToNative(cmd.edge as ScreenEdge, orientation);
   turned.x = first.x;
   turned.y = first.y;
   const sx = cmd.second_x;
@@ -461,7 +469,7 @@ async function withActiveScreen(
   cmd: Record<string, unknown>
 ): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
   if (!api.display?.foldable || cmd.screen !== undefined) return { cmd };
-  if (cmd.cmd !== "touch") return { cmd };
+  if (cmd.cmd !== "touch" && cmd.cmd !== "edgeTouch") return { cmd };
   const udid = api.deviceId ?? "";
   let screen = cmd.type !== "Down" ? gestureScreens.get(api) : undefined;
   let warning: string | undefined;
