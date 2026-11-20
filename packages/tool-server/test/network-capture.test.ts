@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EventEmitter } from "node:events";
+import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter, once } from "node:events";
+import { hostname } from "node:os";
 import { createContext, runInContext, type Context } from "node:vm";
 import {
   FAILURE_CODES,
@@ -2661,16 +2663,98 @@ describe("the tool-server's exit", () => {
   /** What the exit runs in each app's JS runtime, as src/index.ts calls it. */
   const exit = () => pauseJsCapturesOf(registry, undefined, { atExit: true });
 
-  /** Another tool-server process starts the app's capture in the same JS runtime. */
+  /**
+   * Another tool-server process starts the app's capture in the same JS runtime. `pid` is that
+   * process; it is this test's process without it.
+   */
   async function otherServerStarts(
-    rt: FakeRuntime
+    rt: FakeRuntime,
+    pid = process.pid
   ): Promise<typeof import("../src/utils/debugger/scripts/network-interceptor")> {
-    vi.resetModules();
-    const other = await import("../src/utils/debugger/scripts/network-interceptor");
-    rt.evaluate(other.makeNetworkCaptureControlScript(false));
-    rt.evaluate(other.NETWORK_INTERCEPTOR_SCRIPT);
-    return other;
+    const own = Object.getOwnPropertyDescriptor(process, "pid")!;
+    Object.defineProperty(process, "pid", { ...own, value: pid });
+    try {
+      vi.resetModules();
+      const other = await import("../src/utils/debugger/scripts/network-interceptor");
+      rt.evaluate(other.makeNetworkCaptureControlScript(false));
+      rt.evaluate(other.NETWORK_INTERCEPTOR_SCRIPT);
+      return other;
+    } finally {
+      Object.defineProperty(process, "pid", own);
+    }
   }
+
+  /** The pid of a process that has exited. */
+  const exitedPid = () => spawnSync(process.execPath, ["-e", ""]).pid!;
+
+  it("ends the capture that a tool-server which exited without its own exit left in the app", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    // The other tool-server starts the capture, then exits while it cannot reach the app.
+    await otherServerStarts(rt, exitedPid());
+    rt.send("/a");
+    await start(IOS_UDID, APP);
+
+    await exit();
+    rt.send("/b");
+
+    expect(rt.paused).toBe(true);
+    expect(JSON.parse(String(rt.evaluate(makeNetworkLogReadScript(0, 10, PORT))))).toMatchObject({
+      total: 0,
+      paused: true,
+    });
+  });
+
+  it("leaves the capture as it is while another tool-server process still runs, and ends it once that process exits", async () => {
+    const peer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    try {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.connected.add(APP);
+      await otherServerStarts(rt, peer.pid!);
+      await start(IOS_UDID, APP);
+      rt.send("/a");
+
+      await exit();
+      rt.send("/b");
+
+      expect(rt.paused).toBe(false);
+      expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 2 total) ===");
+
+      peer.kill("SIGKILL");
+      await once(peer, "exit");
+      await start(IOS_UDID, APP);
+      await exit();
+
+      expect(rt.paused).toBe(true);
+      expect(JSON.parse(String(rt.evaluate(makeNetworkLogReadScript(0, 10, PORT))))).toMatchObject({
+        total: 0,
+      });
+    } finally {
+      peer.kill("SIGKILL");
+    }
+  });
+
+  it("leaves the capture of a tool-server on another host as it is", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    rt.evaluate(
+      `globalThis.__argent_network_holders.peer = ${JSON.stringify({
+        capturing: true,
+        pid: exitedPid(),
+        host: `not-${hostname()}`,
+      })}`
+    );
+
+    await exit();
+    rt.send("/a");
+
+    expect(rt.paused).toBe(false);
+    expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+  });
 
   it("pauses and empties the JS log of an app no other tool-server captures", async () => {
     const rt = new FakeRuntime(APP);
@@ -2727,7 +2811,7 @@ describe("the tool-server's exit", () => {
     const other = await otherServerStarts(rt);
     rt.send("/b");
 
-    rt.evaluate(other.NETWORK_CAPTURE_RELEASE_SCRIPT);
+    rt.evaluate(other.makeNetworkCaptureReleaseScript([]));
     rt.send("/c");
 
     expect(rt.paused).toBe(true);
@@ -2748,7 +2832,7 @@ describe("the tool-server's exit", () => {
     rt.evaluate(other.makeNetworkCaptureControlScript(false));
     rt.send("/a");
 
-    rt.evaluate(other.NETWORK_CAPTURE_RELEASE_SCRIPT);
+    rt.evaluate(other.makeNetworkCaptureReleaseScript([]));
 
     expect(rt.paused).toBe(true);
     expect(JSON.parse(String(rt.evaluate(makeNetworkLogReadScript(0, 10, PORT))))).toMatchObject({
