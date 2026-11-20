@@ -531,6 +531,14 @@ describe("react-profiler-start", () => {
     expect(result.warning).toContain(`Native network capture is on for ${PKG}`);
   });
 
+  it("says the warning is for iOS and Android, as a Mac app's capture is never named", () => {
+    // A Mac app's capture is kept by its own service, which neither lookup reads.
+    expect(nativeNetworkCaptureWarning("macos-app-com.example.mac")).toBeUndefined();
+    expect(createReactProfilerStartTool(registryWithRuntime()).description).toContain(
+      "On iOS and Android, a warning names the apps with native network capture on"
+    );
+  });
+
   it("adds no warning when no capture is live", async () => {
     const result = await createReactProfilerStartTool(registryWithRuntime()).execute(
       {},
