@@ -7,11 +7,24 @@ Read this for a device `list-devices` marks `foldable: true`: a foldable iOS sim
 - iOS: if argent cannot find the active panel, it uses the cover panel and sets `warning` (a screenshot-diff summary gets a `panel:` line). Take a screenshot to see what the device shows, then do the check the warning names.
 - Android: on a closed generic foldable AVD, tap only full-width rows; test the cover panel on a Pixel Fold AVD.
 
-## iPhone Duo Split View
+## Move a full-screen app into Split View on iPhone Duo
 
-To put an app on one half of the open Duo, use the Home Screen shortcut. A drag from the bottom edge can scroll the foreground app.
+Start with the Duo open in landscape and the app full screen. If needed, use `fold` to open the Duo and `launch-app` to open the app.
 
-1. Open the Duo with `fold` if needed. With the UI in landscape, press `button: home` if an app is in front.
-2. Find the app icon in the Home Screen tree. Long-press its center with `gesture-custom`: send `Down`, then `Up` at the same point with `delayMs: 800`.
-3. Find **Open in Split View** in the menu tree (id `com.apple.springboardhome.application-shortcut-item.open-in-split`). Tap the center of that button.
-4. Verify the app and the Home Screen appear side by side in the screenshot. Stop here when the request is for one app at half width.
+Call `gesture-custom` once with the Duo UDID and these parameters to move the app to the **left**. The `edge` field tells iOS that the touch starts a system gesture. Keep the finger down through the pause and the sideways drag.
+
+```json
+{
+  "edge": "bottom",
+  "interpolate": 12,
+  "events": [
+    { "type": "Down", "x": 0.5, "y": 1 },
+    { "type": "Move", "x": 0.5, "y": 0.5, "delayMs": 280 },
+    { "type": "Move", "x": 0.5, "y": 0.5, "delayMs": 300 },
+    { "type": "Move", "x": 0.14, "y": 0.5, "delayMs": 320 },
+    { "type": "Up", "x": 0.14, "y": 0.5, "delayMs": 200 }
+  ]
+}
+```
+
+For the **right**, change both final x coordinates to `0.86`. Check the screenshot for the app on the requested side and the Home Screen on the other. Stop here if the user asked for one app at half width.

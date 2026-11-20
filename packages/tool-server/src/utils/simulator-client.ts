@@ -23,7 +23,7 @@ import {
   readUiOrientation,
   unknownOrientationNote,
 } from "./ios-ui-orientation";
-import { isTurned, uiPointToNative } from "./ui-orientation";
+import { isTurned, uiEdgeToNative, uiPointToNative, type ScreenEdge } from "./ui-orientation";
 import type { UiOrientation } from "../tools/describe/contract";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -394,7 +394,7 @@ async function withNativeTouchSpace(
   cmd: Record<string, unknown>
 ): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
   if (
-    cmd.cmd !== "touch" ||
+    (cmd.cmd !== "touch" && cmd.cmd !== "edgeTouch") ||
     !api.deviceId ||
     inNativeCoordinates() ||
     !isIosSimulator(resolveDevice(api.deviceId))
@@ -418,6 +418,7 @@ async function withNativeTouchSpace(
 
   const turned: Record<string, unknown> = { ...cmd };
   const first = uiPointToNative({ x: cmd.x as number, y: cmd.y as number }, orientation);
+  if (cmd.cmd === "edgeTouch") turned.edge = uiEdgeToNative(cmd.edge as ScreenEdge, orientation);
   turned.x = first.x;
   turned.y = first.y;
   const sx = cmd.second_x;
@@ -461,7 +462,7 @@ async function withActiveScreen(
   cmd: Record<string, unknown>
 ): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
   if (!api.display?.foldable || cmd.screen !== undefined) return { cmd };
-  if (cmd.cmd !== "touch") return { cmd };
+  if (cmd.cmd !== "touch" && cmd.cmd !== "edgeTouch") return { cmd };
   const udid = api.deviceId ?? "";
   let screen = cmd.type !== "Down" ? gestureScreens.get(api) : undefined;
   let warning: string | undefined;
