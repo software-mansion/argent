@@ -14,6 +14,7 @@ import {
 } from "../../src/blueprints/network-inspector";
 import {
   MAX_VALUE_CHARS,
+  toBody,
   unavailable,
   type NativeNetworkBody,
   type NativeNetworkRecord,
@@ -393,6 +394,65 @@ describe("view-network-request-details: iOS bodies and Content-Encoding", () => 
   });
 });
 
+describe("view-network-request-details: an iOS request body that the upload cut", () => {
+  const ENDED = (bytes: number) =>
+    `the upload ended after the first ${bytes} bytes, before the app's body stream reached its end`;
+
+  /** The agent's reply to Network.getRequestPostData, read as the store reads it. */
+  function postReply(fields: Record<string, unknown>): NativeNetworkBody {
+    return toBody(fields, "post");
+  }
+
+  it("says that the body is incomplete and gives no whole size, not even the Content-Length", async () => {
+    serve(post({ "Content-Type": "text/plain", "Content-Length": "2000" }));
+    requestPostData.mockResolvedValue(
+      postReply({ postData: "a".repeat(800), base64Encoded: false, incomplete: true })
+    );
+
+    expect((await details()).request.postData).toBe(
+      `[TRUNCATED: first 800 chars shown, full size: unknown; ${ENDED(800)}, MIME: text/plain]\n${"a".repeat(800)}`
+    );
+  });
+
+  it("cuts a long incomplete body to 1000 chars and gives the length the app wrote", async () => {
+    serve(post({ "Content-Type": "text/plain" }));
+    requestPostData.mockResolvedValue(
+      postReply({ postData: "b".repeat(675_840), base64Encoded: false, incomplete: true })
+    );
+
+    expect((await details()).request.postData).toBe(
+      `[TRUNCATED: first 1000 chars shown, full size: unknown; ${ENDED(675_840)}, MIME: text/plain]\n${"b".repeat(1000)}...`
+    );
+  });
+
+  it("omits an incomplete binary body and says that the upload cut it", async () => {
+    serve(post({ "Content-Type": "application/octet-stream", "Content-Length": "4096" }));
+    requestPostData.mockResolvedValue(
+      postReply({
+        postData: Buffer.from([0xff, 0xfe, 0x00, 0x81]).toString("base64"),
+        base64Encoded: true,
+        incomplete: true,
+      })
+    );
+
+    expect((await details()).request.postData).toBe(
+      `[body omitted: binary application/octet-stream, size unknown; ${ENDED(4)}]`
+    );
+  });
+
+  it.each([
+    ["incomplete: false", { incomplete: false }],
+    ["no incomplete field, as an older agent sends", {}],
+  ])("shows a body with %s as the whole body", async (_name, fields) => {
+    serve(post({ "Content-Type": "text/plain", "Content-Length": "800" }));
+    requestPostData.mockResolvedValue(
+      postReply({ postData: "a".repeat(800), base64Encoded: false, ...fields })
+    );
+
+    expect((await details()).request.postData).toBe("a".repeat(800));
+  });
+});
+
 describe("view-network-request-details: an iOS request body that came with the request", () => {
   it("shows a JSON body as it came", async () => {
     const json = '{"name":"東京","n":1}';
@@ -416,6 +476,43 @@ describe("view-network-request-details: an iOS request body that came with the r
 
     expect((await details()).request.postData).toBe(
       `[TRUNCATED: first 1000 chars shown, full size: 70000 chars, MIME: text/plain]\n${sent.slice(0, 1000)}...`
+    );
+  });
+
+  it("decodes a body in the charset its Content-Type names, as a body read from the agent", async () => {
+    // The UTF-16LE bytes of "OK" are valid UTF-8, so the agent can send them inline.
+    const utf16 = Buffer.from("OK", "utf16le");
+    serve(post({ "Content-Type": "text/plain; charset=utf-16le" }));
+    requestPostData.mockResolvedValue(inlineBody(utf16.toString("utf8")));
+    expect((await details()).request.postData).toBe("OK");
+
+    requestPostData.mockResolvedValue(base64Body(utf16));
+    expect((await details()).request.postData).toBe("OK");
+  });
+
+  it("counts the chars of a body in its charset to decide on a cut", async () => {
+    serve(post({ "Content-Type": "text/plain; charset=utf-16le" }));
+    requestPostData.mockResolvedValue(
+      inlineBody(Buffer.from("a".repeat(600), "utf16le").toString("utf8"))
+    );
+    expect((await details()).request.postData).toBe("a".repeat(600));
+
+    requestPostData.mockResolvedValue(
+      inlineBody(Buffer.from("b".repeat(1500), "utf16le").toString("utf8"))
+    );
+    expect((await details()).request.postData).toBe(
+      `[TRUNCATED: first 1000 chars shown, full size: 1500 chars, MIME: text/plain]\n${"b".repeat(1000)}...`
+    );
+  });
+
+  it("gives only a lower bound for the length of a body in another charset that the host kept the start of", async () => {
+    // 70000 bytes; the host keeps the first MAX_VALUE_CHARS, which decode to half as many chars.
+    const sent = Buffer.from("c".repeat(35_000), "utf16le").toString("utf8");
+    serve(post({ "Content-Type": "text/plain; charset=utf-16le" }));
+    requestPostData.mockResolvedValue(inlineBody(sent.slice(0, MAX_VALUE_CHARS), sent.length));
+
+    expect((await details()).request.postData).toBe(
+      `[TRUNCATED: first 1000 chars shown, full size: more than ${MAX_VALUE_CHARS / 2} chars, MIME: text/plain]\n${"c".repeat(1000)}...`
     );
   });
 

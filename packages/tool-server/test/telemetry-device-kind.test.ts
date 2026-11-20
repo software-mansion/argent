@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   attributeDeviceForTelemetry,
@@ -67,6 +70,29 @@ describe("attributeDeviceForTelemetry", () => {
     "harmony-127.0.0.1:5555",
   ])("%s carries the harmony platform but no kind", (id) => {
     expect(attributeDeviceForTelemetry(id)).toEqual({ platform: "harmony" });
+  });
+
+  it("a Mac app id carries the kind of argent's record of the app", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-telemetry-kind-"));
+    vi.stubEnv("HOME", home);
+    try {
+      expect(attributeDeviceForTelemetry("macos-app-com.example.cat")).toEqual({
+        platform: "macos",
+        device_kind: "app",
+      });
+      fs.mkdirSync(path.join(home, ".argent"));
+      fs.writeFileSync(
+        path.join(home, ".argent", "macos-apps.json"),
+        JSON.stringify([{ bundleId: "com.example.cat", catalyst: true }])
+      );
+      expect(attributeDeviceForTelemetry("macos-app-com.example.cat")).toEqual({
+        platform: "macos",
+        device_kind: "catalyst",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("classifyDeviceForTelemetry is the platform half of the same classifier", () => {
