@@ -209,6 +209,12 @@ export interface MacosAppApi {
   isNetworkCaptureStarted(): boolean;
   isNetworkCaptureStopped(): boolean;
   /**
+   * The connected process did not acknowledge the last stop's
+   * Network.disable, so it may still intercept its requests. A late
+   * acknowledgement, a start and a new connection end it.
+   */
+  isNetworkCaptureStopUnconfirmed(): boolean;
+  /**
    * True once per start that found the app running: its requests before the
    * start were not recorded. Reading it clears it.
    */
@@ -478,11 +484,15 @@ class LibraryChannel {
   armEnabling?: () => void;
   /** Why the last Network.enable did not arm this channel. */
   enableFailure?: string;
+  /** A stop's Network.disable timed out, and no acknowledgement of a Network.disable came since. */
+  stopUnconfirmed = false;
   /**
    * The CDP ids of the Network.enable requests sent on this channel since its
    * last Network.disable: an acknowledgement of any of them arms it.
    */
   private readonly enableIds = new Set<number>();
+  /** The CDP ids of the Network.disable requests sent on this channel. */
+  private readonly disableIds = new Set<number>();
   private readonly pending = new Map<number, PendingCall>();
   private nextId = 1;
   private hello: MacosLibraryHandshake | null = null;
@@ -511,7 +521,10 @@ class LibraryChannel {
       send: (frame) => {
         const p = (frame as { payload: { id: number; method: string } }).payload;
         if (p.method === "Network.enable") this.enableIds.add(p.id);
-        if (p.method === "Network.disable") this.enableIds.clear();
+        if (p.method === "Network.disable") {
+          this.enableIds.clear();
+          this.disableIds.add(p.id);
+        }
         return writeNdjsonFrame(socket, frame);
       },
     });
@@ -615,6 +628,9 @@ class LibraryChannel {
       // request timed out, also while a retry waits for its own, and from then on it captures.
       if (p && typeof p.id === "number" && this.enableIds.has(p.id) && "result" in p) {
         this.network.enabled(this);
+      }
+      if (p && typeof p.id === "number" && this.disableIds.has(p.id) && "result" in p) {
+        this.stopUnconfirmed = false;
       }
       if (this.cdp.handleResponse(p)) return;
       if (p && typeof p.method === "string" && p.id === undefined) {
@@ -1617,6 +1633,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       captureStopped = false;
       const startedNow = !captureStarted;
       captureStarted = true;
+      if (channel) channel.stopUnconfirmed = false;
       // A stop of the app's services during this start ends the capture: the
       // next service starts with capture off.
       const servicesStopped = {
@@ -1663,6 +1680,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       ch.enabling = undefined;
       ch.armEnabling = undefined;
       delete ch.enableFailure;
+      ch.stopUnconfirmed = false;
       try {
         await ch.cdp.request("Network.disable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS });
         return { confirmed: true };
@@ -1676,6 +1694,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           };
         }
         if (!ch.isOpen) return { confirmed: true };
+        // Not when a start during the wait turned capture on again.
+        if (captureStopped) ch.stopUnconfirmed = true;
         return {
           confirmed: false,
           reason: `${
@@ -1688,6 +1708,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     },
     isNetworkCaptureStarted: () => captureStarted,
     isNetworkCaptureStopped: () => captureStopped,
+    isNetworkCaptureStopUnconfirmed: () => liveChannel()?.stopUnconfirmed === true,
     takeCaptureGap: () => {
       const gap = captureGap;
       captureGap = false;

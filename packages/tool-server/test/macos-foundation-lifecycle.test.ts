@@ -1633,6 +1633,43 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       });
     }, 20_000);
 
+    it("says in the stopped listing that the app did not acknowledge the stop, until a disconnect", async () => {
+      await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=disable-silent"] });
+      await start();
+      expect((await stop()).layers).toEqual([
+        expect.objectContaining({ layer: "macos-native", armed: true }),
+      ]);
+      expect(await readLog()).toMatchObject({
+        stopped: true,
+        armed: false,
+        header:
+          "macos-native: stopped, 0 requests (capture stopped by network-capture-stop; network-capture-start turns it on again; the app's process did not acknowledge Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture)",
+      });
+      // A new process starts without capture.
+      await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      expect((await readLog()).header).toBe(
+        "macos-native: stopped, 0 requests (capture stopped by network-capture-stop; network-capture-start turns it on again)"
+      );
+    }, 20_000);
+
+    it("drops the unconfirmed stop from the listing once the app acknowledges Network.disable late", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      await start();
+      // Held suspended past the 5 s wait, as Instruments or a debugger does.
+      process.kill(pid, "SIGSTOP");
+      try {
+        expect((await stop()).layers).toEqual([
+          expect.objectContaining({ layer: "macos-native", armed: true }),
+        ]);
+        expect((await readLog()).header).toContain("did not acknowledge Network.disable");
+      } finally {
+        process.kill(pid, "SIGCONT");
+      }
+      expect((await readUntil((log) => !log.header.includes("Network.disable"))).header).toBe(
+        "macos-native: stopped, 0 requests (capture stopped by network-capture-stop; network-capture-start turns it on again)"
+      );
+    }, 20_000);
+
     it("records no new request after a stop that the app did not acknowledge", async () => {
       await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=disable-silent"] });
       await start();

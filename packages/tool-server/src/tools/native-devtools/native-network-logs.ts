@@ -248,7 +248,15 @@ function listStopped(
  */
 function listMacosNative(app: MacosAppApi, params: Params, port: number): NativeListing {
   const store = app.networkRecords();
-  if (app.isNetworkCaptureStopped()) return listStopped("macos-native", store, params, port);
+  if (app.isNetworkCaptureStopped()) {
+    return listStopped(
+      "macos-native",
+      store,
+      params,
+      port,
+      stoppedDetail(app.isNetworkCaptureStopUnconfirmed())
+    );
+  }
   if (!app.isNetworkCaptureStarted()) return notStarted("macos-native", params.bundleId);
   const state = store.state();
   const detail: string[] = [];
