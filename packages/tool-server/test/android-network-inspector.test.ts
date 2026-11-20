@@ -3348,7 +3348,9 @@ describe("timing and filtering", () => {
     agent.request(agent.rid(2), "http://10.0.2.2:8081/status");
     agent.request(agent.rid(3), "https://example.com/api");
     agent.request(agent.rid(4), "http://localhost:3000/mock-api");
-    await vi.waitFor(() => expect(api.records(0)).toHaveLength(4));
+    // The emulator's alias for the host: Metro here, a real host on iOS.
+    agent.request(agent.rid(5), "http://10.0.2.2:8081/api/items");
+    await vi.waitFor(() => expect(api.records(0)).toHaveLength(5));
 
     expect(api.records(8081).map((r) => r.request.url)).toEqual([
       "https://example.com/api",

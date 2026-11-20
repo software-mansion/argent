@@ -1813,7 +1813,10 @@ function createInspector(
       };
     },
     records: (port) =>
-      records.filter((r) => !cleared.has(r) && !isMetroTraffic(r.request.url, port)),
+      records.filter(
+        (r) =>
+          !cleared.has(r) && !isMetroTraffic(r.request.url, port, { androidEmulatorHost: true })
+      ),
     record: (id) => byId.get(id)?.record,
     responseBody: (id) => fetchBody(id, "response"),
     requestPostData: (id) => fetchBody(id, "post"),
