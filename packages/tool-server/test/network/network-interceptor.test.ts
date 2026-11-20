@@ -5164,7 +5164,7 @@ describe("network read scripts", () => {
   it("distinguishes a missing interceptor from an unknown request", () => {
     const rt = createRuntime();
     const readDetail = () => JSON.parse(rt.run(makeNetworkDetailReadScript("absent")) as string);
-    expect(readDetail()).toEqual({ error: "Network interceptor not installed" });
+    expect(readDetail()).toEqual({ error: "Network interceptor not installed", installed: false });
     expect(JSON.parse(rt.run(makeNetworkLogReadScript(0, 1, 8081)) as string)).toEqual({
       entries: [],
       total: 0,
