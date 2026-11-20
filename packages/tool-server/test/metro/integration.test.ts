@@ -9,6 +9,7 @@ import {
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
+import { guardModuleLoadErrors } from "../../src/utils/debugger/scripts/guard-module-errors";
 import { scopeTempHome } from "../helpers/temp-home";
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
@@ -229,7 +230,10 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
     })) as { result: unknown };
 
     expect(result.result).toBe("eval-result-42");
-    expect(evaluateParams).toContainEqual({ expression: "1 + 1", returnByValue: false });
+    expect(evaluateParams).toContainEqual({
+      expression: guardModuleLoadErrors("1 + 1"),
+      returnByValue: false,
+    });
   });
 
   it("connects to Metro without downloading unused source maps", async () => {

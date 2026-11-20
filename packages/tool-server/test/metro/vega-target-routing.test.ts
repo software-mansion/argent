@@ -5,6 +5,7 @@ import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
+import { guardModuleLoadErrors } from "../../src/utils/debugger/scripts/guard-module-errors";
 import { scopeTempHome } from "../helpers/temp-home";
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
@@ -171,7 +172,7 @@ describe("Vega target routing on a legacy Metro (no logicalDeviceId)", () => {
     });
     expect(result).toMatchObject({ result: "legacy-eval-result" });
     expect(evaluateParams).toContainEqual({
-      expression: "1 + 1",
+      expression: guardModuleLoadErrors("1 + 1"),
       returnByValue: true,
       awaitPromise: true,
     });

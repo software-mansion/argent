@@ -172,13 +172,31 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
       clearTimeout(exitGrace);
       // Closing the reader flushes what it has already read, so a verdict built
       // from `statusBuf` sees every line the pipe delivered.
-      rl.close();
+      rl?.close();
       cleanup?.();
       fn();
     };
 
-    const rl = readline.createInterface({ input: proc.stdout! });
-    rl.on("line", async (rawLine: string) => {
+    proc.on("error", (err) => {
+      settle(() =>
+        reject(
+          new FailureError(
+            "android-devtools helper process error.",
+            {
+              error_code: FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_PROCESS_ERROR,
+              failure_stage: "android_devtools_helper_process",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              ...subprocessFailureMetadata(err, "android_devtools"),
+            },
+            { cause: err }
+          )
+        )
+      );
+    });
+
+    const rl = proc.stdout ? readline.createInterface({ input: proc.stdout }) : null;
+    rl?.on("line", async (rawLine: string) => {
       const line = rawLine.trim();
       // Keep the first lines, not the last: the reason leads the status block
       // and the exception stack that follows would push it out of the cap.
@@ -265,24 +283,6 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
     });
 
     proc.on("close", () => settle(rejectExited));
-
-    proc.on("error", (err) => {
-      settle(() =>
-        reject(
-          new FailureError(
-            "android-devtools helper process error.",
-            {
-              error_code: FAILURE_CODES.ANDROID_DEVTOOLS_HELPER_PROCESS_ERROR,
-              failure_stage: "android_devtools_helper_process",
-              failure_area: "tool_server",
-              error_kind: "subprocess",
-              ...subprocessFailureMetadata(err, "android_devtools"),
-            },
-            { cause: err }
-          )
-        )
-      );
-    });
 
     const timer = setTimeout(() => {
       settle(

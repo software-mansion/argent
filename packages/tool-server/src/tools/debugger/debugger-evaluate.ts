@@ -6,7 +6,12 @@ import {
   type ToolDefinition,
 } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
-import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
+import {
+  DEBUGGER_TOOL_CAPABILITY,
+  debuggerServiceRef,
+  isChromiumDebuggerTarget,
+} from "./debugger-service-ref";
+import { guardModuleLoadErrors } from "../../utils/debugger/scripts/guard-module-errors";
 import { metroPortField } from "../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
@@ -25,7 +30,7 @@ export const debuggerEvaluateTool: ToolDefinition<
 > = {
   id: "debugger-evaluate",
   description: `Execute arbitrary JavaScript in the app's JS runtime via CDP: Hermes on iOS / Android / Vega, V8 on Chromium.
-Returns the result serialized by value as JSON, with deviceName, appName, and logicalDeviceId. A returned Promise is awaited for up to 10 s on Chromium and on Hermes with RN 0.76 or later: the call returns the value it resolves to, and fails with the reason if it rejects. A Promise still pending after 10 s fails with DEBUGGER_CDP_REQUEST_TIMEOUT after the expression ran. On Vega and older RN, a Promise comes back as its internal fields. Use when you need to read app state, including localStorage and sessionStorage on Chromium, call app functions, or test logic at runtime. Cyclic objects, which many RN runtime values are (fiber nodes, navigation refs, global), fail with a serialization error. Fails if the expression throws or the runtime is not connected.`,
+Returns the result serialized by value as JSON, with deviceName, appName, and logicalDeviceId. A returned Promise is awaited for up to 10 s on Chromium and on Hermes with RN 0.76 or later: the call returns the value it resolves to, and fails with the reason if it rejects. A Promise still pending after 10 s fails with DEBUGGER_CDP_REQUEST_TIMEOUT after the expression ran. On Vega and older RN, a Promise comes back as its internal fields. Use when you need to read app state, including localStorage and sessionStorage on Chromium, call app functions, or test logic at runtime. Cyclic objects, which many RN runtime values are (fiber nodes, navigation refs, global), fail with a serialization error. Fails if the expression throws or the runtime is not connected. On React Native, a module that fails to load while the expression runs (e.g. a lazy react-native export whose native module the app lacks) fails the call with that module's error instead of opening the app's red box.`,
   zodSchema,
   searchHint:
     "javascript js eval expression runtime app state localstorage sessionstorage web storage",
@@ -43,7 +48,11 @@ Returns the result serialized by value as JSON, with deviceName, appName, and lo
     const api = services.debugger as JsRuntimeDebuggerApi;
     let result: unknown;
     try {
-      result = await api.cdp.evaluateAwaited(params.expression);
+      // Chromium has no Metro module loader, and a page's CSP may forbid eval.
+      const expression = isChromiumDebuggerTarget(params.device_id)
+        ? params.expression
+        : guardModuleLoadErrors(params.expression);
+      result = await api.cdp.evaluateAwaited(expression);
     } catch (err) {
       // The agent's expression throwing is not a tool malfunction, so re-code it
       // to keep it separable from genuine CDP faults in telemetry. getFailureSignal

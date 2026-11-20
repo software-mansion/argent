@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { FAILURE_CODES, FailureError, TypedEventEmitter, getFailureSignal } from "@argent/registry";
 import * as crypto from "node:crypto";
 import { sleep } from "../timing";
+import { expoManifestOrigin, metroOriginCandidates } from "./metro-origin";
 import { WATCH_PROMISE_FUNCTION, takeSettledScript } from "./scripts/await-promise";
 
 export interface ScriptInfo {
@@ -131,6 +132,16 @@ interface PendingBinding {
 const DEFAULT_TIMEOUT_MS = 10_000;
 const PROMISE_POLL_INTERVAL_MS = 100;
 
+/**
+ * How long a Metro socket must stay open before argent trusts its Origin. Expo
+ * terminates a socket it rejects as soon as the upgrade completes, which on
+ * loopback lands within a few milliseconds.
+ */
+const ORIGIN_SETTLE_MS = 100;
+
+/** The Origin each Metro (by `host:port`) last kept a socket open for. */
+const acceptedOrigins = new Map<string, string>();
+
 export class CDPClient {
   readonly events = new TypedEventEmitter<CDPClientEvents>();
 
@@ -166,26 +177,96 @@ export class CDPClient {
     this.awaitPromisesInApp = options?.awaitPromisesInApp === true;
   }
 
-  connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      // RN >= 0.85 Metro requires an Origin header; Expo matches it exactly
-      // against its serverBaseUrl (127.0.0.1), hence the localhost rewrite.
-      let headers: Record<string, string> | undefined;
-      if (this.sendOrigin) {
-        const { protocol, host } = new URL(this.wsUrl);
-        const origin =
-          (protocol === "wss:" ? "https://" : "http://") + host.replace("localhost", "127.0.0.1");
-        headers = { Origin: origin };
+  async connect(): Promise<void> {
+    if (!this.sendOrigin) {
+      await this.open(undefined);
+      return;
+    }
+
+    // RN >= 0.85 Metro requires an Origin header, and Expo accepts only the one
+    // naming its own server URL. Every upgrade with a wrong Origin still evicts
+    // the debugger holding the page before Expo drops it, so argent asks first:
+    // the Origin that worked last time, then the one Expo's manifest names. Only
+    // when Expo drops even that does it fall back to guessing.
+    const metro = new URL(this.wsUrl).host;
+    const tried: string[] = [];
+    const attempt = async (origin: string | undefined) => {
+      if (!origin || tried.includes(origin)) return false;
+      tried.push(origin);
+      if ((await this.open(origin)) === "rejected") return false;
+      acceptedOrigins.set(metro, origin);
+      return true;
+    };
+
+    const remembered = acceptedOrigins.get(metro);
+    if (await attempt(remembered)) return;
+    if (await attempt(await expoManifestOrigin(this.wsUrl))) return;
+    for (const origin of metroOriginCandidates(this.wsUrl)) {
+      if (await attempt(origin)) return;
+    }
+
+    acceptedOrigins.delete(metro);
+    throw new FailureError(
+      `Metro at ${metro} refused the debugger connection for every Origin argent tried ` +
+        `(${tried.join(", ")}): it answered the upgrade with 401 or 403, or dropped the ` +
+        `socket without a close frame right after it. Expo's dev server drops it when the ` +
+        `Origin does not match its server URL, which REACT_NATIVE_PACKAGER_HOSTNAME moves ` +
+        `to another host. Restart Metro with REACT_NATIVE_PACKAGER_HOSTNAME unset, or set ` +
+        `to 127.0.0.1, then retry.`,
+      {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_ORIGIN_REJECTED,
+        failure_stage: "debugger_cdp_connect",
+        failure_area: "tool_server",
+        error_kind: "network",
       }
-      const ws = new WebSocket(this.wsUrl, headers ? { headers } : undefined);
+    );
+  }
+
+  /**
+   * Open one socket. Without an Origin this is a plain connect.
+   *
+   * With one, the socket must then stay open for {@linkcode ORIGIN_SETTLE_MS}
+   * (or carry a message) before it counts, since Expo completes the upgrade for
+   * any Origin and only then terminates a socket whose Origin it rejects.
+   * `rejected` is that termination (close code 1006, no close frame) or a
+   * 401/403 for the upgrade, and the socket is discarded without emitting
+   * `connected` or `disconnected`. Any other close inside the window, such as
+   * React Native's `[PAGE_NOT_FOUND]` or `[NEW_DEBUGGER_OPENED]`, which carry a
+   * close frame, is not about the Origin: the socket counts as opened and then
+   * lost, as it would without the window.
+   */
+  private open(origin: string | undefined): Promise<"open" | "rejected"> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(this.wsUrl, origin ? { headers: { Origin: origin } } : undefined);
       this.ws = ws;
 
-      const onOpen = () => {
+      let state: "opening" | "settling" | "open" | "dropped" = "opening";
+      let settle: ReturnType<typeof setTimeout> | undefined;
+      const accept = () => {
         cleanup();
+        state = "open";
         this.events.emit("connected");
-        resolve();
+        resolve("open");
+      };
+      const drop = () => {
+        cleanup();
+        state = "dropped";
+        ws.terminate();
+        if (this.ws === ws) this.ws = null;
+        resolve("rejected");
+      };
+
+      const onOpen = () => {
+        clearTimeout(timer);
+        if (!origin) return accept();
+        state = "settling";
+        settle = setTimeout(accept, ORIGIN_SETTLE_MS);
+        ws.once("message", accept);
       };
       const onError = (err: Error) => {
+        // An error after the upgrade is followed by `close`, which decides.
+        if (state === "settling") return;
+        if (origin && /Unexpected server response: 40[13]\b/.test(err.message)) return drop();
         cleanup();
         reject(
           new FailureError(
@@ -200,7 +281,8 @@ export class CDPClient {
           )
         );
       };
-      const onClose = () => {
+      const onClose = (code: number) => {
+        if (state === "settling") return code === 1006 ? drop() : accept();
         cleanup();
         reject(
           new FailureError("WebSocket closed before open", {
@@ -233,21 +315,30 @@ export class CDPClient {
       }, DEFAULT_TIMEOUT_MS);
       const cleanup = () => {
         clearTimeout(timer);
+        clearTimeout(settle);
         ws.removeListener("open", onOpen);
         ws.removeListener("error", onError);
         ws.removeListener("close", onClose);
+        ws.removeListener("message", accept);
       };
 
       ws.on("open", onOpen);
       ws.on("error", onError);
       ws.on("close", onClose);
 
+      // Attached last, so a close the settle window turns into `accept` reports
+      // `connected` before `disconnected`. Every failure except a rejected
+      // Origin reports `disconnected`, as callers such as a Chromium tab switch
+      // rely on to tear a dead session down.
+      const ignored = () => state === "settling" || state === "dropped";
       ws.on("message", (raw: WebSocket.RawData) => this.handleMessage(raw));
       ws.on("close", () => {
+        if (ignored()) return;
         this.cleanup();
         this.events.emit("disconnected");
       });
       ws.on("error", (err) => {
+        if (ignored()) return;
         this.cleanup();
         this.events.emit("disconnected", err as Error);
       });
