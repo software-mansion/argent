@@ -383,6 +383,12 @@ describe("debugger-log-registry entries", () => {
       })) as EntriesResult
     ).entries.map((e) => e.id);
 
+  it("returns no entries for a connected session that has logged nothing", async () => {
+    await connectAndCapture(LOGICAL_ID, 0);
+
+    expect(await readEntries({})).toEqual([]);
+  });
+
   it("returns the newest entries, honouring tail and levels", async () => {
     const urn = await connectAndCapture(LOGICAL_ID, 30);
 

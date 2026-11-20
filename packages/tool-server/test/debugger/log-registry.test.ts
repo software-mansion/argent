@@ -62,11 +62,19 @@ describe("Log Registry recent entries", () => {
 
   it("cuts long messages without splitting a surrogate pair", () => {
     writeLog(0, { message: "a".repeat(300) });
-    writeLog(1, { message: "x".repeat(299) + "😀tail" });
+    writeLog(1, { message: "b".repeat(301) });
+    writeLog(2, { message: "x".repeat(298) + "😀tail" });
 
-    const [exact, cut] = writer.getRecent(2);
+    const [exact, cut, cutBeforeEmoji] = writer.getRecent(3);
     expect(exact.message).toBe("a".repeat(300));
-    expect(cut.message).toBe("x".repeat(299) + "…");
+    expect(cut.message).toBe("b".repeat(299) + "…");
+    expect(cutBeforeEmoji.message).toBe("x".repeat(298) + "…");
+  });
+
+  it("keeps the line breaks of a multi-line message", () => {
+    writeLog(0, { message: "first line\nsecond line" });
+
+    expect(writer.getRecent(1)[0].message).toBe("first line\nsecond line");
   });
 
   it("stops recording entries at the 50,000-entry cap, with the stats", () => {

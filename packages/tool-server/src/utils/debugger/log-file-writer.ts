@@ -300,7 +300,7 @@ function cleanSourceUrl(url: string): string | null {
 
 function cutMessage(message: string): string {
   if (message.length <= RECENT_MESSAGE_CHARS) return message;
-  let end = RECENT_MESSAGE_CHARS;
+  let end = RECENT_MESSAGE_CHARS - 1;
   if (isHighSurrogate(message.charCodeAt(end - 1))) end--;
   return detachedCopy(message.slice(0, end)) + "…";
 }

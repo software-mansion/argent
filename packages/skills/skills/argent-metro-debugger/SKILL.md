@@ -46,7 +46,7 @@ What the `guidance` does not tell you:
 
 ## 4. Reading Console Logs (Log Registry)
 
-Logs are written to a flat log file on disk. `debugger-log-registry` returns the summary, the file path and `entries`: the newest 20 console entries, oldest first, each message cut to 300 characters. Pass `levels: ["warning", "error"]` to see only those, and `tail` (max 100) for more. Each `entries[].id` is the `[L:<id>]` anchor of that line in the file. Read `entries` first; search the file only for older lines or full messages, and only if you can read files.
+Logs are written to a flat log file on disk. `debugger-log-registry` returns the summary, the file path and `entries`: the newest 20 console entries, oldest first, each message cut to 300 characters and keeping its line breaks (the file puts each entry on one line). Pass `levels: ["warning", "error"]` to see only those, and `tail` (max 100) for more. Each `entries[].id` is the `[L:<id>]` anchor of that line in the file. Read `entries` first; search the file only for older lines or full messages, and only if you can read files.
 
 ### Flat log format
 
