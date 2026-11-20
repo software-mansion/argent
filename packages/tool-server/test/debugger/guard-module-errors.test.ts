@@ -79,6 +79,36 @@ describe("guardModuleLoadErrors", () => {
     expect((g.ErrorUtils as { reportFatalError: unknown }).reportFatalError).toBe(reportFatalError);
   });
 
+  it("keeps a hook the expression installs over reportFatalError", () => {
+    const reportFatalError = vi.fn();
+    const EU = { reportFatalError } as { reportFatalError: (e: unknown) => void };
+    g.ErrorUtils = EU;
+    const logged: unknown[] = [];
+    g.__testLeaked = logged;
+
+    run(
+      "var o = ErrorUtils.reportFatalError; ErrorUtils.reportFatalError = function(e) { __testLeaked.push(e); o(e); }"
+    );
+    expect(EU.reportFatalError).not.toBe(reportFatalError);
+
+    const later = new Error("later");
+    EU.reportFatalError(later);
+    expect(logged).toEqual([later]);
+    expect(reportFatalError).toHaveBeenCalledWith(later);
+  });
+
+  it("reports to the red box through a reference kept to the recorder", () => {
+    const reportFatalError = vi.fn();
+    g.ErrorUtils = { reportFatalError };
+
+    run("globalThis.__testLeaked = ErrorUtils.reportFatalError");
+    expect((g.ErrorUtils as { reportFatalError: unknown }).reportFatalError).toBe(reportFatalError);
+
+    const later = new Error("later");
+    (g.__testLeaked as (e: unknown) => void)(later);
+    expect(reportFatalError).toHaveBeenCalledWith(later);
+  });
+
   it("evaluates unchanged where there is no ErrorUtils", () => {
     expect(run("40 + 2")).toBe(42);
   });

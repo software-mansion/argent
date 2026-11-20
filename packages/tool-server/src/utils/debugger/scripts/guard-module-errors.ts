@@ -12,6 +12,10 @@
  * first one once it ends. Errors from code that runs later, such as a render
  * the expression schedules, still reach the red box.
  *
+ * The expression may read or replace `reportFatalError`, for example to hook
+ * the red box. A reference it keeps to the recorder reports to the red box once
+ * the expression ends, and a function it assigns stays in place.
+ *
  * The expression runs through an indirect eval, which keeps the semantics of
  * `Runtime.evaluate`: global scope, the completion value, and a returned promise
  * awaited by CDP. A runtime without `ErrorUtils` evaluates it unchanged.
@@ -23,14 +27,20 @@ export function guardModuleLoadErrors(expression: string): string {
   if (!EU || typeof EU.reportFatalError !== 'function') return (0, eval)(source);
   var report = EU.reportFatalError;
   var fatal = [];
-  EU.reportFatalError = function(e) { fatal.push(e); };
+  var running = true;
+  var record = function() {
+    if (!running) return report.apply(this, arguments);
+    fatal.push(arguments[0]);
+  };
+  EU.reportFatalError = record;
   var value;
   try {
     value = (0, eval)(source);
   } catch (e) {
     if (!fatal.length) throw e;
   } finally {
-    EU.reportFatalError = report;
+    running = false;
+    if (EU.reportFatalError === record) EU.reportFatalError = report;
   }
   if (fatal.length) throw fatal[0];
   return value;
