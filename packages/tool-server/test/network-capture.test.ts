@@ -3156,6 +3156,26 @@ describe("a start and a stop of one app", () => {
     expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped" });
   });
 
+  it("run one after the other when a JS stop comes while a start of both layers looks up adb, so the JS layer ends paused", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    let release!: () => void;
+    adbLookup.hold = new Promise((resolve) => (release = resolve));
+    __resetDepCacheForTests();
+
+    const starting = start(SERIAL, APP);
+    await vi.waitFor(() => expect(adbLookup.reached).toBe(true));
+    const stopping = stop(SERIAL, APP, undefined, "js");
+    await settle();
+    expect(rt.evaluated).toEqual([]);
+
+    release();
+    await starting;
+    expect((await stopping).layers).toEqual([{ layer: "js", armed: false, total: 0 }]);
+    expect(rt.paused).toBe(true);
+    expect(androidFor(APP).isStarted()).toBe(true);
+  });
+
   it("run one after the other", async () => {
     const rt = new FakeRuntime(APP);
     serve(PORT, SERIAL, rt);
