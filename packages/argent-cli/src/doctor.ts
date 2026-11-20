@@ -93,10 +93,16 @@ function home(p: string): string {
   return p === h || p.startsWith(h + path.sep) ? `~${p.slice(h.length)}` : p;
 }
 
-export function stripPackageBinDirs(pathValue: string): string {
+function isProjectBinDir(dir: string, cwd: string): boolean {
+  if (!/[\\/]node_modules[\\/]\.bin[\\/]?$/.test(dir)) return false;
+  const owner = path.resolve(dir, "..", "..");
+  return cwd === owner || cwd.startsWith(owner + path.sep);
+}
+
+export function stripProjectBinDirs(pathValue: string, cwd: string): string {
   return pathValue
     .split(path.delimiter)
-    .filter((dir) => !/[\\/]node_modules[\\/]\.bin[\\/]?$/.test(dir))
+    .filter((dir) => !isProjectBinDir(dir, cwd))
     .join(path.delimiter);
 }
 
@@ -451,6 +457,15 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
+function failureSummary(failed: DoctorCheck[]): string {
+  const errors = failed.filter((c) => c.status === "error").length;
+  const warnings = failed.length - errors;
+  const parts: string[] = [];
+  if (errors > 0) parts.push(`${plural(errors, "check")} failed`);
+  if (warnings > 0) parts.push(plural(warnings, "warning"));
+  return parts.join(" and ");
+}
+
 function isFailed(c: DoctorCheck): boolean {
   return c.status === "error" || c.status === "warn";
 }
@@ -497,15 +512,12 @@ export function renderDoctorReport(report: DoctorReport, verbose = false): strin
 
   const lines = [
     header(report),
-    `${passedCount}/${scored.length} checks passed. ${plural(failed.length, "check")} failed. Possible issues detected:`,
+    `${passedCount}/${scored.length} checks passed. ${failureSummary(failed)}. Possible issues detected:`,
   ];
   if (!verbose && passedCount > 0) lines.push(pc.dim("Use --verbose to see the passed checks."));
   lines.push(...passedDetails);
   for (const c of failed) lines.push("", ...failedBlock(c));
-  lines.push(
-    "",
-    `${plural(failed.length, "check")} failed, indicating possible issues with your setup.`
-  );
+  lines.push("", `${failureSummary(failed)}, indicating possible issues with your setup.`);
   return lines.join("\n");
 }
 
@@ -533,7 +545,7 @@ export async function doctor(argv: string[], options: { paths: ToolsServerPaths 
     return;
   }
 
-  if (process.env.PATH) process.env.PATH = stripPackageBinDirs(process.env.PATH);
+  if (process.env.PATH) process.env.PATH = stripProjectBinDirs(process.env.PATH, process.cwd());
   const report = await collectDoctorReport(options.paths, process.cwd());
   console.log(renderDoctorReport(report, argv.includes("--verbose")));
   if (countStatus(report, "error") > 0) process.exitCode = 1;

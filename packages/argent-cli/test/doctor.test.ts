@@ -9,7 +9,7 @@ import {
   managedTargets,
   renderDoctorReport,
   resolveDoctorRoot,
-  stripPackageBinDirs,
+  stripProjectBinDirs,
   toolchainChecks,
   type DoctorCheck,
   type EntryContext,
@@ -115,10 +115,19 @@ describe("toolchainChecks", () => {
   });
 });
 
-describe("stripPackageBinDirs", () => {
-  it("drops node_modules/.bin so a project copy does not pass for a global install", () => {
+describe("stripProjectBinDirs", () => {
+  it("drops the project's node_modules/.bin so a project copy does not pass for a global install", () => {
     const value = ["/proj/node_modules/.bin", "/usr/local/bin", "/usr/bin"].join(path.delimiter);
-    expect(stripPackageBinDirs(value)).toBe(["/usr/local/bin", "/usr/bin"].join(path.delimiter));
+    expect(stripProjectBinDirs(value, "/proj/src")).toBe(
+      ["/usr/local/bin", "/usr/bin"].join(path.delimiter)
+    );
+  });
+
+  it("keeps a global bin directory that ends in node_modules/.bin", () => {
+    const value = ["/home/me/.config/yarn/global/node_modules/.bin", "/usr/bin"].join(
+      path.delimiter
+    );
+    expect(stripProjectBinDirs(value, "/proj")).toBe(value);
   });
 });
 
@@ -197,7 +206,7 @@ describe("renderDoctorReport", () => {
   const info = { status: "info", label: "Running v1.0.0" } as const;
   const warning = {
     status: "warn",
-    label: "Rules missing in ~/.cursor/rules",
+    label: "Rules missing in ~/my-app/.cursor/rules",
     detail: "argent.md",
     fix: "argent init",
   } as const;
@@ -222,18 +231,26 @@ describe("renderDoctorReport", () => {
 
   it("puts the summary first and lists errors before warnings with their advice", () => {
     const output = stripVTControlCharacters(renderDoctorReport(report(passed, warning, failure)));
-    expect(output).toContain("1/3 checks passed. 2 checks failed.");
+    expect(output).toContain("1/3 checks passed. 1 check failed and 1 warning.");
     expect(output).toContain("Use --verbose to see the passed checks.");
     expect(output).not.toContain(passed.label);
     expect(output.indexOf("✖ `argent` is not on PATH")).toBeLessThan(
       output.indexOf("⚠ Rules missing")
     );
     expect(output).toContain(
-      "⚠ Rules missing in ~/.cursor/rules\n  argent.md\nAdvice:\nargent init"
+      "⚠ Rules missing in ~/my-app/.cursor/rules\n  argent.md\nAdvice:\nargent init"
     );
     expect(
-      output.trimEnd().endsWith("2 checks failed, indicating possible issues with your setup.")
+      output
+        .trimEnd()
+        .endsWith("1 check failed and 1 warning, indicating possible issues with your setup.")
     ).toBe(true);
+  });
+
+  it("does not call a warning-only run failed", () => {
+    const output = stripVTControlCharacters(renderDoctorReport(report(passed, warning)));
+    expect(output).toContain("1/2 checks passed. 1 warning.");
+    expect(output).not.toContain("failed");
   });
 
   it("lists the passed checks with --verbose", () => {
