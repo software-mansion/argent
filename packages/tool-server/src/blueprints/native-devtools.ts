@@ -1548,6 +1548,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         if (!launched) {
           const now = await host.inspectRunningApp(udid, bundleId).catch(() => null);
           if (disposed) return undefined;
+          // A stop during the lookup.
+          if (stoppedBundleIds.has(bundleId)) return noteWhenStopped();
           if (now?.running === false) return gone;
           launched = ofLaunch();
         }

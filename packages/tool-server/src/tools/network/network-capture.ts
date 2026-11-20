@@ -181,9 +181,10 @@ export function isLiveService(registry: Pick<Registry, "getSnapshot">, urn: stri
 
 /**
  * The debugger of the app's JS runtime. With `logicalDeviceId`, Metro's target
- * goes by that id, while a remote simulator's runtime still reaches Metro over
- * the sim-remote tunnel of its udid. The debugger opens that tunnel only for an
- * id of a remote simulator, so it is opened here.
+ * goes by that id, while the device itself still goes by its udid: a
+ * provider's grant and socket, and a remote simulator's sim-remote tunnel to
+ * Metro. The debugger opens that tunnel only for an id of a remote simulator,
+ * so it is opened here.
  */
 export async function resolveJsRuntime(
   registry: Registry,
@@ -194,7 +195,11 @@ export async function resolveJsRuntime(
   if (logicalDeviceId !== undefined && classifyDevice(udid) === "ios-remote") {
     await proxyStart(udid, port);
   }
-  return resolveDebuggerService(registry, { port, device_id: logicalDeviceId ?? udid });
+  return resolveDebuggerService(
+    registry,
+    { port, device_id: logicalDeviceId ?? udid },
+    { physicalDeviceId: udid }
+  );
 }
 
 /** Why the app's JS runtime was not reached, in a few words the caller can act on. */

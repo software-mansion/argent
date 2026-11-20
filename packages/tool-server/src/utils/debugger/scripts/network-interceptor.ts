@@ -23,6 +23,8 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
+import { isProcessAlive } from "@argent/device-providers";
 
 /** A body of one of these MIME types is not text. The iOS native layer reads the same list. */
 export const BINARY_BODY_TYPES =
@@ -1101,12 +1103,17 @@ export const NETWORK_CAPTURE_MARK_SCRIPT = `(function() {
 
 /**
  * This tool-server's key in `__argent_network_holders` of an app's JS context. Every tool-server
- * attached to the app shares that context, so a start adds the key as `true`, and a stop sets it
- * to `false`: that tool-server still reads the log, but no longer captures. The tool-server's exit
- * ends the capture there only when no other tool-server's key is `true`, and empties the log only
- * when no other tool-server's key is left.
+ * attached to the app shares that context, so a start sets the key's `capturing` to `true`, and a
+ * stop sets it to `false`: that tool-server still reads the log, but no longer captures. The
+ * tool-server's exit ends the capture there only when no other tool-server captures, and empties
+ * the log only when no other tool-server's key is left. The key's `pid` and `host` let the exit of
+ * another tool-server on this host remove the key of a tool-server that exited without its own.
  */
 const HOLDER = JSON.stringify(randomUUID());
+
+function holderRecord(capturing: boolean): string {
+  return JSON.stringify({ capturing, pid: process.pid, host: hostname() });
+}
 
 /**
  * Pauses or resumes recording in the app's JS context. Says whether this script is installed
@@ -1120,9 +1127,9 @@ export function makeNetworkCaptureControlScript(paused: boolean): string {
     paused
       ? `
   var holders = g.__argent_network_holders;
-  if (holders && Object.prototype.hasOwnProperty.call(holders, ${HOLDER})) holders[${HOLDER}] = false;`
+  if (holders && Object.prototype.hasOwnProperty.call(holders, ${HOLDER})) holders[${HOLDER}] = ${holderRecord(false)};`
       : `
-  (g.__argent_network_holders = g.__argent_network_holders || {})[${HOLDER}] = true;`
+  (g.__argent_network_holders = g.__argent_network_holders || {})[${HOLDER}] = ${holderRecord(true)};`
   }
   return JSON.stringify({ installed: typeof g.__argent_network_mark === 'function' });
 })()`;
@@ -1143,23 +1150,46 @@ export const NETWORK_CAPTURE_END_SCRIPT = `(function() {
 /**
  * The tool-server's exit: as {@link NETWORK_CAPTURE_END_SCRIPT}, but a capture that another
  * tool-server still captures stays as it is, with its log, and the log of a capture that another
- * tool-server only stopped stays for it to read.
+ * tool-server only stopped stays for it to read. It first removes the holders keyed `exited`.
+ * Returns the holders left, for {@link exitedHolders}.
  */
-export const NETWORK_CAPTURE_RELEASE_SCRIPT = `(function() {
+export function makeNetworkCaptureReleaseScript(exited: readonly string[]): string {
+  return `(function() {
   var g = globalThis;
   var holders = g.__argent_network_holders;
   var readers = false;
   if (holders) {
     delete holders[${HOLDER}];
+    var exited = ${JSON.stringify(exited)};
+    for (var i = 0; i < exited.length; i++) delete holders[exited[i]];
     for (var key in holders) {
       if (!Object.prototype.hasOwnProperty.call(holders, key)) continue;
-      if (holders[key]) return;
+      if (holders[key].capturing) return JSON.stringify({ holders: holders });
       readers = true;
     }
   }
   g.__argent_network_paused = true;
   if (!readers && typeof g.__argent_network_clear === 'function') g.__argent_network_clear();
+  return JSON.stringify({ holders: holders || {} });
 })()`;
+}
+
+/**
+ * The keys of the holders in an answer of {@link makeNetworkCaptureReleaseScript} whose
+ * tool-server ran on this host in a process that has exited, so no exit of its own released them.
+ */
+export function exitedHolders(answer: unknown): string[] {
+  let holders: Record<string, { pid?: unknown; host?: unknown }>;
+  try {
+    holders = (JSON.parse(String(answer)) as { holders: typeof holders }).holders;
+  } catch {
+    return [];
+  }
+  return Object.keys(holders).filter((key) => {
+    const { pid, host } = holders[key]!;
+    return host === hostname() && typeof pid === "number" && !isProcessAlive(pid);
+  });
+}
 
 /**
  * Reads a page of captured network logs, minus Metro's own traffic on `metroPort`, and whether a

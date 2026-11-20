@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { isExternalDeviceUrn } from "../../utils/external-devices";
 import {
   forgetJsCaptures,
   forgetJsCapturesOf,
@@ -13,6 +12,7 @@ import {
   PORT_KEYED_NAMESPACES,
   deviceIdOwningUrn,
   isDeviceServiceUrn,
+  isProviderOwnedUrn,
   unnameableSessionUrns,
 } from "./device-services";
 
@@ -132,7 +132,7 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
              * otherwise would tell the agent it had cleaned up a server it does
              * not own.
              */
-            if (wasLive && !isExternalDeviceUrn(urn)) stopped.push(urn);
+            if (wasLive && !isProviderOwnedUrn(urn)) stopped.push(urn);
           } else if (
             scoped &&
             isLiveServiceState(entry.state) &&

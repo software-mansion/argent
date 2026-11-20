@@ -33,7 +33,10 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { NETWORK_CAPTURE_MARK_SCRIPT } from "../../utils/debugger/scripts/network-interceptor";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { metroPort } from "../../utils/debugger/metro-port";
-import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
+import {
+  DependencyMissingError,
+  XcodeFirstLaunchPendingError,
+} from "../../utils/dependency-errors";
 import { xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
@@ -94,13 +97,9 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
       // The checks run under the lock too: a stop called while they run waits for
       // this start, so the start cannot install capture after that stop.
       const layers = await withCaptureLock(params.udid, params.bundleId, async () => {
-        await ensureDeps(
-          device.platform === "android"
-            ? ["adb"]
-            : device.platform === "ios-remote"
-              ? ["sim-remote"]
-              : ["xcrun"]
-        );
+        // The JS layer also reaches a remote simulator's Metro over the sim-remote
+        // tunnel. adb and xcrun serve only the native layer, which checks them.
+        if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
         if (device.platform === "ios" && isInjectableBundleId(params.bundleId)) {
           await refuseWhileXcodeInstalls(registry, device, params.bundleId);
         }
@@ -118,7 +117,15 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
             : startIosLayer(registry, device, params.bundleId, port),
         ]);
       });
-      if (layers.every((layer) => layer.unavailable)) throw unavailableError(params, layers);
+      if (layers.every((layer) => layer.unavailable)) {
+        const error = unavailableError(params, layers);
+        // ensureDeps caches its probe, so this is what the native layer found.
+        const missing = await missingNativeDep(device);
+        if (missing && layers.some((layer) => layer.reason === missing.message)) {
+          throw new DependencyMissingError(missing.missing, error.message);
+        }
+        throw error;
+      }
       return { status: "ok", layers };
     },
   };
@@ -172,6 +179,22 @@ function unavailableError(params: CaptureParams, layers: StartedLayer[]): Failur
 
 function unavailable(layer: StartedLayer["layer"], reason: string): StartedLayer {
   return { layer, armed: false, reason, unavailable: true };
+}
+
+/**
+ * The host tool that the local native layer needs and does not find. The JS
+ * layer needs neither adb nor xcrun, so a missing one leaves it running.
+ */
+async function missingNativeDep(device: DeviceInfo): Promise<DependencyMissingError | undefined> {
+  // execute checks sim-remote before both layers.
+  if (device.platform === "ios-remote") return undefined;
+  try {
+    await ensureDeps([device.platform === "android" ? "adb" : "xcrun"]);
+    return undefined;
+  } catch (err) {
+    if (err instanceof DependencyMissingError) return err;
+    throw err;
+  }
 }
 
 /**
@@ -369,6 +392,8 @@ async function startIosLayer(
     setIosUnavailable(device.id, bundleId, reason);
     return unavailable("ios-native", reason);
   };
+  const missing = await missingNativeDep(device);
+  if (missing) return notTurnedOn(missing.message);
   let api: NativeDevtoolsApi;
   try {
     const ref = nativeDevtoolsRef(device);
@@ -432,6 +457,8 @@ async function startAndroidLayer(
   bundleId: string,
   port: number
 ): Promise<StartedLayer> {
+  const missing = await missingNativeDep(device);
+  if (missing) return unavailable("android-native", missing.message);
   let api: AndroidNetworkInspectorApi;
   try {
     const ref = androidNetworkInspectorRef(device, bundleId, port);
