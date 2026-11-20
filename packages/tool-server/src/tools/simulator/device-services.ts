@@ -70,6 +70,16 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
 const APP_KEYED_NAMESPACES: readonly string[] = [ANDROID_NETWORK_INSPECTOR_NAMESPACE];
 
 /**
+ * Namespaces whose URN holds the device's native id (udid or adb serial) also
+ * when the service was asked for with its `ext:` id, so either spelling of the
+ * device matches.
+ */
+const NATIVE_ID_KEYED_NAMESPACES: readonly string[] = [
+  ...APP_KEYED_NAMESPACES,
+  NATIVE_DEVTOOLS_NAMESPACE,
+];
+
+/**
  * Every namespace whose service belongs to exactly one device. Membership is
  * "does `dispose()` reap a resource that outlives the call", with two
  * exceptions: `AndroidTvControl` is stateless adb shell-outs with a no-op
@@ -170,7 +180,7 @@ export function deviceIdOwningUrn(
     if (portion === undefined) continue;
     const tail = portion.toLowerCase();
     const owner = deviceIds.find((id) => {
-      const spellings = APP_KEYED_NAMESPACES.includes(namespace)
+      const spellings = NATIVE_ID_KEYED_NAMESPACES.includes(namespace)
         ? [id, externalNativeId(id)]
         : [id];
       return spellings.some((spelling) => {
