@@ -237,21 +237,19 @@ describe("native devtools network conditions", () => {
     }
   });
 
-  it("re-sends the conditions after every network inspection activation", async () => {
+  it("re-sends the conditions after the first network inspection activation only", async () => {
     const { api, agent } = await setup();
     await api.setNetworkConditions(BUNDLE, SLOW);
 
     api.activateNetworkInspection(BUNDLE);
 
-    await vi.waitFor(() =>
-      expect(agent.received).toEqual([
-        BYPASS_METRO,
-        EMULATE_SLOW,
-        ACTIVATE,
-        BYPASS_METRO,
-        EMULATE_SLOW,
-      ])
-    );
+    const afterFirstActivation = [BYPASS_METRO, EMULATE_SLOW, ACTIVATE, BYPASS_METRO, EMULATE_SLOW];
+    await vi.waitFor(() => expect(agent.received).toEqual(afterFirstActivation));
+
+    api.activateNetworkInspection(BUNDLE);
+    await api.setNetworkConditions(BUNDLE, SLOW);
+
+    expect(agent.received).toEqual([...afterFirstActivation, BYPASS_METRO, EMULATE_SLOW]);
   });
 
   it("keeps the given Metro port out of the throttle across a relaunch", async () => {

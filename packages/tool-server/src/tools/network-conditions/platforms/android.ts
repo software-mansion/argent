@@ -7,7 +7,7 @@ import { requestedConditions, type NetworkConditionsParams } from "../schema";
 import type { AndroidServices, NetworkConditionsResult } from "../types";
 
 const NETWORK_UP_TIMEOUT_MS = 15_000;
-const NETWORK_DOWN_TIMEOUT_MS = 5_000;
+const NETWORK_DOWN_TIMEOUT_MS = 15_000;
 const NETWORK_POLL_MS = 500;
 
 function providerEmulator(): FailureError {
@@ -51,6 +51,20 @@ function networkStayedUp(serial: string): FailureError {
   );
 }
 
+function networkDidNotDrop(serial: string): FailureError {
+  return new FailureError(
+    `Turned Wi-Fi and mobile data off for ${serial}, but its network was still up after ` +
+      `${NETWORK_DOWN_TIMEOUT_MS / 1000} s. The emulator may be slow: call network-conditions ` +
+      "again. Wi-Fi and mobile data are back on.",
+    {
+      error_code: FAILURE_CODES.ANDROID_OFFLINE_TIMEOUT,
+      failure_stage: "network_conditions_offline",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
+}
+
 async function setRadios(serial: string, enabled: boolean): Promise<void> {
   const state = enabled ? "enable" : "disable";
   await runAdb(["-s", serial, "shell", "svc", "wifi", state]);
@@ -62,6 +76,13 @@ async function setRadios(serial: string, enabled: boolean): Promise<void> {
 async function hasDefaultNetwork(serial: string): Promise<boolean> {
   const out = await adbShell(serial, "dumpsys connectivity | grep -m1 'Active default network'");
   return /Active default network: \d+/.test(out);
+}
+
+async function defaultNetworkIsEthernet(serial: string): Promise<boolean> {
+  const out = await adbShell(serial, "dumpsys connectivity");
+  const id = /Active default network: (\d+)/.exec(out)?.[1];
+  const agent = out.split("\n").find((line) => line.includes(`NetworkAgentInfo{network{${id}}`));
+  return /Transports: [A-Z|]*ETHERNET/.test(agent ?? "");
 }
 
 const networkIsUp = (serial: string) => hasDefaultNetwork(serial).catch(() => false);
@@ -84,8 +105,9 @@ async function goOffline(serial: string): Promise<void> {
   await setRadios(serial, false);
   const down = await pollUntil(async () => !(await networkIsUp(serial)), NETWORK_DOWN_TIMEOUT_MS);
   if (down) return;
+  const ethernet = await defaultNetworkIsEthernet(serial).catch(() => false);
   await setRadios(serial, true);
-  throw networkStayedUp(serial);
+  throw ethernet ? networkStayedUp(serial) : networkDidNotDrop(serial);
 }
 
 async function turnRadiosOn(serial: string): Promise<void> {

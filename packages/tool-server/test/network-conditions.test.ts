@@ -245,29 +245,48 @@ describe("network-conditions on an Android emulator", () => {
     expect(adbShell).toHaveBeenCalledTimes(2);
   });
 
-  it("fails offline and turns the radios back on when a network stays up", async () => {
-    const { calls, services } = fakeNetworkShaper();
-    vi.useFakeTimers();
-    try {
-      const offline = networkConditionsTool
-        .execute(services, { udid: androidEmulator, offline: true })
-        .catch((err: unknown) => err);
-      await vi.advanceTimersByTimeAsync(6_000);
-      const err = await offline;
+  it.each([
+    {
+      network: "Ethernet",
+      agent:
+        "NetworkAgentInfo{network{100}  handle{1}  ni{ETHERNET CONNECTED} nc{[ Transports: ETHERNET Capabilities: INTERNET]}",
+      message: /Android TV emulator connects over Ethernet/,
+      code: FAILURE_CODES.ANDROID_OFFLINE_UNSUPPORTED,
+    },
+    {
+      network: "Wi-Fi",
+      agent:
+        "NetworkAgentInfo{network{100}  handle{1}  ni{WIFI CONNECTED} nc{[ Transports: WIFI Capabilities: INTERNET]}",
+      message: /still up after 15 s/,
+      code: FAILURE_CODES.ANDROID_OFFLINE_TIMEOUT,
+    },
+  ])(
+    "fails offline and turns the radios back on when the $network network stays up",
+    async ({ agent, message, code }) => {
+      const { calls, services } = fakeNetworkShaper();
+      vi.mocked(adbShell).mockResolvedValue(`Active default network: 100\n  ${agent}\n`);
+      vi.useFakeTimers();
+      try {
+        const offline = networkConditionsTool
+          .execute(services, { udid: androidEmulator, offline: true })
+          .catch((err: unknown) => err);
+        await vi.advanceTimersByTimeAsync(16_000);
+        const err = await offline;
 
-      expect((err as Error).message).toMatch(/still has a network/);
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_OFFLINE_UNSUPPORTED);
-      expect(calls).toEqual([
-        "clear",
-        "svc wifi disable",
-        "svc data disable",
-        "svc wifi enable",
-        "svc data enable",
-      ]);
-    } finally {
-      vi.useRealTimers();
+        expect((err as Error).message).toMatch(message);
+        expect(getFailureSignal(err)?.error_code).toBe(code);
+        expect(calls).toEqual([
+          "clear",
+          "svc wifi disable",
+          "svc data disable",
+          "svc wifi enable",
+          "svc data enable",
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
     }
-  });
+  );
 
   it("removes the proxy and leaves the radios alone at a reset when a network is up", async () => {
     const { calls, services } = fakeNetworkShaper();
@@ -382,21 +401,27 @@ describe("network-conditions on an iOS simulator", () => {
     }
   );
 
-  it.each([{ offline: true }, {}])(
-    "returns restart_required for %j when the running app lost its connection",
-    async (conditions) => {
-      const { api, services } = fakeNativeDevtools("stale_process");
+  it("returns restart_required when the running app lost its connection", async () => {
+    const { api, services } = fakeNativeDevtools("stale_process");
 
-      const result = await networkConditionsTool.execute(services, {
-        udid: iosUdid,
-        bundleId,
-        ...conditions,
-      });
+    const result = await networkConditionsTool.execute(services, {
+      udid: iosUdid,
+      bundleId,
+      offline: true,
+    });
 
-      expect(result).toMatchObject({ status: "restart_required" });
-      expect(api.setNetworkConditions).not.toHaveBeenCalled();
-    }
-  );
+    expect(result).toMatchObject({ status: "restart_required" });
+    expect(api.setNetworkConditions).not.toHaveBeenCalled();
+  });
+
+  it("drops the stored conditions at a reset when the running app lost its connection", async () => {
+    const { api, services } = fakeNativeDevtools("stale_process");
+
+    const result = await networkConditionsTool.execute(services, { udid: iosUdid, bundleId });
+
+    expect(result).toMatchObject({ status: "restart_required" });
+    expect(api.setNetworkConditions).toHaveBeenCalledWith(bundleId, null);
+  });
 
   it("clears the stored conditions when the app is not running", async () => {
     const { api, services } = fakeNativeDevtools("not_running");

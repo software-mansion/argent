@@ -1,5 +1,6 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { CDPClient } from "../utils/debugger/cdp-client";
+import { sleep } from "../utils/timing";
 import { browserWebSocketUrl, listPageTargets, type CdpTarget } from "./cdp-session";
 
 export interface TabInfo {
@@ -51,6 +52,8 @@ const isHttpUrl = (url: string | undefined): url is string => /^https?:/i.test(u
 const isBlank = (url: string) => url === "" || url === "about:blank";
 
 const TYPED_LOAD_TIMEOUT_MS = 120_000;
+const HISTORY_RESET_ATTEMPTS = 20;
+const HISTORY_RESET_RETRY_MS = 100;
 
 export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   const { cdp, port } = deps;
@@ -165,14 +168,20 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   }
 
   /**
-   * Loads `url` as a typed address without waiting for the response, then
-   * drops the blank page the tab started on from its history.
+   * Loads `url` as a typed address, then drops the blank page the tab started
+   * on from its history. Chrome rejects the history reset until the load commits.
    */
-  function loadAsTyped(url: string): void {
-    cdp
-      .send("Page.navigate", { url, transitionType: "typed" }, TYPED_LOAD_TIMEOUT_MS)
-      .then(() => cdp.send("Page.resetNavigationHistory"))
-      .catch(() => {});
+  async function loadAsTyped(targetId: string, url: string): Promise<void> {
+    await cdp.send("Page.navigate", { url, transitionType: "typed" }, TYPED_LOAD_TIMEOUT_MS);
+    for (let attempt = 0; attempt < HISTORY_RESET_ATTEMPTS; attempt++) {
+      if (activeTargetId !== targetId) return;
+      const reset = await cdp.send("Page.resetNavigationHistory").then(
+        () => true,
+        () => false
+      );
+      if (reset) return;
+      await sleep(HISTORY_RESET_RETRY_MS);
+    }
   }
 
   async function open(opts?: {
@@ -223,7 +232,7 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       tabToLabel.set(tabId, opts.label);
     }
     if (activating) await activate(created, await listTargets());
-    if (deferLoad) loadAsTyped(requestedUrl);
+    if (deferLoad) loadAsTyped(created, requestedUrl).catch(() => {});
     const tabs = await list();
     return tabs.map((tab) =>
       tab.targetId === created && requestedUrl && isBlank(tab.url)
@@ -251,7 +260,8 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       }
     }
 
-    return list();
+    const remaining = (await listTargets()).filter((t) => t.id !== targetId);
+    return remaining.map(toInfo);
   }
 
   return {

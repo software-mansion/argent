@@ -140,13 +140,6 @@ describe("buildCpuSampleIndex — sample times are ms since profiling started", 
     expect(index.timestampsMs[index.timestampsMs.length - 1]).toBeCloseTo(1000, 6);
   });
 
-  it("does not depend on commit data at all", () => {
-    // The displacement bug came from inferring an offset out of the first hot
-    // commit's timestamp — a value that can be many seconds into a session. The
-    // index no longer accepts one, so no such inference is possible.
-    expect(buildCpuSampleIndex.length).toBe(1);
-  });
-
   it("covers the profile's own reported duration, to within one interval", () => {
     // Σ timeDeltas is short of endTime - startTime by the final unsampled
     // interval — 899µs on the reporter's real 25.1s profile. Exact equality

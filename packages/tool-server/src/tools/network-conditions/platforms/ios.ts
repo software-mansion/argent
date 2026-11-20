@@ -60,6 +60,7 @@ export const iosImpl: PlatformImpl<
     const api = services.nativeDevtools;
     const conditions = requestedConditions(params);
 
+    if (!conditions && !api.isConnected(bundleId)) await api.setNetworkConditions(bundleId, null);
     if (conditions || !(await isNotRunning(api, bundleId))) {
       const blocked = await precheckNativeDevtools(api, params.udid, bundleId);
       if (blocked) return blocked;
