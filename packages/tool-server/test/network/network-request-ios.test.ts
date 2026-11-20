@@ -365,6 +365,52 @@ describe("view-network-request-details: iOS bodies and Content-Encoding", () => 
     expect((await details()).request.postData).toBe(json);
     expect(requestPostData).toHaveBeenCalledWith(ID);
   });
+
+  describe("a Brotli request body whose bytes are valid UTF-8", () => {
+    // brotli('{"ok":true}'): the agent can send these bytes as text, or inline.
+    const br = Buffer.from("212800047b226f6b223a747275657d03", "hex");
+
+    it.each([
+      ["read as base64", () => base64Body(br)],
+      ["read as text", () => textBody(br.toString("utf8"))],
+      ["sent inline with the request", () => inlineBody(br.toString("utf8"))],
+    ])("decodes the body %s by the request's Content-Encoding", async (_how, reply) => {
+      serve(post({ "Content-Type": "application/json", "Content-Encoding": "br" }));
+      requestPostData.mockResolvedValue(reply());
+
+      expect((await details()).request.postData).toBe('{"ok":true}');
+    });
+
+    it.each([
+      ["read as base64", () => base64Body(br.subarray(0, 12), true)],
+      ["read as text", () => textBody(br.subarray(0, 12).toString("utf8"), true)],
+    ])("decodes the start of a body the agent cut, %s", async (_how, reply) => {
+      serve(post({ "Content-Type": "application/json", "Content-Encoding": "br" }));
+      requestPostData.mockResolvedValue(reply());
+
+      expect((await details()).request.postData).toBe(
+        `[TRUNCATED: first 8 chars shown, full size: unknown; the agent kept only the first 12 bytes, MIME: application/json]\n{"ok":tr`
+      );
+    });
+
+    it("decodes the start of an inline body the host kept, and gives only a lower bound for its length", async () => {
+      serve(post({ "Content-Type": "application/json", "Content-Encoding": "br" }));
+      requestPostData.mockResolvedValue(inlineBody(br.subarray(0, 12).toString("utf8"), 16));
+
+      expect((await details()).request.postData).toBe(
+        `[TRUNCATED: first 8 chars shown, full size: more than 8 chars, MIME: application/json]\n{"ok":tr`
+      );
+    });
+
+    it("shows a text body that does not decode by its Content-Encoding as it came", async () => {
+      serve(post({ "Content-Type": "application/json", "Content-Encoding": "gzip" }));
+      requestPostData.mockResolvedValue(textBody('{"plain":true}'));
+      expect((await details()).request.postData).toBe('{"plain":true}');
+
+      requestPostData.mockResolvedValue(inlineBody('{"plain":true}'));
+      expect((await details()).request.postData).toBe('{"plain":true}');
+    });
+  });
 });
 
 describe("view-network-request-details: an iOS request body that the upload cut", () => {

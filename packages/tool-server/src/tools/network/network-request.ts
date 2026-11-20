@@ -540,17 +540,15 @@ async function readNativeBody(
   if (body.inlineChars !== undefined) {
     return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing);
   }
-  if (!body.base64Encoded) {
+  // A body sent as text has the body's own bytes as UTF-8, so its Content-Encoding applies to them.
+  const kept = Buffer.from(body.body, body.base64Encoded ? "base64" : "utf8");
+  const bytes = decodeContent(kept, framing.contentEncoding, body.truncated);
+  if (!bytes) return decodesTooLarge(framing);
+  if (!body.base64Encoded && bytes === kept) {
     const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
     return body.truncated
-      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing, body.incomplete)
+      ? cutByAgent(text, mimeType, kept.length, framing, body.incomplete)
       : truncateBody(text, mimeType);
-  }
-
-  const kept = Buffer.from(body.body, "base64");
-  const bytes = decodeContent(kept, framing.contentEncoding, body.truncated);
-  if (!bytes) {
-    return `[unavailable: the ${framing.contentEncoding.trim()} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
   }
   const text = decodeText(bytes, charsetOf(framing.contentType), body.truncated);
   if (text === null) {
@@ -596,13 +594,29 @@ function inlineBody(
   if (BINARY_BODY_TYPES.test(mimeType.toLowerCase())) {
     return `[body omitted: binary ${mimeType}, ${framing.wholeSize ?? "size unknown"}]`;
   }
-  const decoded = inDeclaredCharset(text, framing.contentType, truncated);
+  const sent = Buffer.from(text, "utf8");
+  const bytes = decodeContent(sent, framing.contentEncoding, truncated);
+  if (!bytes) return decodesTooLarge(framing);
+  const encoded = bytes !== sent;
+  const decoded = encoded
+    ? decodeText(bytes, charsetOf(framing.contentType), truncated)
+    : inDeclaredCharset(text, framing.contentType, truncated);
+  if (decoded === null) {
+    const size = truncated ? (framing.wholeSize ?? "size unknown") : `${bytes.length} bytes`;
+    return `[body omitted: binary ${mimeType || "data"}, ${size}]`;
+  }
   if (!truncated) return truncateBody(decoded, mimeType);
-  // In another charset, the whole body has more chars than its kept start, but how many is unknown.
-  const fullSize = namesUtf8(framing.contentType)
-    ? `${wholeChars} chars`
-    : `more than ${decoded.length} chars`;
-  return `${cutMarker(fullSize, mimeType)}\n${decoded.slice(0, MAX_BODY_SIZE)}...`;
+  // In another charset, or under a Content-Encoding, the whole body has more chars than its kept start.
+  const fullSize =
+    !encoded && namesUtf8(framing.contentType)
+      ? `${wholeChars} chars`
+      : `more than ${decoded.length} chars`;
+  const shown = Math.min(decoded.length, MAX_BODY_SIZE);
+  return `${cutMarker(fullSize, mimeType, shown)}\n${decoded.slice(0, shown)}${decoded.length > shown ? "..." : ""}`;
+}
+
+function decodesTooLarge(framing: NativeBodyFraming): string {
+  return `[unavailable: the ${framing.contentEncoding.trim()} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
 }
 
 /**
