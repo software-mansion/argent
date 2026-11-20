@@ -1670,6 +1670,40 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       );
     }, 20_000);
 
+    it("names a copy of the app that argent did not start and says that it must be quit", async () => {
+      searched.spotlight[BUNDLE_ID] = appPath;
+      const outside = await startOutsideCopy();
+      const [layer] = (await start()).layers;
+      expect(layer).toMatchObject({ layer: "macos-native", armed: false });
+      expect(layer!.reason).toContain(`pid ${outside.pid}`);
+      expect(layer!.reason).toContain("without the argent library");
+      expect(layer!.reason).toMatch(/quit/);
+      expect(layer!.reason).not.toBe(NOT_RUNNING);
+      // As the reason says, launch-app does not start a second copy beside it.
+      const err = await run("launch-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID }).catch(
+        (e: unknown) => e
+      );
+      expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_ALREADY_RUNNING);
+      expect((err as Error).message).toContain(`pid ${outside.pid}`);
+      // Nothing was signalled or started.
+      expect(outside.signals()).toEqual([]);
+      expect(fakeAppPids()).toEqual([outside.pid]);
+    });
+
+    it("names a copy of another build of the app that argent did not start", async () => {
+      searched.spotlight[BUNDLE_ID] = appPath;
+      const otherBuild = writeBundle(path.join(root, `worktree-${Date.now()}`), BUNDLE_ID);
+      const outside = await startOutsideCopyOf(
+        path.join(otherBuild, "Contents", "MacOS", "FakeApp")
+      );
+      const [layer] = (await start()).layers;
+      expect(layer).toMatchObject({ layer: "macos-native", armed: false });
+      expect(layer!.reason).toContain(
+        `${otherBuild} (pid ${outside.pid}) without the argent library`
+      );
+      expect(layer!.reason).toContain("Quit that copy if it is yours");
+    });
+
     it("records no new request after a stop that the app did not acknowledge", async () => {
       await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=disable-silent"] });
       await start();

@@ -305,6 +305,50 @@ function notRunningError(bundleId: string): FailureError {
 }
 
 /**
+ * The error for a call while no copy that argent started runs: a copy that
+ * argent did not start, as launch-app finds it, must quit before a launch can
+ * start one with the library. The build is the one argent started last, else
+ * Spotlight's. With no such copy, or no build to look for, the app is not running.
+ */
+async function noLaunchedCopyError(bundleId: string): Promise<FailureError> {
+  const appPath = getTrackedMacosApp(bundleId)?.appPath ?? (await findMacosAppByBundleId(bundleId));
+  let info: MacosAppInfo | undefined;
+  try {
+    info = appPath ? await inspectMacosApp(appPath) : undefined;
+  } catch {
+    info = undefined;
+  }
+  if (!info || info.bundleId !== bundleId) return notRunningError(bundleId);
+  const copies = await findRunningCopies(bundleId, info.executable);
+  const refuse = (message: string) =>
+    macosFailure(
+      message,
+      FAILURE_CODES.MACOS_APP_ALREADY_RUNNING,
+      "macos_app_reconnect",
+      "validation"
+    );
+  if (copies.same.length > 0) {
+    return refuse(
+      `${bundleId} is running (pid ${copies.same.join(", ")}) without the argent library: ` +
+        `argent did not start that copy, and argent drives only a copy that it starts. ` +
+        `launch-app refuses to start a second copy beside it. That copy may be the user's: ` +
+        `ask the user to quit it, or to agree to boot-device with force: true, which quits it ` +
+        `and starts the app with the library. Unsaved changes in that copy are lost.`
+    );
+  }
+  if (copies.otherBuilds.length > 0) {
+    const where = copies.otherBuilds.map((b) => `${b.appPath} (pid ${b.pid})`).join(", ");
+    return refuse(
+      `${bundleId} is running from ${where} without the argent library: argent did not start ` +
+        `that copy, and argent drives only a copy that it starts. argent runs one copy of a ` +
+        `bundle id at a time, so launch-app refuses to start ${info.appPath} beside it. Quit ` +
+        `that copy if it is yours.`
+    );
+  }
+  return notRunningError(bundleId);
+}
+
+/**
  * Why argent refuses to start the app, so that no launch arms its capture: an
  * Electron app or a build that the hardened runtime keeps the library out of. Undefined while argent's own copy runs, and when argent
  * cannot tell, for example when Spotlight does not know the app. Before argent
@@ -1029,7 +1073,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   /** Connects through the listening socket of the app argent started (a new tool-server, or a dropped channel). */
   const reconnect = async (): Promise<LibraryChannel> => {
     const app = await runningTrackedApp(bundleId);
-    if (!app) throw notRunningError(bundleId);
+    if (!app) throw await noLaunchedCopyError(bundleId);
     const notConnected = (detail: string, cause?: unknown) =>
       macosFailure(
         `${bundleId} is running (pid ${app.pid}) but argent cannot reach its library: ${detail} ` +
@@ -1649,15 +1693,20 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         ch = await ensureChannel();
       } catch (err) {
         if (disposed) return servicesStopped;
-        const notRunning = errorCode(err) === FAILURE_CODES.MACOS_APP_NOT_RUNNING;
+        const code = errorCode(err);
+        const notRunning = code === FAILURE_CODES.MACOS_APP_NOT_RUNNING;
+        // A copy that argent did not start: capture arms only in a copy that argent starts.
+        const notOurs = code === FAILURE_CODES.MACOS_APP_ALREADY_RUNNING;
         // The app runs, so its requests before this start are not recorded, also
         // when argent later reconnects to a process it was connected to before.
-        if (!notRunning && startedNow && !armedSinceLaunch) captureGap = true;
+        if (!notRunning && !notOurs && startedNow && !armedSinceLaunch) captureGap = true;
         return {
           armed: false,
           reason: notRunning
             ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
-            : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
+            : notOurs
+              ? `capture arms when argent starts ${bundleId}, which needs the copy that runs now to quit first: ${errorMessage(err)}`
+              : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
         };
       }
       // A launch this start waited for armed its process from the start.
