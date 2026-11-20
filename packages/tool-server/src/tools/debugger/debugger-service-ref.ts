@@ -54,13 +54,19 @@ export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
 /**
  * For the `react-profiler-*` tools and the `profiler-*` tools that read their
  * data: RN_ONLY_TOOL_CAPABILITY plus Mac apps. A Debug build of a
- * react-native-macos app serves the same Hermes runtime through Metro, and
- * `selectTarget` finds it by the bundle id in the Mac app id.
+ * react-native-macos app, or of React Native built for Mac Catalyst, serves the
+ * same Hermes runtime through Metro, and `selectTarget` finds it by the bundle
+ * id in the Mac app id (and a Mac Catalyst app's identifierForVendor).
  */
 export const REACT_PROFILER_TOOL_CAPABILITY: ToolCapability = {
   ...RN_ONLY_TOOL_CAPABILITY,
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
+
+/** Whether a debugger tool's device id names a Chromium app rather than a Metro runtime. */
+export function isChromiumDebuggerTarget(deviceId: string | undefined): boolean {
+  return !!canonicalDeviceId(deviceId)?.startsWith(CHROMIUM_ID_PREFIX);
+}
 
 /**
  * Debugger service ref for a tool's `services()` callback. `port` is irrelevant
@@ -75,7 +81,7 @@ export function debuggerServiceRef(params: { port?: number; device_id?: string }
   // The Metro path is the default, and has to tolerate undefined / empty /
   // malformed ids: pre-chromium tests and older callers expect a Metro URN back
   // even when device_id is missing.
-  if (deviceId && deviceId.startsWith(CHROMIUM_ID_PREFIX)) {
+  if (deviceId && isChromiumDebuggerTarget(deviceId)) {
     const device = resolveDevice(deviceId);
     return chromiumJsRuntimeDebuggerRef(device);
   }

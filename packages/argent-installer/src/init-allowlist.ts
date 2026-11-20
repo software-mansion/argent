@@ -5,23 +5,32 @@ import { InitCancelled } from "./init-args.js";
 
 interface AllowlistResult {
   enabled: boolean;
+  /** What made the choice: --no-allowlist, the -y default, or the prompt. */
+  decidedBy: "flag" | "default" | "prompt";
   lines: string[];
 }
 
-// `enabled` is returned so the caller can emit the allowlist_decision telemetry event.
+// `enabled` and `decidedBy` are returned so the caller can emit the
+// allowlist_decision telemetry event.
 export async function configureAllowlist(args: {
   adapters: McpConfigAdapter[];
   effectiveRoot: string;
   scope: "local" | "global";
   nonInteractive: boolean;
+  /** --no-allowlist: skip the step without asking. */
+  noAllowlist?: boolean;
 }): Promise<AllowlistResult> {
-  const { adapters, effectiveRoot, scope, nonInteractive } = args;
+  const { adapters, effectiveRoot, scope, nonInteractive, noAllowlist = false } = args;
   const adaptersWithAllowlist = adapters.filter((a) => a.addAllowlist);
   const adaptersWithoutAllowlist = adapters.filter((a) => !a.addAllowlist);
 
   let enabled = false;
+  let decidedBy: AllowlistResult["decidedBy"] = "default";
 
-  if (adaptersWithAllowlist.length > 0) {
+  if (noAllowlist) {
+    decidedBy = "flag";
+    p.log.info(pc.dim("Skipped editor auto-approve lists (--no-allowlist)."));
+  } else if (adaptersWithAllowlist.length > 0) {
     p.log.info(
       `By default, editors ask for confirmation before running each MCP tool.\n` +
         `  Adding Argent to the auto-approve allowlist lets tools run without\n` +
@@ -40,10 +49,11 @@ export async function configureAllowlist(args: {
 
       if (p.isCancel(allowlistChoice)) throw new InitCancelled("allowlist");
       enabled = allowlistChoice as boolean;
+      decidedBy = "prompt";
     }
   }
 
-  if (!enabled) return { enabled, lines: [] };
+  if (!enabled) return { enabled, decidedBy, lines: [] };
 
   const lines: string[] = [];
 
@@ -54,6 +64,11 @@ export async function configureAllowlist(args: {
       continue;
     }
     try {
+      const skipReason = adapter.allowlistSkipReason?.(effectiveRoot, scope) ?? null;
+      if (skipReason) {
+        lines.push(`${pc.yellow("-")} ${adapter.name} ${pc.dim(`(skipped - ${skipReason})`)}`);
+        continue;
+      }
       adapter.addAllowlist!(effectiveRoot, scope);
       lines.push(`${pc.green("+")} ${adapter.name}`);
     } catch (err) {
@@ -67,5 +82,5 @@ export async function configureAllowlist(args: {
     );
   }
 
-  return { enabled, lines };
+  return { enabled, decidedBy, lines };
 }

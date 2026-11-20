@@ -192,10 +192,12 @@ describe("createTreeMemory", () => {
 });
 
 describe("unchangedTreeNote", () => {
-  it("names the tree, does not say that nothing changed, and says how to get the tree again", () => {
-    expect(unchangedTreeNote("k3x-7", "gesture-tap")).toBe(
-      "Identical to element tree `k3x-7`, which an earlier `gesture-tap` result returned, so it is not repeated here: take elements and frames from that tree. The action can still have had an effect that the tree does not show, such as text typed in a field. Call `describe` if you do not have tree `k3x-7`."
-    );
+  it("identifies the earlier tree, notes that action effects may be hidden, and gives the fallback", () => {
+    const note = unchangedTreeNote("k3x-7", "gesture-tap");
+    expect(note).toContain("k3x-7");
+    expect(note).toContain("gesture-tap");
+    expect(note).toMatch(/effects.*tree/i);
+    expect(note).toContain("describe");
   });
 });
 

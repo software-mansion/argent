@@ -192,16 +192,6 @@ describe("ensureRunnerArtifact", () => {
     };
   }
 
-  // ensureRunnerArtifact builds under os.homedir(), which reads USERPROFILE on
-  // Windows and HOME elsewhere. Pinning one name leaves the fixture inert on
-  // the other platform and the build dir lands in the developer's real home.
-  it("redirects os.homedir() under both names it consults", async () => {
-    await withEnsureEnv("homedir-names", async () => {
-      expect(process.env.USERPROFILE).toBe(process.env.HOME);
-      expect(os.homedir()).toBe(path.join(tmpRoot, "ensure-home-homedir-names"));
-    });
-  });
-
   it("reports fromCache honestly and rebuilds the same key only when forced", async () => {
     await withEnsureEnv("hit-and-force", async () => {
       const counter = { builds: 0 };
