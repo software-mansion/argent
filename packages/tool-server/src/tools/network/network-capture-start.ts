@@ -101,7 +101,7 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
                   `${params.bundleId} is an Apple system app, which runs no React Native JS`
                 )
               )
-            : startJsLayer(registry, params.udid, params.bundleId, port),
+            : startJsLayer(registry, params.logicalDeviceId ?? params.udid, params.bundleId, port),
           device.platform === "android"
             ? startAndroidLayer(registry, device, params.bundleId, port)
             : startIosLayer(registry, device, params.bundleId, port),
@@ -157,11 +157,12 @@ async function refuseWhileXcodeInstalls(
  */
 async function startJsLayer(
   registry: Registry,
-  udid: string,
+  /** The device as Metro's runtimes name it: its udid, or its logicalDeviceId on a shared Metro. */
+  jsDeviceId: string,
   bundleId: string,
   port: number
 ): Promise<StartedLayer> {
-  const device = canonicalDeviceId(udid) ?? udid;
+  const device = canonicalDeviceId(jsDeviceId) ?? jsDeviceId;
   const payload = jsCapturePayload(port, device);
   const found = findJsCapture(device, bundleId);
   // The app's capture on another port moves here only once its runtime answers here.
@@ -174,7 +175,7 @@ async function startJsLayer(
   const recording = installedHere && found.paused !== true;
   let dbg: JsRuntimeDebuggerApi;
   try {
-    dbg = await resolveDebuggerService(registry, { port, device_id: udid });
+    dbg = await resolveDebuggerService(registry, { port, device_id: jsDeviceId });
   } catch (err) {
     const reason = classifyNotConnected(err);
     const code = getFailureSignal(err)?.error_code;

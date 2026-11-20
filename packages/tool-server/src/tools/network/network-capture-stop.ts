@@ -79,7 +79,7 @@ Returns { status, layers }: per layer, armed (false once the layer confirmed the
                 total: 0,
                 reason: `${params.bundleId} is an Apple system app, which runs no React Native JS`,
               })
-            : stopJsLayer(registry, params.udid, params.bundleId, port),
+            : stopJsLayer(registry, params.udid, params.logicalDeviceId, params.bundleId, port),
           device.platform === "android"
             ? stopAndroidLayer(registry, device, params.bundleId, port)
             : stopIosLayer(registry, device, params.bundleId, port),
@@ -97,10 +97,13 @@ Returns { status, layers }: per layer, armed (false once the layer confirmed the
 async function stopJsLayer(
   registry: Registry,
   udid: string,
+  /** The device's id on a Metro that several devices share. */
+  logicalDeviceId: string | undefined,
   bundleId: string,
   port: number
 ): Promise<StoppedLayer> {
-  const device = canonicalDeviceId(udid) ?? udid;
+  const jsDeviceId = logicalDeviceId ?? udid;
+  const device = canonicalDeviceId(jsDeviceId) ?? jsDeviceId;
   const payload = jsCapturePayload(port, device);
   const prior = findJsCapture(device, bundleId);
   const kept = prior?.port === port ? prior : undefined;
@@ -140,14 +143,14 @@ async function stopJsLayer(
   // Metro connection. Only the device tells that the interceptor ended with
   // the app's process.
   const endedWithApp = async (stored: JsCapture): Promise<string | undefined> => {
-    if ((await appRuns(device, bundleId)) !== false) return undefined;
+    if ((await appRuns(udid, bundleId)) !== false) return undefined;
     stored.installed = false;
     return `${bundleId} is not running, so nothing records; while capture is stopped, its next JS runtime gets no interceptor`;
   };
 
   let dbg: JsRuntimeDebuggerApi;
   try {
-    dbg = await resolveDebuggerService(registry, { port, device_id: udid });
+    dbg = await resolveDebuggerService(registry, { port, device_id: jsDeviceId });
   } catch (err) {
     const notReached = jsNotReached(classifyNotConnected(err), port, err);
     if (other) {
