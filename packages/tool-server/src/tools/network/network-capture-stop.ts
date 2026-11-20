@@ -57,7 +57,7 @@ export function createNetworkCaptureStopTool(
     id: "network-capture-stop",
     description: `Stop network capture for an app on every layer and keep what was captured. Pass layer js or native to stop only that layer; the other layer keeps capturing.
 Use when you have the requests you need, before you profile, or to end capture in an e2e test. Unlike stop-all-simulator-servers, the requests stay listed in native-network-logs and view-network-logs, and their ids keep working in view-network-request-details (a view-network-logs id until the app's JS runtime reloads).
-Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. A request in flight at the stop completes in the list on iOS and in the JS runtime; on Android the list marks it failed, while the app's own request goes on. On Android, a body that view-network-request-details did not read before the stop is no longer available.
+Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. A request in flight at the stop completes in the list on iOS and in the JS runtime. When the stop covers the native layer on Android, the list marks such a request failed, while the app's own request goes on, and a body that view-network-request-details did not read before the stop is no longer available.
 Returns { status, layers }: per layer the call stopped, armed (false once the layer confirmed the stop), total (the requests it keeps for the app, or 0 when the stop could not count them, as on a JS runtime it did not reach) and a reason when the layer was not reached or was not started.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
