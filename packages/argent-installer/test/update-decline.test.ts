@@ -97,11 +97,13 @@ vi.mock("../src/utils.js", async (importOriginal) => {
 
 const launchPaths = vi.hoisted(() => ({
   value: null as { node: string; cli: string } | null,
+  globalFirstOnPath: true,
 }));
 
 vi.mock("../src/topology.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/topology.js")>()),
   getGloballyInstalledLaunchPaths: () => launchPaths.value,
+  isGlobalInstallFirstOnPath: () => launchPaths.globalFirstOnPath,
 }));
 
 class ExitSentinel extends Error {
@@ -128,6 +130,7 @@ beforeEach(() => {
   topologyState.globalInstalled = true;
   topologyState.globalVersion = "1.0.0";
   launchPaths.value = null;
+  launchPaths.globalFirstOnPath = true;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-update-decline-"));
   originalCwd = process.cwd();
   // Sandbox HOME: the accepted-update path runs the real config refresh, which
@@ -503,8 +506,9 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
     });
   });
 
-  it("keeps a live absolute-path entry when this run cannot resolve the global install", async () => {
+  it("keeps a live absolute-path entry when no global install is first on PATH", async () => {
     const { node, cli } = stagePinnedPaths();
+    launchPaths.globalFirstOnPath = false;
 
     const entry = await updateWithCursorEntry({ command: node, args: [cli, "mcp"] });
 
@@ -521,6 +525,16 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
       command: launchPaths.value.node,
       args: [launchPaths.value.cli, "mcp"],
     });
+  });
+
+  it("moves a live absolute-path entry to bare argent when the install on PATH cannot be pinned", async () => {
+    const { node, cli } = stagePinnedPaths();
+
+    const entry = await updateWithCursorEntry({ command: node, args: [cli, "mcp"] });
+
+    const notes = promptsMock.note.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(notes).toContain("now runs the bare argent command");
+    expect(entry).toEqual({ command: "argent", args: ["mcp"] });
   });
 
   it("reports nothing kept when run from $HOME, where Cursor's project file is its global file", async () => {

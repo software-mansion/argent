@@ -20,6 +20,7 @@ import {
   type McpServerEntry,
 } from "./mcp-configs.js";
 import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
+import { isGlobalInstallFirstOnPath } from "./topology.js";
 import {
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,
@@ -690,6 +691,7 @@ export async function update(args: string[]): Promise<void> {
       // path may move across versions); global scopes run the global install.
       const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
       const globalCmdMode = resolveGlobalCommandMode();
+      const globalInstallOnPath = isGlobalInstallFirstOnPath();
       // Never REWRITE existing entries to the degraded npx fallback: local-npx
       // only means the repo-local bin can't be resolved right now (fresh clone,
       // pruned pnpm store), and the committed node-path command is right again
@@ -735,20 +737,26 @@ export async function update(args: string[]): Promise<void> {
           continue;
         }
         const entry = entryFor(normScope);
+        const replacesLivePin = isLivePinnedEntry(existing) && !isPinnedGlobalEntry(entry);
+        if (replacesLivePin && normScope === "local") continue;
         // A run without the user's PATH (the update-argent tool in a
-        // Dock-launched editor) cannot resolve a pin, and bare `argent` fails
+        // Dock-launched editor) sees no install at all, and bare `argent` fails
         // with ENOENT in that editor.
-        if (isLivePinnedEntry(existing) && !isPinnedGlobalEntry(entry)) {
-          if (normScope === "local") continue;
+        if (replacesLivePin && !globalInstallOnPath) {
           results.push(
             `${pc.yellow("!")} ${adapter.name} kept its absolute-path entry (no global install ` +
-              `with its own node found on PATH) ${pc.dim(configPath)}`
+              `found first on PATH) ${pc.dim(configPath)}`
           );
           continue;
         }
         try {
           adapter.write(configPath, entry);
-          results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
+          results.push(
+            replacesLivePin
+              ? `${pc.yellow("!")} ${adapter.name} now runs the bare argent command (the global ` +
+                  `install on PATH has no node beside it to pin) ${pc.dim(configPath)}`
+              : `${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`
+          );
         } catch {
           // Skip paths that can't be written.
         }

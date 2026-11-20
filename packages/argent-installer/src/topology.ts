@@ -66,6 +66,18 @@ export function isGloballyInstalled(): boolean {
   return getGlobalBinaryPath() !== null;
 }
 
+// Package-manager runs (`npx`, `npm run`) put the project's `node_modules/.bin`
+// first on PATH, which says nothing about the global install behind it.
+function isProjectBinLink(binaryPath: string): boolean {
+  return path.basename(path.dirname(binaryPath)) === ".bin";
+}
+
+/** True iff the `argent` first on PATH is a global install, not a project copy. */
+export function isGlobalInstallFirstOnPath(): boolean {
+  const binaryPath = getGlobalBinaryPath();
+  return binaryPath !== null && !isProjectBinLink(binaryPath);
+}
+
 /**
  * Root directory of the globally-installed argent package, or null when argent
  * is not on PATH or the layout can't be resolved. Used to read the installed
@@ -105,13 +117,13 @@ export function cliPathOf(packageRoot: string): string | null {
  * PATH. Only a `node` beside the argent bin link counts, kept unresolved:
  * `/opt/homebrew/bin/node` survives `brew upgrade`, its Cellar target does not.
  * The bin dir itself is resolved so the entry never pins fnm's per-shell
- * multishell link. Null on Windows, for shims such as Volta and pnpm, and for
- * prefixes without their own `node`.
+ * multishell link. Null on Windows, for shims such as Volta and pnpm, for
+ * prefixes without their own `node` and for a project's `node_modules/.bin`.
  */
 export function getGloballyInstalledLaunchPaths(): { node: string; cli: string } | null {
   if (process.platform === "win32") return null;
   const binaryPath = getGlobalBinaryPath();
-  if (!binaryPath) return null;
+  if (!binaryPath || isProjectBinLink(binaryPath)) return null;
   const packageRoot = packageRootOfBinary(binaryPath);
   const cli = packageRoot ? cliPathOf(packageRoot) : null;
   if (!cli) return null;

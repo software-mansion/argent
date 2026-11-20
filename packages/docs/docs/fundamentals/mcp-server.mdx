@@ -35,7 +35,7 @@ In a global config file, the wizard writes the absolute paths of `node` and of t
 - when the folder of the `argent` command has no `node` file (a custom npm prefix, or `/usr/local` with the Debian and Ubuntu `nodejs` package),
 - in a project config file of a global install.
 
-`argent update` writes the absolute paths again. `nvm uninstall` and `fnm uninstall` also remove the Argent installation of that Node version. After you remove the Node version that runs Argent, install Argent under the new Node version, then run `argent update`.
+`argent update` writes the absolute paths again. If the folder of the `argent` command that comes first on your `PATH` has no `node` file, `argent update` writes the bare `argent` command. `nvm uninstall` and `fnm uninstall` also remove the Argent installation of that Node version. After you remove the Node version that runs Argent, install Argent under the new Node version, then run `argent update`.
 
 ## Add the MCP server by hand
 

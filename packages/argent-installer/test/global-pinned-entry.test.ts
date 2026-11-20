@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { PACKAGE_NAME } from "../src/constants.js";
-import { getGloballyInstalledLaunchPaths } from "../src/topology.js";
+import { getGloballyInstalledLaunchPaths, isGlobalInstallFirstOnPath } from "../src/topology.js";
 import { writeMcpConfigs } from "../src/init-mcp-write.js";
-import { getAdapterByName } from "../src/mcp-configs.js";
+import { ALL_ADAPTERS, getAdapterByName, isArgentManagedEntry } from "../src/mcp-configs.js";
 
 // Real `which` against a staged prefix; /usr/bin and /bin hold no argent.
 const SYSTEM_PATH = `/usr/bin${path.delimiter}/bin`;
@@ -68,6 +68,41 @@ describe.skipIf(process.platform === "win32")("getGloballyInstalledLaunchPaths",
 
     expect(getGloballyInstalledLaunchPaths()).toBeNull();
   });
+  it("returns null for a project's node_modules/.bin that holds a node", () => {
+    const { cli } = stagePrefix(path.join(tmpDir, "prefix"), true);
+    const projectBin = path.join(tmpDir, "project", "node_modules", ".bin");
+    fs.mkdirSync(projectBin, { recursive: true });
+    fs.symlinkSync(cli, path.join(projectBin, "argent"));
+    fs.writeFileSync(path.join(projectBin, "node"), "");
+    vi.stubEnv("PATH", `${projectBin}${path.delimiter}${SYSTEM_PATH}`);
+
+    expect(getGloballyInstalledLaunchPaths()).toBeNull();
+  });
+});
+
+describe.skipIf(process.platform === "win32")("isGlobalInstallFirstOnPath", () => {
+  it("is true for a prefix that cannot be pinned", () => {
+    const { binDir } = stagePrefix(path.join(tmpDir, "npm-global"), false);
+    vi.stubEnv("PATH", `${binDir}${path.delimiter}${SYSTEM_PATH}`);
+
+    expect(isGlobalInstallFirstOnPath()).toBe(true);
+  });
+
+  it("is false when a project's node_modules/.bin shadows the global install", () => {
+    const { binDir, cli } = stagePrefix(path.join(tmpDir, "prefix"), true);
+    const projectBin = path.join(tmpDir, "project", "node_modules", ".bin");
+    fs.mkdirSync(projectBin, { recursive: true });
+    fs.symlinkSync(cli, path.join(projectBin, "argent"));
+    vi.stubEnv("PATH", [projectBin, binDir, SYSTEM_PATH].join(path.delimiter));
+
+    expect(isGlobalInstallFirstOnPath()).toBe(false);
+  });
+
+  it("is false without argent on PATH", () => {
+    vi.stubEnv("PATH", SYSTEM_PATH);
+
+    expect(isGlobalInstallFirstOnPath()).toBe(false);
+  });
 });
 
 describe.skipIf(process.platform === "win32")(
@@ -126,3 +161,30 @@ describe.skipIf(process.platform === "win32")(
     });
   }
 );
+
+describe.skipIf(process.platform === "win32")("a pinned entry with spaces in its paths", () => {
+  const pinned = {
+    command: "/Users/me/Application Support/node 24/bin/node",
+    args: [
+      `/Users/me/Application Support/node 24/lib/node_modules/${PACKAGE_NAME}/dist/cli.js`,
+      "mcp",
+    ],
+  };
+
+  it.each(ALL_ADAPTERS.map((adapter) => [adapter.name, adapter] as const))(
+    "round-trips through the %s global config and is removed again",
+    (_name, adapter) => {
+      vi.stubEnv("HOME", tmpDir);
+      const configPath = adapter.globalPath();
+      if (!configPath) return;
+
+      adapter.write(configPath, pinned);
+
+      const written = adapter.getArgentEntry(configPath);
+      expect(written).toMatchObject(pinned);
+      expect(isArgentManagedEntry(written)).toBe(true);
+      expect(adapter.remove(configPath)).toBe(true);
+      expect(adapter.getArgentEntry(configPath)).toBeNull();
+    }
+  );
+});
