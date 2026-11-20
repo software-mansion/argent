@@ -758,14 +758,32 @@ describe("iOS native network records: Metro filter", () => {
       ipv4: "http://127.0.0.1:8081/symbolicate",
       ipv6: "http://[::1]:8081/hot",
       lan: "http://192.168.1.20:8081/api/users",
+      // The Android emulator's alias for the host; on iOS a real address.
+      alias: "http://10.0.2.2:8081/api/items",
       other: "http://localhost:9000/api/items",
     };
     for (const [name, url] of Object.entries(urls)) agent.complete(name, url);
 
-    expect(store.records(8081).map((r) => r.layerId)).toEqual(["lan", "other"]);
-    expect(store.records(9000).map((r) => r.layerId)).toEqual(["localhost", "ipv4", "ipv6", "lan"]);
+    expect(store.records(8081).map((r) => r.layerId)).toEqual(["lan", "alias", "other"]);
+    expect(store.records(9000).map((r) => r.layerId)).toEqual([
+      "localhost",
+      "ipv4",
+      "ipv6",
+      "lan",
+      "alias",
+    ]);
     // Filtered, not dropped.
-    expect(store.records(4000)).toHaveLength(5);
+    expect(store.records(4000)).toHaveLength(6);
+  });
+
+  it("counts 10.0.2.2 as the host only when the caller names the Android emulator alias", () => {
+    expect(isMetroTraffic("http://10.0.2.2:8081/status", 8081)).toBe(false);
+    expect(isMetroTraffic("http://10.0.2.2:8081/status", 8081, { androidEmulatorHost: true })).toBe(
+      true
+    );
+    expect(
+      isMetroTraffic("http://localhost:8081/status", 8081, { androidEmulatorHost: true })
+    ).toBe(true);
   });
 
   it.each([

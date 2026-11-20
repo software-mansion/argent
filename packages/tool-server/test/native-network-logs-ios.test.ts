@@ -402,6 +402,19 @@ describe("native-network-logs lists an iOS app's native requests", () => {
     });
   });
 
+  it("lists a request to 10.0.2.2 on the Metro port, which is a real host on iOS", async () => {
+    await withService(async (api) => {
+      const app = await launchApp(api);
+      completeRequest(app, "lan", "http://10.0.2.2:8081/api/items");
+      await recorded(api, 1);
+
+      const listing = await list(api);
+      expect(urls(listing)).toEqual(["http://10.0.2.2:8081/api/items"]);
+      expect(listing.total).toBe(1);
+      app.close();
+    });
+  });
+
   it.each([
     ["http://127.0.0.1:80/index.bundle", 80],
     ["https://localhost:443/index.bundle", 443],

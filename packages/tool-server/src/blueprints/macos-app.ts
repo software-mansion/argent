@@ -210,6 +210,12 @@ export interface MacosAppApi {
   isNetworkCaptureStarted(): boolean;
   isNetworkCaptureStopped(): boolean;
   /**
+   * The connected process did not acknowledge the last stop's
+   * Network.disable, so it may still intercept its requests. A late
+   * acknowledgement, a start and a new connection end it.
+   */
+  isNetworkCaptureStopUnconfirmed(): boolean;
+  /**
    * True once per start that found the app running: its requests before the
    * start were not recorded. Reading it clears it.
    */
@@ -297,6 +303,50 @@ function notRunningError(bundleId: string): FailureError {
     "macos_app_connect",
     "not_found"
   );
+}
+
+/**
+ * The error for a call while no copy that argent started runs: a copy that
+ * argent did not start, as launch-app finds it, must quit before a launch can
+ * start one with the library. The build is the one argent started last, else
+ * Spotlight's. With no such copy, or no build to look for, the app is not running.
+ */
+async function noLaunchedCopyError(bundleId: string): Promise<FailureError> {
+  const appPath = getTrackedMacosApp(bundleId)?.appPath ?? (await findMacosAppByBundleId(bundleId));
+  let info: MacosAppInfo | undefined;
+  try {
+    info = appPath ? await inspectMacosApp(appPath) : undefined;
+  } catch {
+    info = undefined;
+  }
+  if (!info || info.bundleId !== bundleId) return notRunningError(bundleId);
+  const copies = await findRunningCopies(bundleId, info.executable);
+  const refuse = (message: string) =>
+    macosFailure(
+      message,
+      FAILURE_CODES.MACOS_APP_ALREADY_RUNNING,
+      "macos_app_reconnect",
+      "validation"
+    );
+  if (copies.same.length > 0) {
+    return refuse(
+      `${bundleId} is running (pid ${copies.same.join(", ")}) without the argent library: ` +
+        `argent did not start that copy, and argent drives only a copy that it starts. ` +
+        `launch-app refuses to start a second copy beside it. That copy may be the user's: ` +
+        `ask the user to quit it, or to agree to boot-device with force: true, which quits it ` +
+        `and starts the app with the library. Unsaved changes in that copy are lost.`
+    );
+  }
+  if (copies.otherBuilds.length > 0) {
+    const where = copies.otherBuilds.map((b) => `${b.appPath} (pid ${b.pid})`).join(", ");
+    return refuse(
+      `${bundleId} is running from ${where} without the argent library: argent did not start ` +
+        `that copy, and argent drives only a copy that it starts. argent runs one copy of a ` +
+        `bundle id at a time, so launch-app refuses to start ${info.appPath} beside it. Quit ` +
+        `that copy if it is yours.`
+    );
+  }
+  return notRunningError(bundleId);
 }
 
 /**
@@ -485,10 +535,19 @@ class LibraryChannel {
   armed = false;
   /** The Network.enable on its way, resolved by the acknowledgement. */
   enabling?: Promise<boolean>;
+  /** Resolves `enabling` as armed when the acknowledgement of an earlier Network.enable arms the channel first. */
+  armEnabling?: () => void;
   /** Why the last Network.enable did not arm this channel. */
   enableFailure?: string;
-  /** The CDP id of the last Network.enable sent on this channel. */
-  private enableId?: number;
+  /** A stop's Network.disable timed out, and no acknowledgement of a Network.disable came since. */
+  stopUnconfirmed = false;
+  /**
+   * The CDP ids of the Network.enable requests sent on this channel since its
+   * last Network.disable: an acknowledgement of any of them arms it.
+   */
+  private readonly enableIds = new Set<number>();
+  /** The CDP ids of the Network.disable requests sent on this channel. */
+  private readonly disableIds = new Set<number>();
   private readonly pending = new Map<number, PendingCall>();
   /** The requester's id of each CDP request this channel sent, by its id on the wire. */
   private readonly cdpIds = new Map<number, number>();
@@ -518,7 +577,11 @@ class LibraryChannel {
       label: `macos-app ${bundleId}`,
       send: (frame) => {
         const p = (frame as { payload: { id: number; method: string } }).payload;
-        if (p.method === "Network.enable") this.enableId = p.id;
+        if (p.method === "Network.enable") this.enableIds.add(p.id);
+        if (p.method === "Network.disable") {
+          this.enableIds.clear();
+          this.disableIds.add(p.id);
+        }
         return this.sendCdp(frame as { type: string; payload: { id: number } });
       },
     });
@@ -633,8 +696,11 @@ class LibraryChannel {
       if (p?.id !== undefined) {
         const id = typeof p.id === "number" ? this.cdpIds.get(p.id) : undefined;
         // An app held suspended (Instruments, a debugger) acknowledges after the
-        // request timed out, and from then on it captures.
-        if (id !== undefined && id === this.enableId && "result" in p) this.network.enabled(this);
+        // request timed out, also while a retry waits for its own, and from then on it captures.
+        if (id !== undefined && this.enableIds.has(id) && "result" in p) this.network.enabled(this);
+        if (id !== undefined && this.disableIds.has(id) && "result" in p) {
+          this.stopUnconfirmed = false;
+        }
         if (id !== undefined && this.cdp.handleResponse({ ...p, id })) {
           this.cdpIds.delete(p.id as number);
         }
@@ -980,6 +1046,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       if (!captureStarted) return;
       ch.armed = true;
       delete ch.enableFailure;
+      ch.armEnabling?.();
     },
   };
 
@@ -988,28 +1055,31 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
    * the reply. The reply arms the channel as its frame is read, before the
    * events after it, unless capture was stopped meanwhile. A channel that does
    * not answer in time stays unarmed until its late reply comes: the next
-   * start asks again.
+   * start asks again, and the late reply of an earlier start also arms it.
    */
   const enableOn = (ch: LibraryChannel): Promise<boolean> => {
     if (ch.armed) return Promise.resolve(true);
     if (ch.enabling) return ch.enabling;
     delete ch.enableFailure;
-    const enabling = ch.cdp
-      .request("Network.enable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS })
-      .then(
-        () => ch.armed,
+    const enabling = new Promise<boolean>((resolve) => {
+      ch.armEnabling = () => resolve(true);
+      ch.cdp.request("Network.enable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS }).then(
+        () => resolve(ch.armed),
         (err: unknown) => {
-          if (!ch.isOpen || disposed) return false;
-          ch.enableFailure =
-            getFailureSignal(err)?.error_kind === "timeout"
-              ? `the app did not acknowledge Network.enable within ${NETWORK_CAPTURE_ACK_TIMEOUT_MS / 1000} s; network-capture-start asks again`
-              : `the app did not enable capture (${errorMessage(err)}); network-capture-start asks again`;
-          return false;
+          if (ch.isOpen && !disposed && !ch.armed) {
+            ch.enableFailure =
+              getFailureSignal(err)?.error_kind === "timeout"
+                ? `the app did not acknowledge Network.enable within ${NETWORK_CAPTURE_ACK_TIMEOUT_MS / 1000} s; network-capture-start asks again`
+                : `the app did not enable capture (${errorMessage(err)}); network-capture-start asks again`;
+          }
+          resolve(false);
         }
-      )
-      .finally(() => {
-        if (ch.enabling === enabling) ch.enabling = undefined;
-      });
+      );
+    }).finally(() => {
+      if (ch.enabling !== enabling) return;
+      ch.enabling = undefined;
+      ch.armEnabling = undefined;
+    });
     ch.enabling = enabling;
     return enabling;
   };
@@ -1044,7 +1114,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   /** Connects through the listening socket of the app argent started (a new tool-server, or a dropped channel). */
   const reconnect = async (): Promise<LibraryChannel> => {
     const app = await runningTrackedApp(bundleId);
-    if (!app) throw notRunningError(bundleId);
+    if (!app) throw await noLaunchedCopyError(bundleId);
     const notConnected = (detail: string, cause?: unknown) =>
       macosFailure(
         `${bundleId} is running (pid ${app.pid}) but argent cannot reach its library: ${detail} ` +
@@ -1648,6 +1718,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       captureStopped = false;
       const startedNow = !captureStarted;
       captureStarted = true;
+      if (channel) channel.stopUnconfirmed = false;
       // A stop of the app's services during this start ends the capture: the
       // next service starts with capture off.
       const servicesStopped = {
@@ -1663,15 +1734,20 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         ch = await ensureChannel();
       } catch (err) {
         if (disposed) return servicesStopped;
-        const notRunning = errorCode(err) === FAILURE_CODES.MACOS_APP_NOT_RUNNING;
+        const code = errorCode(err);
+        const notRunning = code === FAILURE_CODES.MACOS_APP_NOT_RUNNING;
+        // A copy that argent did not start: capture arms only in a copy that argent starts.
+        const notOurs = code === FAILURE_CODES.MACOS_APP_ALREADY_RUNNING;
         // The app runs, so its requests before this start are not recorded, also
         // when argent later reconnects to a process it was connected to before.
-        if (!notRunning && startedNow && !armedSinceLaunch) captureGap = true;
+        if (!notRunning && !notOurs && startedNow && !armedSinceLaunch) captureGap = true;
         return {
           armed: false,
           reason: notRunning
             ? `${bundleId} is not running; capture arms when boot-device, launch-app or restart-app starts it`
-            : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
+            : notOurs
+              ? `capture arms when argent starts ${bundleId}, which needs the copy that runs now to quit first: ${errorMessage(err)}`
+              : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
         };
       }
       // A launch this start waited for armed its process from the start.
@@ -1692,7 +1768,9 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       // The next start sends Network.enable again, whatever became of one on its way now.
       ch.armed = false;
       ch.enabling = undefined;
+      ch.armEnabling = undefined;
       delete ch.enableFailure;
+      ch.stopUnconfirmed = false;
       try {
         await ch.cdp.request("Network.disable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS });
         return { confirmed: true };
@@ -1706,6 +1784,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           };
         }
         if (!ch.isOpen) return { confirmed: true };
+        // Not when a start during the wait turned capture on again.
+        if (captureStopped) ch.stopUnconfirmed = true;
         return {
           confirmed: false,
           reason: `${
@@ -1718,6 +1798,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     },
     isNetworkCaptureStarted: () => captureStarted,
     isNetworkCaptureStopped: () => captureStopped,
+    isNetworkCaptureStopUnconfirmed: () => liveChannel()?.stopUnconfirmed === true,
     takeCaptureGap: () => {
       const gap = captureGap;
       captureGap = false;
