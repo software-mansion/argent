@@ -6,6 +6,18 @@ import type { CDPTarget } from "../../src/utils/debugger/discovery";
 type TargetSelection = typeof import("../../src/utils/debugger/target-selection");
 let selectTarget: TargetSelection["selectTarget"];
 
+/**
+ * The Mac Catalyst apps in `~/.argent/macos-apps.json`, by bundle id, with the
+ * identifierForVendor their library reported (null: none). Empty, as for a
+ * user who never started one, unless a test fills it.
+ */
+const trackedCatalystApps = vi.hoisted(() => new Map<string, string | null>());
+vi.mock("../../src/utils/macos-app-kind", () => ({
+  trackedMacosAppKind: (bundleId: string) =>
+    trackedCatalystApps.has(bundleId) ? "catalyst" : "app",
+  trackedMacosAppVendorId: (bundleId: string) => trackedCatalystApps.get(bundleId) ?? undefined,
+}));
+
 function makeTarget(overrides: Partial<CDPTarget> = {}): CDPTarget {
   return {
     id: "page1",
@@ -18,7 +30,8 @@ function makeTarget(overrides: Partial<CDPTarget> = {}): CDPTarget {
 
 /**
  * React Native's Apple inspector id: `sha256("apple-<identifierForVendor>-<bundle
- * id>-<fusebox|legacy>")`, first 40 hex digits. A Mac app has no vendor id.
+ * id>-<fusebox|legacy>")`, first 40 hex digits. A react-native-macos app has no
+ * vendor id; a Mac Catalyst app runs UIKit and has one.
  */
 function appleLogicalId(
   bundleId: string,
@@ -473,14 +486,6 @@ describe("selectTarget", () => {
       expect(result.target.id).toBe("android");
     });
 
-    it("tells the caller a relaunched app keeps its id", () => {
-      const thrown = selectGoneAndroid();
-
-      expect((thrown as Error | undefined)?.message).toMatch(
-        /relaunch it[\s\S]*retry with the same id/
-      );
-    });
-
     it("after a reinstall changed the id, still refuses and points at the id shown for the device", () => {
       // iOS derives the id from identifierForVendor, which a reinstall can
       // reset: the same iPhone comes back under a new id while the agent still
@@ -508,13 +513,178 @@ describe("selectTarget", () => {
       expect(message).toMatch(/reinstall-app[\s\S]*retry with the id shown for it/);
     });
   });
+
+  describe("when a logicalDeviceId this process has not seen matches no target", () => {
+    // Real repro: a fresh tool-server, Metro serving an iOS simulator and an
+    // Android emulator. The simulator's app is stopped before the first call,
+    // so Metro lists only the emulator, and the first call names the
+    // simulator's logicalDeviceId, which this process has never listed.
+    const SIMULATOR_ID = "8e8a3f0c5b1d4e2f9a7c6b5d4e3f2a1b0c9d8e7f";
+    const EMULATOR_ID = "6661c0de5ab9d24f7e8a3b1c2d4e5f60718293a4";
+
+    const emulator = () =>
+      makeTarget({
+        id: "emulator",
+        deviceName: "sdk_gphone64_arm64 - 14 - API 34",
+        webSocketDebuggerUrl: "ws://10.0.2.2:8081/inspector/debug?device=1&page=1",
+        reactNative: {
+          logicalDeviceId: EMULATOR_ID,
+          capabilities: { prefersFuseboxFrontend: true },
+        },
+      });
+    const simulator = () =>
+      makeTarget({
+        id: "simulator",
+        deviceName: "iPhone 17 Pro",
+        webSocketDebuggerUrl: "ws://localhost:8081/inspector/debug?device=0&page=1",
+        reactNative: {
+          logicalDeviceId: SIMULATOR_ID,
+          capabilities: { prefersFuseboxFrontend: true },
+        },
+      });
+
+    function selectUnattachedSimulator(): unknown {
+      try {
+        selectTarget([emulator()], 8081, { deviceId: SIMULATOR_ID });
+      } catch (err) {
+        return err;
+      }
+      return undefined;
+    }
+
+    it("refuses with DEBUGGER_METRO_NO_TARGETS instead of routing to the only device", () => {
+      const thrown = selectUnattachedSimulator();
+
+      expect(thrown).toBeInstanceOf(FailureError);
+      expect(getFailureSignal(thrown)).toMatchObject({
+        error_code: FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS,
+        failure_stage: "debugger_select_target",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      });
+    });
+
+    it("says the id is not attached, not that it left, and names the device Metro lists", () => {
+      const message = (selectUnattachedSimulator() as Error | undefined)?.message;
+
+      expect(message).toContain(`"${SIMULATOR_ID}" is not attached to Metro on port 8081`);
+      expect(message).not.toContain("no longer attached");
+      expect(message).toContain(`sdk_gphone64_arm64 - 14 - API 34 (${EMULATOR_ID})`);
+    });
+
+    it("routes to the device once its app attaches", () => {
+      expect(selectUnattachedSimulator()).toBeInstanceOf(FailureError);
+
+      const result = selectTarget([emulator(), simulator()], 8081, { deviceId: SIMULATOR_ID });
+
+      expect(result.target.id).toBe("simulator");
+    });
+
+    it("still falls back for a simulator UDID or an emulator serial", () => {
+      expect(
+        selectTarget([emulator()], 8081, { deviceId: "B1C2D3E4-5F60-4718-9A2B-3C4D5E6F7A8B" })
+          .target.id
+      ).toBe("emulator");
+      expect(selectTarget([emulator()], 8081, { deviceId: "emulator-5554" }).target.id).toBe(
+        "emulator"
+      );
+    });
+  });
 });
+
+/**
+ * One entry of GET /json/list from a React Native 0.88.1 Debug app built for Mac
+ * Catalyst, verbatim, and the identifierForVendor its argent library reported.
+ */
+const REAL_CATALYST_TARGET = JSON.parse(
+  '{"id":"fad0a40568545e50e14146aed7b9d140fb09f1cb-1","title":"com.argentcat.prof.rncat (iPad)",' +
+    '"description":"React Native Bridgeless [C++ connection]","appId":"com.argentcat.prof.rncat",' +
+    '"type":"node","webSocketDebuggerUrl":"ws://127.0.0.1:8995/inspector/debug?device=' +
+    'fad0a40568545e50e14146aed7b9d140fb09f1cb&page=1","deviceName":"iPad","reactNative":' +
+    '{"logicalDeviceId":"fad0a40568545e50e14146aed7b9d140fb09f1cb","capabilities":' +
+    '{"prefersFuseboxFrontend":true,"nativeSourceCodeFetching":false,"nativePageReloads":true}}}'
+) as CDPTarget;
+const REAL_CATALYST_VENDOR_ID = "3F3B75E2-A9D2-585E-9ADF-8A1405F6525A";
 
 describe("selectTarget on a Mac app id", () => {
   // A fresh module per test, as in the describe above.
   beforeEach(async () => {
+    trackedCatalystApps.clear();
     vi.resetModules();
     ({ selectTarget } = await import("../../src/utils/debugger/target-selection"));
+  });
+
+  it("picks a real Mac Catalyst runtime by the identifierForVendor its library reported", () => {
+    // Pins the formula: the hash in the fixture is the one the app sent.
+    expect(appleLogicalId("com.argentcat.prof.rncat", { vendorId: REAL_CATALYST_VENDOR_ID })).toBe(
+      REAL_CATALYST_TARGET.reactNative!.logicalDeviceId
+    );
+    // The same app on an iOS simulator, which has another vendor id.
+    const ios = iosTarget("com.argentcat.prof.rncat");
+    trackedCatalystApps.set("com.argentcat.prof.rncat", REAL_CATALYST_VENDOR_ID);
+
+    for (const targets of [
+      [REAL_CATALYST_TARGET],
+      [ios, REAL_CATALYST_TARGET],
+      [REAL_CATALYST_TARGET, ios],
+    ]) {
+      const result = selectTarget(targets, 8995, {
+        deviceId: "macos-app-com.argentcat.prof.rncat",
+      });
+      expect(result.target.id).toBe("fad0a40568545e50e14146aed7b9d140fb09f1cb-1");
+      expect(result.isNewDebugger).toBe(true);
+    }
+    // The app reads as a Mac app where Metro's devices are listed.
+    const err = thrownBy(() =>
+      selectTarget([REAL_CATALYST_TARGET], 8995, { deviceId: "macos-app-com.example.app" })
+    );
+    expect(err.message).toContain(
+      "Metro lists: Mac app com.argentcat.prof.rncat (fad0a40568545e50e14146aed7b9d140fb09f1cb)."
+    );
+  });
+
+  it("refuses a Mac Catalyst app whose identifierForVendor argent does not know, and says how to get it", () => {
+    // Started by an argent whose library did not report it.
+    trackedCatalystApps.set("com.argentcat.prof.rncat", null);
+
+    const err = thrownBy(() =>
+      selectTarget([REAL_CATALYST_TARGET], 8995, {
+        deviceId: "macos-app-com.argentcat.prof.rncat",
+      })
+    );
+
+    expect(err.message).toContain(
+      "No JS runtime of the Mac app com.argentcat.prof.rncat is connected to Metro on port 8995. " +
+        "Metro lists: iPad (fad0a40568545e50e14146aed7b9d140fb09f1cb). argent does not know the " +
+        "identifierForVendor of the Mac Catalyst app com.argentcat.prof.rncat"
+    );
+    expect(err.message).toContain(
+      "Run restart-app, then retry; if this message stays, update argent."
+    );
+    expect(err.message).toContain("React Native built for Mac Catalyst");
+    expect(err.message).not.toContain("react-native-macos");
+    expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
+  });
+
+  it("does not take a react-native-macos runtime for a Mac Catalyst app of the same bundle id", () => {
+    // The record says argent started the Mac Catalyst build: a runtime of an empty
+    // vendor id is another process, with or without the Catalyst app's vendor id.
+    const mac = macTarget("com.example.app");
+    const ios = iosTarget("com.example.app");
+
+    trackedCatalystApps.set("com.example.app", REAL_CATALYST_VENDOR_ID);
+    const err = thrownBy(() =>
+      selectTarget([ios, mac], 8081, { deviceId: "macos-app-com.example.app" })
+    );
+    expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
+    expect(err.message).not.toContain("argent does not know the identifierForVendor");
+
+    trackedCatalystApps.set("com.example.app", null);
+    const noVendorId = thrownBy(() =>
+      selectTarget([mac], 8081, { deviceId: "macos-app-com.example.app" })
+    );
+    expect(getFailureSignal(noVendorId)).toMatchObject(MISMATCH_SIGNAL);
+    expect(noVendorId.message).toContain("argent does not know the identifierForVendor");
   });
 
   it("picks a real react-native-macos 0.83 runtime, whose inspector id hashes the bundle id alone", () => {

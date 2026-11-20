@@ -15,6 +15,7 @@ import { resolveTvApi } from "../tv/tv-service";
 import type { TvControlApi } from "../../blueprints/tv-control-types";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
+import { redactTypedSecrets } from "../../utils/typed-secrets";
 import { ensureDeps } from "../../utils/check-deps";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
@@ -198,7 +199,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 // The matching engine lives in utils/ui-tree-match so the flow directives and
@@ -210,7 +211,6 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
     params.expectedText,
     matches,
     params.textMatch,
-    undefined,
     isMacos(params)
   );
 }
@@ -261,11 +261,16 @@ function timeoutNote(
       // Visible-first, mirroring evaluateCondition, so the note quotes the
       // element the check read, and the text it read (a Mac app's container
       // is checked against its subtree text).
-      const first = textCheckTarget(matches, undefined, isMacos(params));
+      const first = textCheckTarget(matches, isMacos(params));
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
-      base = first
-        ? `element matched but its text was "${macFieldText(first, isMacos(params)) ?? assertText(first)}" (wanted to ${wanted} "${params.expectedText}")`
-        : "no element matched the selector before timeout";
+      // The text comes off the screen, where a field shows a typed secret.
+      const shown = first
+        ? redactTypedSecrets(params.udid, macFieldText(first, isMacos(params)) ?? assertText(first))
+        : undefined;
+      base =
+        shown !== undefined
+          ? `element matched but its text was "${shown}" (wanted to ${wanted} "${params.expectedText}")`
+          : "no element matched the selector before timeout";
       break;
     }
     case "hidden":

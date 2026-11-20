@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
 import * as net from "node:net";
 import type { DeviceInfo } from "@argent/registry";
 
@@ -31,6 +32,7 @@ const probe = vi.hoisted(() => ({
 
 vi.mock("@argent/native-devtools-ios", () => ({
   bootstrapDylibPath: () => "/fake/dylibs/libArgentInjectionBootstrap.dylib",
+  audioDylibPath: () => "/fake/dylibs/libArgentAudio.dylib",
   bootstrapDylibPathTcp: () => "/fake/dylibs/tcp/libArgentInjectionBootstrap.dylib",
   bootstrapDylibPathTvos: () => "/fake/dylibs/tvos/libArgentInjectionBootstrap.dylib",
   tcpInjectionDylibs: () => [],
@@ -113,10 +115,12 @@ import {
   type NativeDevtoolsApi,
 } from "../src/blueprints/native-devtools";
 import { NATIVE_READY_TIMEOUT_MS } from "../src/tools/flows/flow-run";
-import { parsePsElapsedSeconds, processCarriesInjection } from "../src/utils/ios-host";
+import { audioDir, parsePsElapsedSeconds, processCarriesInjection } from "../src/utils/ios-host";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 
 const UDID = processScopedUdid("-1111-2222-3333-444444444444");
+// Arming creates the simulator's audio control directory in /tmp: remove what this file's fake simulator left.
+afterAll(() => fs.rmSync(audioDir(UDID), { recursive: true, force: true }));
 const SOCKET = `/tmp/argent-nd-${UDID.slice(0, 8)}.sock`;
 const BUNDLE = "com.example.app";
 const PID = 4242;
