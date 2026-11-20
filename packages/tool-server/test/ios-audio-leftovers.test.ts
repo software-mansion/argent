@@ -66,6 +66,14 @@ describe("clearAudioLeftovers", () => {
     expect(fs.readdirSync(dir).sort()).toEqual(["in-" + LIVE + "-aaaa.ring", "input"].sort());
   });
 
+  it("removes the status file of an app that is gone and keeps a live or pid-less one", async () => {
+    write("st.com.example.gone", `proto=1\npid=${DEAD}\nstate=dormant\n`);
+    write("st.com.example.live", `proto=1\npid=${LIVE}\nstate=dormant\n`);
+    write("st.com.example.partial", "proto=1\n");
+    await clearAudioLeftovers(dir);
+    expect(fs.readdirSync(dir).sort()).toEqual(["st.com.example.live", "st.com.example.partial"]);
+  });
+
   it("never removes a ring outside the control directory", async () => {
     const outside = path.join(os.tmpdir(), `argent-leftovers-${LIVE}.ring`);
     fs.writeFileSync(outside, "");

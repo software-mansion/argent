@@ -191,21 +191,21 @@ describe("hook state", () => {
     expect(decideHookState(status({ state: "dormant" }), true, pid)).toBe("dormant");
     expect(decideHookState(status({ state: "active" }), true, pid)).toBe("active");
     expect(decideHookState(status({}), true, pid)).toBe("active"); // no state key: a full helper status
-    expect(decideHookState(status({ state: "dormant" }), false, pid)).toBe("stale"); // its process is gone
+    expect(decideHookState(status({ state: "dormant" }), false, pid)).toBe("none"); // its process is gone: a leftover
     expect(decideHookState(status({ state: "dormant" }), true, pid + 1)).toBe("stale"); // relaunched, not written yet
     expect(decideHookState(status({ state: "dormant" }), true, null)).toBe("stale"); // the app is not running
     expect(decideHookState(status({ proto: 2 }), true, pid)).toBe("old-proto");
     expect(decideHookState(parseAppStatus(`pid=${pid}\n`), true, pid)).toBe("old-proto"); // pre-proto hook
   });
 
-  it("reads none without a file and dormant/active/stale/old-proto from one", async () => {
+  it("reads none without a file or from a dead process's, and dormant/active/stale/old-proto from a live one", async () => {
     expect((await readAppHook(session, BUNDLE)).state).toBe("none");
     writeStatus({ state: "dormant" });
     expect((await readAppHook(session, BUNDLE)).state).toBe("dormant");
     writeStatus({ state: "active" });
     expect((await readAppHook(session, BUNDLE)).state).toBe("active");
-    writeStatus({ state: "dormant", pid: 2 ** 22 + 1 }); // dead pid
-    expect((await readAppHook(session, BUNDLE)).state).toBe("stale");
+    writeStatus({ state: "dormant", pid: 2 ** 22 + 1 }); // dead pid: the app running now never wrote one
+    expect((await readAppHook(session, BUNDLE)).state).toBe("none");
     writeStatus({ proto: 0 });
     expect((await readAppHook(session, BUNDLE)).state).toBe("old-proto");
     runningPid = process.pid + 1; // the app was relaunched; the file is the old process's

@@ -12,6 +12,9 @@ import { feederGone } from "./ios-audio-rings";
  *
  * and a tool-server that starts using the simulator removes what belongs to a pid that is gone, never what a live
  * process owns. A pid that was reused by another process keeps its files: that errs on the side of leaving them.
+ *
+ * The apps' own status files (`st.<bundleId>`, with a `pid=<pid>` line) go the same way once their app is gone:
+ * the hook never removes them, and a stale one would be read as an app that carries the hook.
  */
 
 /** The line that marks a control file as written by this process. */
@@ -45,8 +48,8 @@ async function abandoned(text: string): Promise<boolean> {
 }
 
 /**
- * Removes what dead tool-servers left in the simulator's audio control directory, so apps hear the microphone
- * again. Safe to run while other tool-servers drive the simulator; a missing directory is a no-op.
+ * Removes what dead tool-servers and dead apps left in the simulator's audio control directory, so apps hear the
+ * microphone again. Safe to run while other tool-servers drive the simulator; a missing directory is a no-op.
  */
 export async function clearAudioLeftovers(dir: string): Promise<void> {
   let names: string[];
@@ -80,6 +83,15 @@ export async function clearAudioLeftovers(dir: string): Promise<void> {
     if (ring && path.dirname(ring) === dir && /^in-/.test(path.basename(ring))) {
       fs.rmSync(ring, { force: true });
     }
+  }
+  for (const name of names) {
+    if (!name.startsWith("st.")) continue;
+    const file = path.join(dir, name);
+    const text = read(file);
+    if (text === null) continue;
+    const pid = Number(field(text, "pid"));
+    // Without a pid (a half-written file) it stays; re-read so a relaunched app's fresh status is not removed.
+    if (pid > 0 && !processAlive(pid) && read(file) === text) fs.rmSync(file, { force: true });
   }
   for (const name of names) {
     const owner = /^(?:in|clip)-(\d+)-/.exec(name);

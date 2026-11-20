@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -22,6 +22,10 @@ vi.mock("node:child_process", async () => {
     ) => {
       const callback = typeof opts === "function" ? opts : cb!;
       const i = args.indexOf("launchctl");
+      if (failAudioDirSetenv && i >= 0 && args[i + 2] === "ARGENT_AUDIO_DIR") {
+        callback(new Error("launchctl setenv failed"), { stdout: "", stderr: "" });
+        return;
+      }
       if (i >= 0 && args[i + 1] === "setenv") setenvCalls.push(args.slice(i + 2));
       if (i >= 0 && args[i + 1] === "unsetenv") unsetenvCalls.push(args[i + 2]);
       const isGetenv =
@@ -62,6 +66,7 @@ vi.mock("@argent/native-devtools-ios", async () => {
 
 let flagOn = true;
 let audioDylibMissing = false;
+let failAudioDirSetenv = false;
 vi.mock("@argent/configuration-core", async () => {
   const actual = await vi.importActual<typeof import("@argent/configuration-core")>(
     "@argent/configuration-core"
@@ -89,6 +94,7 @@ describe("arming inserts the audio hook per the ios-audio-always-inserted flag",
     currentAudioDir = "";
     fs.rmSync(audioDir(UDID), { recursive: true, force: true });
   });
+  afterEach(() => fs.rmSync(audioDir(UDID), { recursive: true, force: true }));
 
   it("on (the default): bootstrap then the audio hook, the control directory set and created", async () => {
     flagOn = true;
@@ -133,6 +139,28 @@ describe("arming inserts the audio hook per the ios-audio-always-inserted flag",
     }
     expect(inserted()).toBe("/fake/libArgentInjectionBootstrap.dylib");
     expect(setenvCalls.some((a) => a[0] === "ARGENT_AUDIO_DIR")).toBe(false);
+  });
+
+  it("arms without audio when the control directory cannot be created or announced", async () => {
+    flagOn = true;
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const arm = () =>
+      localIosHost.setupNativeDevtoolsEnv(UDID, { transport: "unix", socketPath: "/tmp/x.sock" });
+    try {
+      fs.writeFileSync(audioDir(UDID), ""); // a file in the way: mkdir throws
+      await expect(arm()).resolves.toBeUndefined();
+      expect(setenvCalls.some((a) => a[0] === "ARGENT_AUDIO_DIR")).toBe(false);
+      fs.rmSync(audioDir(UDID));
+
+      failAudioDirSetenv = true;
+      await expect(arm()).resolves.toBeUndefined();
+      expect(inserted()).toBe("/fake/libArgentInjectionBootstrap.dylib:/fake/libArgentAudio.dylib");
+      expect(stderr).toHaveBeenCalledTimes(2);
+      expect(String(stderr.mock.calls[0][0])).toContain("audio setup failed");
+    } finally {
+      failAudioDirSetenv = false;
+      stderr.mockRestore();
+    }
   });
 
   it("clears what a killed tool-server left, flag or not, and keeps a live one's", async () => {

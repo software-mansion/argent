@@ -74,8 +74,8 @@ function writeAtomic(file: string, text: string): void {
 
 /**
  * Creates the control directory, inserts the audio dylib into the simulator's launchd environment
- * and points it at the directory. Nothing audio-related is loaded into any process before this runs,
- * so a simulator where audio is never mocked is untouched. Apps launched from now on carry the hook;
+ * and points it at the directory. Arming already did all of this unless the `ios-audio-always-inserted`
+ * flag is off (see ios-host.ts); then this is the first insertion. Apps launched from now on carry the hook;
  * apps that were already running keep their old environment and need a restart (see
  * {@link readAppStatus} for telling them apart).
  */
@@ -230,8 +230,9 @@ export function readAppStatus(session: AudioSession, bundleId: string): AppAudio
 
 /**
  * Whether the hook is loaded in the app, from its status file alone:
- *   none       no file: the app was launched before arming, or by something that replaced the injected libraries
- *   stale      the file's process is gone, or is not the app's running process (relaunched, not written yet)
+ *   none       no file, or one a dead process left: the app was launched before arming, or by something that
+ *              replaced the injected libraries
+ *   stale      the file's live process is not the app's running process (relaunched, not written yet)
  *   old-proto  a hook speaking another contract version
  *   dormant    loaded, the app has not opened audio yet: requests apply when it does
  *   active     loaded and running its helper: requests are acknowledged
@@ -243,9 +244,8 @@ export function decideHookState(
   pidAlive: boolean,
   runningPid: number | null
 ): HookState {
-  if (!status) return "none";
-  if (!(status.pid > 0) || !pidAlive || runningPid === null || runningPid !== status.pid)
-    return "stale";
+  if (!status || !(status.pid > 0) || !pidAlive) return "none";
+  if (runningPid === null || runningPid !== status.pid) return "stale";
   if (status.proto !== AUDIO_HOOK_PROTO) return "old-proto";
   return status.state;
 }

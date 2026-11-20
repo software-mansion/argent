@@ -377,13 +377,26 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   }
 
   if (audioDylib) {
-    // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
-    fs.mkdirSync(audioDir(nativeId), { recursive: true, mode: 0o700 });
-    await execFileAsync(
-      "xcrun",
-      [...prefix, "spawn", nativeId, "launchctl", "setenv", "ARGENT_AUDIO_DIR", audioDir(nativeId)],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
-    );
+    // Best-effort: the injection above is in place, so a failure here must cost only the audio tools, not the arming.
+    try {
+      // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
+      fs.mkdirSync(audioDir(nativeId), { recursive: true, mode: 0o700 });
+      await execFileAsync(
+        "xcrun",
+        [
+          ...prefix,
+          "spawn",
+          nativeId,
+          "launchctl",
+          "setenv",
+          "ARGENT_AUDIO_DIR",
+          audioDir(nativeId),
+        ],
+        { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+      );
+    } catch (err) {
+      process.stderr.write(`[ios-host] audio setup failed for ${nativeId}: ${String(err)}\n`);
+    }
   }
 
   await ensureAccessibilityEnabled(udid);

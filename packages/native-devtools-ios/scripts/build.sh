@@ -194,8 +194,9 @@ xcrun --sdk iphonesimulator clang \
   "${SRC_DIR}/InjectionBootstrap.c" \
   -o "${DEST_FILE_BS}"
 
-# The audio mock is its own dylib, injected by the tool-server only once an audio tool is used, so a simulator
-# where audio is never mocked does not load it. Local iOS only: no tvOS or tcp variant.
+# The audio mock is its own dylib, inserted by the tool-server into every process of a locally armed simulator at
+# arming time (ios-audio-always-inserted, on by default; off, only once an audio tool is used). Local iOS only: no
+# tvOS or tcp variant.
 if [[ "$TRANSPORT" == "unix" ]]; then
   echo "Building libArgentAudio.dylib..."
   # CoreAudio is not linked: the hook binds to it by flat lookup, so a process that never loads it stays clean.
