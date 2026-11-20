@@ -1369,7 +1369,15 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }
         if (disposed) return undefined;
         if (exited) return gone;
-        const launched = ofLaunch();
+        let launched = ofLaunch();
+        // A process that exits before its first handshake closes no
+        // connection, so only the host tells that it is gone.
+        if (!launched) {
+          const now = await host.inspectRunningApp(udid, bundleId).catch(() => null);
+          if (disposed) return undefined;
+          if (now?.running === false) return gone;
+          launched = ofLaunch();
+        }
         const shownPid = pid ?? launched?.pid;
         const pidText = shownPid !== undefined ? ` (pid ${shownPid})` : "";
         if (launched?.armed) {
