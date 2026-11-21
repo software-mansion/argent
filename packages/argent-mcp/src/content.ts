@@ -30,7 +30,7 @@ function imageBlock(data: Buffer, mimeType: string): ContentBlock {
 // `file://` needs fs — Node's `fetch` only supports `http(s)://`, and the
 // ios-remote screenshot transport writes PNGs to a temp dir under a `file://`
 // URL.
-async function fetchPngBytes(url: string): Promise<Buffer | null> {
+async function fetchPngBytes(url: string, signal?: AbortSignal): Promise<Buffer | null> {
   try {
     let buf: Buffer;
     if (url.startsWith("file://")) {
@@ -38,7 +38,7 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
       const { fileURLToPath } = await import("node:url");
       buf = await readFile(fileURLToPath(url));
     } else {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal });
       if (!res.ok) return null;
       buf = Buffer.from(await res.arrayBuffer());
     }
@@ -77,7 +77,7 @@ export async function toMcpContent(
         return blocks;
       }
       // No image artifact — fall back to older tool-servers' `{ url, path }`.
-      const legacy = await legacyImageContent(rewritten, suppressImage);
+      const legacy = await legacyImageContent(rewritten, suppressImage, ctx.signal);
       const out = requestedOut(args);
       if (!out) return legacy;
       const notSaved = `Could not save to ${out}: no image file came back, so any file already there is not this capture.`;
@@ -138,14 +138,15 @@ function stringifyForText(value: unknown): string {
  */
 async function legacyImageContent(
   result: unknown,
-  suppressImage: boolean
+  suppressImage: boolean,
+  signal?: AbortSignal
 ): Promise<ContentBlock[]> {
   if (result && typeof result === "object" && "url" in result) {
     const r = result as { url: string; path?: string };
     if (suppressImage) {
       return [{ type: "text" as const, text: `Saved: ${r.path ?? ""}` }];
     }
-    const buf = await fetchPngBytes(r.url);
+    const buf = await fetchPngBytes(r.url, signal);
     if (buf) {
       return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${r.path ?? ""}` }];
     }

@@ -15,13 +15,16 @@ import {
 import { cleanupRetiredFiles, formatRetiredCleanup } from "./retired-files.js";
 import {
   AGENTS_DIR,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   formatShellCommand,
+  getRemainingGlobalBinaryPath,
   getGloballyInstalledPackageRoot,
+  globalCommandOptions,
   globalUninstallCommand,
   localUninstallCommand,
   isDeclaredLocally,
+  isArgentOnPath,
   isGloballyInstalled,
   LEGACY_ARGENT_SKILL_NAMES,
   probeLocalInstall,
@@ -35,6 +38,7 @@ import {
   type ShellCommand,
 } from "./utils.js";
 import { execShellCommandSync } from "./shell.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { removeCliRecordFor } from "./cli-record.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { PACKAGE_NAME } from "./constants.js";
@@ -424,13 +428,14 @@ export async function uninstall(args: string[]): Promise<void> {
       removeTargets = targetDecision.targets;
     }
 
-    // Clean every scope EXCEPT those keeping a RETAINED install wired up: a kept
-    // global install keeps its global-scope entries (and, in global mode, its
-    // project-scope entries too — those run the bare `argent` command); a
-    // local-mode project keeps its project-scope entries (committed team files)
-    // unless the local install itself is being removed.
+    // Clean every scope EXCEPT those keeping a RETAINED install wired up: while
+    // argent is on PATH and the global is not being removed, its global-scope
+    // entries stay (and, in global mode, the project-scope ones too — those run
+    // the bare `argent` command); a local-mode project keeps its project-scope
+    // entries (committed team files) unless the local install itself is being
+    // removed.
     const scopesToClean = new Set<"local" | "global">(["local", "global"]);
-    if (globalPresent && !removeTargets.includes("global")) {
+    if (isArgentOnPath() && !removeTargets.includes("global")) {
       scopesToClean.delete("global");
       if (installMode === "global") scopesToClean.delete("local");
     }
@@ -632,6 +637,7 @@ export async function uninstall(args: string[]): Promise<void> {
       kind: "local" | "global";
       cmd: ShellCommand;
       cwd?: string;
+      env?: NodeJS.ProcessEnv;
       prompt: string;
       // Default when auto-selected: a local devDep is likely meant to go, a shared
       // global install is not.
@@ -669,9 +675,11 @@ export async function uninstall(args: string[]): Promise<void> {
         };
       }
       if (!globalPresent) return null;
+      const pm = detectGlobalPackageManager();
       return {
         kind: "global",
-        cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
+        cmd: globalUninstallCommand(pm, PACKAGE_NAME),
+        ...globalCommandOptions(pm),
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
         installDir: getGloballyInstalledPackageRoot(),
@@ -693,6 +701,8 @@ export async function uninstall(args: string[]): Promise<void> {
       );
     }
 
+    // One install failing still leaves the other target to remove.
+    let packageFailed = false;
     for (const removable of removables) {
       let shouldRemove = nonInteractive || removePreconfirmed;
       if (!nonInteractive && !removePreconfirmed) {
@@ -719,9 +729,29 @@ export async function uninstall(args: string[]): Promise<void> {
 
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
-        execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
+        execShellCommandSync(removable.cmd, { cwd: removable.cwd, env: removable.env });
+        // The owner is read from the layout, which can misjudge, and the wrong
+        // manager exits 0 and leaves the package.
+        const leftover = removable.kind === "global" ? getRemainingGlobalBinaryPath() : null;
+        // A second global can stay on PATH after this one is gone.
+        const removed =
+          !leftover || (removable.installDir !== null && !fs.existsSync(removable.installDir));
+        if (removed) hasUninstalledPackage = true;
+
+        /**
+         * Only when the record points inside the install just removed. The
+         * two modes coexist and orphaning a record that names a surviving
+         * install would break provider CLI discovery for no reason.
+         */
+        if (removed && removeCliRecordFor(removable.installDir)) {
+          p.log.info(pc.dim("Removed ~/.argent/cli.json (provider CLI discovery record)."));
+        }
+        if (leftover) {
+          throw new Error(
+            `${leftover} is still on PATH. Remove it with the package manager that installed it.`
+          );
+        }
         p.log.success(`Removed ${removable.kind} package.`);
-        hasUninstalledPackage = true;
         if (removable.kind === "global") hasUninstalledGlobalPackage = true;
 
         // Must go with the install even when pruning was declined, or a stale
@@ -729,30 +759,28 @@ export async function uninstall(args: string[]): Promise<void> {
         if (removable.kind === "local" && removeInstallRecord(projectRoot)) {
           p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
         }
-
-        /**
-         * Only when the record points inside the install just removed. The
-         * two modes coexist and orphaning a record that names a surviving
-         * install would break provider CLI discovery for no reason.
-         */
-        if (removeCliRecordFor(removable.installDir)) {
-          p.log.info(pc.dim("Removed ~/.argent/cli.json (provider CLI discovery record)."));
-        }
       } catch (err) {
         p.log.error(`${removable.kind} uninstall failed: ${err}`);
-        await finalizeUninstallTelemetry(
-          hasPrunedContent,
-          hasUninstalledPackage,
-          UNINSTALL_PACKAGE_ACTION_FAILED
-        );
-        return;
+        const note = yarnClassicNote(removable.cmd);
+        if (note) p.log.info(`Run ${pc.cyan(formatShellCommand(removable.cmd))}${note}.`);
+        packageFailed = true;
       }
+    }
+
+    if (packageFailed) {
+      await finalizeUninstallTelemetry(
+        hasPrunedContent,
+        hasUninstalledPackage,
+        UNINSTALL_PACKAGE_ACTION_FAILED
+      );
+      process.exitCode = 1;
+      return;
     }
 
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
     // Only once no global install is left behind: clearing machine-wide state out
     // from under an installation the user kept would be wrong.
-    if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isGloballyInstalled())) {
+    if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isArgentOnPath())) {
       try {
         await resetLocalTelemetryState();
       } catch {
