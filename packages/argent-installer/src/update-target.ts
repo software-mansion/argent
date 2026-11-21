@@ -16,17 +16,19 @@ interface ResolvedUpdateTarget {
 
 /**
  * Resolve the version `argent update` should install for `pm`: the newest
- * stable release newer than `current` that also clears the machine's
- * minimum-release-age policy. Returns null when the registry lookup fails.
+ * stable release newer than `current` that also clears the minimum-release-age
+ * policy `pm` applies in `cwd`, where the install runs. Returns null when the
+ * registry lookup fails.
  */
 export async function resolveInstallableUpdateTarget(
   pm: PackageManager,
-  current: string | null
+  current: string | null,
+  cwd?: string
 ): Promise<ResolvedUpdateTarget | null> {
   const info = await fetchRegistryInfo(`${NPM_REGISTRY}/${PACKAGE_NAME}`);
   if (info === null) return null;
 
-  const minReleaseAgeMs = await detectMinReleaseAgeMsForPm(pm);
+  const minReleaseAgeMs = await detectMinReleaseAgeMsForPm(pm, cwd);
   const target = pickInstallableTarget(info.latest, info.times, current, minReleaseAgeMs);
 
   return {
