@@ -298,6 +298,33 @@ describe("view-network-request-details: request bodies and charsets", () => {
     expect((await details()).request.postData).toBe(json);
   });
 
+  const signIn = "email=a&password=hunter2&pad=" + "x".repeat(1100);
+
+  it.each([
+    ["gzip", heldBody(zlib.gzipSync(signIn)), { "Content-Encoding": "gzip" }],
+    ["plain text", { available: true, body: signIn, base64Encoded: false, truncated: false }, {}],
+    ["cut", { available: true, body: signIn, base64Encoded: false, truncated: true }, {}],
+  ])(
+    "masks the password in a %s request body and leaves the response body as received",
+    async (_, sent, encoding) => {
+      requestPostData.mockResolvedValue(sent);
+      responseBody.mockResolvedValue(heldBody(Buffer.from('{"access_token":"tok"}')));
+      serve(
+        record({
+          request: {
+            method: "POST",
+            hasPostData: true,
+            headers: { "Content-Type": "application/x-www-form-urlencoded", ...encoding },
+          },
+        })
+      );
+
+      const out = await details();
+      expect(out.request.postData).toContain("email=a&password=[REDACTED]&pad=x");
+      expect(out.response.body).toBe('{"access_token":"tok"}');
+    }
+  );
+
   it("reads a request body whose stacked Content-Encoding has a coding it cannot undo as it came", async () => {
     const sent = zlib.gzipSync(json);
     requestPostData.mockResolvedValue(heldBody(sent));

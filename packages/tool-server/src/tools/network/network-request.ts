@@ -18,6 +18,7 @@ import {
 } from "../../utils/debugger/scripts/network-interceptor";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 import { isRedirect, reasonPhrase } from "./network-logs";
+import { maskBodySecrets } from "./mask-body-secrets";
 
 const SENSITIVE_HEADER_PATTERNS = [
   "auth",
@@ -85,10 +86,23 @@ function utf8Text(bytes: Buffer): string | Buffer {
   }
 }
 
+function maskedPostData(
+  postData: string | undefined,
+  headers: Record<string, string> | undefined
+): string | undefined {
+  return postData == null
+    ? undefined
+    : maskBodySecrets(postData, headerValue(headers ?? {}, "content-type"));
+}
+
 /** A request body cut to MAX_BODY_SIZE; `truncated` says the interceptor kept only its start. */
 function truncatePostData(postData: string | undefined, truncated?: boolean): string | undefined {
-  // A body the interceptor cut is always longer than MAX_BODY_SIZE.
-  if (postData == null || postData.length <= MAX_BODY_SIZE) return postData;
+  if (postData == null) return postData;
+  if (postData.length <= MAX_BODY_SIZE) {
+    return truncated
+      ? `${cutMarker(`more than ${postData.length} chars`, undefined, postData.length)}\n${postData}`
+      : postData;
+  }
   const fullSize = truncated ? `more than ${postData.length} chars` : `${postData.length} chars`;
   return `${cutMarker(fullSize)}\n${postData.slice(0, MAX_BODY_SIZE)}...`;
 }
@@ -190,6 +204,7 @@ export const networkRequestTool: ToolDefinition<
   id: "view-network-request-details",
   description: `Get full details of a specific network request by its requestId.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
+In a JSON or form-encoded request body, the string values of exact field names such as password, otp, api_key or access_token are replaced with "[REDACTED]". The response body is returned as the app received it.
 Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted. Use when you need headers, body, or timing for a specific request after listing logs.
 Returns an error message string if the requestId is not found.`,
   zodSchema,
@@ -251,7 +266,7 @@ Returns an error message string if the requestId is not found.`,
           url: rec.url,
           method: rec.method,
           headers: redactHeaders(rec.requestHeaders),
-          postData: truncatePostData(rec.postData),
+          postData: truncatePostData(maskedPostData(rec.postData, rec.requestHeaders)),
         };
       }
       if (rec.status != null) {
@@ -316,7 +331,10 @@ Returns an error message string if the requestId is not found.`,
         url: entry.request.url,
         method: entry.request.method,
         headers: redactHeaders(entry.request.headers),
-        postData: truncatePostData(entry.request.postData, entry.request.postDataTruncated),
+        postData: truncatePostData(
+          maskedPostData(entry.request.postData, entry.request.headers),
+          entry.request.postDataTruncated
+        ),
       };
     }
 
@@ -410,6 +428,7 @@ async function androidNativeRequestDetails(
         Number(requestHeader("content-length") || NaN),
         "as the app sent them"
       ),
+      maskSecrets: true,
     });
   }
 
@@ -483,6 +502,8 @@ interface AndroidBodyFraming {
   contentEncoding: string;
   /** The whole body's size, shown when the agent kept only its start. */
   wholeSize?: string;
+  /** Replace the values of secret fields, as in a request body. */
+  maskSecrets?: boolean;
 }
 
 async function readAndroidBody(
@@ -497,26 +518,27 @@ async function readAndroidBody(
     return `[unavailable: ${err instanceof Error ? err.message : String(err)}]`;
   }
   if (!body.available) return `[unavailable: ${body.reason ?? "no body"}]`;
-  if (!body.base64Encoded) {
-    return body.truncated
-      ? cutByAgent(body.body, mimeType, Buffer.byteLength(body.body), framing)
-      : truncateBody(body.body, mimeType);
-  }
+  const { truncated } = body;
+  const display = (text: string, keptBytes: number): string => {
+    const masked = framing.maskSecrets ? maskBodySecrets(text, framing.contentType) : text;
+    return truncated
+      ? cutByAgent(masked, mimeType, keptBytes, framing)
+      : truncateBody(masked, mimeType);
+  };
+  if (!body.base64Encoded) return display(body.body, Buffer.byteLength(body.body));
 
   const kept = Buffer.from(body.body, "base64");
-  const bytes = decodeContent(kept, framing.contentEncoding, body.truncated);
+  const bytes = decodeContent(kept, framing.contentEncoding, truncated);
   if (!bytes) {
     return `[unavailable: the ${framing.contentEncoding.trim()} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
   }
-  const text = decodeText(bytes, charsetOf(framing.contentType), body.truncated);
+  const text = decodeText(bytes, charsetOf(framing.contentType), truncated);
   if (text === null) {
-    return body.truncated
+    return truncated
       ? `[body omitted: binary ${mimeType || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length)}]`
       : `[body omitted: binary ${mimeType || "data"}, ${bytes.length} bytes]`;
   }
-  return body.truncated
-    ? cutByAgent(text, mimeType, kept.length, framing)
-    : truncateBody(text, mimeType);
+  return display(text, kept.length);
 }
 
 /**
