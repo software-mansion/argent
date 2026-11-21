@@ -302,6 +302,7 @@ describe("iOS reports when no leak data was recorded", () => {
       uiHangs: [hang],
       cpuHotspots: [],
       memoryLeaks: [],
+      hangsRecorded: true,
       leaksRecorded: false,
       mallocStackLogging: null,
       wallClockStartMs: 1_000_000,
@@ -338,5 +339,75 @@ describe("Android reports no leak data", () => {
 
     expect(out).toContain("**Native Profiler:** 1 hangs, leaks not recorded");
     expect(out).not.toContain("0 leaks");
+  });
+});
+
+describe("iOS reports when no UI hang data was recorded", () => {
+  function hangStacks(api: NativeProfilerSessionApi): Promise<string> {
+    return profilerStackQueryTool.execute({ session: api } as never, {
+      device_id: DEVICE,
+      mode: "hang_stacks",
+      hang_index: 0,
+      top_n: 15,
+    });
+  }
+
+  it.each([false, true])("keeps the hang export status on load (export=%s)", async (hasExport) => {
+    await writeSavedIosSession(SESSION_ID, false);
+    if (!hasExport) {
+      await fs.unlink(path.join(dir, `native-profiler-${SESSION_ID}_raw_hangs.xml`));
+    }
+    const api = await freshIosSession();
+    await loadNative(api);
+
+    expect(await hangStacks(api)).toContain(
+      hasExport ? "There are 0 hangs" : "No UI hang data was recorded"
+    );
+
+    if (hasExport) return;
+    const parsedData = api.parsedData!;
+    parsedData.cpuSamples.push({
+      timestampNs: 0,
+      weightNs: 1_000_000,
+      threadFmt: "Main Thread",
+      stack: [],
+    });
+    parsedData.cpuHotspots.push({
+      type: "cpu_hotspot",
+      platform: "ios",
+      dominantFunction: "example",
+      totalWeightMs: 1,
+      weightPercentage: 100,
+      sampleCount: 1,
+      thread: "Main Thread",
+      severity: "RED",
+      topCallChain: [],
+      topCallChains: [],
+      duringHang: false,
+      timeRangeMs: { first: 0, last: 1 },
+      burstWindows: [],
+    });
+    const breakdown = await profilerStackQueryTool.execute({ session: api } as never, {
+      device_id: DEVICE,
+      mode: "thread_breakdown",
+      thread: "Main",
+      top_n: 15,
+    });
+    expect(breakdown).toContain("| `example` | 1 | 100% | Not recorded |");
+  });
+
+  it("reports missing hangs in the combined report after analyzing a capture", async () => {
+    await cacheReactSession(DEVICE);
+    const api = await buildIosSession(null);
+    api.exportedFiles!.hangs = null;
+    api.wallClockStartMs = 1_000_000;
+    await analyzeNativeProfilerIos(api);
+
+    expect(await hangStacks(api)).toContain("No UI hang data was recorded");
+    const out = await profilerCombinedReportTool.execute({ nativeSession: api } as never, {
+      port: PORT,
+      device_id: DEVICE,
+    });
+    expect(out).toContain("**Native Profiler:** hangs not recorded, leaks not recorded");
   });
 });

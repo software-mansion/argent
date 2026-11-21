@@ -1012,6 +1012,7 @@ export async function analyzeNativeProfilerIos(
   api.parsedData = {
     cpuSamples,
     uiHangs,
+    hangsRecorded: api.exportedFiles.hangs != null && !hangsMissing,
     cpuHotspots,
     memoryLeaks,
     leaksRecorded,

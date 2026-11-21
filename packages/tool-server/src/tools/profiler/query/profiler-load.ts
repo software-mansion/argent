@@ -417,6 +417,7 @@ async function loadNativeSession(
   api.parsedData = {
     cpuSamples,
     uiHangs,
+    hangsRecorded: files.hangs != null,
     cpuHotspots,
     memoryLeaks,
     // Stop writes no raw_leaks.xml when the trace had no Leaks table.
