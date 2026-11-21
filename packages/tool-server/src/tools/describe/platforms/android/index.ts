@@ -8,6 +8,7 @@ import {
   orientScreenSize,
   parseDumpRotation,
 } from "../../../../utils/android-screen";
+import { queueUiautomatorDump } from "../../../../utils/uiautomator-dump-queue";
 import { parseUiAutomatorDump } from "./uiautomator-parser";
 import {
   androidDevtoolsRef,
@@ -100,6 +101,10 @@ async function awaitWebViewPublished(
 }
 
 async function uiautomatorDump(serial: string): Promise<string> {
+  return assertCaptured(await queueUiautomatorDump(serial, () => runUiautomatorDump(serial)));
+}
+
+async function runUiautomatorDump(serial: string): Promise<string> {
   // Per-call dump path so concurrent describes on the same serial don't cat each
   // other's half-written dump.
   const randomSuffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
@@ -113,7 +118,10 @@ async function uiautomatorDump(serial: string): Promise<string> {
     `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
     { timeoutMs: 20_000 }
   );
-  const raw = rawBuf.toString("utf-8");
+  return rawBuf.toString("utf-8");
+}
+
+function assertCaptured(raw: string): string {
   const trimmed = raw.trim();
   if (/^ERROR:/i.test(trimmed) || (!trimmed.includes("<hierarchy") && /error/i.test(trimmed))) {
     throw new FailureError(
