@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 // HOME is redirected before the import, so no case can reach the developer's
 // real link or tool-server state.
 let createToolCaller: typeof import("../src/tool-caller.js").createToolCaller;
-let deadlineSignal: typeof import("../src/tool-caller.js").deadlineSignal;
+let withDeadline: typeof import("../src/tool-caller.js").withDeadline;
 let fetchWithReconnect: typeof import("../src/tool-caller.js").fetchWithReconnect;
 let TEST_HOME: string;
 const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
@@ -20,8 +20,7 @@ beforeAll(async () => {
   process.env.HOME = TEST_HOME;
   process.env.USERPROFILE = TEST_HOME;
   vi.resetModules();
-  ({ createToolCaller, deadlineSignal, fetchWithReconnect } =
-    await import("../src/tool-caller.js"));
+  ({ createToolCaller, withDeadline, fetchWithReconnect } = await import("../src/tool-caller.js"));
 });
 
 afterAll(() => {
@@ -317,11 +316,12 @@ describe("createToolCaller", () => {
     expect(postsTo("/tools/hinted")[0]!.headers["x-argent-deadline-ms"]).toBe("2000");
   });
 
-  it("declares the deadline of a deadlineSignal when it comes first", async () => {
+  it("declares the deadline of a withDeadline signal when it comes first", async () => {
     const { callTool } = caller({ fetchTimeoutMs: 2_000 });
+    const open = new AbortController().signal;
 
-    await callTool("hinted", {}, { signal: deadlineSignal(500) });
-    await callTool("hinted", {}, { signal: deadlineSignal(60_000) });
+    await withDeadline(open, 500, (signal) => callTool("hinted", {}, { signal }));
+    await withDeadline(open, 60_000, (signal) => callTool("hinted", {}, { signal }));
 
     const [first, second] = postsTo("/tools/hinted").map((r) =>
       Number(r.headers["x-argent-deadline-ms"])
@@ -341,29 +341,32 @@ describe("createToolCaller", () => {
       })
     );
     try {
-      const signal = deadlineSignal(1);
-      // Blocks the event loop past the deadline, so the timeout has not fired yet.
-      const until = performance.now() + 5;
-      while (performance.now() < until);
-      await fetchWithReconnect(
-        () => `${stub.url}/tools/fast`,
-        async () => {},
-        {
-          init: { signal },
-          fetchTimeoutMs: null,
-        }
-      );
+      await withDeadline(new AbortController().signal, 1, async (signal) => {
+        // Blocks the event loop past the deadline, so the timeout has not fired yet.
+        const until = performance.now() + 5;
+        while (performance.now() < until);
+        await fetchWithReconnect(
+          () => `${stub.url}/tools/fast`,
+          async () => {},
+          {
+            init: { signal },
+            fetchTimeoutMs: null,
+          }
+        );
+      });
       expect(sent[0]!.get("x-argent-deadline-ms")).toBe("1");
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("keeps fetch's own 300 s for a longRunning tool without a deadlineSignal", async () => {
+  it("keeps fetch's own 300 s for a longRunning tool without a withDeadline signal", async () => {
     const { callTool } = caller();
 
     await callTool("slow", {}, { signal: AbortSignal.timeout(5_000) });
-    await callTool("slow", {}, { signal: deadlineSignal(5_000) });
+    await withDeadline(new AbortController().signal, 5_000, (signal) =>
+      callTool("slow", {}, { signal })
+    );
 
     const [plain, declared] = postsTo("/tools/slow");
     expect(plain!.headers["x-argent-deadline-ms"]).toBe("300000");
@@ -526,6 +529,33 @@ describe("createToolCaller", () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]!.headers["x-argent-deadline-ms"]).toBe("300000");
       expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      await slow.close();
+    }
+  });
+
+  it("ends a call that carried an upload when the caller cancels it", async () => {
+    const slow = await startStub({ installMs: 3_000 });
+    try {
+      const { callTool } = caller({
+        getHandle: () => ({ url: slow.url, token: "tok" }),
+        remote: true,
+      });
+      const controller = new AbortController();
+      const started = Date.now();
+
+      const pending = callTool(
+        "reinstall-app",
+        { udid: "u", bundleId: "x", appPath },
+        { signal: controller.signal }
+      );
+      await vi.waitFor(() =>
+        expect(slow.requests.filter((r) => r.url === "/tools/reinstall-app")).toHaveLength(1)
+      );
+      controller.abort(new Error("stopped in the editor"));
+
+      await expect(pending).rejects.toThrow("stopped in the editor");
+      expect(Date.now() - started).toBeLessThan(2_000);
     } finally {
       await slow.close();
     }

@@ -361,6 +361,48 @@ function finalizeCapture(api: ScreenRecordingSessionApi): void {
   if (stdin?.writable) stdin.end();
 }
 
+/**
+ * Every teardown (stop, the time limit, an encoder crash, dispose) closes the
+ * frame stream, so closing it is where a stream's source is released too.
+ */
+function withCloseHook(stream: MjpegStream, onClose: (() => void) | undefined): MjpegStream {
+  if (!onClose) return stream;
+  return {
+    get latest() {
+      return stream.latest;
+    },
+    get frameCount() {
+      return stream.frameCount;
+    },
+    get error() {
+      return stream.error;
+    },
+    waitForFirstFrame: (timeoutMs) => stream.waitForFirstFrame(timeoutMs),
+    close() {
+      stream.close();
+      onClose();
+    },
+  };
+}
+
+/** The ffmpeg path; throws the not-installed failure when there is none. */
+export async function requireFfmpeg(): Promise<string> {
+  const ffmpeg = await resolveFfmpeg();
+  if (!ffmpeg) {
+    throw new FailureError(
+      "`ffmpeg` was not found on PATH. Install a build with libx264 (`brew install ffmpeg` on macOS, `apt install ffmpeg` on Debian/Ubuntu) and retry.",
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_FFMPEG_NOT_FOUND,
+        failure_stage: "screen_recording_resolve_ffmpeg",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+        failure_command: "ffmpeg",
+      }
+    );
+  }
+  return ffmpeg;
+}
+
 export async function startCapture(
   api: ScreenRecordingSessionApi,
   params: {
@@ -371,15 +413,37 @@ export async function startCapture(
     pointer?: PointerControl;
     /** Set for a foldable: the capture then moves with the live panel. */
     followPanel?: PanelFollow;
+    /**
+     * Release whatever serves `streamUrl` (a cabled iPhone's capture helper).
+     * Called once, when the frame stream closes or the start fails.
+     */
+    releaseStreamSource?: () => void;
   }
 ): Promise<StartRecordingResult> {
-  assertNoActiveRecording(api, "screen_recording_start");
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    params.releaseStreamSource?.();
+  };
+  try {
+    assertNoActiveRecording(api, "screen_recording_start");
+  } catch (err) {
+    release();
+    throw err;
+  }
   // Set synchronously (no await between the assert and here) so an overlapping
   // start or stop is rejected instead of racing this one through the async
   // connect/spawn window; the finally clears it on every exit.
   api.startPending = true;
   try {
-    return await startCaptureLocked(api, params);
+    return await startCaptureLocked(api, {
+      ...params,
+      releaseStreamSource: params.releaseStreamSource && release,
+    });
+  } catch (err) {
+    release();
+    throw err;
   } finally {
     api.startPending = false;
     api.pendingChild = null;
@@ -395,28 +459,20 @@ async function startCaptureLocked(
     trimStatic: boolean;
     pointer?: PointerControl;
     followPanel?: PanelFollow;
+    releaseStreamSource?: () => void;
   }
 ): Promise<StartRecordingResult> {
-  const ffmpeg = await resolveFfmpeg();
-  if (!ffmpeg) {
-    throw new FailureError(
-      "`ffmpeg` was not found on PATH. Install a build with libx264 (`brew install ffmpeg` on macOS, `apt install ffmpeg` on Debian/Ubuntu) and retry.",
-      {
-        error_code: FAILURE_CODES.SCREEN_RECORDING_FFMPEG_NOT_FOUND,
-        failure_stage: "screen_recording_resolve_ffmpeg",
-        failure_area: "tool_server",
-        error_kind: "dependency_missing",
-        failure_command: "ffmpeg",
-      }
-    );
-  }
+  const ffmpeg = await requireFfmpeg();
 
   const outputFile = path.join(
     os.tmpdir(),
     `argent-screen-recording-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
   );
 
-  const stream = await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS);
+  const stream = withCloseHook(
+    await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS),
+    params.releaseStreamSource
+  );
   let logoFile: string | null = null;
   let watermarkSkipped: string | null = null;
   let child: ReturnType<typeof spawn>;

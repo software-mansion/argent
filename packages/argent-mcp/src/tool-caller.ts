@@ -12,13 +12,30 @@ const FETCH_TIMEOUT_MS = 30_000;
 const deadlines = new WeakMap<AbortSignal, number>();
 
 /**
- * `AbortSignal.timeout(ms)` whose deadline {@link fetchWithReconnect} declares
- * to the tool-server, so a hang-up at it counts as a timeout, not a cancel.
+ * Runs `work` with a signal that aborts at `signal` or after `ms`, a deadline
+ * {@link fetchWithReconnect} declares to the tool-server, so a hang-up at it
+ * counts as a timeout, not a cancel. Node 20 and 22 can collect an
+ * `AbortSignal.timeout()` that only `AbortSignal.any()` references, which then
+ * never fires; the timer here keeps its controller alive.
  */
-export function deadlineSignal(ms: number): AbortSignal {
-  const signal = AbortSignal.timeout(ms);
-  deadlines.set(signal, performance.now() + ms);
-  return signal;
+export async function withDeadline<T>(
+  signal: AbortSignal,
+  ms: number,
+  work: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const deadline = new AbortController();
+  const timer = setTimeout(
+    () =>
+      deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
+    ms
+  );
+  const bounded = AbortSignal.any([signal, deadline.signal]);
+  deadlines.set(bounded, performance.now() + ms);
+  try {
+    return await work(bounded);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function fetchWithReconnect(
@@ -132,7 +149,7 @@ interface ToolCallerDeps {
 }
 
 interface ToolCaller {
-  fetchTools(): Promise<ToolMeta[]>;
+  fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]>;
   /**
    * `opts.signal` bounds the whole call, the listing it reads first included,
    * and is never retried once it fires.
@@ -194,7 +211,7 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
       parseUrl(url);
       return fetchWithReconnect(() => rebase(url), deps.reconnect, {
         init: () => withHeaders(init),
-        // A call that carried an upload is sent once and never aborted: the
+        // A call that carried an upload is sent once and never timed out: the
         // tool-server consumes the upload when it reads the call, so a second
         // attempt could only fail.
         fetchTimeoutMs: meta.longRunning || meta.carriesUpload ? null : timeout,
