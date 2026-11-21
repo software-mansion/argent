@@ -40,6 +40,12 @@ interface RunOptions {
   argvForFlags: string[];
 }
 
+function outFlagPath(value: string | undefined): string {
+  const out = value?.trim();
+  if (!out) throw new FlagParseException("--out requires a path");
+  return out;
+}
+
 function splitOptions(argv: string[]): RunOptions {
   // Consumed here rather than by the schema-driven flag parser, so a tool with its
   // own "json" or "out" property can't capture them.
@@ -54,14 +60,12 @@ function splitOptions(argv: string[]): RunOptions {
       continue;
     }
     if (tok === "--out") {
-      const v = argv[i + 1];
-      if (!v) throw new FlagParseException("--out requires a path");
-      outPath = v;
+      outPath = outFlagPath(argv[i + 1]);
       i += 1;
       continue;
     }
     if (tok.startsWith("--out=")) {
-      outPath = tok.slice("--out=".length);
+      outPath = outFlagPath(tok.slice("--out=".length));
       continue;
     }
     rest.push(tok);
@@ -91,7 +95,7 @@ function printToolHelp(meta: ToolMeta): void {
   console.log(`argent run ${meta.name} [flags]`);
   if (description) console.log(`\n${description}\n`);
   console.log("Flags:");
-  console.log(formatSchemaUsage(schema));
+  console.log(formatSchemaUsage(withoutGlobalFlags(schema)));
   console.log("\nGlobal flags:");
   if (!hasOwnArgsField) {
     console.log("  --args <json>          Pass the entire payload as JSON (overrides flags)");
@@ -99,23 +103,39 @@ function printToolHelp(meta: ToolMeta): void {
   }
   console.log("  --<field>-json <json>  Pass a single field as JSON (objects/nested arrays)");
   console.log("  --json                 Print the raw JSON result");
-  console.log("  --out <path>           For image results, save to <path> instead of fetching URL");
+  console.log(
+    "  --out <path>           For image results, save to <path>; outranks a payload `out`"
+  );
   console.log("  --help, -h             Show this help");
 }
 
+function withoutGlobalFlags(schema: JsonSchema | undefined): JsonSchema | undefined {
+  if (!schema?.properties) return schema;
+  const { out: _out, ...properties } = schema.properties;
+  return { ...schema, properties };
+}
+
 async function fetchImageToFile(
-  result: { url?: string; path?: string },
+  result: { url?: string; path?: string } | null,
   outPath: string
 ): Promise<void> {
-  const url = result.url;
+  const url = result?.url;
   if (!url) {
     throw new Error("Tool result did not include a `url`; cannot save image");
   }
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download image: ${res.status} ${res.statusText}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-  fs.writeFileSync(outPath, buf);
+  writeImageFile(outPath, Buffer.from(await res.arrayBuffer()));
+}
+
+function writeImageFile(file: string, data: Buffer): void {
+  // Not normalized: path.resolve treats `..` and a trailing separator unlike the kernel.
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // A FIFO would block the write and a device would take the bytes.
+  if (fs.statSync(file, { throwIfNoEntry: false })?.isFile() === false) {
+    throw new Error(`${file} is not a regular file`);
+  }
+  fs.writeFileSync(file, data);
 }
 
 function renderResult(
@@ -345,12 +365,29 @@ settled=false or debugger-status's not_connected.
     payload[k] = v;
   }
 
+  // `--out` wins, so the server must not refuse the payload's `out`.
+  if (outPath && meta.outputHint === "image") delete payload.out;
+
   // Checked against the merged payload, so a required field supplied through `--args` or
   // `--<field>-json` counts. Answering here spares a round trip — and, for a tool that takes
   // file inputs, spares uploading those files only to be told a flag was missing.
   const missing = findMissingRequired(payload, schema);
   if (missing.length > 0) {
     await failValidation({ missing, invalid: [], rawIssues: null }, "cli_run_required_flags");
+  }
+
+  // Not left to the tool-server: its message would name the global `--out`, and it accepts
+  // Windows-absolute paths, which are cwd-relative on POSIX.
+  const payloadOut = typeof payload.out === "string" ? payload.out.trim() : null;
+  if (meta.outputHint === "image" && payloadOut !== null && !path.isAbsolute(payloadOut)) {
+    await failInvocation(
+      "`out` must be an absolute path on this computer; `--out <path>` also takes a relative one",
+      null,
+      {
+        error_code: FAILURE_CODES.CLI_RUN_INPUT_VALIDATION_FAILED,
+        failure_stage: "cli_run_payload_out",
+      }
+    );
   }
 
   let result: unknown;
@@ -391,13 +428,13 @@ settled=false or debugger-status's not_connected.
 
   // Prefer the bytes the materializer already resolved; fall back to fetching the
   // legacy `{ url }` for older tool-servers that don't emit artifact handles.
-  if (outPath && meta.outputHint === "image") {
+  const imageOut = outPath ?? payloadOut;
+  if (imageOut && meta.outputHint === "image") {
     try {
       if (images.length > 0) {
-        fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-        fs.writeFileSync(outPath, images[0]!.data);
-      } else if (result && typeof result === "object") {
-        await fetchImageToFile(result as { url?: string; path?: string }, outPath);
+        writeImageFile(imageOut, images[0]!.data);
+      } else {
+        await fetchImageToFile(result as { url?: string; path?: string } | null, imageOut);
       }
     } catch (err) {
       console.error(`Failed to save image: ${err instanceof Error ? err.message : err}`);
@@ -414,8 +451,8 @@ settled=false or debugger-status's not_connected.
   if (note) console.error(note);
   console.log(renderResult(result, meta.outputHint, images, json));
 
-  if (outPath && meta.outputHint === "image" && !json) {
-    console.log(`Wrote: ${outPath}`);
+  if (imageOut && meta.outputHint === "image" && !json) {
+    console.log(`Wrote: ${imageOut}`);
   }
 
   if (failure) {

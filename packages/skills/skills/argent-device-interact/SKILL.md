@@ -91,7 +91,7 @@ Gate a step that depends on a screen transition with an `await-ui-element` step 
 
 Interaction tools already attach a screenshot. Call `screenshot` for the initial state, for a baseline before you change visible UI, to check state after a delay, or when the attached capture shows a transitional or loading frame.
 
-Keep the default downscaled capture for UI context and state checks; do not use `scale: 1.0` as a readability or tapping aid. Full resolution is only for saving baseline/current PNGs for comparison (`scale: 1.0` with `includeImageInContext: false`); for visual regression checks use the `argent-screenshot-diff` skill.
+Keep the default downscaled capture for UI context and state checks; do not use `scale: 1.0` as a readability or tapping aid. Full resolution is only for saving baseline/current PNGs for comparison (`scale: 1.0` with `includeImageInContext: false`, saved with `out` at an absolute path unique to this run); for visual regression checks use the `argent-screenshot-diff` skill.
 
 If `screenshot` times out, restart the device transport with `stop-simulator-server`.
 

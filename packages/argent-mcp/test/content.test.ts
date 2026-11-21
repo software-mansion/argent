@@ -329,6 +329,188 @@ describe("toMcpContent with artifact ctx", () => {
     ]);
   });
 
+  it("copies the PNG to `out`, creating parents, and reports that path", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const out = join(root, "keep", "nested", "base.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img1", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out: ` ${out} ` }
+    );
+
+    expect(await fs.readFile(out)).toEqual(Buffer.from(pngBytes));
+    expect(result[0]?.type).toBe("image");
+    expect(result[1]).toEqual({ type: "text", text: `Saved: ${out}` });
+  });
+
+  it("writes `out` when the image is suppressed from context", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x46];
+    const out = join(root, "baseline.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img5", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(out)).toEqual(Buffer.from(pngBytes));
+    expect(result).toEqual([{ type: "text", text: `Saved: ${out}` }]);
+  });
+
+  it("keeps the image and the scratch path when `out` cannot be written", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x45];
+    const blocker = join(root, "blocker");
+    await fs.writeFile(blocker, "not a directory");
+    const out = join(blocker, "base.png");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img4", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out }
+    );
+
+    expect(result[0]?.type).toBe("image");
+    const text = (result[1] as { text: string }).text;
+    expect(text).toMatch(/^Saved: .*shot\.png\nCould not save to /);
+    expect(text).toContain(`Could not save to ${out}: E`);
+  });
+
+  it("refuses an `out` that is not a regular file", async () => {
+    const out = join(root, "isdir");
+    await fs.mkdir(out);
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img10", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE]),
+      },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    const lines = (result[0] as { text: string }).text.split("\n");
+    expect(lines[1]).toBe(`Could not save to ${out}: not a regular file`);
+  });
+
+  it("refuses a directory-shaped `out` instead of writing a file there", async () => {
+    const dir = join(root, "shots");
+    const out = `${dir}${path.sep}`;
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img6", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE]),
+      },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    await expect(fs.stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
+    const text = (result[0] as { text: string }).text;
+    expect(text).toMatch(/^Saved: .*shot\.png\nCould not save to /);
+  });
+
+  it("creates a missing directory that `..` steps back out of", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x47];
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img8", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out: `${root}/a/../base.png`, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(join(root, "base.png"))).toEqual(Buffer.from(pngBytes));
+    expect(result).toEqual([{ type: "text", text: `Saved: ${root}/a/../base.png` }]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a Windows-absolute `out`, which is cwd-relative on POSIX",
+    async () => {
+      const out = `C:\\argent-test-${process.pid}.png`;
+      try {
+        const result = await toMcpContent(
+          { image: artifactHandle("img9", "shot.png", "image/png") },
+          "image",
+          {
+            toolsUrl: "http://remote:3001",
+            deviceId: "DEV-1",
+            fetchImpl: fetchReturning([...PNG_SIGNATURE]),
+          },
+          { udid: "DEV-1", out, includeImageInContext: false }
+        );
+
+        await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
+        const text = (result[0] as { text: string }).text;
+        expect(text).toMatch(
+          new RegExp(
+            `^Saved: .*shot\\.png\\nCould not save to C:\\\\argent-test-${process.pid}\\.png: not an absolute path on this computer$`
+          )
+        );
+
+        const legacy = await toMcpContent(
+          { url: "http://host/shot.png", path: "/host/shot.png" },
+          "image",
+          { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning([]) },
+          { udid: "DEV-1", out, includeImageInContext: false }
+        );
+        expect((legacy[1] as { text: string }).text).toMatch(
+          new RegExp(`^Could not save to C:\\\\argent-test-${process.pid}\\.png: no image`)
+        );
+      } finally {
+        await fs.rm(out, { force: true });
+      }
+    }
+  );
+
+  it("says `out` was not written when the image download fails", async () => {
+    const out = join(root, "stale.png");
+    await fs.writeFile(out, "earlier capture");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img7", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: (async () => ({ ok: false, status: 404 })) as unknown as typeof fetch,
+      },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(out, "utf8")).toBe("earlier capture");
+    expect(result).toEqual([
+      { type: "text", text: JSON.stringify({ image: null }, null, 2) },
+      {
+        type: "text",
+        text: `Could not save to ${out}: no image file came back, so any file already there is not this capture.`,
+      },
+    ]);
+  });
+
+  it("says `out` was not written for a legacy `{ url, path }` result", async () => {
+    const out = join(root, "legacy.png");
+
+    const result = await toMcpContent(
+      { url: "http://host/shot.png", path: "/host/shot.png" },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning([]) },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(result[0]).toEqual({ type: "text", text: "Saved: /host/shot.png" });
+    expect((result[1] as { text: string }).text).toContain(`Could not save to ${out}:`);
+  });
+
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
     const result = await toMcpContent(
       { exportedFiles: { cpu: artifactHandle("cpu1", "cpu.xml", "application/xml") } },
@@ -831,6 +1013,38 @@ describe("flowRunToMcpContent", () => {
       type: "text",
       text: JSON.stringify({ ok: true }, null, 2),
     });
+  });
+
+  it("ignores `out` in a step's args, which come from the flow file", async () => {
+    const victim = join(root, "notes.txt");
+    await fs.writeFile(victim, "important user notes");
+
+    const input: FlowExecuteResult = {
+      flow: "poison",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1", out: victim, includeImageInContext: false },
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    expect(await fs.readFile(victim, "utf8")).toBe("important user notes");
+    expect(blocks.some((b) => b.type === "image")).toBe(false);
+    const saved = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.startsWith("Saved:")
+    );
+    expect(saved?.text).toMatch(/^Saved: .*shot\.png$/);
   });
 
   it("renders image tool results as image blocks", async () => {

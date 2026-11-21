@@ -272,6 +272,16 @@ const zodSchema = z.object({
     .describe(
       "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Ignored on every other platform."
     ),
+  // Written by argent-mcp and argent-cli, not by this tool.
+  out: z
+    .string()
+    .trim()
+    // win32 also accepts POSIX-absolute paths, and the client may run on either OS.
+    .refine((p) => path.win32.isAbsolute(p), "must be an absolute path")
+    .optional()
+    .describe(
+      "Over MCP or `argent run`, also save the PNG at this absolute path on your machine, creating missing directories and replacing an existing file. An e2e test step and the Node client write nothing."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -285,7 +295,7 @@ Fails if the capture backend (simulator-server, emulator, Chromium CDP<flag:harm
     zodSchema,
     alwaysLoad: true,
     searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
-    readOnly: true,
+    // Not readOnly: plan mode would run a call whose `out` replaces a file without a prompt.
     interaction: {
       startedMsg: () => "Capturing screenshot",
       completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
