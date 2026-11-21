@@ -3,11 +3,15 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 // Interaction and measurement use the same XCTest bundle IDs. A retiring interaction
 // runner may still be exiting when the registry starts its replacement.
 const interactionRunners = new Map<string, number>();
-const measurements = new Set<string>();
+// Both modes relaunch the app, so two on one device collide.
+const launchAnalyses = new Map<string, "measure" | "profile">();
 
-function assertNotMeasuring(udid: string): void {
-  if (measurements.has(udid)) {
-    throw runnerBusy(`A launch measurement is in progress on ${udid}. Retry when it finishes.`);
+function assertNoLaunchAnalysis(udid: string, only?: "measure"): void {
+  const mode = launchAnalyses.get(udid);
+  if (mode && (!only || mode === only)) {
+    throw runnerBusy(
+      `A launch ${mode === "measure" ? "measurement" : "profile"} is in progress on ${udid}. Retry when it finishes.`
+    );
   }
 }
 
@@ -21,7 +25,7 @@ function runnerBusy(message: string): FailureError {
 }
 
 export function reserveInteractionRunner(udid: string): () => void {
-  assertNotMeasuring(udid);
+  assertNoLaunchAnalysis(udid, "measure");
   interactionRunners.set(udid, (interactionRunners.get(udid) ?? 0) + 1);
   return () => {
     const remaining = interactionRunners.get(udid)! - 1;
@@ -30,15 +34,15 @@ export function reserveInteractionRunner(udid: string): () => void {
   };
 }
 
-export function reserveLaunchMeasurement(udid: string): () => void {
-  assertNotMeasuring(udid);
-  if (interactionRunners.has(udid)) {
+export function reserveLaunchAnalysis(udid: string, mode: "measure" | "profile"): () => void {
+  assertNoLaunchAnalysis(udid);
+  if (mode === "measure" && interactionRunners.has(udid)) {
     throw runnerBusy(
       `Argent's device runner is active on ${udid}. Run stop-simulator-server for this device, then retry.`
     );
   }
-  measurements.add(udid);
+  launchAnalyses.set(udid, mode);
   return () => {
-    measurements.delete(udid);
+    launchAnalyses.delete(udid);
   };
 }

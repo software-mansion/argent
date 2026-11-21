@@ -25,7 +25,10 @@ import {
   runLogged,
   terminateLaunchedApp,
 } from "../../src/utils/ios-launch-time/workflow";
-import { reserveInteractionRunner } from "../../src/utils/ios-device/runner-reservation";
+import {
+  reserveInteractionRunner,
+  reserveLaunchAnalysis,
+} from "../../src/utils/ios-device/runner-reservation";
 import { iosDeviceRunnerBlueprint } from "../../src/blueprints/ios-device-runner";
 
 // Pins what each mode's execute() passes to xcodebuild / xctrace and how it
@@ -72,12 +75,14 @@ vi.mock("../../src/utils/ios-launch-time/workflow", async (importOriginal) => {
     ...actual,
     prepareLaunch: vi.fn(
       async (request: {
+        deviceId?: string;
         checkDevice?: (d: { id: string; simulator: boolean }) => void | Promise<void>;
       }) => {
-        await request.checkDevice?.({ id: "UDID-1", simulator: state.simulator });
+        const id = request.deviceId ?? "UDID-1";
+        await request.checkDevice?.({ id, simulator: state.simulator });
         return {
           runDir: state.runDir,
-          deviceId: "UDID-1",
+          deviceId: id,
           deviceName: "Test device",
           simulator: state.simulator,
           simulatorDeviceSet: null,
@@ -192,6 +197,7 @@ type ProfileResult = {
   launchMs: number | null;
   simulatorLaunchEstimateMs?: number | null;
   firstFrameEndMs: number;
+  exports: Record<string, string>;
   exportErrors?: Record<string, string>;
   profilerSession: { cpuXml: string; cpuSamples: number };
   warning: string | null;
@@ -245,8 +251,14 @@ describe('mode "profile" on a simulator', () => {
     expect(result.launchMs).toBeNull();
     expect(result.firstFrameEndMs).toBe(300);
     expect(result.simulatorLaunchEstimateMs).toBe(200);
-    // Instruments never fills the lifecycle table on a simulator: not an export error.
+    // Instruments never fills the lifecycle table on a simulator.
     expect(result.exportErrors).toBeUndefined();
+    expect(result.exports).not.toHaveProperty("lifecycle");
+    expect(
+      vi
+        .mocked(runLogged)
+        .mock.calls.some(([, args]) => args.join(" ").includes("life-cycle-period"))
+    ).toBe(false);
     expect(result.profilerSession.cpuSamples).toBe(2);
     const session = await readFile(result.profilerSession.cpuXml, "utf8");
     expect(session).toContain("render()");
@@ -519,6 +531,39 @@ describe('mode "profile" on an iPhone', () => {
     );
   });
 
+  it("refuses to record while another launch analysis runs on the device", async () => {
+    for (const mode of ["measure", "profile"] as const) {
+      const release = reserveLaunchAnalysis("UDID-1", mode);
+      try {
+        const { error, signal } = await failure(profileLaunch(params()));
+        expect(error.message).toContain(
+          `A launch ${mode === "measure" ? "measurement" : "profile"} is in progress on UDID-1`
+        );
+        expect(signal.error_code).toBe(FAILURE_CODES.LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE);
+      } finally {
+        release();
+      }
+    }
+    expect(runLogged).not.toHaveBeenCalled();
+  });
+
+  it("holds the device through the recording, beside the interaction runner", async () => {
+    vi.mocked(runLogged).mockImplementationOnce(async () => {
+      await expect(measureLaunch(params({ mode: "measure" }))).rejects.toThrow(
+        /launch profile is in progress on UDID-1/
+      );
+      reserveInteractionRunner("UDID-1")();
+      throw new Error("interrupted recording");
+    });
+    await expect(profileLaunch(params())).rejects.toThrow(/interrupted recording/);
+    const releaseRunner = reserveInteractionRunner("UDID-1");
+    try {
+      await expect(profile()).resolves.toMatchObject({ launchMs: 268.5 });
+    } finally {
+      releaseRunner();
+    }
+  });
+
   it("does not record the signpost and cuts the CPU samples at the first-frame phase", async () => {
     const result = await profile();
     expect(recordArgs()).not.toContain("os_signpost");
@@ -758,6 +803,24 @@ describe('mode "measure"', () => {
     } finally {
       release();
     }
+  });
+
+  it("stops waiting for another device's runner build once cancelled", async () => {
+    let finishFirst!: () => void;
+    vi.mocked(runLogged).mockImplementationOnce(() => new Promise<void>((r) => (finishFirst = r)));
+    const first = measureLaunch(params({ mode: "measure", device_id: "SIM-1" }));
+    await vi.waitFor(() => expect(runLogged).toHaveBeenCalledTimes(1));
+    const controller = new AbortController();
+    const second = measureLaunch(params({ mode: "measure", device_id: "SIM-2" }), {
+      signal: controller.signal,
+    } as ToolContext);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await expect(second).rejects.toBe(controller.signal.reason);
+    reserveLaunchAnalysis("SIM-2", "measure")();
+    finishFirst();
+    await expect(first).resolves.toMatchObject({ samplesCollected: 5 });
+    expect(runLogged).toHaveBeenCalledTimes(1);
   });
 
   it("holds the iPhone runner through XCTest and releases it after a failed measurement", async () => {

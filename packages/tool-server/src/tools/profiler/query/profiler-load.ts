@@ -15,7 +15,8 @@ import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
-import { resolveDevice } from "../../../utils/device-info";
+import { isIosPhysicalDevice, resolveDevice } from "../../../utils/device-info";
+import { UnsupportedOperationError } from "../../../utils/capability";
 import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
@@ -502,7 +503,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const profilerLoadTool: ToolDefinition<Params, string> = {
   id: "profiler-load",
-  description: `Fetch and restore a profiling session that react-profiler-stop or native-profiler-stop saved to disk, so the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query) can read it.
+  description: `Fetch and restore a profiling session that react-profiler-stop, native-profiler-stop or native-profiler-launch-analysis saved to disk, so the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query) can read it.
 Use when you need to revisit past session data without capturing a new recording.
 Modes:
 - list: Show all available profiling sessions in the project's debug directory.
@@ -540,6 +541,11 @@ Fails if the session_id is not found or the session's trace files are missing fr
         return listSessions(debugDir);
 
       case "load_react": {
+        const device = resolveDevice(params.device_id);
+        // The React query tools cannot read a session loaded for an iPhone.
+        if (isIosPhysicalDevice(device)) {
+          throw new UnsupportedOperationError("profiler-load", device, "load_react mode");
+        }
         if (!params.session_id) {
           throw new FailureError(
             "load_react mode requires the session_id parameter. Use list mode first.",
