@@ -8,39 +8,60 @@ on:
       - "packages/tool-server/src/tools/**"
       - "scripts/extract-tools.mjs"
   pull_request:
-    paths:
-      - "packages/tool-server/src/tools/**"
-      - "scripts/extract-tools.mjs"
 
 jobs:
+  changes:
+    name: Select Tool Description Quality paths
+    uses: ./.github/workflows/pr-check-paths.yml
+    with:
+      paths: |-
+        packages/tool-server/src/tools/**
+        scripts/extract-tools.mjs
+
   tool-descriptions:
     name: Tool description quality (SpiderShield)
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check path selection
+        if: needs.changes.result != 'success' || needs.changes.outputs.relevant != 'true'
+        shell: bash
+        run: |
+          test '${{ needs.changes.result }}:${{ needs.changes.outputs.relevant }}' = 'success:false'
+          echo "No matching files changed."
+
       - name: Checkout
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/checkout@v7
 
       - name: Set up Node.js
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: "22"
 
       - name: Set up Python
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install SpiderShield
+        if: needs.changes.outputs.relevant == 'true'
         run: pip install spidershield==0.3.4
 
       - name: Extract tool descriptions
+        if: needs.changes.outputs.relevant == 'true'
         run: node scripts/extract-tools.mjs > tools.json
 
       - name: Run SpiderShield scan
+        if: needs.changes.outputs.relevant == 'true'
         run: spidershield scan packages/tool-server --tools-json tools.json --format json > spidershield-report.json
 
       - name: Check description score (regression gate)
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           python3 -c "
           import json, sys
@@ -126,8 +147,8 @@ jobs:
           "
 
       - name: Upload SpiderShield report
+        if: always() && needs.changes.outputs.relevant == 'true'
         uses: actions/upload-artifact@v7
-        if: always()
         with:
           name: tool-description-report
           path: spidershield-report.json

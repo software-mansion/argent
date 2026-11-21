@@ -211,6 +211,28 @@ describe("view-network-logs (chromium branch)", () => {
     expect(out).toContain('{id: 2} "POST /api" 500 Err');
   });
 
+  it("reads pageIndex null as the latest page, like an omitted pageIndex", async () => {
+    const requests = Array.from({ length: 60 }, (_, i) =>
+      rec({ requestId: String(i + 1), url: `https://x.test/r${i + 1}`, status: 200 })
+    );
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const render = async (pageIndex: unknown) => {
+      const params = networkLogsTool.zodSchema!.parse({
+        device_id: "chromium-cdp-9222",
+        port: 8081,
+        pageIndex,
+      });
+      return (await networkLogsTool.execute(
+        services,
+        params as Parameters<typeof networkLogsTool.execute>[1]
+      )) as string;
+    };
+    expect(await render(null)).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+    expect(await render(undefined)).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+    expect(await render(0)).toContain("=== NETWORK LOGS (page 1/2, 60 total) ===");
+    expect(await render("1")).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+  });
+
   it("reports no-traffic when the recording is empty", async () => {
     const services = { chromium: { server: { network: { requests: () => [] } } } } as never;
     const out = (await networkLogsTool.execute(services, {

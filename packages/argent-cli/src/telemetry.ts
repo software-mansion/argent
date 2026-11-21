@@ -1,6 +1,8 @@
+import * as path from "node:path";
 import pc from "picocolors";
-import type { FlagScope } from "@argent/configuration-core";
+import { configDir, type FlagScope } from "@argent/configuration-core";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
+import { degenerateProjectScopeWarning } from "./project-scope.js";
 import {
   init as telemetryInit,
   isEnabled as telemetryIsEnabled,
@@ -11,6 +13,7 @@ import {
 } from "@argent/telemetry";
 
 const SCOPES: readonly FlagScope[] = ["global", "project"];
+const SUBCOMMANDS: readonly string[] = ["status", "enable", "disable"];
 
 const TELEMETRY_OPTIONS = {
   scope: { kind: "value", choices: SCOPES },
@@ -21,11 +24,17 @@ export async function telemetry(args: string[]): Promise<void> {
   const sub = args[0];
   let scope: FlagScope = "global";
   // Help is accepted in any position, including after a subcommand; the option
-  // parser below knows only `--scope` and would reject it as an unknown flag.
+  // parser below would reject it as an unknown flag.
   const wantsHelp = args.includes("--help") || args.includes("-h");
   if (!wantsHelp) {
+    if (sub !== undefined && !SUBCOMMANDS.includes(sub)) {
+      console.error(`Error: Unknown subcommand: telemetry ${sub}`);
+      printUsage();
+      process.exit(2);
+    }
     try {
-      const { positionals, options } = parseCommandArgs(args.slice(1), TELEMETRY_OPTIONS);
+      const specs = sub === "status" ? {} : TELEMETRY_OPTIONS;
+      const { positionals, options } = parseCommandArgs(args.slice(1), specs);
       if (positionals.length > 0) {
         throw new UsageError(`Unexpected argument "${positionals[0]}".`);
       }
@@ -60,10 +69,6 @@ export async function telemetry(args: string[]): Promise<void> {
     case "disable":
       await cmdDisable(scope);
       return;
-    default:
-      console.error(`Unknown subcommand: telemetry ${sub}`);
-      await telemetryShutdown();
-      process.exit(1);
   }
 }
 
@@ -112,9 +117,15 @@ function describeSource(source: ReturnType<typeof telemetryStatus>["source"]): s
   }
 }
 
+function projectConfigWarning(scope: FlagScope): string | null {
+  return degenerateProjectScopeWarning(scope, path.join(configDir("project"), "config.json"));
+}
+
 async function cmdEnable(scope: FlagScope): Promise<void> {
+  const warning = projectConfigWarning(scope);
   const wasEnabled = telemetryIsEnabled();
   markEnabled(scope);
+  if (warning) console.error(pc.yellow(warning));
   const nowEnabled = telemetryIsEnabled();
   if (!nowEnabled) {
     // The other scope (or an env override) still says no — restrictive merge.
@@ -133,10 +144,12 @@ async function cmdEnable(scope: FlagScope): Promise<void> {
 }
 
 async function cmdDisable(scope: FlagScope): Promise<void> {
+  const warning = projectConfigWarning(scope);
   const wasEnabled = telemetryIsEnabled();
   // Still write when already off: a global opt-out and a committed project
   // opt-out are different guarantees, and the user asked for this one.
   await markDisabled(scope);
+  if (warning) console.error(pc.yellow(warning));
   if (!wasEnabled) {
     console.log(pc.dim(`Telemetry was already disabled (written at ${scopeLabel(scope)}).`));
   } else {

@@ -60,24 +60,12 @@ export interface TextAnalysis {
   changes: TextChange[];
 }
 
-interface RegionScale {
-  x: number;
-  y: number;
-}
-
 interface AnalyzeScreenshotTextOptions {
   baselinePath: string;
   currentPath: string;
   hasPixelDiff?: boolean;
   baselineImage?: FontGeometryImage;
   currentImage?: FontGeometryImage;
-  /**
-   * Multipliers that map the baseline image's OCR bounds into the pixel diff's
-   * coordinate space. Omit (or pass 1/1) when the inputs share dimensions.
-   */
-  baselineRegionScale?: RegionScale;
-  /** Same as {@link baselineRegionScale}, for the current image's OCR bounds. */
-  currentRegionScale?: RegionScale;
   ignoreTopPixels?: number;
   textChangeMinConfidence?: number;
 }
@@ -132,38 +120,14 @@ export async function analyzeScreenshotTextChanges(
     };
   }
 
-  // OCR ran on the original files, so each side's bounds are in its own image's
-  // coordinate space; rescale both into the space the pixel diff uses.
   return analyzeTextRegions({
-    baselineRegions: rescaleTextRegions(baselineOcr.blocks, options.baselineRegionScale),
-    currentRegions: rescaleTextRegions(currentOcr.blocks, options.currentRegionScale),
+    baselineRegions: baselineOcr.blocks,
+    currentRegions: currentOcr.blocks,
     baselineImage: options.baselineImage,
     currentImage: options.currentImage,
     ignoreTopPixels: options.ignoreTopPixels,
     textChangeMinConfidence: options.textChangeMinConfidence,
   });
-}
-
-/**
- * Rebase OCR region and per-word bounds onto the normalized coordinate space
- * the pixel diff compares in.
- */
-export function rescaleTextRegions(regions: TextRegion[], scale?: RegionScale): TextRegion[] {
-  if (!scale || (scale.x === 1 && scale.y === 1)) return regions;
-  return regions.map((region) => ({
-    ...region,
-    bounds: scaleBounds(region.bounds, scale),
-    words: region.words?.map((word) => ({ ...word, bounds: scaleBounds(word.bounds, scale) })),
-  }));
-}
-
-function scaleBounds(bounds: DiffBounds, scale: RegionScale): DiffBounds {
-  return {
-    x: bounds.x * scale.x,
-    y: bounds.y * scale.y,
-    width: bounds.width * scale.x,
-    height: bounds.height * scale.y,
-  };
 }
 
 export function analyzeTextRegions(params: {
