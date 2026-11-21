@@ -16,6 +16,8 @@ import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import { startRemoteCapture } from "./capture-remote";
 import type { StartRecordingResult } from "./session-guards";
 import { startIosDeviceCapture } from "./ios-device-stream/start-device-capture";
+import { startMacosCapture } from "./capture-macos";
+import { resolveMacosApp } from "../../utils/macos-input";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
 const MAX_TIME_LIMIT_SECONDS = 600;
@@ -30,13 +32,15 @@ const capability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  // argent's library records the app's window from inside the app.
+  macos: { app: true, catalyst: true },
 } as const;
 
 const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS Simulator UDID, cabled iPhone UDID, or Android serial)."
+      "Target device id from `list-devices` (iOS Simulator UDID, cabled iPhone UDID, <flag:macos-apps>Mac app id, </flag:macos-apps>or Android serial)."
     ),
   timeLimitSeconds: z
     .number()
@@ -62,7 +66,9 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Default true. Draw an on-screen marker for every tap, swipe, drag, pinch and rotate into the " +
-        "video, so it shows where each interaction landed. Set false to record the raw screen with no overlay."
+        "video, so it shows where each interaction landed. " +
+        "<flag:macos-apps>On a Mac app: the pointer argent clicks with, a ring for each click and a dot while a button is held. </flag:macos-apps>" +
+        "Set false to record the raw screen with no overlay."
     ),
 });
 
@@ -75,8 +81,9 @@ export function createScreenRecordingStartTool(
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
 A physical iPhone must be on a USB cable (list-devices transportType "wired"). Its first recording on this host compiles a capture helper and the OS asks the user to allow camera access for "ios-screen-stream"; tell them to click Allow. No touch markers are drawn on a phone.
-Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed (local devices only), or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
+<flag:macos-apps>On a Mac app it records the app's window, with its menus, sheets and popovers, at the window's resolution and a variable frame rate. No permission prompt and no ffmpeg; it also records while the Mac is locked. A window that is minimized or not whole on one display cannot be recorded: the start fails, and when this occurs during the recording, the video holds its last frame and screen-recording-stop returns a warning.
+</flag:macos-apps>Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
+Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed (local simulators, emulators and phones), or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
     zodSchema,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     interaction: {
@@ -132,6 +139,16 @@ Fails if a recording is already running on the device, the device is not booted,
         // the mp4 is fetched at stop. The touch visualizer is drawn there too,
         // into the frames before they are encoded.
         return startRemoteCapture(api, {
+          timeLimitSeconds,
+          watermark,
+          trimStatic: params.trimStatic ?? true,
+          showTouches,
+        });
+      }
+
+      if (device.platform === "macos") {
+        const app = await resolveMacosApp(registry, device, "screen-recording-start");
+        return startMacosCapture(api, app, {
           timeLimitSeconds,
           watermark,
           trimStatic: params.trimStatic ?? true,
