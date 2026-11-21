@@ -69,10 +69,10 @@ const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; 
 /** A response body read that waited behind a read the app did not answer in time. */
 const NO_EARLIER_ANSWER = `the app did not answer an earlier body read within ${RESPONSE_BODY_TIMEOUT_MS / 1000} s; read it again later`;
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
+/** argent can connect to a Mac app's process again, and then read the body. */
+const MACOS_CONNECTION_CLOSED = `${CONNECTION_CLOSED}; read it again after argent reconnects to the app, as network-capture-start does`;
 const REQUEST_BODY_GONE = "the agent holds no body for this request";
 const BODY_NO_LONGER_HELD = "the agent no longer holds this body";
-/** The Mac library keeps no bodies, so its "No ..." answer is not an eviction. */
-export const MACOS_NO_BODIES = "argent does not keep the bodies of a Mac app's requests";
 /**
  * A Mac app's connection can come back for the same process, and a request
  * that still runs then completes, so this is true before and after a reconnect.
@@ -121,6 +121,12 @@ export interface IosAgentLink {
     params: Record<string, unknown>,
     timeoutMs: number
   ): Promise<unknown>;
+  /**
+   * argent can still connect again to the process of the closed `connection`,
+   * as to a Mac app's process while it runs. Absent on iOS, where a
+   * connection does not come back for the same process.
+   */
+  canReconnect?(connection: number): boolean;
 }
 
 /** What the host learned about the app after one of its connections closed. */
@@ -277,15 +283,13 @@ export function createIosNetworkRecords(
 
   /** Why a body of a connection that is no longer live cannot be read. */
   function closedReason(connection: number): string {
-    // No body of a Mac app's request is kept, so a read sooner would not find it either.
-    if (layer === "macos-native") return MACOS_NO_BODIES;
-    // A connection does not come back for the same process, so a newer one,
-    // even one that closed since, is a new process.
+    // A newer connection, even one that closed since, is a new process: an iOS
+    // connection does not come back for the same process, and a Mac app's
+    // records number its processes. A Mac app's process can connect again.
     const live = link.liveConnection();
     if (live !== undefined) sawConnection(live);
-    return endedConnections.has(connection) || newestConnection > connection
-      ? PROCESS_GONE
-      : CONNECTION_CLOSED;
+    if (endedConnections.has(connection) || newestConnection > connection) return PROCESS_GONE;
+    return link.canReconnect?.(connection) ? MACOS_CONNECTION_CLOSED : CONNECTION_CLOSED;
   }
 
   function readBody(id: string, kind: "response" | "post"): Promise<NativeNetworkBody> {
@@ -470,7 +474,6 @@ export function createIosNetworkRecords(
         const detail = at === -1 ? message : message.slice(at + marker.length);
         // The agent answers a body it does not hold with an error that says so.
         if (/^no /i.test(detail)) {
-          if (layer === "macos-native") return MACOS_NO_BODIES;
           if (kind === "response") return BODY_NO_LONGER_HELD;
           // No request held at all is not final while the upload runs: a read
           // after it can still bring the body.

@@ -2,6 +2,7 @@ import { execFileSync, spawn, type SpawnOptions } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as zlib from "node:zlib";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { failedSpawn } from "./helpers/failed-spawn";
@@ -120,7 +121,7 @@ import { resolveDevice } from "../src/utils/device-info";
 import { createHttpApp } from "../src/http";
 import { pollPidsUntilGone } from "../src/utils/process-kill";
 import { PROCESS_ENDED } from "../src/utils/native-network-record";
-import { MACOS_CONNECTION_DROPPED, MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
+import { MACOS_CONNECTION_DROPPED } from "../src/blueprints/ios-network-records";
 import {
   chromiumRefusal,
   findMacosAppByBundleId,
@@ -1005,11 +1006,14 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(urls(await readLog())).toEqual(["https://example.com/c"]);
     });
 
-    it("gives a record's details with its secret headers redacted", async () => {
+    it("gives a record's details with its secret headers redacted and its bodies", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();
       await request("https://example.com/secret", {
+        method: "POST",
         headers: { Authorization: "Bearer fake-token", Accept: "application/json" },
+        postData: '{"name":"mac"}',
+        body: '{"ok":true}',
       });
       const [line] = (await readLog()).requests;
       const found = await details(line!.id);
@@ -1018,15 +1022,21 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         state: "complete",
         request: {
           url: "https://example.com/secret",
-          method: "GET",
+          method: "POST",
           headers: { Authorization: "[REDACTED]", Accept: "application/json" },
+          postData: '{"name":"mac"}',
         },
-        response: { status: 200, headers: { "Set-Cookie": "[REDACTED]" } },
+        response: { status: 200, headers: { "Set-Cookie": "[REDACTED]" }, body: '{"ok":true}' },
       });
-      // The fake keeps no bodies, as the Mac library does.
-      expect(found.response.body).toBe(`[unavailable: ${MACOS_NO_BODIES}]`);
       expect(JSON.stringify(found)).not.toContain("fake-token");
       expect(JSON.stringify(found)).not.toContain("fake-secret");
+
+      // A body the library does not hold gets the iOS text, as on iOS.
+      await request("https://example.com/gone");
+      const gone = (await readLog()).requests.find((r) => r.url === "https://example.com/gone")!;
+      expect((await details(gone.id)).response.body).toBe(
+        "[unavailable: the agent no longer holds this body]"
+      );
 
       expect(await details("macos-0000-999999")).toBe(
         "Request macos-0000-999999 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
@@ -1037,17 +1047,46 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       );
     });
 
-    it("says that argent keeps no bodies also after the connection drops and after a restart", async () => {
+    it("keeps a request body read open while the app sends the body, past the default wait of a CDP request", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();
-      await request("https://example.com/old");
-      const [old] = (await readLog()).requests;
-      const app = await macosApp();
-      await app.call("Net.drop");
-      await waitUntil(() => !app.isConnected());
-      expect((await details(old!.id)).response.body).toBe(`[unavailable: ${MACOS_NO_BODIES}]`);
-      await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
-      expect((await details(old!.id)).response.body).toBe(`[unavailable: ${MACOS_NO_BODIES}]`);
+      await request("https://example.com/upload", {
+        method: "POST",
+        postData: "UPLOADED",
+        hold: true,
+      });
+      const [{ id }] = (await readLog()).requests;
+      const sending =
+        "[unavailable: the app may still be sending this request body; read it again after the request ends]";
+      expect((await details(id)).request.postData).toBe(sending);
+      // The next wait ends 11 s after the read went out, and the read is still open.
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect((await details(id)).request.postData).toBe(sending);
+      // The app answers the read when the upload ends.
+      await (await macosApp()).call("Net.finish");
+      expect((await details(id)).request.postData).toBe("UPLOADED");
+    }, 25_000);
+
+    it("decodes a base64 body, and shows a response that is itself gzip data as binary, never decoding it again", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      const gz = zlib.gzipSync('{"inner":"gzip"}');
+      await request("https://example.com/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        postData: Buffer.from('{"city":"東京"}').toString("base64"),
+        body: gz.toString("base64"),
+        base64: true,
+        responseHeaders: { "Content-Encoding": "gzip", "Content-Type": "application/gzip" },
+        mimeType: "application/gzip",
+      });
+      const [{ id }] = (await readLog()).requests;
+      const found = await details(id);
+      expect(found.request.postData).toBe('{"city":"東京"}');
+      // The app reads a response decoded, so its Content-Encoding is not applied again.
+      expect(found.response.body).toBe(
+        `[body omitted: binary application/gzip, ${gz.length} bytes]`
+      );
     });
 
     it("arms the new process at restart-app, keeps the history and fails the old process's open request", async () => {
@@ -1104,6 +1143,228 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         "https://example.com/first",
         "https://example.com/second",
       ]);
+    });
+
+    it("reads a body after argent reconnects to the same process", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/kept", {
+        method: "POST",
+        postData: "SENT",
+        body: "RECEIVED",
+      });
+      const [{ id }] = (await readLog()).requests;
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      // A read does not reconnect, and says that the body can come back.
+      expect((await details(id)).response.body).toBe(
+        "[unavailable: the agent's connection closed before this body was read; read it again after argent reconnects to the app, as network-capture-start does]"
+      );
+      // The record keeps its process, so the read goes to the new connection.
+      await start();
+      expect(await details(id)).toMatchObject({
+        request: { postData: "SENT" },
+        response: { body: "RECEIVED" },
+      });
+    });
+
+    describe("does not say to read a body again after a reconnect when no reconnect can bring it", () => {
+      const CLOSED = "[unavailable: the agent's connection closed before this body was read]";
+
+      it("when the app quit after the check of its dropped connection", async () => {
+        const { pid } = await run("boot-device", { macosAppPath: appPath });
+        await start();
+        await request("https://example.com/kept", {
+          method: "POST",
+          postData: "SENT",
+          body: "RECEIVED",
+        });
+        const [{ id }] = (await readLog()).requests;
+        const app = await macosApp();
+        await app.call("Net.drop");
+        await waitUntil(() => !app.isConnected());
+        // The app quits after argent's 2 s check of the dropped connection.
+        await new Promise((r) => setTimeout(r, 2_500));
+        process.kill(pid, "SIGKILL");
+        await waitUntil(() => !pidAlive(pid));
+
+        expect(await details(id)).toMatchObject({
+          request: { postData: CLOSED },
+          response: { body: CLOSED },
+        });
+      }, 15_000);
+
+      it("when the app has no listening socket to reconnect to", async () => {
+        // No socket path under so long a HOME fits sun_path.
+        vi.stubEnv("HOME", path.join(root, "h".repeat(90)));
+        fs.mkdirSync(process.env.HOME!, { recursive: true });
+        setFlag("macos-apps", true, "global");
+        const booted = await run("boot-device", { macosAppPath: appPath });
+        expect(booted.note).toContain("too long for a listening socket");
+        await start();
+        await request("https://example.com/kept", {
+          method: "POST",
+          postData: "SENT",
+          body: "RECEIVED",
+        });
+        const [{ id }] = (await readLog()).requests;
+        const app = await macosApp();
+        await app.call("Net.drop");
+        await waitUntil(() => !app.isConnected());
+
+        expect(await details(id)).toMatchObject({
+          request: { postData: CLOSED },
+          response: { body: CLOSED },
+        });
+        // A start cannot reconnect to the process either.
+        expect((await start()).layers[0]).toMatchObject({
+          armed: false,
+          reason: expect.stringContaining("too long for a listening socket"),
+        });
+        expect((await details(id)).response.body).toBe(CLOSED);
+      });
+
+      it("when stop-simulator-server stops the app's services during the read", async () => {
+        await run("boot-device", { macosAppPath: appPath });
+        await start();
+        await request("https://example.com/held", { method: "POST", postData: "BODY", hold: true });
+        const [held] = (await readLog()).requests;
+        // The app holds the read until the upload ends.
+        const reading = details(held!.id);
+        await new Promise((r) => setTimeout(r, 500));
+        await run("stop-simulator-server", { udid: DEVICE_ID });
+
+        expect((await reading).request.postData).toBe(CLOSED);
+      });
+    });
+
+    it("does not answer a body read with the answer to a read of an earlier connection", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      const sending =
+        "[unavailable: the app may still be sending this request body; read it again after the request ends]";
+      await request("https://example.com/r1", { method: "POST", postData: "BODY-1", hold: true });
+      const [r1] = (await readLog()).requests;
+      // The app holds the read until the upload ends, and answers it then on
+      // the connection of that time.
+      expect((await details(r1!.id)).request.postData).toBe(sending);
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+
+      await start();
+      await request("https://example.com/r2", { method: "POST", postData: "BODY-2", hold: true });
+      const r2 = (await readLog()).requests.find((r) => r.url === "https://example.com/r2")!;
+      expect((await details(r2.id)).request.postData).toBe(sending);
+      await app.call("Net.finish");
+      expect((await details(r2.id)).request.postData).toBe("BODY-2");
+      expect((await details(r1!.id)).request.postData).toBe("BODY-1");
+    }, 25_000);
+
+    it("does not answer a body read with a reply under an id that argent did not send on the connection", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/held", { method: "POST", postData: "BODY", hold: true });
+      const [held] = (await readLog()).requests;
+      expect((await details(held!.id)).request.postData).toBe(
+        "[unavailable: the app may still be sending this request body; read it again after the request ends]"
+      );
+      // argent numbers the requests of a connection from 1, but sends them
+      // under other ids, so these ids also match the number of the open read.
+      const app = await macosApp();
+      await app.call("Net.answer", {
+        ids: Array.from({ length: 64 }, (_, i) => i + 1),
+        reply: { result: { postData: "NOT-SENT", base64Encoded: false } },
+      });
+      await app.call("Net.finish");
+      expect((await details(held!.id)).request.postData).toBe("BODY");
+    }, 15_000);
+
+    it("does not answer a body read with the answer to a read of the tool-server before it", async () => {
+      /** A new tool-server process: the Mac app module and the tools load again. */
+      const newToolServer = async () => {
+        vi.resetModules();
+        const { Registry: FreshRegistry } = await import("@argent/registry");
+        const macos = await import("../src/blueprints/macos-app");
+        const { createNetworkCaptureStartTool: startTool } =
+          await import("../src/tools/network/network-capture-start");
+        const { createNativeNetworkLogsTool: logsTool } =
+          await import("../src/tools/native-devtools/native-network-logs");
+        const { networkRequestTool: detailsTool } =
+          await import("../src/tools/network/network-request");
+        const reg = new FreshRegistry();
+        reg.registerBlueprint(macos.macosAppBlueprint);
+        reg.registerTool(startTool(reg));
+        reg.registerTool(logsTool(reg));
+        reg.registerTool(detailsTool);
+        const ref = macos.macosAppRef(resolveDevice(DEVICE_ID));
+        return {
+          reg,
+          app: () => reg.resolveService<MacosAppApi>(ref.urn, ref.options),
+          start: () =>
+            reg.invokeTool("network-capture-start", { udid: DEVICE_ID, bundleId: BUNDLE_ID }),
+          held: async (url: string, postData: string): Promise<string> => {
+            await (
+              await reg.resolveService<MacosAppApi>(ref.urn, ref.options)
+            ).call("Net.request", { url, method: "POST", postData, hold: true });
+            const log = await reg.invokeTool<Listing>("native-network-logs", {
+              udid: DEVICE_ID,
+              bundleId: BUNDLE_ID,
+            });
+            return log.requests.find((r) => r.url === url)!.id;
+          },
+          postData: async (requestId: string): Promise<unknown> =>
+            (
+              await reg.invokeTool<any>("view-network-request-details", {
+                device_id: DEVICE_ID,
+                requestId,
+              })
+            ).request.postData,
+        };
+      };
+      const sending =
+        "[unavailable: the app may still be sending this request body; read it again after the request ends]";
+      await run("boot-device", { macosAppPath: appPath });
+      await registry.disposeService(macosAppRef(resolveDevice(DEVICE_ID)).urn);
+
+      // The first tool-server reads a body that the app holds until the upload ends.
+      const first = await newToolServer();
+      try {
+        await first.start();
+        expect(await first.postData(await first.held("https://example.com/r1", "BODY-1"))).toBe(
+          sending
+        );
+      } finally {
+        await first.reg.dispose();
+      }
+
+      // The next one sends the same requests, and the app answers both reads to it.
+      const next = await newToolServer();
+      try {
+        await next.start();
+        const r2 = await next.held("https://example.com/r2", "BODY-2");
+        expect(await next.postData(r2)).toBe(sending);
+        await (await next.app()).call("Net.finish");
+        expect(await next.postData(r2)).toBe("BODY-2");
+      } finally {
+        await next.reg.dispose();
+      }
+    }, 25_000);
+
+    it("gives a body read before restart-app from argent's copy, and says that the process is gone for one not read", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/read", { body: "READ-BEFORE" });
+      await request("https://example.com/unread", { body: "NOT-READ" });
+      const [read, unread] = (await readLog()).requests;
+      expect((await details(read!.id)).response.body).toBe("READ-BEFORE");
+
+      await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      expect((await details(read!.id)).response.body).toBe("READ-BEFORE");
+      expect((await details(unread!.id)).response.body).toBe(
+        "[unavailable: the app process that made the request is gone]"
+      );
     });
 
     it("leaves the requests of a quick reconnect open when the dropped connection's exit check ends", async () => {
