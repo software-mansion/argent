@@ -186,6 +186,13 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
 
+`debugger-log-registry` returns the counts, the clusters and the path of the log file. The result also contains `entries`: the newest console entries of the session, oldest first. These parameters change `entries`:
+
+- `tail`: the number of entries. The default is 20 and the maximum is 100.
+- `levels`: the console levels to return, for example `["warning", "error"]`. The levels are the CDP names, so `console.warn` is `warning`.
+
+Argent cuts each message in `entries` to 300 characters. The counts and the clusters do not change with these parameters. Argent stops the capture after 50,000 entries in one session.
+
 ## Native devtools
 
 On a Mac app, these tools read the app through the Argent library:
