@@ -122,6 +122,15 @@ function createConsoleLogServer(
   });
 }
 
+async function openLogWriterOrDisconnect(port: number, cdp: CDPClient): Promise<LogFileWriter> {
+  try {
+    return new LogFileWriter(port);
+  } catch (error) {
+    await cdp.disconnect();
+    throw error;
+  }
+}
+
 /**
  * What a React Native runtime says about itself in
  * `ReactNativeApplication.metadataUpdated`, its answer to the enable sent at
@@ -266,6 +275,59 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
     await cdp.connect();
 
+    // Hermes replays its buffered console messages to a new client before it
+    // answers `Runtime.enable`, so the listener must be in place before the
+    // setup below, or the startup logs of an app that launched earlier are lost.
+    const logWriter = await openLogWriterOrDisconnect(port, cdp);
+    const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
+    let nextLogId = 0;
+
+    cdp.events.on("consoleAPICalled", (params) => {
+      const entry: ConsoleLogEntry = {
+        id: nextLogId++,
+        level: params.type,
+        args: params.args.map((a) => ({
+          type: a.type,
+          value: a.value,
+          description: a.description,
+        })),
+        message: formatConsoleArgs(params),
+        timestamp: params.timestamp,
+        stackTrace: params.stackTrace as ConsoleLogEntry["stackTrace"],
+      };
+      logWriter.write({
+        id: entry.id,
+        timestamp: consoleTimestampToIso(entry.timestamp),
+        level: entry.level,
+        message: entry.message,
+        stackTrace: entry.stackTrace,
+      });
+      consoleEvents.emit("log", entry);
+    });
+
+    const logicalDeviceId = selected.target.reactNative?.logicalDeviceId;
+
+    /**
+     * Closes the log file. It is deleted unless the socket dropped (likely an
+     * app crash, so the log is evidence). With `breadcrumb`, also leaves a note
+     * for `debugger-log-registry` saying where the history went, under both
+     * ids, since `forgetDeviceAlias` drops the only join between them.
+     */
+    const closeLog = ({ breadcrumb }: { breadcrumb: boolean }) => {
+      const captured = logWriter.getStats().totalEntries;
+      const keepFile = captured > 0 && !cdp.isConnected();
+      if (breadcrumb && captured > 0) {
+        const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
+        const salvage = keepFile
+          ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
+          : `The ${entries} went with it: the log file is deleted on teardown. This ` +
+            `registry holds only what the runtime replayed or logged since, so earlier entries ` +
+            `may be missing.`;
+        recordReapedSession("js-runtime-debugger", [deviceId, logicalDeviceId], salvage, keepFile);
+      }
+      logWriter.close({ keepFile });
+    };
+
     const sourceMaps = new SourceMapsRegistry();
 
     cdp.events.on("scriptParsed", (script) => {
@@ -330,33 +392,6 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
       const sourceResolver = createSourceResolver(port, metro.projectRoot);
 
-      const logWriter = new LogFileWriter(port);
-      const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
-      let nextLogId = 0;
-
-      cdp.events.on("consoleAPICalled", (params) => {
-        const entry: ConsoleLogEntry = {
-          id: nextLogId++,
-          level: params.type,
-          args: params.args.map((a) => ({
-            type: a.type,
-            value: a.value,
-            description: a.description,
-          })),
-          message: formatConsoleArgs(params),
-          timestamp: params.timestamp,
-          stackTrace: params.stackTrace as ConsoleLogEntry["stackTrace"],
-        };
-        logWriter.write({
-          id: entry.id,
-          timestamp: consoleTimestampToIso(entry.timestamp),
-          level: entry.level,
-          message: entry.message,
-          stackTrace: entry.stackTrace,
-        });
-        consoleEvents.emit("log", entry);
-      });
-
       const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
 
       const api: JsRuntimeDebuggerApi = {
@@ -364,7 +399,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         projectRoot: metro.projectRoot,
         deviceName: selected.deviceName,
         appName: selected.target.title,
-        logicalDeviceId: selected.target.reactNative?.logicalDeviceId,
+        logicalDeviceId,
         runtimeApp,
         isNewDebugger: selected.isNewDebugger,
         cdp,
@@ -403,36 +438,19 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       return {
         api,
         dispose: async () => {
-          // `logWriter.close()` below unlinks the log file unless the socket
-          // dropped (likely an app crash, so the log is evidence), and this
-          // dispose is routinely another agent's `stop-all-simulator-servers`.
-          // Breadcrumb so `debugger-log-registry` can say where the history went
-          // — only when there was history, and under both ids, since
-          // `forgetDeviceAlias` below drops the only join between them.
-          const captured = logWriter.getStats().totalEntries;
-          const keepFile = captured > 0 && !cdp.isConnected();
-          if (captured > 0) {
-            const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
-            const salvage = keepFile
-              ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
-              : `The ${entries} went with it — the log file is deleted on teardown, so this ` +
-                `registry starts empty rather than the app having logged nothing.`;
-            recordReapedSession(
-              "js-runtime-debugger",
-              [deviceId, api.logicalDeviceId],
-              salvage,
-              keepFile
-            );
-          }
           forgetDeviceAlias(api.logicalDeviceId);
           forgetLogicalKeyedDevice(deviceId);
           await consoleServer.close();
-          logWriter.close({ keepFile });
+          // Routinely another agent's `stop-all-simulator-servers`, so leave word.
+          closeLog({ breadcrumb: true });
           await cdp.disconnect();
         },
         events,
       };
     } catch (error) {
+      // A socket drop here is the app dying as the debugger attaches, possibly
+      // after replaying its startup logs. Only that leaves anything to report.
+      closeLog({ breadcrumb: !cdp.isConnected() });
       // An open socket keeps the inspector's debugger session, and the next
       // connect's Runtime.enable then goes unanswered.
       await cdp.disconnect();
