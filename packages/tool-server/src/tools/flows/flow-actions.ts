@@ -1677,6 +1677,7 @@ async function waitForCondition(
 ): Promise<DirectiveOutcome> {
   const deadline = Date.now() + timeoutMs;
 
+  // The last TRUSTED read's matches.
   let lastMatches: ReturnType<typeof findAll> = [];
   // The read `lastMatches` came from, for the reason that quotes its text.
   let lastData: DescribeTreeData | undefined;
@@ -1698,12 +1699,15 @@ async function waitForCondition(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
       const data = await readFlowTree(env);
-      lastMatches = flowFindAll(data.tree, step.selector);
-      lastData = data;
+      const matches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
-      everMatched ||= lastMatches.length > 0;
+      everMatched ||= matches.length > 0;
       const blind = isBlindRead(data, everMatched, step.condition);
-      if (!blind) lastTrustedReadAt = Date.now();
+      if (!blind) {
+        lastMatches = matches;
+        lastData = data;
+        lastTrustedReadAt = Date.now();
+      }
       lastReadTrusted = !blind;
       fallbackHint =
         blind && step.condition === "hidden" && data.source === "macos-fallback"
@@ -1714,7 +1718,7 @@ async function waitForCondition(
         evaluateCondition(
           step.condition,
           step.expectedText,
-          lastMatches,
+          matches,
           step.textMatch,
           env.device.platform === "macos"
         )
@@ -1724,7 +1728,7 @@ async function waitForCondition(
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
       // A throw is as blind as an empty tree — `lastMatches` still holds the
-      // previous successful read, which must not pass for current evidence.
+      // previous trusted read, which must not pass for current evidence.
       lastReadTrusted = false;
     }
     if (Date.now() >= deadline) {

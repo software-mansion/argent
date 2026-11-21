@@ -403,6 +403,24 @@ describe("flowRunToMcpContent", () => {
     ]);
   });
 
+  it("names each baseline the client could not write", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      ok: false,
+      passed: 1,
+      failed: 0,
+      errored: 0,
+      skipped: 0,
+      steps: [],
+      baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+    });
+
+    expect(blocks.slice(-2)).toEqual([
+      { type: "text", text: "✗ baseline not written: /p/b.png: EACCES: permission denied" },
+      { type: "text", text: "FAIL — 1 passed, 0 failed, 0 errored, 0 skipped" },
+    ]);
+  });
+
   it("produces header and footer text blocks", async () => {
     const input: FlowExecuteResult = { flow: "test", steps: [] };
     const blocks = await flowRunToMcpContent(input);

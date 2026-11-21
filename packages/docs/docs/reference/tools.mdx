@@ -854,6 +854,12 @@ Some agent tools do not always give the same result as the hidden tool:
 
 In `ui-tree`, fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. On Android, `roots` holds one root per window, topmost first. A system dialog, such as a runtime permission prompt or a crash dialog, sets `alertVisible`, and every node of the app it covers is `covered`. When Android hides the app's window under the dialog, `foregroundApp` is unset. `foreground-app` returns the same `foregroundApp` and `alertVisible` without reading the tree, plus the app's `name` on iOS.
 
+## Relative paths
+
+The client resolves a relative path in a file input of a tool against its working directory, for example `appPath` of `reinstall-app`. `GET /tools` lists the file inputs of a tool in `fileInputs`. The MCP server refuses such a path in `project_root` or `e2e_test_path`.
+
+On Windows, a path such as `\team\$archive` starts at the root of the client's current drive. For these MCP inputs, include the drive letter, for example `D:\team\$archive`.
+
 ## Footnotes
 
 Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
