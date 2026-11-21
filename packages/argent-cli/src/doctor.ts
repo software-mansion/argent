@@ -8,7 +8,7 @@ import type { ToolsServerPaths } from "@argent/tools-client";
 import {
   ALL_ADAPTERS,
   detectAdapters,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   findConfiguredAdapterScopes,
   formatShellCommand,
@@ -420,7 +420,7 @@ function buildContext(paths: ToolsServerPaths, cwd: string): DoctorContext {
     localPackageDir: resolveInstallMode(projectRoot) === "local" ? local.packageDir : null,
     argentCommand: globalOnPath ? MCP_BINARY_NAME : `npx ${PACKAGE_NAME}`,
     globalInstallFix: formatShellCommand(
-      globalInstallCommand(detectPackageManager(), PACKAGE_NAME)
+      globalInstallCommand(detectGlobalPackageManager(), PACKAGE_NAME)
     ),
     projectInstallFix: formatShellCommand(
       projectInstallCommand(detectProjectPackageManager(projectRoot))

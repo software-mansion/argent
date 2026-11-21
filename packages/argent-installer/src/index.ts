@@ -11,7 +11,7 @@ export {
   resolveInstallMode,
   resolveProjectRoot,
   listBundledSkills,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   projectInstallCommand,
