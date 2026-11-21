@@ -41,6 +41,8 @@ import { xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
+import { macosAppRef, macosLaunchRefusal, type MacosAppApi } from "../../blueprints/macos-app";
+import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 import { classifyNotConnected } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
@@ -67,8 +69,8 @@ export function createNetworkCaptureStartTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StartedLayer>> {
   return {
     id: "network-capture-start",
-    description: `Start network capture for an app on every layer that sees its requests: the app's JS runtime and the native layer (NSURLProtocol on iOS; OkHttp on Android, which needs a debuggable build).
-Use when you are about to trigger requests you need to inspect, also as a step of an e2e test. Unlike native-network-logs and view-network-logs, which on iOS and Android only read and say capture is not started until this runs, this turns capture on and waits a few seconds for each layer to arm. A second call keeps the requests captured so far.
+    description: `Start network capture for an app on every layer that sees its requests: the app's JS runtime and the native layer (NSURLProtocol on iOS; OkHttp on Android, which needs a debuggable build).<flag:macos-apps> On a Mac app, only its native NSURLProtocol layer.</flag:macos-apps>
+Use when you are about to trigger requests you need to inspect, also as a step of an e2e test. Unlike the read tools (native-network-logs and view-network-logs on iOS and Android<flag:macos-apps>, native-network-logs on a Mac app</flag:macos-apps>), which only read and say capture is not started until this runs, this turns capture on and waits a few seconds for each layer to arm. A second call keeps the requests captured so far.
 Returns { status, layers }: per layer, armed, and a reason when it is not armed (unavailable: true when nothing arms it without a change you must make). A native layer that is not armed yet arms by itself, for example at the app's next launch (on Android, only a launch by launch-app or restart-app), and native capture follows the app into later processes that launch-app and restart-app start, until network-capture-stop. On a device whose devtools agent argent attached to, a relaunch ends native capture: call this tool again after it. The JS layer arms only at a call of this tool: call it again once the app's JavaScript has loaded, and after a reload or relaunch. Capture can slow the app.
 Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
     zodSchema: captureSchema,
@@ -85,6 +87,12 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
       const device = resolveDevice(params.udid);
       // Only the HTTP gate checks the capability, and an e2e `tool:` step does not pass it.
       assertSupported("network-capture-start", CAPTURE_CAPABILITY, device);
+      if (device.platform === "macos") {
+        const layer = await withCaptureLock(params.udid, params.bundleId, () =>
+          startMacosLayer(registry, device, params)
+        );
+        return { status: "ok", layers: [layer] };
+      }
       const port = metroPort({ device_id: params.udid, port: params.port });
       // The checks run under the lock too: a stop called while they run waits for
       // this start, so the start cannot install capture after that stop.
@@ -110,24 +118,63 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
         ]);
       });
       if (layers.every((layer) => layer.unavailable)) {
-        const message =
-          `Network capture cannot start for ${params.bundleId} on ${params.udid}: ` +
-          layers.map((layer) => `${layer.layer}: ${layer.reason}`).join("; ");
+        const error = unavailableError(params, layers);
         // ensureDeps caches its probe, so this is what the native layer found.
         const missing = await missingNativeDep(device);
         if (missing && layers.some((layer) => layer.reason === missing.message)) {
-          throw new DependencyMissingError(missing.missing, message);
+          throw new DependencyMissingError(missing.missing, error.message);
         }
-        throw new FailureError(message, {
-          error_code: FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE,
-          failure_stage: "network_capture_start",
-          failure_area: "tool_server",
-          error_kind: "unsupported",
-        });
+        throw error;
       }
       return { status: "ok", layers };
     },
   };
+}
+
+/**
+ * A Mac app has one layer, in the app's own service. It is resolved under the
+ * lock, so a start that waited for a stop-all-simulator-servers of the app arms
+ * the service that comes after it.
+ */
+async function startMacosLayer(
+  registry: Registry,
+  device: DeviceInfo,
+  params: CaptureParams
+): Promise<StartedLayer> {
+  const ref = macosAppRef(device);
+  const app = requireMacosAppOfBundle(
+    { macosApp: await registry.resolveService<MacosAppApi>(ref.urn, ref.options) },
+    device,
+    "network-capture-start",
+    params.bundleId
+  );
+  // No launch of an Apple app loads argent's library, so nothing arms it.
+  if (!isInjectableBundleId(params.bundleId)) {
+    throw unavailableError(params, [
+      unavailable(
+        "macos-native",
+        `${params.bundleId} is an Apple app; argent captures only apps it can load its library into, such as your own builds`
+      ),
+    ]);
+  }
+  // Nor does a launch arm an app that argent refuses to start.
+  const refusal = app.isConnected() ? undefined : await macosLaunchRefusal(params.bundleId);
+  if (refusal) throw unavailableError(params, [unavailable("macos-native", refusal)]);
+  const { armed, reason } = await app.startNetworkCapture();
+  return { layer: "macos-native", armed, ...(reason ? { reason } : {}) };
+}
+
+function unavailableError(params: CaptureParams, layers: StartedLayer[]): FailureError {
+  return new FailureError(
+    `Network capture cannot start for ${params.bundleId} on ${params.udid}: ` +
+      layers.map((layer) => `${layer.layer}: ${layer.reason}`).join("; "),
+    {
+      error_code: FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE,
+      failure_stage: "network_capture_start",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    }
+  );
 }
 
 function unavailable(layer: StartedLayer["layer"], reason: string): StartedLayer {
