@@ -975,9 +975,8 @@ export async function analyzeNativeProfilerIos(
     });
   }
 
-  const [cpuMissing, hangsMissing, leaksMissing] = await Promise.all([
+  const [cpuMissing, leaksMissing] = await Promise.all([
     checkExportFileMissing(api.exportedFiles.cpu ?? null),
-    checkExportFileMissing(api.exportedFiles.hangs ?? null),
     checkExportFileMissing(api.exportedFiles.leaks ?? null),
   ]);
 
@@ -987,6 +986,7 @@ export async function analyzeNativeProfilerIos(
     bottlenecks,
     cpuSamples,
     uiHangs,
+    hangsRecorded,
     cpuHotspots,
     memoryLeaks,
     toolingCpuMs,
@@ -1012,7 +1012,7 @@ export async function analyzeNativeProfilerIos(
   api.parsedData = {
     cpuSamples,
     uiHangs,
-    hangsRecorded: api.exportedFiles.hangs != null && !hangsMissing,
+    hangsRecorded,
     cpuHotspots,
     memoryLeaks,
     leaksRecorded,
@@ -1045,10 +1045,11 @@ export async function analyzeNativeProfilerIos(
   if (!api.exportedFiles.hangs) {
     exportErrors.hangs =
       skipped ?? "Hangs export failed — no potential-hangs table found in trace.";
-  } else if (hangsMissing) {
-    exportErrors.hangs =
-      `Hangs export ${hangsMissing} — the trace export claims it succeeded but the file is gone ` +
-      `or unreadable, so no hang data could be analyzed. Re-run native-profiler-stop.`;
+  } else if (!hangsRecorded) {
+    const hangsMissing = await checkExportFileMissing(api.exportedFiles.hangs);
+    exportErrors.hangs = hangsMissing
+      ? `Hangs export ${hangsMissing} — no hang data could be analyzed. Re-run native-profiler-stop.`
+      : `Could not read a potential-hangs table from \`${api.exportedFiles.hangs}\`.`;
   }
   if (api.exportedFiles.leaks && leaksMissing) {
     exportErrors.leaks =

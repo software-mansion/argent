@@ -27,17 +27,6 @@ import {
 } from "../../src/utils/ios-profiler/render";
 import type { ProfilerPayload, UiHang } from "../../src/utils/ios-profiler/types";
 
-// Zero bottlenecks from the pipeline, so analyze takes the all-clear path.
-vi.mock("../../src/utils/ios-profiler/pipeline/index", () => ({
-  runIosProfilerPipeline: vi.fn(async () => ({
-    bottlenecks: [],
-    cpuSamples: [],
-    uiHangs: [],
-    cpuHotspots: [],
-    memoryLeaks: [],
-  })),
-}));
-
 // profiler-load reads saved sessions from getDebugDir(); point it at the test dir.
 // The rest of the module stays real: the combined report reads commits with it.
 vi.mock("../../src/utils/react-profiler/debug/dump", async (importActual) => ({
@@ -80,6 +69,8 @@ afterEach(async () => {
 });
 
 const SESSION_ID = "20261030-120000";
+const EMPTY_HANGS_TABLE =
+  '<trace-query-result><node><schema name="potential-hangs"/></node></trace-query-result>';
 
 function leakStacks(api: NativeProfilerSessionApi): Promise<string> {
   return profilerStackQueryTool.execute({ session: api } as never, {
@@ -109,7 +100,7 @@ async function readReportFile(reportFile: string | null): Promise<string> {
 async function writeSavedIosSession(sessionId: string, withLeaks: boolean): Promise<void> {
   const base = path.join(dir, `native-profiler-${sessionId}`);
   await fs.writeFile(`${base}_raw_cpu.xml`, "");
-  await fs.writeFile(`${base}_raw_hangs.xml`, "");
+  await fs.writeFile(`${base}_raw_hangs.xml`, EMPTY_HANGS_TABLE);
   if (withLeaks) await fs.writeFile(`${base}_raw_leaks.xml`, "");
 }
 
@@ -156,12 +147,10 @@ async function freshIosSession(): Promise<NativeProfilerSessionApi> {
 async function buildIosSession(leaksFile: string | null): Promise<NativeProfilerSessionApi> {
   const api = await freshIosSession();
   api.traceFile = path.join(dir, "native-profiler-ios.trace");
-  // Null cpu/hangs paths short-circuit the missing-file checks; only the leaks
-  // export decides whether leaks were recorded.
   const cpu = path.join(dir, "raw_cpu.xml");
   const hangs = path.join(dir, "raw_hangs.xml");
   await fs.writeFile(cpu, "");
-  await fs.writeFile(hangs, "");
+  await fs.writeFile(hangs, EMPTY_HANGS_TABLE);
   api.exportedFiles = { cpu, hangs, leaks: leaksFile };
   return api;
 }
@@ -352,19 +341,36 @@ describe("iOS reports when no UI hang data was recorded", () => {
     });
   }
 
-  it.each([false, true])("keeps the hang export status on load (export=%s)", async (hasExport) => {
-    await writeSavedIosSession(SESSION_ID, false);
-    if (!hasExport) {
-      await fs.unlink(path.join(dir, `native-profiler-${SESSION_ID}_raw_hangs.xml`));
+  it.each(["missing file", "unreadable file", "missing table", "empty table"] as const)(
+    "reports hang availability after load and analyze (%s)",
+    async (scenario) => {
+      await writeSavedIosSession(SESSION_ID, false);
+      const hangsPath = path.join(dir, `native-profiler-${SESSION_ID}_raw_hangs.xml`);
+      if (scenario === "missing table") {
+        await fs.writeFile(hangsPath, "<trace-query-result></trace-query-result>");
+      } else if (scenario !== "empty table") {
+        await fs.unlink(hangsPath);
+        // Reading a directory as a file fails even when the test runs as root.
+        if (scenario === "unreadable file") await fs.mkdir(hangsPath);
+      }
+
+      const api = await freshIosSession();
+      const recorded = scenario === "empty table";
+      const queryResult = recorded ? "There are 0 hangs" : "No UI hang data was recorded";
+      expect(await loadNative(api)).toContain(`UI hangs: ${recorded ? "0" : "not recorded"}`);
+      expect(await hangStacks(api)).toContain(queryResult);
+
+      const analysis = await analyzeNativeProfilerIos(api);
+      expect(Boolean(analysis.exportErrors.hangs)).toBe(!recorded);
+      expect(await hangStacks(api)).toContain(queryResult);
     }
+  );
+
+  it("marks thread hotspots when no hang data is available", async () => {
+    await writeSavedIosSession(SESSION_ID, false);
+    await fs.unlink(path.join(dir, `native-profiler-${SESSION_ID}_raw_hangs.xml`));
     const api = await freshIosSession();
     await loadNative(api);
-
-    expect(await hangStacks(api)).toContain(
-      hasExport ? "There are 0 hangs" : "No UI hang data was recorded"
-    );
-
-    if (hasExport) return;
     const parsedData = api.parsedData!;
     parsedData.cpuSamples.push({
       timestampNs: 0,
