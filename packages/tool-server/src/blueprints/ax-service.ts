@@ -16,6 +16,7 @@ import {
 } from "@argent/registry";
 import { assertExternalCapability } from "../utils/external-devices";
 import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
+import { axServiceSocketPath } from "../utils/socket-tag";
 import { asUiOrientation, type UiOrientation } from "../tools/describe/contract";
 
 // Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
@@ -184,10 +185,6 @@ const LIVE_PANEL_TIMEOUT_MS = 2_000;
  * daemon whose main thread is held by another command against a hung app.
  */
 const FILL_TIMEOUT_MS = 6_000;
-
-function getSocketPath(udid: string): string {
-  return `/tmp/ax-${udid.slice(0, 8)}.sock`;
-}
 
 interface PendingRpc {
   resolve: (value: unknown) => void;
@@ -543,7 +540,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const endpoint: IosEndpoint =
       transport === "tcp"
         ? { transport: "tcp" }
-        : { transport: "unix", socketPath: getSocketPath(udid) };
+        : { transport: "unix", socketPath: axServiceSocketPath(udid) };
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const pendingRpc = new Map<number, PendingRpc>();

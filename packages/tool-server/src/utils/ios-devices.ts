@@ -70,13 +70,40 @@ export function simulatorRuntimeKind(runtimeId: string): "mobile" | "tv" | undef
 }
 
 /**
+ * The listing of each device set that is still running, by set path (`""` for
+ * the default set).
+ */
+const inFlightSetListings = new Map<string, Promise<IosSimulatorScan>>();
+
+/**
  * List one device set's iOS/tvOS simulators; none on any failure but the refusal
  * while Xcode's component install is pending. Read as an empty set, it would
  * make a simulator's type lookup answer "not tvOS, not foldable".
  *
+ * Callers that ask for the same set while its listing is still running share
+ * that one `simctl` call, such as the foldable checks of several simulators an
+ * external provider lends from one set. Each caller gets its own copies.
+ *
  * @throws XcodeFirstLaunchPendingError
  */
 async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulatorScan> {
+  const key = deviceSet ?? "";
+  let listing = inFlightSetListings.get(key);
+
+  if (!listing) {
+    const started = readDeviceSetSimulators(deviceSet).finally(() => {
+      if (inFlightSetListings.get(key) === started) inFlightSetListings.delete(key);
+    });
+    listing = started;
+    inFlightSetListings.set(key, listing);
+  }
+
+  const { simulators, timedOut } = await listing;
+  return { simulators: simulators.map((simulator) => ({ ...simulator })), timedOut };
+}
+
+/** @throws XcodeFirstLaunchPendingError */
+async function readDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulatorScan> {
   // simctl materializes a missing `--set` directory as a side effect, so a
   // config typo would leave a stray directory on disk.
   if (deviceSet && !fs.existsSync(deviceSet)) return { simulators: [], timedOut: false };
@@ -220,9 +247,10 @@ export function getCachedSimulatorRuntimeKind(udid: string): "mobile" | "tv" | u
   return runtimeKindCache.get(udid);
 }
 
-/** Test-only: clear the iOS runtime-kind memo so cases don't leak verdicts. */
+/** Test-only: clear the iOS memos and in-flight set listings so cases don't leak verdicts. */
 export function __resetSimulatorRuntimeKindCacheForTesting(): void {
   runtimeKindCache.clear();
+  inFlightSetListings.clear();
   foldableCache.clear();
   deviceTypeFoldableCache.clear();
   deviceTypeBundlePaths = null;

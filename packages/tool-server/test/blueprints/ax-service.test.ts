@@ -3,7 +3,7 @@ import type { DeviceInfo } from "@argent/registry";
 import { axServiceBlueprint } from "../../src/blueprints/ax-service";
 
 // Regression: same crash class as simulator-server. A missing udid would
-// throw `getSocketPath(undefined).slice` synchronously and `udid.slice` in
+// reach `axServiceSocketPath(undefined)` and throw `udid.slice` in
 // the stderr listener fatally. The id-shape check sits *after* the apple-
 // only check so an Android caller still gets the clearer iOS-only error.
 describe("ax-service blueprint — input validation", () => {

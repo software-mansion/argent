@@ -10,6 +10,7 @@ import {
 import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import {
+  isFoldableSimulator,
   scanIosSimulators,
   simctlListTimeoutAdvice,
   simulatorRuntimeKind,
@@ -113,6 +114,11 @@ type HarmonyDevice = {
 type ExternalListedDevice = {
   capabilities: string[];
   external: true;
+  /**
+   * Present and true for a foldable simulator (the iPhone Duo), as on a plain
+   * iOS row.
+   */
+  foldable?: true;
   id: string;
   kind: "device" | "emulator" | "simulator";
   name: string;
@@ -156,8 +162,9 @@ type ListDevicesResult = {
    * Present only when it applies, unlike the description, which is read once
    * per session: why local iOS targets are missing while Xcode's component
    * install is pending, a retry notice when `simctl` timed out, the rules for a
-   * provider's device when one is listed, and how to reach the adb server when
-   * it is not adb's default.
+   * provider's device when one is listed, a retry notice when the foldable
+   * check of a provider's simulator timed out, and how to reach the adb server
+   * when it is not adb's default.
    */
   hint?: string;
 };
@@ -172,6 +179,13 @@ const EXTERNAL_DEVICES_HINT =
   `drops argent's cached handles, which is the recovery when calls keep failing against an endpoint the provider has ` +
   `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
   `withheld fails with a clear message naming the provider.`;
+
+function foldableCheckTimedOutHint(names: readonly string[]): string {
+  return (
+    `The foldable check did not finish in time for ${names.join(", ")}, so 'foldable: true' may be ` +
+    `missing there. Call list-devices again to retry the check.`
+  );
+}
 
 function iosListTimedOutHint(): string {
   return `iOS simulators may be missing from this list: ${simctlListTimeoutAdvice("list-devices")}`;
@@ -305,7 +319,8 @@ async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
 // and truncates branches that would have completed, dropping real devices. The long
 // pole is Vega at ~20s (6s `device list` + two serial 5s `ps` probes + 4s `device
 // info` on the recovery path); Android is ~11s; the two HarmonyOS branches run
-// concurrently and top out at the 8s `hdc list targets`; iOS / AVD-list / Chromium
+// concurrently and top out at the 8s `hdc list targets`; the external branch is
+// ~6s (0.8s liveness probe + the 5s foldable budget); iOS / AVD-list / Chromium
 // are far below. list-devices-deadline.test.ts asserts the margin from the same
 // exported constants, so a future timeout bump fails loudly instead of silently
 // breaching it.
@@ -334,10 +349,11 @@ export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string)
   }
 }
 
-function toListedExternal(device: ExternalDevice): ExternalListedDevice {
+function toListedExternal(device: ExternalDevice, foldable: boolean): ExternalListedDevice {
   return {
     capabilities: Array.from(device.capabilities).sort(),
     external: true,
+    ...(foldable ? { foldable: true as const } : {}),
     id: device.id,
     kind: device.kind,
     name: device.name,
@@ -351,6 +367,78 @@ function toListedExternal(device: ExternalDevice): ExternalListedDevice {
     /** Mirror the id into the key the agent associates with the platform. */
     ...(device.platform === "ios" ? { udid: device.id } : { serial: device.id }),
   };
+}
+
+/**
+ * `foldableTimedOut`: the foldable check ran past its budget, so `foldable` is
+ * unknown.
+ */
+type ExternalEntry = { device: ExternalDevice; foldable: boolean; foldableTimedOut: boolean };
+
+/**
+ * How long the external branch waits for the foldable check of its lent
+ * simulators. The check reads the provider's device set and (the first time a
+ * device type is seen) the device-type list and profile. Each of those `simctl`
+ * and `plutil` calls has its own timeout and in series they can outlast
+ * `BRANCH_DEADLINE_MS`, which would drop every lent device, Android ones
+ * included. Past this budget a lent simulator is listed without the flag and
+ * the result's hint says so. The check keeps running and caches what it finds,
+ * so a later call gets the flag once the device set answers in time.
+ */
+export const EXTERNAL_FOLDABLE_BUDGET_MS = 5_000;
+
+/**
+ * Pair each external device with whether it is a foldable simulator (the iPhone
+ * Duo), read from the provider's device set. An agent needs the flag to know
+ * `fold` applies, whoever drives the device. This runs inside the external
+ * discovery branch, after the liveness probe, so it overlaps the other
+ * branches. The branch's worst case is the probe plus
+ * {@link EXTERNAL_FOLDABLE_BUDGET_MS}, under `BRANCH_DEADLINE_MS`.
+ * `isFoldableSimulator` memoizes every verdict the device set answers, so a
+ * simulator the set lists costs one `simctl` call per tool-server run.
+ */
+async function withFoldableFlags(external: readonly ExternalDevice[]): Promise<ExternalEntry[]> {
+  const simulators = external.filter(
+    (device) => device.platform === "ios" && device.kind === "simulator"
+  );
+
+  if (simulators.length === 0) {
+    return external.map((device) => ({ device, foldable: false, foldableTimedOut: false }));
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const budget = new Promise<"timed-out">((resolve) => {
+    timer = setTimeout(() => resolve("timed-out"), EXTERNAL_FOLDABLE_BUDGET_MS);
+  });
+
+  try {
+    return await Promise.all(
+      external.map(async (device) => {
+        if (!simulators.includes(device)) {
+          return { device, foldable: false, foldableTimedOut: false };
+        }
+
+        /**
+         * A rejection (`XcodeFirstLaunchPendingError` while Xcode's component
+         * install is pending) must not escape: the branch's own `.catch` runs
+         * before this step, so it would fail the whole call.
+         */
+        const verdict = await Promise.race([
+          isFoldableSimulator(device.id).catch(() => false),
+          budget,
+        ]);
+
+        return {
+          device,
+          foldable: verdict === true,
+          foldableTimedOut: verdict === "timed-out",
+        };
+      })
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -465,10 +553,13 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
         : [],
       /**
        * One directory stat when no provider is registered (the common case)
-       * and a short HTTP probe per provider otherwise.
+       * and a short HTTP probe per provider otherwise, then the foldable
+       * check of each lent simulator.
        */
       withDeadline(
-        listExternalDevices().catch(() => []),
+        listExternalDevices()
+          .catch(() => [])
+          .then(withFoldableFlags),
         [],
         "external"
       ),
@@ -479,7 +570,7 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
       ),
     ]);
 
-    const externalShadows = externalShadowIds(external);
+    const externalShadows = externalShadowIds(external.map(({ device }) => device));
 
     const iosTagged: IosDevice[] = ios.simulators
       .filter((simulator) => !externalShadows.has(simulator.udid))
@@ -560,7 +651,7 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
       ...macos,
       ...vega,
       ...harmonyTagged,
-      ...external.map(toListedExternal),
+      ...external.map(({ device, foldable }) => toListedExternal(device, foldable)),
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
@@ -568,11 +659,16 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
       foldableAvds.has(a.name) ? { ...a, foldable: true as const } : a
     );
 
+    const foldableTimedOut = external
+      .filter((entry) => entry.foldableTimedOut)
+      .map(({ device }) => device.name);
+
     const adbPrefix = adbCommandPrefix(process.env);
     const hints = [
       ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
       ...(ios.timedOut ? [iosListTimedOutHint()] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
+      ...(foldableTimedOut.length > 0 ? [foldableCheckTimedOutHint(foldableTimedOut)] : []),
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];
 
