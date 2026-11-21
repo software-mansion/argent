@@ -13,18 +13,32 @@
  * UIManager.measureInWindow with native tags. Measurement is batched via Promise.all
  * with a per-host cache because Paper's measureInWindow is async.
  *
+ * The fallback's pageX/pageY count from the React Native root view, not the window.
+ * With addRootOffset (a Mac app), a host measured that way (one whose public instance
+ * was never created, such as a Text) gets the window offset of its nearest ancestor
+ * host that has measureInWindow: the title bar height in a react-native-macos window.
+ * Paper's UIManager.measureInWindow counts from a react-native-macos window's content
+ * view, below the title bar. With addRootOffset, Paper rects get the window height
+ * (Dimensions 'window', the window frame) minus the height of a root container that
+ * fills the content view's width from its top-left corner; any other root adds 0.
+ * Other platforms keep page coordinates: on Android an edge-to-edge app's viewport
+ * offset is minus the status bar, which would move hosts that are placed right today.
+ *
  * includeSkipped additionally reports totalFibers and a per-name count of skipped
  * components.
  */
 export function makeComponentTreeScript(opts: {
   includeSkipped?: boolean;
   requestId: string;
+  addRootOffset?: boolean;
 }): string {
   const trackSkipped = opts?.includeSkipped ? "true" : "false";
+  const addRootOffset = opts?.addRootOffset ? "true" : "false";
   const requestId = JSON.stringify(opts.requestId);
   return `(async function() {
   var REQUEST_ID = ${requestId};
   var TRACK_SKIPPED = ${trackSkipped};
+  var ADD_ROOT_OFFSET = ${addRootOffset};
   // Deliver errors through the SAME binding channel as the success path. The
   // consumer (evaluateWithBinding) runs Runtime.evaluate WITHOUT returnByValue/
   // awaitPromise, so the IIFE's return value is discarded — a 'return' here never
@@ -195,12 +209,14 @@ export function makeComponentTreeScript(opts: {
       // a primitive id (numeric nativeTag, WeakMap-by-identity fallback) per above.
       var _canon = fiber.stateNode.canonical;
       var _sn = fiber.stateNode.node || null;
+      var _pi = _canon.publicInstance || null;
       return {
         f: true,
         n: typeof _canon.nativeTag === 'number' ? _canon.nativeTag : _sn,
         key: fabricKey(_canon.nativeTag, _sn),
-        pi: _canon.publicInstance || null,
-        sn: _sn
+        pi: _pi,
+        sn: _sn,
+        anchor: !ADD_ROOT_OFFSET || (_pi && typeof _pi.measureInWindow === 'function') ? null : findOffsetAnchor(fiber.return)
       };
     }
     if (useFabric && fiber.stateNode.node) {
@@ -214,6 +230,20 @@ export function makeComponentTreeScript(opts: {
         return { f: false, n: fiber.stateNode.canonical.nativeTag, key: 'p' + fiber.stateNode.canonical.nativeTag };
       if (typeof fiber.stateNode._nativeTag === 'number')
         return { f: false, n: fiber.stateNode._nativeTag, key: 'p' + fiber.stateNode._nativeTag };
+    }
+    return null;
+  }
+
+  // The nearest ancestor Fabric host whose public instance has measureInWindow:
+  // it is in the same root view as the host below it, so the difference between
+  // its window and page coordinates is that root view's offset in the window.
+  function findOffsetAnchor(fiber) {
+    for (var _d = 0; fiber && _d < 5000; _d++, fiber = fiber.return) {
+      if (typeof fiber.type !== 'string' || !fiber.stateNode || !fiber.stateNode.canonical) continue;
+      var _apn = fiber.stateNode.canonical.publicInstance;
+      if (_apn && typeof _apn.measureInWindow === 'function' && fiber.stateNode.node) {
+        return { key: fabricKey(fiber.stateNode.canonical.nativeTag, fiber.stateNode.node), pi: _apn, sn: fiber.stateNode.node };
+      }
     }
     return null;
   }
@@ -340,6 +370,48 @@ export function makeComponentTreeScript(opts: {
     }
   }
 
+  // Window offset of an anchor's root view, cached per anchor. Zero when it
+  // cannot be measured, which keeps the page coordinates as they were.
+  var offsetCache = {};
+  function anchorOffset(anchor) {
+    if (!anchor) return Promise.resolve({ dx: 0, dy: 0 });
+    if (offsetCache[anchor.key]) return offsetCache[anchor.key];
+    offsetCache[anchor.key] = new Promise(function(_resolve) {
+      var _done = false;
+      function resolve(v) { if (_done) return; _done = true; _resolve(v); }
+      setTimeout(function() { resolve({ dx: 0, dy: 0 }); }, 600);
+      try {
+        anchor.pi.measureInWindow(function(wx, wy) {
+          nativeFabricUIManager.measure(anchor.sn, function(x, y, w, h, px, py) {
+            resolve({ dx: wx - px, dy: wy - py });
+          });
+        });
+      } catch (e) { resolve({ dx: 0, dy: 0 }); }
+    });
+    return offsetCache[anchor.key];
+  }
+
+  // Paper on a Mac app: the title bar height above the content view, or 0.
+  function paperTitleBar() {
+    if (!ADD_ROOT_OFFSET || useFabric || !(screenW > 0)) return Promise.resolve(0);
+    var _ci = root.current && root.current.stateNode && root.current.stateNode.containerInfo;
+    var _tag = _ci && typeof _ci.containerTag === 'number' ? _ci.containerTag : (typeof _ci === 'number' ? _ci : null);
+    if (_tag === null || typeof UIManagerMod.measureInWindow !== 'function') return Promise.resolve(0);
+    return new Promise(function(_resolve) {
+      var _done = false;
+      function resolve(v) { if (_done) return; _done = true; _resolve(v); }
+      setTimeout(function() { resolve(0); }, 600);
+      try {
+        UIManagerMod.measureInWindow(_tag, function(cx, cy, cw, ch) {
+          var bar = screenH - ch;
+          var fills = Math.abs(cx) < 1 && Math.abs(cy) < 1 && Math.abs(cw - screenW) <= 1;
+          resolve(fills && bar > 0 && bar <= 120 ? bar : 0);
+        });
+      } catch (e) { resolve(0); }
+    });
+  }
+  var paperDy = await paperTitleBar();
+
   function measureOne(info) {
     return new Promise(function(_resolve) {
       // Guard against measure callbacks that never fire (detached / off-screen
@@ -358,15 +430,17 @@ export function makeComponentTreeScript(opts: {
             });
           } else if (typeof nativeFabricUIManager !== 'undefined' && typeof nativeFabricUIManager.measure === 'function') {
             nativeFabricUIManager.measure(info.sn || info.n, function(x, y, w, h, px, py) {
-              if (w > 0 && h > 0) resolve({ x: Math.round(px), y: Math.round(py), w: Math.round(w), h: Math.round(h) });
-              else resolve(null);
+              if (!(w > 0 && h > 0)) { resolve(null); return; }
+              anchorOffset(info.anchor).then(function(o) {
+                resolve({ x: Math.round(px + o.dx), y: Math.round(py + o.dy), w: Math.round(w), h: Math.round(h) });
+              });
             });
           } else {
             resolve(null);
           }
         } else {
           UIManagerMod.measureInWindow(info.n, function(x, y, w, h) {
-            if (w > 0 && h > 0) resolve({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
+            if (w > 0 && h > 0) resolve({ x: Math.round(x), y: Math.round(y + paperDy), w: Math.round(w), h: Math.round(h) });
             else resolve(null);
           });
         }

@@ -19,7 +19,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
+      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, <flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
     ),
   expression: z.string().describe("JavaScript expression to evaluate in the app runtime"),
 });
@@ -29,7 +29,7 @@ export const debuggerEvaluateTool: ToolDefinition<
   { result: unknown; deviceName: string; appName: string; logicalDeviceId: string | undefined }
 > = {
   id: "debugger-evaluate",
-  description: `Execute arbitrary JavaScript in the app's JS runtime via CDP: Hermes on iOS / Android / Vega, V8 on Chromium.
+  description: `Execute arbitrary JavaScript in the app's JS runtime via CDP: Hermes on iOS / Android / Vega<flag:macos-apps> / Mac apps</flag:macos-apps>, V8 on Chromium.
 Returns the result serialized by value as JSON, with deviceName, appName, and logicalDeviceId. Use when you need to read app state, including localStorage and sessionStorage on Chromium, call app functions, or test logic at runtime. Cyclic objects, which many RN runtime values are (fiber nodes, navigation refs, global), fail with a serialization error. Fails if the expression throws or the runtime is not connected. On React Native, a module that fails to load while the expression runs (e.g. a lazy react-native export whose native module the app lacks) fails the call with that module's error instead of opening the app's red box.`,
   zodSchema,
   searchHint:
