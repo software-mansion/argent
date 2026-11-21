@@ -27,16 +27,35 @@ function escapeRegExp(value: string): string {
  * match an emulator running `Pixel_7_API_34`.
  */
 export function parseEmulatorPidsForAvd(psOutput: string, avdName: string): number[] {
+  return parseEmulatorProcessesForAvd(psOutput, avdName).map((p) => p.pid);
+}
+
+/** One emulator process running an AVD, with the launch flags argent tells instances apart by. */
+export interface EmulatorProcess {
+  pid: number;
+  /** Launched with `-read-only`: it holds no AVD lock and saves no snapshot. */
+  readOnly: boolean;
+  /** The console port from `-port <n>`, or null when the emulator picked one itself. */
+  port: number | null;
+}
+
+/** Like {@link parseEmulatorPidsForAvd}, with each process's `-read-only` and `-port` flags. */
+export function parseEmulatorProcessesForAvd(psOutput: string, avdName: string): EmulatorProcess[] {
   const avdArg = new RegExp(`(?:^|\\s)-avd\\s+${escapeRegExp(avdName)}(?:\\s|$)`);
-  const pids: number[] = [];
+  const processes: EmulatorProcess[] = [];
   for (const line of psOutput.split("\n")) {
     const m = line.match(/^\s*(\d+)\s+(.*)$/);
     if (!m) continue;
     const argv = m[2]!;
     if (!EMULATOR_PROCESS_RE.test(argv) || !avdArg.test(argv)) continue;
-    pids.push(parseInt(m[1]!, 10));
+    const port = argv.match(/(?:^|\s)-port\s+(\d+)(?:\s|$)/);
+    processes.push({
+      pid: parseInt(m[1]!, 10),
+      readOnly: /(?:^|\s)-read-only(?:\s|$)/.test(argv),
+      port: port ? parseInt(port[1]!, 10) : null,
+    });
   }
-  return pids;
+  return processes;
 }
 
 /**
@@ -44,17 +63,36 @@ export function parseEmulatorPidsForAvd(psOutput: string, avdName: string): numb
  * is unavailable, as on Windows).
  */
 export async function listEmulatorPidsForAvd(avdName: string): Promise<number[]> {
-  if (process.platform === "win32") return [];
+  return (await listEmulatorProcessesForAvd(avdName)).map((p) => p.pid);
+}
+
+/**
+ * The emulator processes running `avdName`, with their `-read-only` and `-port`
+ * flags (empty if none, or if `ps` is unavailable, as on Windows).
+ */
+export async function listEmulatorProcessesForAvd(avdName: string): Promise<EmulatorProcess[]> {
+  return (await readEmulatorProcessesForAvd(avdName)) ?? [];
+}
+
+/**
+ * Like {@link listEmulatorProcessesForAvd}, but null when the process table
+ * cannot be read (Windows, or `ps` failed or timed out), so a caller can tell
+ * "no such emulator" from "unknown".
+ */
+export async function readEmulatorProcessesForAvd(
+  avdName: string
+): Promise<EmulatorProcess[] | null> {
+  if (process.platform === "win32") return null;
   try {
     const { stdout } = await execFileAsync(PS_BIN, [...PS_ARGS_WITH_PID], {
       timeout: 5_000,
       maxBuffer: 16 * 1024 * 1024,
     });
-    return parseEmulatorPidsForAvd(stdout, avdName);
+    return parseEmulatorProcessesForAvd(stdout, avdName);
   } catch (err) {
     process.stderr.write(
-      `[emulator-process] ps probe failed; assuming no emulator runs "${avdName}": ${String(err)}\n`
+      `[emulator-process] ps probe failed; cannot list the emulators of "${avdName}": ${String(err)}\n`
     );
-    return [];
+    return null;
   }
 }
