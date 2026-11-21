@@ -263,7 +263,9 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const onPublishedBundler = publishedMetroPort(deviceId, port) === undefined;
     const proxied = onPublishedBundler ? externalJsDebuggerUrl(deviceId) : undefined;
 
-    const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
+    const cdp = new CDPClient(proxied ?? selected.webSocketUrl, {
+      awaitPromisesInApp: !selected.legacyInspector,
+    });
     await cdp.connect();
 
     const sourceMaps = new SourceMapsRegistry();

@@ -1,0 +1,213 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { Session } from "node:inspector";
+import { WebSocketServer } from "ws";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { CDPClient } from "../../src/utils/debugger/cdp-client";
+
+interface SentRequest {
+  method: string;
+  params: Record<string, unknown>;
+}
+
+/**
+ * Serves this process's own V8 over a WebSocket, so the scripts that
+ * evaluateAwaited sends really run. `awaitPromise` is dropped on the way, so
+ * V8 hands back a Promise handle the way Hermes does.
+ */
+let wss: WebSocketServer;
+let session: Session;
+let sent: SentRequest[];
+
+interface RuntimeReply {
+  result?: { value?: unknown };
+  exceptionDetails?: { exception?: { objectId?: string; description?: string } };
+}
+
+function post(method: string, params: Record<string, unknown>): Promise<RuntimeReply> {
+  return new Promise((resolve, reject) => {
+    session.post(method, params, (error, result) =>
+      error ? reject(error) : resolve(result as RuntimeReply)
+    );
+  });
+}
+
+/**
+ * Hermes describes a thrown Error whose `stack` is empty as `name: message`.
+ * V8 before Node 24 describes it as "", so the description is filled in here.
+ */
+async function describeLikeHermes(reply: RuntimeReply): Promise<void> {
+  const exception = reply.exceptionDetails?.exception;
+  if (!exception?.objectId || exception.description !== "") return;
+
+  const named = await post("Runtime.callFunctionOn", {
+    objectId: exception.objectId,
+    functionDeclaration: "function () { return String(this); }",
+    returnByValue: true,
+  });
+  exception.description = String(named.result?.value);
+}
+
+async function run(id: number, method: string, params: Record<string, unknown>): Promise<string> {
+  try {
+    const result = await post(method, params);
+    await describeLikeHermes(result);
+    return JSON.stringify({ id, result });
+  } catch (error) {
+    return JSON.stringify({ id, error: { code: -32000, message: (error as Error).message } });
+  }
+}
+
+beforeEach(async () => {
+  sent = [];
+  session = new Session();
+  session.connect();
+  wss = new WebSocketServer({ port: 0 });
+  await new Promise((resolve) => wss.once("listening", resolve));
+
+  wss.on("connection", (ws) => {
+    ws.on("message", async (raw) => {
+      const { id, method, params } = JSON.parse(raw.toString()) as SentRequest & { id: number };
+      sent.push({ method, params });
+      ws.send(await run(id, method, { ...params, awaitPromise: false }));
+    });
+  });
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
+  session.disconnect();
+  await new Promise((resolve) => wss.close(resolve));
+});
+
+async function connect(options: { awaitPromisesInApp: boolean }): Promise<CDPClient> {
+  const { port } = wss.address() as { port: number };
+  const client = new CDPClient(`ws://localhost:${port}`, options);
+  await client.connect();
+  return client;
+}
+
+function leftoverSlots(): string[] {
+  return Object.keys(globalThis).filter((key) => key.startsWith("__argentPromise_"));
+}
+
+function pollCount(): number {
+  return sent.filter((request) => String(request.params.expression).includes("(function (slot)"))
+    .length;
+}
+
+function sentMethods(): string[] {
+  return sent.map((request) => request.method);
+}
+
+describe("CDPClient.evaluateAwaited", () => {
+  it("returns the value a Promise resolves to and removes its slot", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const value = await client.evaluateAwaited(
+      "new Promise((resolve) => setTimeout(() => resolve({ n: 42 }), 150))"
+    );
+
+    expect(value).toEqual({ n: 42 });
+    expect(leftoverSlots()).toEqual([]);
+    await client.disconnect();
+  });
+
+  it("throws the rejection reason as a runtime exception", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const error = await client
+      .evaluateAwaited(
+        'new Promise((_, reject) => setTimeout(() => reject(new Error("boom")), 150))'
+      )
+      .catch((e: unknown) => e);
+
+    expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION);
+    expect((error as Error).message).toContain("Error: boom");
+    await client.disconnect();
+  });
+
+  it("keeps a rejection reason that is not an Error readable", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const error = await client
+      .evaluateAwaited("new Promise((_, reject) => setTimeout(() => reject({ code: 7 }), 150))")
+      .catch((e: unknown) => e);
+
+    expect((error as Error).message).toContain('Promise rejected with: {"code":7}');
+    await client.disconnect();
+  });
+
+  it("returns primitives and objects by value and releases the handle", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    expect(await client.evaluateAwaited("1 + 1")).toBe(2);
+    expect(await client.evaluateAwaited('"a" + "b"')).toBe("ab");
+    expect(await client.evaluateAwaited('Symbol("s")')).toBeUndefined();
+    expect(await client.evaluateAwaited("({ a: [1, 2] })")).toEqual({ a: [1, 2] });
+    await vi.waitFor(() => expect(sentMethods()).toContain("Runtime.releaseObject"));
+    await client.disconnect();
+  });
+
+  it("fails with DEBUGGER_CDP_REQUEST_TIMEOUT when the Promise never settles", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+    vi.useFakeTimers({ toFake: ["Date"] });
+
+    const pending = client.evaluateAwaited("new Promise(() => {})").catch((e: unknown) => e);
+    await vi.waitFor(() => expect(pollCount()).toBeGreaterThan(0));
+    vi.setSystemTime(Date.now() + 10_000);
+    const error = await pending;
+
+    expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT);
+    expect((error as Error).message).toContain("did not settle within 10000ms");
+    await vi.waitFor(() => expect(leftoverSlots()).toEqual([]));
+    await client.disconnect();
+  });
+
+  it("awaits a thenable that is not a Promise", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const value = await client.evaluateAwaited(
+      "({ then: (resolve) => setTimeout(() => resolve(5), 150) })"
+    );
+
+    expect(value).toBe(5);
+    await client.disconnect();
+  });
+
+  it("describes a rejection reason that JSON cannot represent", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const error = await client
+      .evaluateAwaited('new Promise((_, reject) => setTimeout(() => reject(Symbol("why")), 50))')
+      .catch((e: unknown) => e);
+
+    expect((error as Error).message).toBe("Error: Promise rejected with: Symbol(why)");
+    await client.disconnect();
+  });
+
+  it("fails when the slot disappears, as it does on a JS reload", async () => {
+    const client = await connect({ awaitPromisesInApp: true });
+
+    const pending = client.evaluateAwaited("new Promise(() => {})").catch((e: unknown) => e);
+    await vi.waitFor(() => expect(leftoverSlots()).toHaveLength(1));
+    for (const slot of leftoverSlots()) delete (globalThis as Record<string, unknown>)[slot];
+    const error = await pending;
+
+    expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION);
+    expect((error as Error).message).toContain("The JS context reloaded");
+    await client.disconnect();
+  });
+
+  it("sends one by-value evaluate as before when the client does not await in the app", async () => {
+    const client = await connect({ awaitPromisesInApp: false });
+
+    expect(await client.evaluateAwaited("({ n: 7 })")).toEqual({ n: 7 });
+    expect(sent).toEqual([
+      {
+        method: "Runtime.evaluate",
+        params: { expression: "({ n: 7 })", returnByValue: true, awaitPromise: true },
+      },
+    ]);
+    await client.disconnect();
+  });
+});
