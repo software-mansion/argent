@@ -43,7 +43,8 @@
             "native-devtools",
             "native-profiler",
             "simctl",
-            "simulator-server"
+            "simulator-server",
+            "usbmuxd"
           ]
         },
         {
@@ -101,7 +102,7 @@
           "items": {
             "$ref": "#/$defs/providerDevice"
           },
-          "description": "The devices on offer right now. Required — an empty array is the correct way to say 'I am running but have nothing booted', and is meaningfully different from omitting the field (which is malformed). Republish whenever a device starts or stops."
+          "description": "The devices on offer right now. Required \u2014 an empty array is the correct way to say 'I am running but have nothing booted', and is meaningfully different from omitting the field (which is malformed). Republish whenever a device starts or stops."
         }
       }
     },
@@ -115,7 +116,7 @@
         },
         "platform": {
           "enum": ["android", "ios"],
-          "description": "Must agree with what nativeId's shape implies, or Argent rejects the device — classification stays single-sourced."
+          "description": "Must agree with what nativeId's shape implies, or Argent rejects the device \u2014 classification stays single-sourced."
         },
         "kind": {
           "enum": ["device", "emulator", "simulator"]
@@ -141,7 +142,7 @@
         },
         "simulatorServer": {
           "type": "object",
-          "description": "Required when the 'simulator-server' capability is declared. Argent probes apiUrl during discovery as its liveness signal — a device whose server is not listening is dropped from list-devices.",
+          "description": "Required when the 'simulator-server' capability is declared. Argent probes apiUrl during discovery as its liveness signal \u2014 a device whose server is not listening is dropped from list-devices.",
           "required": ["apiUrl", "streamUrl"],
           "properties": {
             "apiUrl": {
@@ -183,7 +184,7 @@
         },
         "nativeDevtools": {
           "type": "object",
-          "description": "Where to attach to the native-devtools agent already inside the app, instead of injecting Argent's own dylib. DYLD_INSERT_LIBRARIES and the agent's endpoint are simulator-wide launchd values, so two products arming their own injection overwrite each other, and two builds of the same agent in one process would duplicate its classes and swizzles. A provider that already injects should re-serve its agent connection here and stay the only one in the app. The socket speaks the same newline-delimited JSON envelope Argent's own agent does — { type: 'Control' | 'ViewInspector' | 'CDP', payload } — opening with a Control frame naming the connected bundleId.",
+          "description": "Where to attach to the native-devtools agent already inside the app, instead of injecting Argent's own dylib. DYLD_INSERT_LIBRARIES and the agent's endpoint are simulator-wide launchd values, so two products arming their own injection overwrite each other, and two builds of the same agent in one process would duplicate its classes and swizzles. A provider that already injects should re-serve its agent connection here and stay the only one in the app. The socket speaks the same newline-delimited JSON envelope Argent's own agent does \u2014 { type: 'Control' | 'ViewInspector' | 'CDP', payload } \u2014 opening with a Control frame naming the connected bundleId.",
           "properties": {
             "socketPath": {
               "type": "string",
@@ -193,6 +194,13 @@
             }
           },
           "required": ["socketPath"]
+        },
+        "usbmuxd": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?:/[^\\u0000]+|[A-Za-z0-9.][A-Za-z0-9.\\-]*:\\d{1,5}|\\[[0-9A-Fa-f:.]+\\]:\\d{1,5})$",
+          "description": "iOS hardware only. The usbmuxd endpoint Argent reaches this phone through: host:port for a TCP relay or an absolute unix socket path. Required by, and only meaningful with, the 'usbmuxd' capability."
         }
       },
       "allOf": [
