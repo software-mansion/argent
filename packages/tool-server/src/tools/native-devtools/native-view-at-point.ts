@@ -12,7 +12,7 @@ export const viewAtPointParams = {
   x: z
     .number()
     .describe(
-      "Raw X coordinate in points, on the portrait axes of the screen<flag:macos-apps>; on a Mac app, points from the top-left of the area describe reports</flag:macos-apps>. NOT normalized [0,1] tap space."
+      "Raw X coordinate in points, on the axes of the UI as the user sees it (the axes of screenshots and describe frames)<flag:macos-apps>; on a Mac app, points from the top-left of the area describe reports</flag:macos-apps>. NOT normalized [0,1] tap space."
     ),
   y: z
     .number()
@@ -100,7 +100,7 @@ identifier, label and layer name, plus its ancestors and subviews as requested.
 view is null when nothing is drawn at that point, or with hitTest when no touchable view sits under it.
 
 To get x and y from a normalized describe frame, multiply its values by the
-screen size in points, also when the UI is landscape.
+screen size in points, on the same axes (landscape when the UI is).
 native-full-hierarchy returns that size as screen (pass maxDepth: 1 and fields: ["className"] to keep it small).<flag:macos-apps> On a Mac app,
 multiply them by the size of the area describe reports instead.</flag:macos-apps>
 
@@ -125,7 +125,7 @@ An Apple system app is rejected outright (terminal: never retry it).`,
   capability: {
     apple: { simulator: true },
     appleRemote: { simulator: true },
-    macos: { app: true },
+    macos: { app: true, catalyst: false },
   },
   services: nativeAppServices,
   execute: (services, { hitTest, ...query }) =>

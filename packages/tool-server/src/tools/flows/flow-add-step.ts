@@ -64,6 +64,7 @@ import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
+import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
 import {
   MACOS_DESCRIBE_LIMITS,
   MACOS_JUDGING_LIMITS,
@@ -791,7 +792,7 @@ async function captureTapSelector(
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
     );
-    const { tree, uiOrientation } = data;
+    const { tree } = data;
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(withoutTypedText(node, data));
@@ -801,9 +802,8 @@ async function captureTapSelector(
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
     // winning frame to cover the tapped point, or the recorded step would
-    // silently retarget and coordinates are safer. Ranked in the reading order
-    // replay will rank in: the UI's, on a landscape UI.
-    const resolved = selectorToFrame(tree, selector, uiOrientation);
+    // silently retarget and coordinates are safer.
+    const resolved = selectorToFrame(tree, selector);
     if (!resolved) {
       // Defensive: a selector derived from a visible node matches that node
       // under matchNode's semantics, so this should be unreachable. Kept in
@@ -1781,11 +1781,21 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A right-click must survive it as `button`, or replay would left-click.
       // Left is the default (absent).
       const tapButton = isTap && args.button === "right" ? { button: "right" as const } : {};
+      const heldKeys = Array.isArray(args.modifiers)
+        ? MACOS_MODIFIERS.filter((m) => (args.modifiers as unknown[]).includes(m))
+        : [];
+      const tapModifiers = isTap && heldKeys.length > 0 ? { modifiers: heldKeys } : {};
 
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
-        step = { kind: "tap", selector: captured.selector, ...tapTimes, ...tapButton };
+        step = {
+          kind: "tap",
+          selector: captured.selector,
+          ...tapTimes,
+          ...tapButton,
+          ...tapModifiers,
+        };
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
@@ -1796,6 +1806,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           y: args.y as number,
           ...tapTimes,
           ...tapButton,
+          ...tapModifiers,
         };
         warning = captured?.warning;
       } else if (isLaunch) {

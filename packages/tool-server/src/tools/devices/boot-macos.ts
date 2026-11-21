@@ -10,7 +10,15 @@ import { assertMacosAppsEnabled, inspectMacosApp } from "../../utils/macos-apps"
 
 export type MacosBootResult = Pick<
   MacosLaunchResult,
-  "bundleId" | "pid" | "appPath" | "sandboxed" | "logPath" | "args" | "alreadyRunning" | "note"
+  | "kind"
+  | "bundleId"
+  | "pid"
+  | "appPath"
+  | "sandboxed"
+  | "logPath"
+  | "args"
+  | "alreadyRunning"
+  | "note"
 > & {
   platform: "macos";
   /** `macos-app-<bundle id>`: the device id every other tool takes. */
@@ -41,7 +49,7 @@ export async function bootMacosApp(
   const app = await registry.resolveService<MacosAppApi>(ref.urn, ref.options);
   // Exactly the arguments of this call, none when absent: an explicit boot
   // never reuses the arguments of an earlier start (launch-app and restart-app do).
-  const { pid, appPath, sandboxed, logPath, args, alreadyRunning, note } = await app.launch({
+  const { kind, pid, appPath, sandboxed, logPath, args, alreadyRunning, note } = await app.launch({
     appPath: info?.appPath,
     args: opts.args,
     noLastArgs: true,
@@ -50,6 +58,7 @@ export async function bootMacosApp(
   return {
     platform: "macos",
     id: device.id,
+    kind,
     bundleId,
     pid,
     appPath,

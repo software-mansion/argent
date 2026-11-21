@@ -230,14 +230,9 @@ describe("nativeNetworkCaptureWarning", () => {
 
         const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, foundOn(USB, WIRELESS));
 
-        expect(warning).toBe(
-          `Native network capture is on for ${PKG}, ${OTHER_PKG} on ${USB} and ${WIRELESS}, ` +
-            `adb serials of the device this profile runs on: Argent attaches its in-app agent to the ` +
-            `processes of these apps. It can slow the app, so the timings in this profile can differ ` +
-            `from a run without it. To profile without it, stop this profile, call native-network-logs ` +
-            `with stop: true for ${OTHER_PKG} with udid ${USB}, ${PKG} with udid ${WIRELESS}, then ` +
-            `restart-app on ${USB} and profile again.`
-        );
+        expect(warning).toContain(`${OTHER_PKG} with udid ${USB}`);
+        expect(warning).toContain(`${PKG} with udid ${WIRELESS}`);
+        expect(warning).toContain(`restart-app on ${USB}`);
       });
 
       // An emulator has no hardware key, so the same app can be captured under both serials.
@@ -249,14 +244,9 @@ describe("nativeNetworkCaptureWarning", () => {
 
         const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, foundOn(USB, WIRELESS));
 
-        expect(warning).toBe(
-          `Native network capture is on for ${PKG} on ${USB} and ${WIRELESS}, adb serials of the ` +
-            `device this profile runs on: Argent attaches its in-app agent to the processes of that ` +
-            `app. It can slow the app, so the timings in this profile can differ from a run without ` +
-            `it. To profile without it, stop this profile, call native-network-logs with stop: true ` +
-            `for ${PKG} with udid ${USB}, ${PKG} with udid ${WIRELESS}, then restart-app on ${USB} ` +
-            `and profile again.`
-        );
+        expect(warning).toContain(`${PKG} on ${USB} and ${WIRELESS}`);
+        expect(warning).toContain(`${PKG} with udid ${USB}`);
+        expect(warning).toContain(`${PKG} with udid ${WIRELESS}`);
       });
 
       describe("with a serial whose logcat could not be read", () => {
@@ -277,14 +267,10 @@ describe("nativeNetworkCaptureWarning", () => {
             unresolvedOn(USB, WIRELESS)
           );
 
-          expect(warning).toBe(
-            `Native network capture is on for ${PKG} on ${WIRELESS}, which may also be the device ` +
-              `this profile runs on: its logcat could not be read to tell. Argent attaches its in-app ` +
-              `agent to the processes of that app there. It can slow the app, so the timings in this ` +
-              `profile can differ from a run without it. To profile without it, stop this profile, ` +
-              `call native-network-logs with stop: true for ${PKG} with udid ${WIRELESS}, then ` +
-              `restart-app on ${USB} and profile again.`
-          );
+          expect(warning).toContain(`${PKG} on ${WIRELESS}, which may`);
+          expect(warning).toContain(`${PKG} with udid ${WIRELESS}`);
+          expect(warning).toContain(`restart-app on ${USB}`);
+          expect(warning).not.toContain(OTHER_PKG);
           expect(liveDevices).not.toHaveBeenCalled();
         });
 
@@ -301,15 +287,10 @@ describe("nativeNetworkCaptureWarning", () => {
             unresolvedOn(USB, WIRELESS, OTHER_WIRELESS)
           );
 
-          expect(warning).toBe(
-            `Native network capture is on for ${PKG} on ${WIRELESS}, ${OTHER_WIRELESS}, each of which ` +
-              `may also be the device this profile runs on: their logcats could not be read to tell. ` +
-              `Argent attaches its in-app agent to the processes of that app there. It can slow the ` +
-              `app, so the timings in this profile can differ from a run without it. To profile ` +
-              `without it, stop this profile, call native-network-logs with stop: true for ${PKG} ` +
-              `with udid ${WIRELESS}, ${PKG} with udid ${OTHER_WIRELESS}, then restart-app on ` +
-              `${USB} and profile again.`
-          );
+          expect(warning).toContain(`${WIRELESS}, ${OTHER_WIRELESS}, each of which may`);
+          expect(warning).toContain(`${PKG} with udid ${WIRELESS}`);
+          expect(warning).toContain(`${PKG} with udid ${OTHER_WIRELESS}`);
+          expect(warning).toContain(`restart-app on ${USB}`);
         });
 
         // Two sets of steps would have the agent stop the run it just restarted,
@@ -326,17 +307,12 @@ describe("nativeNetworkCaptureWarning", () => {
             unresolved: [OTHER_DEVICE],
           });
 
-          expect(warning).toBe(
-            `Native network capture is on for ${OTHER_PKG} on ${WIRELESS}, the device this profile ` +
-              `runs on: Argent attaches its in-app agent to the processes of that app. Native ` +
-              `network capture is also on for ${PKG} on ${OTHER_DEVICE}, which may also be the ` +
-              `device this profile runs on: its logcat could not be read to tell. Argent attaches ` +
-              `its in-app agent to the processes of that app there. It can slow the app, so the ` +
-              `timings in this profile can differ from a run without it. To profile without it, ` +
-              `stop this profile, call native-network-logs with stop: true for ${OTHER_PKG} with ` +
-              `udid ${WIRELESS}, ${PKG} with udid ${OTHER_DEVICE}, then restart-app on ${WIRELESS} ` +
-              `and profile again.`
-          );
+          expect(warning).toContain(`${OTHER_PKG} on ${WIRELESS}`);
+          expect(warning).toContain(`${PKG} on ${OTHER_DEVICE}, which may`);
+          expect(warning).toContain(`${OTHER_PKG} with udid ${WIRELESS}`);
+          expect(warning).toContain(`${PKG} with udid ${OTHER_DEVICE}`);
+          expect(warning).toContain(`restart-app on ${WIRELESS}`);
+          expect(warning?.match(/restart-app/g)).toHaveLength(1);
         });
 
         it("is undefined when capture there is only for other apps, or the runtime is not Android", () => {

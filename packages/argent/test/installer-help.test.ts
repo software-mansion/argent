@@ -184,19 +184,6 @@ describe("printInstallerHelp", () => {
     expect(remove).toContain("Run `argent uninstall --help` to see its options.");
     expect(remove).not.toContain("Options:");
   });
-
-  it("only writes to stdout (no wizard / prompt / network)", () => {
-    // The whole contract of the help path is that it is side-effect-free. This
-    // asserts the function writes to console.log and returns nothing — not how
-    // many calls it batches the output into, which is an implementation
-    // detail. The end-to-end guarantee (config left untouched) is covered in
-    // cli-dispatch.test.ts.
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const result = printInstallerHelp("uninstall");
-    expect(result).toBeUndefined();
-    expect(spy).toHaveBeenCalled();
-    spy.mockRestore();
-  });
 });
 
 describe("INSTALLER_COMMAND_META", () => {

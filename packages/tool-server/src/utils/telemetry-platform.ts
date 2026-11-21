@@ -62,7 +62,8 @@ function telemetryDeviceKind(
   if (device.platform === "harmony" && device.kind === "device") return undefined;
   // Every other kind is already a positive shape match in `resolveDevice`:
   // simulator (UUID / `remote:`), device on iOS (`isIosPhysicalUdid`), emulator
-  // (`emulator-`), vvd (`amazon-`), app (`chromium-cdp-`, `macos-app-`).
+  // (`emulator-`), vvd (`amazon-`), app (`chromium-cdp-`, `macos-app-`), and
+  // catalyst, a `macos-app-` id that argent's record names as Mac Catalyst.
   if (device.platform !== "android" || device.kind !== "device") return device.kind;
   if (consolePortFromAdbSerial(nativeId) !== null) return "emulator";
   if (ANDROID_USB_SERIAL.test(nativeId) || ANDROID_TCP_SERIAL.test(nativeId)) return "device";

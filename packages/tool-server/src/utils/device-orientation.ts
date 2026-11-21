@@ -41,7 +41,7 @@ type SurfaceRotation = 0 | 1 | 2 | 3;
  * could never notice simulator-server changing underneath us. `captureLooksUpright`
  * below is the check that would, and it is applied to the real capture.
  */
-export const SURFACE_ROTATION_TO_NAME: Readonly<Record<SurfaceRotation, OrientationName>> = {
+const SURFACE_ROTATION_TO_NAME: Readonly<Record<SurfaceRotation, OrientationName>> = {
   0: "Portrait",
   1: "LandscapeLeft",
   2: "PortraitUpsideDown",

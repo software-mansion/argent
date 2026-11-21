@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifyDevice,
@@ -82,5 +85,69 @@ describe("macosListenSocket", () => {
     // Nor has any app under a home too long for the hashed name.
     vi.stubEnv("HOME", `/Users/${"h".repeat(80)}`);
     expect(macosListenSocket(long, false)).toBeNull();
+  });
+});
+
+describe("the kind of a Mac app id", () => {
+  let home = "";
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-macos-kind-"));
+    vi.stubEnv("HOME", home);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const file = () => path.join(home, ".argent", "macos-apps.json");
+  /** As argent writes the record: a new file renamed into place. */
+  const record = (content: unknown) => {
+    fs.mkdirSync(path.dirname(file()), { recursive: true });
+    const tmp = `${file()}.tmp`;
+    fs.writeFileSync(tmp, typeof content === "string" ? content : JSON.stringify(content));
+    fs.renameSync(tmp, file());
+  };
+  const kind = (bundleId: string) => resolveDevice(`macos-app-${bundleId}`).kind;
+
+  it("is catalyst only for a bundle id whose last start argent recorded as Mac Catalyst", () => {
+    expect(kind("com.example.app")).toBe("app");
+    record([
+      { bundleId: "com.example.app", catalyst: true },
+      { bundleId: "com.example.appkit", catalyst: false },
+      { bundleId: "com.example.old" },
+    ]);
+    expect(resolveDevice("macos-app-com.example.app")).toEqual({
+      id: "macos-app-com.example.app",
+      platform: "macos",
+      kind: "catalyst",
+    });
+    expect(kind("com.example.appkit")).toBe("app");
+    expect(kind("com.example.old")).toBe("app");
+    expect(kind("com.example.never")).toBe("app");
+    expect(resolveDevice("macos-app-bad_id").kind).toBe("app");
+
+    // The newest start wins: the same bundle id rebuilt as an AppKit app, and back.
+    record([{ bundleId: "com.example.app", catalyst: false }]);
+    expect(kind("com.example.app")).toBe("app");
+    record([{ bundleId: "com.example.app", catalyst: true }]);
+    expect(kind("com.example.app")).toBe("catalyst");
+  });
+
+  it.each([
+    ["a torn file", '[{ "bundleId": "com.example.app", "catalyst": tr'],
+    ["no list", { bundleId: "com.example.app", catalyst: true }],
+    ["damaged entries", [null, 7, { bundleId: "com.example.app", catalyst: "yes" }]],
+  ])("is app for %s", (_label, content) => {
+    record([{ bundleId: "com.example.app", catalyst: true }]);
+    expect(kind("com.example.app")).toBe("catalyst");
+    record(content);
+    expect(kind("com.example.app")).toBe("app");
+  });
+
+  it("is app once the file is gone", () => {
+    record([{ bundleId: "com.example.app", catalyst: true }]);
+    expect(kind("com.example.app")).toBe("catalyst");
+    fs.rmSync(file());
+    expect(kind("com.example.app")).toBe("app");
   });
 });

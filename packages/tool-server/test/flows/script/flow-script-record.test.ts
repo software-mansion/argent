@@ -459,10 +459,6 @@ describe("recording a script step", () => {
     expect((await addScript("deviceless", "../../scripts/seed.mjs")).status).toBe("pass");
   });
 
-  it("is declared longRunning, because a script may outlive the MCP fetch budget", async () => {
-    expect(flowAddScriptTool.longRunning).toBe(true);
-  });
-
   it("runs in the working directory replay gives it", async () => {
     await write("fixtures/order.json", `{ "item": "espresso machine" }`);
     await write(

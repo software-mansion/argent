@@ -102,7 +102,7 @@ interface ToolCallerDeps {
 }
 
 interface ToolCaller {
-  fetchTools(): Promise<ToolMeta[]>;
+  fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]>;
   /**
    * `opts.signal` bounds the whole call, the listing it reads first included,
    * and is never retried once it fires.
@@ -164,7 +164,7 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
       parseUrl(url);
       return fetchWithReconnect(() => rebase(url), deps.reconnect, {
         init: () => withHeaders(init),
-        // A call that carried an upload is sent once and never aborted: the
+        // A call that carried an upload is sent once and never timed out: the
         // tool-server consumes the upload when it reads the call, so a second
         // attempt could only fail.
         fetchTimeoutMs: meta.longRunning || meta.carriesUpload ? null : timeout,
