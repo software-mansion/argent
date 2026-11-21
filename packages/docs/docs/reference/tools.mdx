@@ -106,8 +106,10 @@ With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started 
 | `screenshot`        | Capture the device screen                                                        |
 | `describe`          | Get the accessibility / DOM element tree for the current screen                  |
 | `screenshot-diff`   | Compare two PNG screenshots and return a visual-diff summary                     |
-| `await-screen-idle` | Block until the screen has rendered content and stopped changing                 |
+| `await-screen-idle` | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
+
+On Chromium, `describe` reports a zero-area frame when a rotated container fully clips an element along one axis.
 
 On an iOS simulator, a line of `describe` can show:
 
@@ -849,6 +851,15 @@ Some agent tools do not always give the same result as the hidden tool:
 - `react-profiler-component-source` fails when `project_root` is not on the computer of the tool-server. `react-profiler-analyze` returns the report with a `warning`. When no component in the report table is in `project_root`, the `warning` says so. This can mean that all components in the table are library components, or that `project_root` is wrong. When `project_root` holds no components, `react-profiler-analyze` uses the project root that Metro reports, and the `warning` says so.
 - `react-profiler-renders` reads only the top 30 levels of the React fiber tree and counts the mounted components, not the re-renders. For render counts, use `profiler-commit-query` with `mode: "render_counts"` after a profiling session.
 - `e2e-execute` without `prerequisiteAcknowledged` returns the execution prerequisite and runs no step only when the e2e test has a prerequisite. When the e2e test has no prerequisite, `e2e-execute` runs the e2e test.
+
+On Chromium, `fill` fails with `FILL_UNSUPPORTED_FIELD` and changes nothing for:
+
+- text longer than the `maxlength` of the field
+- text that a number input does not hold as a number
+- whitespace around an address in an email input
+- focus in a cross-origin frame, a closed shadow root or an `<embed>`
+
+When a Chromium page does not answer for 10 seconds, for example while it shows a JavaScript dialog, `fill` fails with `FILL_NOT_VERIFIED`. If the page does not answer before the edit, `fill` changes nothing.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones and Mac apps are not supported yet.
 
