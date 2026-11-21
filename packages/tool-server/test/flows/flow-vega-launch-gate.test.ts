@@ -63,12 +63,9 @@ async function runMain(): Promise<FlowRunResult> {
       {},
       { name: "main", project_root: tmpDir, device: VEGA }
     );
-    let settled = false;
-    void pending.then(() => (settled = true));
-    for (let i = 0; i < 400 && !settled; i++) {
-      await new Promise((resolve) => setImmediate(resolve));
-      await vi.advanceTimersByTimeAsync(250);
-    }
+    // The flow reads its YAML on the real filesystem before the launch gate starts polling.
+    await vi.waitFor(() => expect(describeVega).toHaveBeenCalled(), { timeout: 4000 });
+    await vi.runAllTimersAsync();
     const result = await pending;
     if (!("steps" in result))
       throw new Error(`expected a run result, got notice: ${result.notice}`);

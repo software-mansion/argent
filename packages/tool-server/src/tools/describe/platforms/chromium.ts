@@ -1599,13 +1599,14 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   function clipBox(clip, m, box) {
     const [a, b, c, d, tx, ty] = m;
     const obliqueStrip = (box.top === -Infinity && c && d) || (box.left === -Infinity && a && b);
-    if (!obliqueStrip && !clip?.polygon) return intersect(clip, mapRect(m, box));
+    const polygon = clip && clip.polygon;
+    if (!obliqueStrip && !polygon) return intersect(clip, mapRect(m, box));
 
     const det = a * d - b * c;
     if (!det) return { ...NO_AREA };
     const view = intersect(clip, { left: 0, top: 0, right: w, bottom: h });
     if (view.right <= view.left || view.bottom <= view.top) return { ...NO_AREA };
-    let points = clip?.polygon || [
+    let points = polygon || [
       [view.left, view.top],
       [view.right, view.top],
       [view.right, view.bottom],
@@ -1640,7 +1641,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   function visibleBox(el, style, r, clip) {
-    if (!clip?.polygon) return intersect(r, clip);
+    if (!clip || !clip.polygon) return intersect(r, clip);
     if (el instanceof HTMLElement) {
       const width = getOffsetWidth.call(el);
       const height = getOffsetHeight.call(el);
