@@ -416,7 +416,14 @@ const zodSchema = z.object({
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe("Query mode; see Modes in the tool description."),
-  hang_index: z.coerce.number().int().optional().describe("0-based index into the hang list"),
+  // Without `.nullable()`, `z.coerce.number()` reads null as hang 0.
+  hang_index: z.coerce
+    .number()
+    .int()
+    .nullable()
+    .transform((value) => value ?? undefined)
+    .optional()
+    .describe("0-based index into the hang list"),
   function_name: z.string().optional().describe("Native function name"),
   thread: z
     .string()

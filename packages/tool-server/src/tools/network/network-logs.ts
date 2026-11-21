@@ -190,9 +190,13 @@ const zodSchema = z.object({
     .describe(
       "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect."
     ),
+  // `.default` covers only an omitted param, and `z.coerce.number()` reads null as 0, so
+  // null would return the oldest page. Agents send null for "not set": read it as "latest".
   pageIndex: z
     .union([z.coerce.number().int().nonnegative(), z.literal("latest")])
+    .nullable()
     .default("latest")
+    .transform((value) => value ?? "latest")
     .describe(
       'Page index (0-based) or "latest" for the most recent page. Each page contains up to 50 entries.'
     ),
