@@ -1,5 +1,16 @@
 import type { CDPClient } from "../utils/debugger/cdp-client";
 
+/** One earlier hop of a redirected request, from CDP `redirectResponse`. */
+interface NetworkRedirectHop {
+  method: string;
+  url: string;
+  status: number;
+  statusText?: string;
+  location?: string;
+  /** Monotonic CDP timestamp of the redirect response, in seconds. */
+  timestamp: number;
+}
+
 /**
  * Backs `view-network-logs` and `view-network-request-details` on Chromium:
  * recorded passively from CDP `Network` events, with no injected interceptor
@@ -16,6 +27,8 @@ export interface NetworkRequestRecord {
   requestHeaders?: Record<string, string>;
   responseHeaders?: Record<string, string>;
   postData?: string;
+  /** Earlier hops, oldest first. The other fields describe the final hop. */
+  redirects?: NetworkRedirectHop[];
   initiator?: { type: string; url?: string; lineNumber?: number };
   /** ISO timestamp, from CDP wallTime. */
   startedDateTime: string;
@@ -68,6 +81,29 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
           postData?: string;
         };
         const rec = record(params.requestId as string);
+        const redirect = params.redirectResponse as
+          { status: number; statusText?: string; headers?: Record<string, string> } | undefined;
+        // A redirect reuses the requestId. Keep the previous hop as a `redirects`
+        // entry, so its method, URL and 303 are visible, and drop its body and
+        // response so they do not leak onto the new request.
+        if (redirect) {
+          const location = Object.entries(redirect.headers ?? {}).find(
+            ([name]) => name.toLowerCase() === "location"
+          )?.[1];
+          (rec.redirects ??= []).push({
+            method: rec.method,
+            url: rec.url,
+            status: redirect.status,
+            statusText: redirect.statusText,
+            location,
+            timestamp: params.timestamp as number,
+          });
+          delete rec.postData;
+          delete rec.status;
+          delete rec.statusText;
+          delete rec.mimeType;
+          delete rec.responseHeaders;
+        }
         rec.method = r.method ?? rec.method;
         rec.url = r.url ?? rec.url;
         // Merge, don't replace: requestWillBeSentExtraInfo carries the rest of the
@@ -76,9 +112,12 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
         if (r.postData != null) rec.postData = r.postData;
         rec.resourceType = (params.type as string) ?? rec.resourceType;
         rec.initiator = (params.initiator as NetworkRequestRecord["initiator"]) ?? rec.initiator;
-        rec.startTs = (params.timestamp as number) ?? rec.startTs;
-        if (params.wallTime) {
-          rec.startedDateTime = new Date((params.wallTime as number) * 1000).toISOString();
+        // Keep the first hop's start, so the duration covers the whole redirect chain.
+        if (!redirect) {
+          rec.startTs = (params.timestamp as number) ?? rec.startTs;
+          if (params.wallTime) {
+            rec.startedDateTime = new Date((params.wallTime as number) * 1000).toISOString();
+          }
         }
         break;
       }

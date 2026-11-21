@@ -137,6 +137,104 @@ describe("NetworkManager (recording)", () => {
     emitRequest(f.events, { id: "late", url: "https://x.test/late", status: 200 });
     expect(net.get("late")).toBeUndefined();
   });
+
+  it("does not carry a redirected POST's body onto the GET it redirects to", () => {
+    // CDP reuses the requestId across redirect hops; the second requestWillBeSent
+    // carries the 303 as redirectResponse and no postData.
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { method: "POST", url: "https://x.test/authenticate", postData: "password=hunter2" },
+      type: "Document",
+      timestamp: 1,
+    });
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { method: "GET", url: "https://x.test/login" },
+      redirectResponse: { status: 303, statusText: "See Other", headers: { location: "/login" } },
+      type: "Document",
+      timestamp: 2,
+    });
+    expect(net.get("1")).toMatchObject({ method: "GET", url: "https://x.test/login" });
+    expect(net.get("1")!.postData).toBeUndefined();
+  });
+
+  it("keeps the redirect hop (303 and Location) in redirects", () => {
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { method: "POST", url: "https://x.test/authenticate", postData: "password=hunter2" },
+      type: "Document",
+      timestamp: 1,
+    });
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { method: "GET", url: "https://x.test/login" },
+      redirectResponse: {
+        status: 303,
+        statusText: "See Other",
+        headers: { Location: "/login" },
+      },
+      type: "Document",
+      timestamp: 2,
+    });
+    expect(net.get("1")!.redirects).toEqual([
+      {
+        method: "POST",
+        url: "https://x.test/authenticate",
+        status: 303,
+        statusText: "See Other",
+        location: "/login",
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("measures a redirect chain from its first hop", () => {
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { method: "POST", url: "https://x.test/authenticate" },
+      type: "Document",
+      timestamp: 1,
+      wallTime: 1_700_000_000,
+    });
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { method: "GET", url: "https://x.test/login" },
+      redirectResponse: { status: 303, statusText: "See Other", headers: {} },
+      type: "Document",
+      timestamp: 2,
+      wallTime: 1_700_000_001,
+    });
+    f.events.emit("event", "Network.loadingFinished", {
+      requestId: "1",
+      timestamp: 5,
+      encodedDataLength: 10,
+    });
+    const rec = net.get("1")!;
+    expect(rec.startedDateTime).toBe(new Date(1_700_000_000 * 1000).toISOString());
+    expect(rec.durationMs).toBeCloseTo(4000, 0);
+  });
+
+  it("keeps a 307 request body that is resent on the new hop", () => {
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { method: "POST", url: "https://x.test/old", postData: "a=1" },
+      type: "Fetch",
+      timestamp: 1,
+    });
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { method: "POST", url: "https://x.test/new", postData: "a=1" },
+      redirectResponse: { status: 307, statusText: "Temporary Redirect", headers: {} },
+      type: "Fetch",
+      timestamp: 2,
+    });
+    expect(net.get("1")).toMatchObject({
+      method: "POST",
+      url: "https://x.test/new",
+      postData: "a=1",
+    });
+    expect(net.get("1")!.redirects).toHaveLength(1);
+  });
 });
 
 // ── view-network-logs / view-network-request-details: Chromium branch ────────
