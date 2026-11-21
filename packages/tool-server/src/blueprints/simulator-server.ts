@@ -199,6 +199,7 @@ async function buildRemoteInstance(
   const api: SimulatorServerApi = {
     apiUrl: stubUrl,
     streamUrl: stubUrl,
+    deviceId: device.id,
     // Through `sendCommand`, as the attached instance below does, so a key the
     // session refuses reports the same failure as a refused touch instead of a
     // bare SDK error the caller cannot classify.
@@ -385,17 +386,35 @@ async function spawnSimulatorServerProcess(
     const STREAM_GRACE_MS = 500;
     let apiReadyTimer: NodeJS.Timeout | null = null;
 
-    const rl = readline.createInterface({ input: proc.stdout! });
-
     const settle = (fn: () => void, cleanup?: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (apiReadyTimer) clearTimeout(apiReadyTimer);
-      rl.close();
+      rl?.close();
       cleanup?.();
       fn();
     };
+
+    proc.on("error", (err) => {
+      settle(() =>
+        reject(
+          new FailureError(
+            err instanceof Error ? err.message : String(err),
+            {
+              error_code: FAILURE_CODES.SIMULATOR_SERVER_PROCESS_ERROR,
+              failure_stage: "simulator_server_spawn_process",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              ...subprocessFailureMetadata(err, "simulator_server"),
+            },
+            { cause: err instanceof Error ? err : new Error(String(err)) }
+          )
+        )
+      );
+    });
+
+    const rl = proc.stdout ? readline.createInterface({ input: proc.stdout }) : null;
 
     // Set on `exit`, before the rejection waits for stderr: stdout can still
     // deliver buffered readiness lines, and an exited process is never ready.
@@ -406,7 +425,7 @@ async function spawnSimulatorServerProcess(
       settle(() => resolve({ proc, apiUrl: apiUrl!, streamUrl }));
     };
 
-    rl.on("line", (rawLine: string) => {
+    rl?.on("line", (rawLine: string) => {
       const line = rawLine.trim();
       if (line.startsWith("stream_ready ")) {
         const match = line.match(/(http:\/\/[^ ]+)/);
@@ -482,24 +501,6 @@ async function spawnSimulatorServerProcess(
         clearTimeout(drainTimer);
         fail();
       });
-    });
-
-    proc.on("error", (err) => {
-      settle(() =>
-        reject(
-          new FailureError(
-            err instanceof Error ? err.message : String(err),
-            {
-              error_code: FAILURE_CODES.SIMULATOR_SERVER_PROCESS_ERROR,
-              failure_stage: "simulator_server_spawn_process",
-              failure_area: "tool_server",
-              error_kind: "subprocess",
-              ...subprocessFailureMetadata(err, "simulator_server"),
-            },
-            { cause: err instanceof Error ? err : new Error(String(err)) }
-          )
-        )
-      );
     });
 
     const timer = setTimeout(() => {

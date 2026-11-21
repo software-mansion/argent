@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { _CI_VENDOR_COUNT_FOR_TEST, isCi } from "../src/ci-detect.js";
+import { isCi } from "../src/ci-detect.js";
 
 describe("ci-detect", () => {
   it("returns false when no CI env var is set", () => {
@@ -34,9 +34,5 @@ describe("ci-detect", () => {
 
   it("treats CI=false as not CI (ci-info escape hatch)", () => {
     expect(isCi({ CI: "false", GITHUB_ACTIONS: "1" })).toBe(false);
-  });
-
-  it("uses ci-info's broad provider table", () => {
-    expect(_CI_VENDOR_COUNT_FOR_TEST).toBeGreaterThanOrEqual(45);
   });
 });

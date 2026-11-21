@@ -1,6 +1,6 @@
 import pc from "picocolors";
 import { MCP_BINARY_NAME } from "./constants.js";
-import { isGloballyInstalled } from "./utils.js";
+import { isArgentOnPath } from "./utils.js";
 import {
   hasCustomizingEnv,
   isPinnedGlobalEntry,
@@ -62,7 +62,7 @@ export async function cleanupStaleMcpConfigs(args: {
   let removedCount = 0;
   let warnedCount = 0;
   // Hoisted: one PATH probe (a `which`/`where` subprocess) per run.
-  const globalArgentOnPath = isGloballyInstalled();
+  const globalArgentOnPath = isArgentOnPath();
 
   // No env that could make it resolvable inside the client (a custom PATH is
   // exactly what an nvm user adds) — so it is dead in every environment that
@@ -169,8 +169,8 @@ export async function cleanupStaleMcpConfigs(args: {
             "if it is a leftover, remove it"
         );
       }
-      // Bare `argent` that IS on PATH: a working global install the user
-      // kept — legitimate coexistence, stay quiet.
+      // Bare `argent` with an argent on PATH: possibly a global install the
+      // user kept — legitimate coexistence, stay quiet.
     }
   } else if (scope === "global") {
     // A project-scope entry at this root can outrank the global entry just

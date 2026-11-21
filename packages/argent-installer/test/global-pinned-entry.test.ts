@@ -74,6 +74,7 @@ describe.skipIf(process.platform === "win32")("getGloballyInstalledLaunchPaths",
     fs.mkdirSync(projectBin, { recursive: true });
     fs.symlinkSync(cli, path.join(projectBin, "argent"));
     fs.writeFileSync(path.join(projectBin, "node"), "");
+    vi.stubEnv("npm_config_local_prefix", path.join(tmpDir, "project"));
     vi.stubEnv("PATH", `${projectBin}${path.delimiter}${SYSTEM_PATH}`);
 
     expect(getGloballyInstalledLaunchPaths()).toBeNull();
@@ -93,6 +94,7 @@ describe.skipIf(process.platform === "win32")("isGlobalInstallFirstOnPath", () =
     const projectBin = path.join(tmpDir, "project", "node_modules", ".bin");
     fs.mkdirSync(projectBin, { recursive: true });
     fs.symlinkSync(cli, path.join(projectBin, "argent"));
+    vi.stubEnv("npm_config_local_prefix", path.join(tmpDir, "project"));
     vi.stubEnv("PATH", [projectBin, binDir, SYSTEM_PATH].join(path.delimiter));
 
     expect(isGlobalInstallFirstOnPath()).toBe(false);

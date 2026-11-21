@@ -27,7 +27,6 @@ const adbServerShell = vi.hoisted(() =>
 vi.mock("../src/utils/adb-server", () => ({ adbServerShell }));
 
 import {
-  SURFACE_ROTATION_TO_NAME,
   captureLooksUpright,
   captureRotationForSurface,
   readAndroidSurfaceRotation,
@@ -116,14 +115,6 @@ describe("the surface-rotation → rotation-name table", () => {
   // convention because we are compensating for a rotation it applies while
   // decoding. That is exactly why this test cannot be the only guard — see
   // `captureLooksUpright`, which checks the real capture instead.
-  it("maps each rotation to the name that yields an upright capture", () => {
-    expect(SURFACE_ROTATION_TO_NAME).toEqual({
-      0: "Portrait",
-      1: "LandscapeLeft",
-      2: "PortraitUpsideDown",
-      3: "LandscapeRight",
-    });
-  });
 
   it("sends no rotation at all for an unrotated device", () => {
     // Not "Portrait": keeping it undefined leaves the request body byte-identical

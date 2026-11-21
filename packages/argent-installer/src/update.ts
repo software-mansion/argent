@@ -26,8 +26,9 @@ import {
   getGloballyInstalledPackageRoot,
   isGloballyInstalled,
   isNewerVersion,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
+  globalCommandOptions,
   globalInstallCommand,
   localInstallCommand,
   probeLocalInstall,
@@ -44,6 +45,7 @@ import {
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { reportSkillRefresh } from "./skills.js";
 import { reportRetiredFiles } from "./retired-files.js";
 import { PACKAGE_NAME } from "./constants.js";
@@ -306,7 +308,10 @@ export async function update(args: string[]): Promise<void> {
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
-    const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
+    const pm =
+      mode === "local" ? detectProjectPackageManager(projectRoot) : detectGlobalPackageManager();
+    // Local installs must rewrite the project's manifest/lockfile.
+    const runIn = mode === "local" ? { cwd: projectRoot } : globalCommandOptions(pm);
     let latest: string | null = null;
     let target: string | null;
     let minReleaseAgeMs = 0;
@@ -317,7 +322,7 @@ export async function update(args: string[]): Promise<void> {
     } else {
       let resolved;
       try {
-        resolved = await resolveInstallableUpdateTarget(pm, installed);
+        resolved = await resolveInstallableUpdateTarget(pm, installed, runIn.cwd);
       } catch (err) {
         spinner.stop(pc.red("Could not reach registry."));
         await trackPackageAction(
@@ -456,9 +461,8 @@ export async function update(args: string[]): Promise<void> {
             // Current versions ship no postinstall, but downgrades and pinned
             // installs fetch older ones whose postinstall honors this — keep it
             // so they stay quiet and don't double-kill the tool server.
-            env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
-            // Local installs must rewrite the project's manifest/lockfile.
-            ...(mode === "local" ? { cwd: projectRoot } : {}),
+            env: { ...(runIn.env ?? process.env), ARGENT_SKIP_POSTINSTALL: "1" },
+            cwd: runIn.cwd,
           });
         },
         () => {
@@ -483,6 +487,8 @@ export async function update(args: string[]): Promise<void> {
             UPDATE_PACKAGE_ACTION_FAILED
           );
           p.log.error(`${installed ? "Update" : "Install"} failed: ${installError}`);
+          const note = yarnClassicNote(cmd);
+          if (note) p.log.info(`Run ${pc.cyan(cmdStr)}${note}.`);
           return { failed: UPDATE_PACKAGE_ACTION_FAILED };
         }
         p.log.warn(
