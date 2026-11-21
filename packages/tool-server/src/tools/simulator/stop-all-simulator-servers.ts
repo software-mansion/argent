@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { isExternalDeviceUrn } from "../../utils/external-devices";
 import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
   deviceIdOwningUrn,
+  borrowedSimulatorServers,
   isDeviceServiceUrn,
   unnameableSessionUrns,
 } from "./device-services";
@@ -38,7 +38,7 @@ export function createStopAllSimulatorServersTool(
     description: `Stop the services a device owns - simulator-server processes (iOS + Android), native devtools, the iOS accessibility service, TV-control daemons, Chromium CDP sessions, screen recordings, native profiler sessions, Android native network capture (started by native-network-logs), and JS-runtime debugger sessions along with the network inspectors and React profiler sessions that ride on them - freeing their spawned processes, sockets and ports. Call this when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services mid-flow - not just because a task finished, since the next task reuses these services and would start cold again. To end only the native network capture of one app, call native-network-logs with stop: true instead.
 PASS \`devices\` with the device ids this session used: one tool-server serves every agent, subagent and CLI call using this argent install, and an unscoped call tears down THEIR devices too. Omit \`devices\` only when a machine-wide cleanup is what you actually want. An EMPTY array stops nothing; it does not ask for the machine-wide sweep.
 A JS-runtime debugger session is keyed by the id you called \`debugger-connect\` with. On a Metro serving two or more devices that id is not a udid or serial - connect refuses those and tells you to re-target with the \`logicalDeviceId\` it returns - so a scope built from \`list-devices\` ids cannot reach that session. Pass any such \`logicalDeviceId\` in \`devices\` ALONGSIDE the device id.
-Returns { stopped }: the URNs of the live services that were shut down; empty means nothing was still running. { unmatched }, present only when a supplied id owns no service here, lists those ids, so a typo or a device NAME passed instead of an id does not read as a clean machine. It is NOT proof the id is wrong: a Vega device you only booted and drove with the remote registers no service and lands here, as does any device this session never started anything on. { left_running } lists the URNs of live debugger sessions (and the network inspectors / React profiler sessions riding on them) whose id no device scope can name; re-call with the id after each URN's \`<namespace>:<port>:\` prefix to reap them. { aborted: true } means the request was cancelled part-way: the rest was left untouched and \`unmatched\` / \`left_running\` were not computed.
+Returns { stopped }: the URNs of the live services that were shut down; a simulator-server Argent did not start keeps running and is not listed, so empty means nothing Argent started was still running. { unmatched }, present only when a supplied id owns no service here, lists those ids, so a typo or a device NAME passed instead of an id does not read as a clean machine. It is NOT proof the id is wrong: a Vega device you only booted and drove with the remote registers no service and lands here, as does any device this session never started anything on. { left_running } lists the URNs of live debugger sessions (and the network inspectors / React profiler sessions riding on them) whose id no device scope can name; re-call with the id after each URN's \`<namespace>:<port>:\` prefix to reap them. { aborted: true } means the request was cancelled part-way: the rest was left untouched and \`unmatched\` / \`left_running\` were not computed.
 Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); otherwise it always succeeds, and reaping nothing is a result, not a failure.`,
     zodSchema,
     interaction: {
@@ -82,6 +82,7 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
       // machine-wide sweep, which would tear down other agents' services.
       const scoped = devices !== undefined;
       const snapshot = registry.getSnapshot();
+      const borrowedUrns = await borrowedSimulatorServers(registry, snapshot.services.keys());
       const stopped: string[] = [];
       const matchedIds = new Set<string>();
       // Live port-keyed services this scope did NOT claim; unclaimed services
@@ -112,14 +113,7 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
           // reported stopped.
           const wasLive = isLiveServiceState(entry.state);
           await registry.disposeService(urn);
-          /**
-           * A device from an external provider is disposed (dropping our
-           * cached handle) but never reported as stopped. Its `dispose()` is a
-           * no-op by design, so nothing was actually shut down and claiming
-           * otherwise would tell the agent it had cleaned up a server it does
-           * not own.
-           */
-          if (wasLive && !isExternalDeviceUrn(urn)) stopped.push(urn);
+          if (wasLive && !borrowedUrns.has(urn)) stopped.push(urn);
         } else if (
           scoped &&
           isLiveServiceState(entry.state) &&

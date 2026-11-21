@@ -2,8 +2,11 @@ import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
-import { isExternalId } from "../../utils/external-devices";
-import { deviceIdOwningUrn, transportNamespacesForPlatform } from "./device-services";
+import {
+  borrowedSimulatorServers,
+  deviceIdOwningUrn,
+  transportNamespacesForPlatform,
+} from "./device-services";
 
 const zodSchema = z.object({
   udid: z
@@ -18,7 +21,7 @@ export function createStopSimulatorServerTool(
 ): ToolDefinition<{ udid: string }, { stopped: boolean; udid: string }> {
   return {
     id: "stop-simulator-server",
-    description: `Stop the transport session for a specific device (iOS simulator / Android: simulator-server process; physical iOS: the on-device runner; Chromium: CDP WebSocket) and free its resources; on a TV target it also reaps that device's TV-control daemons. Use to restart a wedged transport, or when the user is done with one device but wants to keep others running - not just because a task on it finished, since the next task on that device would start cold again. On iOS / Android / TV it deliberately leaves this device's native-devtools, accessibility, profiler and debugger services running - to drain those as well, use stop-all-simulator-servers with \`devices\`. On CHROMIUM, stopping the transport also ends the JS-runtime debugger session and its captured console history - reconnect with debugger-connect afterwards.<flag:macos-apps> On a Mac app it also ends the native-network-logs capture and drops its log; call native-network-logs again to restart it.</flag:macos-apps> Returns { stopped, udid }; \`stopped\` is false, not an error, when no session is open for the id.`,
+    description: `Stop the transport session for a specific device (iOS simulator / Android: simulator-server process; physical iOS: the on-device runner; Chromium: CDP WebSocket) and free its resources; on a TV target it also reaps that device's TV-control daemons. Use to restart a wedged transport, or when the user is done with one device but wants to keep others running - not just because a task on it finished, since the next task on that device would start cold again. On iOS / Android / TV it deliberately leaves this device's native-devtools, accessibility, profiler and debugger services running - to drain those as well, use stop-all-simulator-servers with \`devices\`. On CHROMIUM, stopping the transport also ends the JS-runtime debugger session and its captured console history - reconnect with debugger-connect afterwards.<flag:macos-apps> On a Mac app it also ends the native-network-logs capture and drops its log; call native-network-logs again to restart it.</flag:macos-apps> Returns { stopped, udid }; \`stopped\` is true when any of these services was running for the id, and false, not an error, when none was. A simulator-server Argent did not start keeps running and does not count, so on a TV target \`stopped\` can be true from the TV-control daemons alone while that server keeps running.`,
     zodSchema,
     interaction: {
       startedMsg: ({ params }) => `Stopping simulator server for ${params.udid}`,
@@ -37,14 +40,6 @@ export function createStopSimulatorServerTool(
       const platform = resolveDevice(udid).platform;
       const namespaces = transportNamespacesForPlatform(platform);
 
-      /**
-       * An external device has no server of ours to stop. Its `dispose()` is
-       * a no-op by design. Still drop the cached handles so the next call
-       * re-resolves against the provider's state, but report `stopped: false`.
-       * A clean no-op beats an error for an agent that calls this on every device.
-       */
-      const external = isExternalId(udid);
-
       const snapshot = registry.getSnapshot();
       let stopped = false;
       // Scanned rather than fetched by exact URN, so ids resolve through the
@@ -53,11 +48,19 @@ export function createStopSimulatorServerTool(
       const urns = [...snapshot.services.keys()].filter(
         (urn) => deviceIdOwningUrn(urn, namespaces, [udid]) !== undefined
       );
+
+      const borrowedUrns = await borrowedSimulatorServers(registry, urns);
+
       for (const urn of urns) {
         const entry = snapshot.services.get(urn);
         if (!entry || entry.state === ServiceState.IDLE) continue;
 
-        if (external) {
+        // A provider's simulator-server is borrowed and its `dispose()` is a
+        // no-op by design: drop the cached handle so the next call re-resolves
+        // against the provider's state, but do not report it stopped. Only that
+        // one URN is borrowed; TvControl and IosDeviceRunner of the same device
+        // are Argent's own and fall through like any other.
+        if (borrowedUrns.has(urn)) {
           await registry.disposeService(urn);
           continue;
         }
