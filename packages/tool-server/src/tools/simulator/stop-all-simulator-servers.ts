@@ -6,6 +6,7 @@ import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
   deviceIdOwningUrn,
+  isAttachedSimulatorServerUrn,
   isDeviceServiceUrn,
   unnameableSessionUrns,
 } from "./device-services";
@@ -96,16 +97,20 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
           aborted = true;
           break;
         }
-        const matchedId = scoped
-          ? deviceIdOwningUrn(urn, DEVICE_OWNED_NAMESPACES, devices)
-          : undefined;
+        // Every supplied id that owns it, so an `ext:` id and its raw udid
+        // passed together are both matched.
+        const owners = scoped
+          ? devices.filter(
+              (id) => deviceIdOwningUrn(urn, DEVICE_OWNED_NAMESPACES, [id]) !== undefined
+            )
+          : [];
         const matches = scoped
-          ? matchedId !== undefined
+          ? owners.length > 0
           : isDeviceServiceUrn(urn, DEVICE_OWNED_NAMESPACES);
         // Ownership counts regardless of state: `disposeService` leaves the
         // node in place as IDLE, so a device this session already stopped would
         // otherwise be reported unmatched by the next scoped call.
-        if (matchedId !== undefined) matchedIds.add(matchedId.toLowerCase());
+        for (const id of owners) matchedIds.add(id.toLowerCase());
         if (matches && entry.state !== ServiceState.IDLE) {
           // An ERROR node (e.g. a tvOS SimulatorServer that refused to start)
           // is disposed too, but was never a running server, so it is not
@@ -117,9 +122,11 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
            * cached handle) but never reported as stopped. Its `dispose()` is a
            * no-op by design, so nothing was actually shut down and claiming
            * otherwise would tell the agent it had cleaned up a server it does
-           * not own.
+           * not own. Under the raw udid / serial only the attached
+           * simulator-server is such a handle.
            */
-          if (wasLive && !isExternalDeviceUrn(urn)) stopped.push(urn);
+          const external = isExternalDeviceUrn(urn) || isAttachedSimulatorServerUrn(urn);
+          if (wasLive && !external) stopped.push(urn);
         } else if (
           scoped &&
           isLiveServiceState(entry.state) &&
