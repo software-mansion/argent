@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
@@ -9,6 +9,7 @@ import {
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
+import { readLogFile } from "../helpers/read-log-file";
 import { scopeTempHome } from "../helpers/temp-home";
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
@@ -255,5 +256,64 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
       expression: "1+1",
     })) as { result: unknown };
     expect(evaluation.result).toBe("eval-result-42");
+  });
+
+  it("opens no listening socket of its own", async () => {
+    const listening = () =>
+      process.getActiveResourcesInfo().filter((r) => r === "TCPServerWrap").length;
+    const before = listening();
+    const result = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: "socket-count-device",
+    })) as Record<string, unknown>;
+    expect(result.connected).toBe(true);
+    expect(listening()).toBe(before);
+  });
+  it("writes a console call to the log file with its time, text and source", async () => {
+    const result = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: "console-device",
+    })) as Record<string, unknown>;
+    expect(result.connected).toBe(true);
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(
+      `JsRuntimeDebugger:${mockPort}:console-device`
+    );
+    const timestamp = Date.UTC(2026, 0, 2, 3, 4, 5, 678);
+    cdpConn!.send(
+      JSON.stringify({
+        method: "Runtime.consoleAPICalled",
+        params: {
+          type: "warning",
+          args: [{ type: "string", value: "low battery" }],
+          timestamp,
+          stackTrace: {
+            callFrames: [
+              {
+                functionName: "render",
+                url: "http://localhost:8081/src/App.tsx",
+                lineNumber: 41,
+                columnNumber: 2,
+              },
+            ],
+          },
+        },
+      })
+    );
+    cdpConn!.send(
+      JSON.stringify({
+        method: "Runtime.consoleAPICalled",
+        params: { type: "log", args: [{ type: "string", value: "ok" }], timestamp },
+      })
+    );
+    await vi.waitFor(() => expect(readLogFile(api.logWriter)).toHaveLength(2));
+    const [warning, log] = readLogFile(api.logWriter);
+    expect(warning).toMatchObject({
+      id: 0,
+      timestamp: "2026-01-02T03:04:05.678Z",
+      level: "WARNING",
+      source: "src/App.tsx:41",
+      message: "low battery",
+    });
+    expect(log).toMatchObject({ id: 1, level: "LOG", message: "ok" });
   });
 });

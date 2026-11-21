@@ -18,7 +18,10 @@ import {
   ToolNotFoundError,
   ToolExecutionError,
   FailureError,
+  getFailureSignal,
   getFailureSignalOrFallback,
+  isCallerDeadlineReason,
+  withFailureSignal,
 } from "./errors";
 import { FAILURE_CODES } from "./failure-codes";
 import { canonicalToolArgs, ToolParamAliasError } from "./tool-ids";
@@ -237,6 +240,20 @@ export class Registry {
           : new ToolExecutionError(toolId, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
+      // A failure the caller's abort caused (an AbortError, or one carrying the
+      // abort's reason) is a cancel. When the caller hung up at the deadline it
+      // declared, it keeps the class the tool gave it, or else is a timeout.
+      const signal = options?.signal;
+      if (
+        signal?.aborted &&
+        ((error instanceof Error && error.name === "AbortError") || hasCause(error, signal.reason))
+      ) {
+        if (!isCallerDeadlineReason(signal.reason)) {
+          withFailureSignal(wrappedError, CANCELLED_SIGNAL);
+        } else if (!getFailureSignal(error)) {
+          withFailureSignal(wrappedError, TIMED_OUT_SIGNAL);
+        }
+      }
       const failureSignal = getFailureSignalOrFallback(wrappedError);
       const failedMsg = formatInteractionMessage(
         () =>
@@ -482,6 +499,29 @@ export class Registry {
     this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
   }
 }
+
+function hasCause(error: unknown, cause: unknown): boolean {
+  let current = error;
+  for (let depth = 0; current instanceof Error && depth < 16; depth++) {
+    if (current === cause) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+const CANCELLED_SIGNAL = {
+  error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED,
+  failure_stage: "registry_tool_cancelled",
+  failure_area: "registry",
+  error_kind: "cancelled",
+} as const;
+
+const TIMED_OUT_SIGNAL = {
+  error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_TIMED_OUT,
+  failure_stage: "registry_tool_timed_out",
+  failure_area: "registry",
+  error_kind: "timeout",
+} as const;
 
 /**
  * Cause for the ServiceInitializationErrors raised when a resolve races an

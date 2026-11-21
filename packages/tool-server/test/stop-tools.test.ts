@@ -1341,10 +1341,10 @@ describe("stop-all-simulator-servers left_running", () => {
   // With two or more devices on one Metro, `debugger-connect` refuses a udid /
   // serial and instructs the caller to re-target with the `logicalDeviceId`
   // Metro echoed. That id keys the session's URN, and no `list-devices` id
-  // equals it — so no `devices` scope can reap the CDP socket, the bound
-  // loopback console server or the log file handle it holds. Worse, the
-  // caller's real serial DOES match that device's other services, so it never
-  // lands in `unmatched` and the teardown reads as a clean machine.
+  // equals it — so no `devices` scope can reap the CDP socket or the log file
+  // handle it holds. Worse, the caller's real serial DOES match that device's
+  // other services, so it never lands in `unmatched` and the teardown reads as
+  // a clean machine.
   const LOGICAL = "b5f2c1e0-7a44-4d8e-9c31-metro-logical";
 
   // What the JsRuntimeDebugger factory records when the id it was resolved with

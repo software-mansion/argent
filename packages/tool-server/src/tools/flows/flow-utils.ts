@@ -1294,7 +1294,7 @@ export function describeSelector(s: FlowSelector): string {
     .map(([k, v]) =>
       k === "textMatches"
         ? `text=/${escapeInline(String(v))}/`
-        : `${k === "identifier" ? "id" : k}=${JSON.stringify(String(v))}`
+        : `${k === "identifier" ? "id" : k}=${escapeInline(JSON.stringify(String(v)))}`
     )
     .join(" ");
   // The universal selector prints as CSS spells it, so a relation-only target
@@ -1311,11 +1311,11 @@ export function describeSelector(s: FlowSelector): string {
 
 /**
  * Render a text condition's comparator and expectation for reports. Literal
- * expectations use JSON quoting so embedded quotes, backslashes and control
- * characters stay unambiguous; regex patterns use slash delimiters so they
- * cannot be mistaken for literals. Failure prose asks for the infinitive verb
- * form (`wanted to contain/equal/match`), step targets for the YAML mode names
- * (`contains/equals/matches`).
+ * expectations use JSON quoting plus `escapeInline` so embedded quotes,
+ * backslashes and control characters stay unambiguous; regex patterns use
+ * slash delimiters so they cannot be mistaken for literals. Failure prose asks
+ * for the infinitive verb form (`wanted to contain/equal/match`), step targets
+ * for the YAML mode names (`contains/equals/matches`).
  */
 export function describeTextExpectation(
   expectedText: string | undefined,
@@ -1326,9 +1326,9 @@ export function describeTextExpectation(
   const mode = textMatch ?? "contains";
   switch (mode) {
     case "contains":
-      return `${verbForm === "infinitive" ? "contain" : mode} ${JSON.stringify(expected)}`;
+      return `${verbForm === "infinitive" ? "contain" : mode} ${escapeInline(JSON.stringify(expected))}`;
     case "equals":
-      return `${verbForm === "infinitive" ? "equal" : mode} ${JSON.stringify(expected)}`;
+      return `${verbForm === "infinitive" ? "equal" : mode} ${escapeInline(JSON.stringify(expected))}`;
     case "matches":
       return `${verbForm === "infinitive" ? "match" : mode} /${expected}/`;
   }
@@ -1771,6 +1771,10 @@ function toYamlStep(step: FlowStep): YamlStep {
 // 200 chars still shows a genuine flow entry in full.
 const MAX_ENTRY_RENDER_CHARS = 200;
 
+// One character of an escaped render: an escape sequence or a code point. The
+// cap counts these, so a cut halves neither.
+const RENDERED_CHAR = /\\u[0-9a-f]{4}|\\?[\s\S]/gu;
+
 function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
   // throw and mask the validation message. It also returns the *value*
@@ -1782,11 +1786,10 @@ function renderEntry(raw: unknown): string {
   } catch {
     rendered = "[cyclic entry]";
   }
-  if (rendered.length > MAX_ENTRY_RENDER_CHARS) {
-    const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
-    rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
-  }
-  return rendered;
+  const chars = escapeInline(rendered).match(RENDERED_CHAR) ?? [];
+  if (chars.length <= MAX_ENTRY_RENDER_CHARS) return chars.join("");
+  const elided = chars.length - MAX_ENTRY_RENDER_CHARS;
+  return `${chars.slice(0, MAX_ENTRY_RENDER_CHARS).join("")}…(+${elided} chars)`;
 }
 
 function badEntry(raw: unknown, detail: string): never {
@@ -3508,7 +3511,7 @@ function assertNoOutputReferences(steps: FlowStep[], trail: number[] = []): void
         : `\`${field.where}\``;
       throw new FailureError(
         `Step ${at.join(".")} (\`${step.kind}\`): ${locator} uses unsupported template syntax. ` +
-          `Replace it with the literal value the step needs: ${JSON.stringify(rendered)}`,
+          `Replace it with the literal value the step needs: ${escapeInline(JSON.stringify(rendered))}`,
         {
           error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
           failure_stage: "flow_output_reference",

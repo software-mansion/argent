@@ -44,9 +44,10 @@ only when you name it (`--phase ios-duo`) and give it a booted iPhone Duo.
 
 ## Isolation
 
-Everything runs under a throwaway `HOME` and npm prefix (`$(mktemp -d)`), so the
-real machine's `~/.argent`, editor MCP configs, and global packages are never
-touched — safe to run on a shared box. Add `--keep` to inspect the sandbox after.
+Everything runs under a throwaway `HOME` (the XDG base directories included) and
+npm prefix (`$(mktemp -d)`), so the real machine's `~/.argent`, editor MCP
+configs, and global packages are never touched — safe to run on a shared box.
+Add `--keep` to inspect the sandbox after.
 
 ## Providing a device
 
@@ -97,5 +98,6 @@ lib/common.sh       logging, argent_cli/run_tool, assert_* helpers, server + scr
 lib/discover-tools.sh   parses `argent tools describe` into per-tool arg models
 lib/report.py       JSONL -> markdown (per-phase + per-tool coverage matrix + failures)
 phases/*.sh         one run_phase() per phase
+harness.test.mjs    phase helpers under stubbed tool calls, in `npm run test:scripts` (needs `npm run build`)
 results/            generated JSONL + report (gitignored)
 ```

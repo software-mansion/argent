@@ -1227,6 +1227,27 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0]?.reason).toContain("unrecognized step kind");
   });
 
+  it("spells the control characters of a malformed run: target's entry in the step's reason", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "broken.yaml" }],
+    });
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "broken.yaml"),
+      'steps:\n  - note: "\\x9b[2J\\x7f"\n',
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps[0]?.reason).toMatch(/: \{"note":"\\u009b\[2J\\u007f"\}$/);
+  });
+
   it("reports a run: target with a newer version as a step error", async () => {
     await writeFlow("main", {
       executionPrerequisite: "",

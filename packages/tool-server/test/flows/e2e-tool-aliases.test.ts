@@ -107,12 +107,17 @@ describe("the former flow-* tool ids", () => {
     }
     expect(mcpNames).not.toContain("e2e-read-prerequisite");
     expect(mcpNames).toContain("e2e-execute");
-    // A tool behind a flag that is off is hidden, so count only the exposed ones.
+    // A tool behind a flag not offered on this host is hidden, so compare with the exposed ones.
     const exposed = registry.getSnapshot().tools.filter((id) => {
       const flag = registry.getTool(id)!.featureFlag;
       return !flag || isFlagOffered(flag);
     });
-    expect(tools.filter((t) => t.aliasOf === undefined)).toHaveLength(exposed.length);
+    expect(
+      tools
+        .filter((t) => t.aliasOf === undefined)
+        .map((t) => t.name)
+        .sort()
+    ).toEqual(exposed.sort());
   });
 
   it("run the same flow with the same result through invokeTool and POST /tools", async () => {

@@ -163,6 +163,10 @@ export E2E_TOOLS_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("12
 # The RN tier looks for the Bluesky checkout under the real HOME.
 export HOME_REAL="$HOME"
 export HOME="$E2E_HOME"
+# An exported XDG dir outranks $HOME for Electron's profile, editor configs and
+# the skills lock, so those would land in the real one.
+export XDG_CONFIG_HOME="$E2E_HOME/.config" XDG_CACHE_HOME="$E2E_HOME/.cache" \
+  XDG_DATA_HOME="$E2E_HOME/.local/share" XDG_STATE_HOME="$E2E_HOME/.local/state"
 # Device state must stay visible through the sandbox HOME or the android tier
 # false-fails on every gesture/screenshot: adb auth keys live in ~/.android, and
 # on macOS the emulator writes its gRPC discovery files under

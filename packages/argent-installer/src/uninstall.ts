@@ -471,8 +471,9 @@ export async function uninstall(args: string[]): Promise<void> {
       for (const s of ["local", "global"] as const) {
         if (!scopesToClean.has(s)) continue;
         try {
-          adapter.removeAllowlist(projectRoot, s);
-          results.push(`${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`);
+          if (adapter.removeAllowlist(projectRoot, s)) {
+            results.push(`${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`);
+          }
         } catch {
           // non-fatal
         }

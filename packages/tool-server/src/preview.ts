@@ -596,11 +596,12 @@ export function createPreviewRouter(registry: Registry): Router {
     }
     res.set("Cache-Control", "no-store");
     res.type(mime);
-    fs.createReadStream(real)
-      .on("error", () => {
-        if (!res.headersSent) res.status(404).end();
-      })
-      .pipe(res);
+    const stream = fs.createReadStream(real).on("error", () => {
+      if (!res.headersSent) res.status(404).end();
+    });
+    // pipe() leaves the file open when the client aborts mid-download.
+    res.on("close", () => stream.destroy());
+    stream.pipe(res);
   });
 
   // Accessibility tree for the streamed device, so the UI can anchor each
