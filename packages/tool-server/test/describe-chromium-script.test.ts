@@ -165,12 +165,24 @@ function el(opts: Opts = {}): MockElement {
 // (accessibleName's placeholder/value fallbacks, isPassword, isChecked): built
 // like el(), then re-prototyped onto the mock input class with the live
 // .type/.value/.placeholder properties those branches read directly.
-function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: string }) {
+function inputEl(
+  opts: Opts & {
+    type?: string;
+    value?: string;
+    placeholder?: string;
+    labels?: (string | Record<string, unknown>)[];
+  }
+) {
   const node = el({ ...opts, tag: "input" }) as MockElement & Record<string, unknown>;
   Object.setPrototypeOf(node, MockHTMLInputElement.prototype);
   if (opts.type) node.type = opts.type;
   if (opts.value) node.value = opts.value;
   if (opts.placeholder) node.placeholder = opts.placeholder;
+  // .labels is the NodeList of <label for>/wrapping <label> elements; the script reads
+  // each one's textContent.
+  if (opts.labels) {
+    node.labels = opts.labels.map((t) => (typeof t === "string" ? { __textContent: t } : t));
+  }
   return node;
 }
 
@@ -794,6 +806,49 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(pw!.password).toBe(true);
     expect(pw!.label).toBeUndefined();
     expect(JSON.stringify(tree)).not.toContain("hunter2");
+  });
+
+  it("names a field by its <label for> text rather than its placeholder", () => {
+    const { tree } = run([
+      inputEl({ placeholder: "Ph", labels: ["Lbl"], attrs: { id: "q" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "q")!.label).toBe("Lbl");
+  });
+
+  it("names a field by its <label for> text when it has no placeholder", () => {
+    const { tree } = run([inputEl({ labels: ["Email"], attrs: { id: "e" }, rect: BOX })]);
+    expect(findById(tree, "e")!.label).toBe("Email");
+  });
+
+  it("excludes a wrapped select/textarea subtree from its wrapping <label> text", () => {
+    const txt = (data: string) => ({ nodeType: 3, nodeValue: data });
+    const ctl = (tagName: string, text: string) => ({
+      nodeType: 1,
+      __tagName: tagName,
+      __childNodes: [txt(text)],
+    });
+    const wrap = (...childNodes: unknown[]) => ({ nodeType: 1, __tagName: "LABEL", __childNodes: childNodes });
+    const { tree } = run([
+      inputEl({
+        labels: [wrap(txt("Country "), ctl("SELECT", "US CA"))],
+        attrs: { id: "c" },
+        rect: BOX,
+      }),
+      inputEl({
+        labels: [wrap(txt("Notes "), ctl("TEXTAREA", "typed body"))],
+        attrs: { id: "n" },
+        rect: { x: 0, y: 200, w: 200, h: 30 },
+      }),
+    ]);
+    expect(findById(tree, "c")!.label).toBe("Country");
+    expect(findById(tree, "n")!.label).toBe("Notes");
+  });
+
+  it("still prefers aria-label over an associated <label>", () => {
+    const { tree } = run([
+      inputEl({ labels: ["Lbl"], attrs: { "id": "a", "aria-label": "Aria" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "a")!.label).toBe("Aria");
   });
 
   it("still reads a non-password input's value as its accessible name", () => {

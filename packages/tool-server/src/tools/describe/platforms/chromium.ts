@@ -81,12 +81,55 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getOwnerDocument = protoGetter(Node.prototype, "ownerDocument");
   const getActiveElement = protoGetter(docProto, "activeElement");
   const getDocBody = protoGetter(docProto, "body");
+  // .labels is a per-class accessor (HTMLInputElement/TextArea/Select), so capture each
+  // class's own getter; typeof guards cover the test harness's partial mock DOM.
+  const inputLabels =
+    typeof HTMLInputElement === "undefined" ? null : protoGetter(HTMLInputElement.prototype, "labels");
+  const textAreaLabels =
+    typeof HTMLTextAreaElement === "undefined" ? null : protoGetter(HTMLTextAreaElement.prototype, "labels");
+  const selectLabels =
+    typeof HTMLSelectElement === "undefined" ? null : protoGetter(HTMLSelectElement.prototype, "labels");
 
   function nodeRole(el) {
     const r = getAttr.call(el, "role");
     if (r) return r;
     const t = getTagName.call(el).toLowerCase();
     return t;
+  }
+
+  // Text of a <label>, leaving out any form control it wraps: <label>Country <select>
+  // <option>US</option></select></label> must read "Country", not "Country US".
+  function labelOwnText(node) {
+    const kids = getChildNodes.call(node);
+    if (!kids) return getTextContent.call(node) || "";
+    let out = "";
+    for (const k of kids) {
+      const t = getNodeType.call(k);
+      if (t === 3) out += getNodeValue.call(k) || "";
+      else if (t === 1) {
+        const tag = getTagName.call(k).toLowerCase();
+        if (tag === "input" || tag === "select" || tag === "textarea" || tag === "button") continue;
+        out += labelOwnText(k);
+      }
+    }
+    return out;
+  }
+
+  // Text of the <label for=...> / wrapping <label> elements associated with a form control.
+  function labelText(el) {
+    let get = null;
+    if (inputLabels && el instanceof HTMLInputElement) get = inputLabels;
+    else if (textAreaLabels && el instanceof HTMLTextAreaElement) get = textAreaLabels;
+    else if (selectLabels && el instanceof HTMLSelectElement) get = selectLabels;
+    if (!get) return "";
+    const labels = get.call(el);
+    if (!labels) return "";
+    const parts = [];
+    for (const l of labels) {
+      const txt = labelOwnText(l).replace(/\\s+/g, " ").trim();
+      if (txt) parts.push(txt);
+    }
+    return parts.join(" ");
   }
 
   function accessibleName(el) {
@@ -105,6 +148,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
       if (parts.length) return parts.join(" ").slice(0, 200);
     }
+    const lbl = labelText(el);
+    if (lbl) return lbl.slice(0, 200);
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       if (el.placeholder) return el.placeholder.slice(0, 200);
       // Never fall through to a password input's value: with no aria label or
