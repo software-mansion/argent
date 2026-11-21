@@ -103,18 +103,19 @@ Argent can make the network slow or offline. The agent then tests loading states
 
 The agent sets a minimum latency, a download limit, an upload limit, or offline mode. The scope of the change depends on the platform:
 
-| Platform              | Scope                                                                                   |
-| --------------------- | --------------------------------------------------------------------------------------- |
-| iOS simulator         | One app. Argent slows the `URLSession` requests of the app, except WebSockets.          |
-| Android emulator      | The emulator network. Only offline mode is available.                                   |
-| Chromium and Electron | The page of the active tab, without its workers, service workers and cross-site iframes |
+| Platform              | Scope                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------- |
+| iOS simulator         | One app. Argent slows the `URLSession` requests of the app, except WebSockets.                    |
+| Android emulator      | The HTTP, HTTPS and WebSocket traffic of all apps that use the proxy of the system, except Metro. |
+| Chromium and Electron | The page of the active tab, without its workers, service workers and cross-site iframes           |
 
 The conditions stay until the agent changes them or removes them, also in later steps and later e2e tests. Remove them at the end of an e2e test. Some events also remove them:
 
-- iOS: the tool-server stops, or `stop-all-simulator-servers` stops the native devtools of the device. On a simulator from a device provider, a restart of the app also removes them.
+- iOS: the tool-server stops, or `stop-all-simulator-servers` stops the native devtools of the device. On a simulator from a device provider, a restart of the app also removes them. After a crash of the tool-server, they stay until the next tool-server removes them.
+- Android: the tool-server stops, or `stop-all-simulator-servers` stops the services of the emulator. After a crash of the tool-server, apps cannot connect until the next tool-server removes the conditions.
 - Chromium: the active tab closes outside Argent, or another DevTools client detaches from the page.
 
-On an iOS simulator, the app does not use its HTTP cache while Argent shapes or inspects its requests, so offline mode also fails a request that the cache could answer. On an Android emulator, offline mode stays after the tool-server stops. An Android TV emulator connects over Ethernet, so offline mode fails there. Offline mode does not stop requests through `adb reverse`, and it cuts the connection to Metro at `10.0.2.2`. Argent does not set network conditions on a physical device. The [tools reference](/docs/reference/tools#network-conditions) gives the details.
+On an iOS simulator, the app does not use its HTTP cache while Argent shapes or inspects its requests, so offline mode also fails a request that the cache could answer. On an Android emulator, Argent throttles through a proxy on the host. Apps that do not use the proxy of the system, and traffic that is not HTTP, keep their speed. Offline mode stays after the tool-server stops. An Android TV emulator connects over Ethernet, so offline mode fails there. Offline mode does not stop requests through `adb reverse`, and it cuts the connection to Metro at `10.0.2.2`. Argent does not set network conditions on a physical device. The [tools reference](/docs/reference/tools#network-conditions) gives the details.
 
 ## Example instructions
 
