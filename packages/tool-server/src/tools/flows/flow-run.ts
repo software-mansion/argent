@@ -183,7 +183,7 @@ export interface StepReport {
    * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited. Also raised by a launch whose Android native network
+   * from one that waited. Also raised by a launch whose native network
    * capture note differs from the last one reported for that app
    * ({@link networkCaptureWarning}).
    */
@@ -355,7 +355,9 @@ const NATIVE_READY_POLL_MS = 250;
  * verdict: the post-launch settle plus the whole connect wait. The gate's own
  * timeout is only the second half, so quoting it alone understates the age of a
  * process the step launched — the fact the remedies below rest on. Exported so
- * they can be pinned against it.
+ * they can be pinned against it. A launch step quotes the time it measured
+ * from the start of its restart-app call instead, so the figure also counts
+ * restart-app itself, for example its wait for native network capture.
  */
 export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT_MS;
 
@@ -393,7 +395,8 @@ async function waitForNativeDevtools(
   registry: Registry,
   device: DeviceInfo,
   bundleId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  relaunchedAt?: number
 ): Promise<string | null> {
   let api: NativeDevtoolsApi;
   try {
@@ -429,13 +432,18 @@ async function waitForNativeDevtools(
   // the caller, which drops the reason.
   const state = await api.appConnectionState(bundleId).catch(() => "indeterminate" as const);
   if (state === "connected") return null;
-  return flowLaunchGateReason(bundleId, state);
+  return flowLaunchGateReason(
+    bundleId,
+    state,
+    relaunchedAt === undefined ? undefined : Date.now() - relaunchedAt
+  );
 }
 
 /**
  * The measured diagnosis, rewritten for the one fact that separates this caller
  * from every other consumer of {@link buildAppStateMessage}: it has just run
- * `restart-app` on this bundle id and spent {@link LAUNCH_TO_VERDICT_MS} on it.
+ * `restart-app` on this bundle id and spent `spentMs` on it, at least
+ * {@link LAUNCH_TO_VERDICT_MS}.
  *
  * Those messages are written for a reader who has not launched anything, so
  * emitted verbatim they hand back the action this step just took and an author
@@ -446,7 +454,8 @@ async function waitForNativeDevtools(
  */
 export function flowLaunchGateReason(
   bundleId: string,
-  state: Exclude<NativeDevtoolsAppState, "connected">
+  state: Exclude<NativeDevtoolsAppState, "connected">,
+  spentMs = LAUNCH_TO_VERDICT_MS
 ): string {
   const measured = buildAppStateMessage(bundleId, state);
   switch (state) {
@@ -454,7 +463,7 @@ export function flowLaunchGateReason(
       // The step launched it and it is gone: a relaunch provably reproduces
       // this, so the measured remedy reads as advice to change nothing.
       return (
-        `${bundleId} was relaunched by this step and is no longer running ${LAUNCH_TO_VERDICT_MS} ms later, ` +
+        `${bundleId} was relaunched by this step and is no longer running ${spentMs} ms later, ` +
         `so it exited after launch rather than failing to connect. Re-running the e2e test repeats the same launch: ` +
         `start it by hand (launch-app, then describe or screenshot) to see the crash or early exit first.`
       );
@@ -479,16 +488,16 @@ export function flowLaunchGateReason(
       // figure is the whole spend: the poll checks the live map once before its
       // first sleep, so a dial during the post-launch settle counts too.
       return (
-        `${measured} A cold start slower than the ${LAUNCH_TO_VERDICT_MS} ms this step waited reads the ` +
+        `${measured} A cold start slower than the ${spentMs} ms this step waited reads the ` +
         `same way — if that is likely, re-run the e2e test to relaunch and wait again before restarting anything.`
       );
     case "connecting":
       // A process seconds old, though this step launched the app
-      // LAUNCH_TO_VERDICT_MS ago — something relaunched it in between, so the
+      // spentMs ago — something relaunched it in between, so the
       // handshake being waited on belongs to that later process. "Wait" is
       // still right; crediting this step with that launch is not.
       return (
-        `${measured} This step launched it ${LAUNCH_TO_VERDICT_MS} ms before that reading, so the process ` +
+        `${measured} This step launched it ${spentMs} ms before that reading, so the process ` +
         `being measured started after the step's own launch — something relaunched it in between. Re-run ` +
         `the e2e test once the app is settled.`
       );
@@ -502,7 +511,7 @@ export function flowLaunchGateReason(
       // started; this step already spent that wait. What survives is the half
       // that does not ask argent to restart a process the provider owns.
       return (
-        `${measured} This step already waited ${LAUNCH_TO_VERDICT_MS} ms after launching it, so the ` +
+        `${measured} This step already waited ${spentMs} ms after launching it, so the ` +
         `provider is lending a different app rather than one still connecting. Re-run the e2e test only ` +
         `once it is lending this one; otherwise drive the app by coordinate.`
       );
@@ -584,7 +593,8 @@ async function treeSourceGate(
   registry: Registry,
   device: DeviceInfo,
   bundleId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  relaunchedAt?: number
 ): Promise<string | null> {
   if (isIosPhysicalDevice(device) && !signal?.aborted) {
     // Physical devices read the XCUITest runner, not native devtools.
@@ -604,7 +614,7 @@ async function treeSourceGate(
   // resolves the service through `nativeDevtoolsRef(device)`, which the
   // blueprint serves over TCP for a remote sim.
   if ((device.platform === "ios" || device.platform === "ios-remote") && !signal?.aborted) {
-    const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
+    const reason = await waitForNativeDevtools(registry, device, bundleId, signal, relaunchedAt);
     if (reason !== null && !signal?.aborted) {
       // Every reason names the bundle id, so the prefix must not: doubled, it
       // reads as two failures reported back to back.
@@ -633,7 +643,7 @@ async function treeSourceGate(
 }
 
 /**
- * The `networkCapture` note an Android launch-app or restart-app result carries
+ * The `networkCapture` note a launch-app or restart-app result carries
  * while native network capture, started earlier by `native-network-logs`, is on
  * for the app: whether the capture followed the app into the new process.
  * Reported as a step warning: the step passed, but the app may run
@@ -711,6 +721,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
         ? (appLaunchArgs(app, "macos") ?? [])
         : undefined;
   let restart: unknown;
+  const relaunchedAt = Date.now();
   try {
     restart = await invokeOnDevice(env, "restart-app", {
       bundleId,
@@ -731,7 +742,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   }
   refreshMacosDeviceKind(state);
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
-  const gate = await treeSourceGate(registry, device, bundleId, signal);
+  const gate = await treeSourceGate(registry, device, bundleId, signal, relaunchedAt);
   // The gate returns null (ready) on abort — check the signal before trusting
   // it, or a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;

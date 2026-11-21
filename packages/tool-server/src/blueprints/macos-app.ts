@@ -40,11 +40,16 @@ import {
   trackedAppKind,
 } from "../utils/macos-apps";
 import type { MacosAppKind } from "../utils/macos-app-kind";
-import {
-  isInjectableBundleId,
-  NATIVE_NETWORK_LOG_LIMIT,
-  type NetworkEvent,
-} from "./native-devtools";
+import { isInjectableBundleId } from "./native-devtools";
+
+export interface NetworkEvent {
+  method: string;
+  params: unknown;
+  timestamp: number;
+}
+
+/** How many network events a Mac app's log keeps; the oldest go first. */
+const NATIVE_NETWORK_LOG_LIMIT = 1000;
 
 /**
  * The in-app library of one native Mac app (device id `macos-app-<bundle id>`):
