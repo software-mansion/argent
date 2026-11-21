@@ -1,4 +1,5 @@
 import type { CDPClient } from "../utils/debugger/cdp-client";
+import type { CdpNetworkConditions } from "../utils/network-conditions";
 
 /**
  * Backs `view-network-logs` and `view-network-request-details` on Chromium:
@@ -34,15 +35,23 @@ export interface NetworkManager {
   get(requestId: string): NetworkRequestRecord | undefined;
   /** Enables the Network domain; called on connect and after a tab switch. */
   reattach(): Promise<void>;
+  /** Conditions are per target, so `reattach` applies them again to the new tab. */
+  setConditions(conditions: CdpNetworkConditions): Promise<void>;
+  /** True while the stored conditions shape traffic, false after a reset. */
+  throttled(): boolean;
   dispose(): void;
 }
 
 const MAX_RECORDS = 1000;
 
+const shapesTraffic = (c: CdpNetworkConditions): boolean =>
+  c.offline || c.latency > 0 || c.downloadThroughput >= 0 || c.uploadThroughput >= 0;
+
 export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
   const { cdp } = deps;
   const order: string[] = [];
   const byId = new Map<string, NetworkRequestRecord>();
+  let conditions: CdpNetworkConditions | null = null;
 
   function record(requestId: string): NetworkRequestRecord {
     let rec = byId.get(requestId);
@@ -144,7 +153,15 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
     get: (requestId: string) => byId.get(requestId),
     reattach: async () => {
       await cdp.send("Network.enable").catch(() => {});
+      if (conditions) {
+        await cdp.send("Network.emulateNetworkConditions", conditions).catch(() => {});
+      }
     },
+    setConditions: async (next) => {
+      await cdp.send("Network.emulateNetworkConditions", next);
+      conditions = next;
+    },
+    throttled: () => conditions !== null && shapesTraffic(conditions),
     dispose: () => {
       cdp.events.off("event", onEvent);
       cdp.send("Network.disable").catch(() => {});
