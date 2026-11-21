@@ -2,9 +2,10 @@ import * as fs from "node:fs";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 
 /**
- * The host end of the ring the iOS Simulator audio mock moves microphone samples through. The ring is a regular file
- * the host creates in the simulator's control directory and the hook in the app reads (its half of the layout below
- * is in argent-private), so the app only copies samples: decoding, tone generation and pacing all happen here.
+ * The host ends of the two rings the iOS Simulator audio mock moves samples through. Each ring is a regular file
+ * the host creates in the simulator's control directory and the hook in the app reads and writes (its half of the
+ * layouts below is in argent-private), so the app only copies samples: decoding, tone generation, pacing and
+ * writing the WAV all happen here.
  *
  *   in ring   (host -> app)  header, then `RING_CAP` float32 mono frames at `STREAM_RATE`
  *     16 writeFrame   host   frames written, modulo 2^32
@@ -12,6 +13,8 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
  *     24 streamStart  host   frame the rewound stream starts at
  *     64 readFrame    app    frames consumed
  *     68 requestGen   app    bumped when the app starts capturing again and wants the stream from its start
+ *   out ring  (app -> host)  header, then `RING_CAP` frames of `channels` float32 samples (room for OUT_MAX_CHANNELS)
+ *     16 channels, 20 rate, 24 writeFrame   app, fixed by the first frame recorded
  *
  * The in ring is paced by the app's read cursor, not a host clock: the feeder keeps `LEAD_FRAMES` of samples ahead
  * of it, so the two clocks never drift apart and a stream starts from its beginning when the app starts reading.
@@ -19,12 +22,17 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 
 const RING_HDR = 128;
 const IN_MAGIC = 0x49475241; // "ARGI"
+const OUT_MAGIC = 0x4f475241; // "ARGO"
 const RING_CAP = 1 << 16;
+const OUT_MAX_CHANNELS = 8;
 export const STREAM_RATE = 48_000;
 /** How far ahead of the app's read cursor the feeder stays: the longest event-loop stall it rides out. */
 const LEAD_FRAMES = 14_400;
 const MAX_CHUNK = 4_800;
 const FEED_TICK_MS = 10;
+const DRAIN_TICK_MS = 20;
+/** The WAV header is rewritten this often while recording, so a crash leaves a file with a real length. */
+const WAV_PATCH_EVERY_TICKS = 25;
 /** KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, as a WAVE_FORMAT_EXTENSIBLE `fmt ` chunk stores it. */
 const FLOAT_SUBFORMAT = "0300000000001000800000aa00389b71";
 
@@ -273,4 +281,154 @@ export async function feederGone(ringPath: string, windowMs = 1_000): Promise<bo
   await new Promise((resolve) => setTimeout(resolve, windowMs));
   const after = readInCursors(ringPath);
   return !after || after.write === before.write;
+}
+
+function wavHeader(channels: number, rate: number, frames: number): Buffer {
+  const data = Math.min(frames * channels * 2, 0xffffffff - 36);
+  const h = Buffer.alloc(44);
+  h.write("RIFF", 0, "ascii");
+  h.writeUInt32LE(36 + data, 4);
+  h.write("WAVEfmt ", 8, "ascii");
+  h.writeUInt32LE(16, 16);
+  h.writeUInt16LE(1, 20);
+  h.writeUInt16LE(channels, 22);
+  h.writeUInt32LE(rate, 24);
+  h.writeUInt32LE(rate * channels * 2, 28);
+  h.writeUInt16LE(channels * 2, 32);
+  h.writeUInt16LE(16, 34);
+  h.write("data", 36, "ascii");
+  h.writeUInt32LE(data, 40);
+  return h;
+}
+
+export interface FinishedWav {
+  path: string;
+  frames: number;
+  droppedFrames: number;
+  channels: number;
+  sampleRate: number;
+}
+
+/** Drains the out ring the app fills into a 16-bit WAV. */
+export class OutputRecorder {
+  private readonly ringFd: number;
+  private readonly scratch = Buffer.alloc(RING_CAP * OUT_MAX_CHANNELS * 4);
+  private readonly guest = Buffer.alloc(12);
+  private wavFd: number | undefined;
+  private rd = 0;
+  private frames = 0;
+  private dropped = 0;
+  private channels = 0;
+  private rate = 0;
+  private ticks = 0;
+  private timer: NodeJS.Timeout | undefined;
+
+  constructor(
+    readonly ringPath: string,
+    readonly wavPath: string
+  ) {
+    this.ringFd = createRing(
+      ringPath,
+      [OUT_MAGIC, 1, RING_CAP, OUT_MAX_CHANNELS],
+      RING_CAP * OUT_MAX_CHANNELS * 4
+    );
+    this.timer = setInterval(() => {
+      try {
+        this.step();
+      } catch (err) {
+        process.stderr.write(`[audio] output recorder stopped: ${String(err)}\n`);
+        if (this.timer) clearInterval(this.timer);
+      }
+    }, DRAIN_TICK_MS);
+    this.timer.unref();
+  }
+
+  step(): void {
+    fs.readSync(this.ringFd, this.guest, 0, 12, 16);
+    const channels = this.guest.readUInt32LE(0);
+    if (!channels) return; // the app has not output a frame yet
+    const rate = this.guest.readUInt32LE(4);
+    const writeFrame = this.guest.readUInt32LE(8);
+    if (this.wavFd === undefined) {
+      this.channels = channels;
+      this.rate = rate;
+      this.wavFd = fs.openSync(this.wavPath, "w");
+      fs.writeSync(this.wavFd, wavHeader(channels, rate, 0), 0, 44, 0);
+    }
+    // Unsigned: the app only ever runs ahead, and a host stalled for hours is far more than 2^31 frames behind.
+    let n = (writeFrame - this.rd) >>> 0;
+    if (n > RING_CAP) {
+      // The app outran the drain: skip to the newest half ring, the gap is in the file.
+      this.dropped += n - RING_CAP / 2;
+      this.rd = (writeFrame - RING_CAP / 2) >>> 0;
+      n = RING_CAP / 2;
+    }
+    if (n > 0) this.drain(n);
+    if (++this.ticks % WAV_PATCH_EVERY_TICKS === 0) this.patchHeader();
+  }
+
+  private drain(n: number): void {
+    const mask = RING_CAP - 1;
+    const start = this.rd & mask;
+    const first = Math.min(n, RING_CAP - start);
+    const ch = this.channels;
+    const frameBytes = ch * 4;
+    fs.readSync(this.ringFd, this.scratch, 0, first * frameBytes, RING_HDR + start * frameBytes);
+    if (n > first) {
+      fs.readSync(
+        this.ringFd,
+        this.scratch,
+        first * frameBytes,
+        (n - first) * frameBytes,
+        RING_HDR
+      );
+    }
+    const out = Buffer.allocUnsafe(n * ch * 2);
+    for (let i = 0; i < n; i++) {
+      for (let k = 0; k < ch; k++) {
+        const v = this.scratch.readFloatLE((i * ch + k) * 4);
+        out.writeInt16LE(Math.round(Math.max(-1, Math.min(1, v)) * 32767), (i * ch + k) * 2);
+      }
+    }
+    fs.writeSync(this.wavFd!, out, 0, out.length, 44 + this.frames * ch * 2);
+    this.frames += n;
+    this.rd = (this.rd + n) >>> 0;
+  }
+
+  private patchHeader(): void {
+    if (this.wavFd === undefined) return;
+    fs.writeSync(this.wavFd, wavHeader(this.channels, this.rate, this.frames), 0, 44, 0);
+  }
+
+  /** Drains what is left, finalizes the WAV and removes the ring. Call once the app stopped writing. */
+  finish(): FinishedWav {
+    if (this.timer) clearInterval(this.timer);
+    this.step();
+    if (this.wavFd === undefined) {
+      // The app never output: leave a valid, empty file.
+      this.channels = 1;
+      this.rate = STREAM_RATE;
+      this.wavFd = fs.openSync(this.wavPath, "w");
+    }
+    this.patchHeader();
+    fs.closeSync(this.wavFd);
+    fs.closeSync(this.ringFd);
+    fs.rmSync(this.ringPath, { force: true });
+    return {
+      path: this.wavPath,
+      frames: this.frames,
+      droppedFrames: this.dropped,
+      channels: this.channels,
+      sampleRate: this.rate,
+    };
+  }
+
+  /** Gives up without a result, for a recording the app never started. */
+  abort(): void {
+    if (this.timer) clearInterval(this.timer);
+    if (this.wavFd !== undefined) fs.closeSync(this.wavFd);
+    fs.closeSync(this.ringFd);
+    fs.rmSync(this.ringPath, { force: true });
+    fs.rmSync(this.wavPath, { force: true });
+  }
 }

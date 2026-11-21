@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, Registry, getFailureSignal } from "@argent/registry";
 import { createAudioInputTool } from "../src/tools/audio/audio-input";
+import { createAudioRecordStartTool } from "../src/tools/audio/audio-record-start";
+import { createAudioRecordStopTool } from "../src/tools/audio/audio-record-stop";
 
 const TVOS = "0000AAAA-0000-0000-0000-00000000A77E";
 const BOOTED = "0000CCCC-0000-0000-0000-000000000000";
@@ -25,6 +27,8 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
 function registryRig() {
   const registry = new Registry();
   registry.registerTool(createAudioInputTool(registry));
+  registry.registerTool(createAudioRecordStartTool(registry));
+  registry.registerTool(createAudioRecordStopTool(registry));
   // A refused target must fail before any service (native devtools, the audio session) starts.
   const resolveService = vi
     .spyOn(registry, "resolveService")
@@ -32,7 +36,11 @@ function registryRig() {
   return { registry, resolveService };
 }
 
-const calls = [["audio-input", { source: "tone" }]] as const;
+const calls = [
+  ["audio-input", { source: "tone" }],
+  ["audio-record-start", { bundleId: "com.example.app" }],
+  ["audio-record-stop", { bundleId: "com.example.app" }],
+] as const;
 
 const targets = [
   ["an Android emulator", "emulator-5554", FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION],

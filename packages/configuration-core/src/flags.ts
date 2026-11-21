@@ -76,7 +76,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "ios-audio-always-inserted",
     description:
       "Insert the iOS audio hook (libArgentAudio.dylib) into every app an armed simulator launches, so " +
-      "audio-input works without restart-app. Dormant until the app opens audio. " +
+      "audio-input and audio-record-start work without restart-app. Dormant until the app opens audio. " +
       "On by default; `argent disable ios-audio-always-inserted` inserts it only on the first audio tool call, " +
       "for apps launched after that call.",
     defaultEnabled: true,
