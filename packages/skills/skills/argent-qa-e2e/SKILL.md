@@ -17,7 +17,7 @@ Load `argent-create-e2e` as the authoring engine. Follow its required references
 
 A QA e2e test is complete only when:
 
-1. The first step that is not `echo:` or `script:` is `launch:`. In-test setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
+1. The first step that is not `echo:` or `script:` is `launch:`. A web app in a browser booted with `browser` has no `launch:` form, so tell the user it cannot be a standalone QA test. In-test setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
 2. The first walkthrough recorded every action and live structural check. Only the three documented polish insertions are unrecorded.
 3. Every requirement maps to a hard `await:`, `assert:`, or reviewed `snapshot:`. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
 4. Every screen change has destination identity followed by `idle` readiness.

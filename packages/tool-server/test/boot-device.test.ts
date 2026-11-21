@@ -1117,7 +1117,7 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
   it.each([
     [
       "chromium-cdp-9222",
-      /already running and needs no boot; to start an Electron app, pass `electronAppPath`/,
+      /already running and needs no boot; to start an Electron app, pass `electronAppPath`, or a web browser, `browser`\./,
     ],
     ["amazon-4a27df03c9777152", /`vvdImage`/],
     ["emulator-5554", /Boot an Android emulator by passing `avdName`/],

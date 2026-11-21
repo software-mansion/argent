@@ -10,10 +10,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
-import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { scopeTempHome } from "./helpers/temp-home";
+import { createCdpStub } from "./helpers/cdp-stub";
 
 scopeTempHome("argent-boot-electron-kill-home-");
 
@@ -96,26 +96,18 @@ afterEach(() => {
  */
 async function bootFakeChild(): Promise<{ child: FakeChild; port: number; close: () => void }> {
   const child = makeFakeChild();
-  spawnMock.mockReturnValue(child);
-
-  const srv = http.createServer((req, res) => {
-    res.setHeader("content-type", "application/json");
-    if (req.url === "/json/version") {
-      res.end(JSON.stringify({ "Browser": "Chrome/Test", "Protocol-Version": "1.3" }));
-      return;
-    }
-    res.statusCode = 404;
-    res.end();
+  const { port, listen, close } = await createCdpStub();
+  spawnMock.mockImplementation(() => {
+    listen();
+    return child;
   });
-  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
-  const { port } = srv.address() as { port: number };
 
   await bootElectronApp({ appPath: appDir, port, readyTimeoutMs: 5000 });
   // Both guards are load-bearing: the mock above has to actually intercept
   // trackChromiumPort — deleted or calling through, it is invisible — and the
   // scoped HOME keeps the port every boot here persists out of the real file.
   expect(fs.existsSync(path.join(os.homedir(), ".argent", "chromium-cdp-ports.json"))).toBe(false);
-  return { child, port, close: () => srv.close() };
+  return { child, port, close };
 }
 
 describe("killChromiumByPort — handle path", () => {

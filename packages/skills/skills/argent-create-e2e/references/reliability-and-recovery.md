@@ -77,7 +77,7 @@ While the required source is down, selector failures and raw-point capture are v
 | Platform | Symptom                                | Recovery                                                                         |
 | -------- | -------------------------------------- | -------------------------------------------------------------------------------- |
 | Android  | Cannot reach the argent android helper | Argent reinstalls it once; if it persists, read the device's reason in the error |
-| Chromium | No reachable CDP session               | Boot again with `electronAppPath` and remote debugging                           |
+| Chromium | No reachable CDP session               | Boot again with `electronAppPath` or `browser`                                   |
 | Vega     | Toolkit returns no page source         | Relaunch an app built with automation support                                    |
 
 On Android, healthy `describe` output does not prove the runner tree is available. It can fall back to legacy `uiautomator`, while the runner refuses that trimmed fallback.

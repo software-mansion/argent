@@ -38,6 +38,8 @@ export const FAILURE_COMMANDS = [
   "afconvert",
   "cdp",
   "electron",
+  // A Chromium-family browser booted by `boot-device` with `browser`.
+  "browser",
   "npm",
   "npx",
   "unknown",
