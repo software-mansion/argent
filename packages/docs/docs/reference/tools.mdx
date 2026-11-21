@@ -195,7 +195,7 @@ On a Mac app, these tools read the app through the Argent library:
   - SwiftUI puts the identifier and the label of a control on an accessibility element, not on a view. Thus a `native-find-views` search by `identifier` or `label` does not find SwiftUI controls. `describe` shows them.
   - When a search by `identifier` or `label` finds no view, its result has a `note` that refers to `describe`.
   - For Mac Catalyst, use [`describe`](#mac-catalyst-apps) to inspect UIKit controls.
-- `native-network-logs` reads the requests that the app sends through `NSURLSession`. With `stop: true`, it fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`. The capture stops when the tool-server disconnects from the app.
+- `native-network-logs` reads the requests that the app sends through `NSURLSession`. It returns the same rows and the same raw events as on iOS. With `stop: true`, it fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`. The capture stops when the tool-server disconnects from the app.
 
 The [Mac apps](#mac-apps) section contains the details.
 
@@ -205,6 +205,28 @@ The [Mac apps](#mac-apps) section contains the details.
 | `native-find-views`     | Search views by class, accessibility id, label, tag, or `nativeID`                                                         |
 | `native-view-at-point`  | Inspect the deepest visible view at a native window point, or with `hitTest: true` the view that would receive touch input |
 | `native-network-logs`   | Read native HTTP requests on iOS, Android and Mac apps, or stop native network capture on Android                          |
+
+`native-network-logs` returns one row for each request on each platform. A row has these fields:
+
+| Field         | Content                                                             |
+| ------------- | ------------------------------------------------------------------- |
+| `id`          | The ID of the request                                               |
+| `method`      | The HTTP method                                                     |
+| `url`         | The URL that the app requested                                      |
+| `finalUrl`    | The URL of the response, when a redirect ended at a different URL   |
+| `state`       | `pending`, `headers` (the response started), `complete` or `failed` |
+| `status`      | The HTTP status of the response                                     |
+| `mimeType`    | The type of the response                                            |
+| `bytes`       | The size of the response                                            |
+| `durationMs`  | The duration of a `complete` or `failed` request                    |
+| `errorText`   | The error of a `failed` request                                     |
+| `rnRequestId` | Android: the ID that React Native gave to the request               |
+
+The result has `count` for the rows in the list and `total` for the requests in the log.
+
+On iOS and on a Mac app, the log keeps the most recent 1000 events, and a request has several events. When the log removed old events, the result has `truncated: true`. Then old requests are missing, and a row can be without `method` and `url`. A request that the app cancelled stays in the state `pending` or `headers`.
+
+On iOS and on a Mac app, `format: "events"` returns the raw events with the headers of the requests and of the responses. The result then has `count` and `events`. On Android, `native-network-logs` ignores `format`. Use `view-network-request-details` for the headers and the bodies.
 
 ### Native network capture on Android
 

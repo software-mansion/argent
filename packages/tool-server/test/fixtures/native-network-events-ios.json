@@ -1,0 +1,244 @@
+[
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "initiator": {
+        "type": "other"
+      },
+      "frameId": "native-devtools-ios-frame",
+      "loaderId": "native-devtools-ios-loader",
+      "wallTime": 1795193492.197439,
+      "request": {
+        "postData": "",
+        "method": "GET",
+        "headers": {},
+        "url": "http://127.0.0.1:4210/ok?n=first"
+      },
+      "type": "XHR",
+      "requestId": "420318B5-F43B-4877-8EDE-C1BED61CAF5A",
+      "documentURL": "http://127.0.0.1:4210/ok?n=first",
+      "timestamp": 1795193492.197438
+    },
+    "timestamp": 1795193492198
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "initiator": {
+        "type": "other"
+      },
+      "frameId": "native-devtools-ios-frame",
+      "loaderId": "native-devtools-ios-loader",
+      "wallTime": 1795193492.1977491,
+      "request": {
+        "postData": "",
+        "method": "GET",
+        "headers": {},
+        "url": "http://127.0.0.1:4210/missing"
+      },
+      "type": "XHR",
+      "requestId": "7AB9EAA8-079A-414E-B16F-22BD7F56819C",
+      "documentURL": "http://127.0.0.1:4210/missing",
+      "timestamp": 1795193492.197748
+    },
+    "timestamp": 1795193492198
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "initiator": {
+        "type": "other"
+      },
+      "frameId": "native-devtools-ios-frame",
+      "loaderId": "native-devtools-ios-loader",
+      "wallTime": 1795193492.1978068,
+      "request": {
+        "postData": "",
+        "method": "GET",
+        "headers": {},
+        "url": "http://127.0.0.1:4249/refused"
+      },
+      "type": "XHR",
+      "requestId": "1B65117A-383D-42F6-8ABA-8090BD1863E2",
+      "documentURL": "http://127.0.0.1:4249/refused",
+      "timestamp": 1795193492.197806
+    },
+    "timestamp": 1795193492198
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "initiator": {
+        "type": "other"
+      },
+      "frameId": "native-devtools-ios-frame",
+      "loaderId": "native-devtools-ios-loader",
+      "wallTime": 1795193492.1978931,
+      "request": {
+        "postData": "",
+        "method": "GET",
+        "headers": {},
+        "url": "http://127.0.0.1:4210/redirect"
+      },
+      "type": "XHR",
+      "requestId": "2D5BAA19-DADD-472B-92C1-104D5A149635",
+      "documentURL": "http://127.0.0.1:4210/redirect",
+      "timestamp": 1795193492.1978931
+    },
+    "timestamp": 1795193492198
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "response": {
+        "status": 200,
+        "statusText": "no error",
+        "mimeType": "application/json",
+        "headers": {
+          "Date": "Fri, 20 Nov 2026 16:51:32 GMT",
+          "Connection": "keep-alive",
+          "Transfer-Encoding": "Identity",
+          "Keep-Alive": "timeout=5",
+          "Content-Type": "application/json",
+          "x-test": "argent-r2"
+        },
+        "url": "http://127.0.0.1:4210/ok?n=first",
+        "encodedDataLength": -1
+      },
+      "frameId": "native-devtools-ios-frame",
+      "loaderId": "native-devtools-ios-loader",
+      "type": "XHR",
+      "requestId": "420318B5-F43B-4877-8EDE-C1BED61CAF5A",
+      "timestamp": 1795193492.21264,
+      "hasExtraInfo": false
+    },
+    "timestamp": 1795193492213
+  },
+  {
+    "method": "Network.dataReceived",
+    "params": {
+      "encodedDataLength": 23,
+      "timestamp": 1795193492.212681,
+      "requestId": "420318B5-F43B-4877-8EDE-C1BED61CAF5A",
+      "dataLength": 23
+    },
+    "timestamp": 1795193492213
+  },
+  {
+    "method": "Network.loadingFinished",
+    "params": {
+      "encodedDataLength": 23,
+      "timestamp": 1795193492.214822,
+      "requestId": "420318B5-F43B-4877-8EDE-C1BED61CAF5A",
+      "nativeDevtoolsDurationMs": 15.419960021972656
+    },
+    "timestamp": 1795193492214
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "response": {
+        "status": 404,
+        "statusText": "not found",
+        "mimeType": "application/json",
+        "headers": {
+          "Date": "Fri, 20 Nov 2026 16:51:32 GMT",
+          "Connection": "keep-alive",
+          "Transfer-Encoding": "Identity",
+          "Keep-Alive": "timeout=5",
+          "Content-Type": "application/json",
+          "x-test": "argent-r2"
+        },
+        "url": "http://127.0.0.1:4210/missing",
+        "encodedDataLength": -1
+      },
+      "frameId": "native-devtools-ios-frame",
+      "loaderId": "native-devtools-ios-loader",
+      "type": "XHR",
+      "requestId": "7AB9EAA8-079A-414E-B16F-22BD7F56819C",
+      "timestamp": 1795193492.21565,
+      "hasExtraInfo": false
+    },
+    "timestamp": 1795193492216
+  },
+  {
+    "method": "Network.dataReceived",
+    "params": {
+      "encodedDataLength": 21,
+      "timestamp": 1795193492.215672,
+      "requestId": "7AB9EAA8-079A-414E-B16F-22BD7F56819C",
+      "dataLength": 21
+    },
+    "timestamp": 1795193492216
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "response": {
+        "status": 200,
+        "statusText": "no error",
+        "mimeType": "application/json",
+        "headers": {
+          "Date": "Fri, 20 Nov 2026 16:51:32 GMT",
+          "Connection": "keep-alive",
+          "Transfer-Encoding": "Identity",
+          "Keep-Alive": "timeout=5",
+          "Content-Type": "application/json",
+          "x-test": "argent-r2"
+        },
+        "url": "http://127.0.0.1:4210/landed",
+        "encodedDataLength": -1
+      },
+      "frameId": "native-devtools-ios-frame",
+      "loaderId": "native-devtools-ios-loader",
+      "type": "XHR",
+      "requestId": "2D5BAA19-DADD-472B-92C1-104D5A149635",
+      "timestamp": 1795193492.2164931,
+      "hasExtraInfo": false
+    },
+    "timestamp": 1795193492217
+  },
+  {
+    "method": "Network.dataReceived",
+    "params": {
+      "encodedDataLength": 15,
+      "timestamp": 1795193492.216508,
+      "requestId": "2D5BAA19-DADD-472B-92C1-104D5A149635",
+      "dataLength": 15
+    },
+    "timestamp": 1795193492217
+  },
+  {
+    "method": "Network.loadingFailed",
+    "params": {
+      "canceled": false,
+      "nativeDevtoolsDurationMs": 18.832921981811523,
+      "encodedDataLength": 0,
+      "type": "XHR",
+      "requestId": "1B65117A-383D-42F6-8ABA-8090BD1863E2",
+      "timestamp": 1795193492.216636,
+      "errorText": "Could not connect to the server."
+    },
+    "timestamp": 1795193492217
+  },
+  {
+    "method": "Network.loadingFinished",
+    "params": {
+      "encodedDataLength": 21,
+      "timestamp": 1795193492.218141,
+      "requestId": "7AB9EAA8-079A-414E-B16F-22BD7F56819C",
+      "nativeDevtoolsDurationMs": 18.074989318847656
+    },
+    "timestamp": 1795193492218
+  },
+  {
+    "method": "Network.loadingFinished",
+    "params": {
+      "encodedDataLength": 15,
+      "timestamp": 1795193492.218789,
+      "requestId": "2D5BAA19-DADD-472B-92C1-104D5A149635",
+      "nativeDevtoolsDurationMs": 18.740177154541016
+    },
+    "timestamp": 1795193492219
+  }
+]

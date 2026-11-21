@@ -48,6 +48,7 @@ function makeNativeApi(): NativeDevtoolsApi {
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],
     clearNetworkLog: () => {},
+    networkLogEvicted: () => false,
     getAppState: async () => {
       throw new Error("not implemented");
     },

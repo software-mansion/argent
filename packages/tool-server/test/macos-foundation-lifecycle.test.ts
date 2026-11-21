@@ -883,9 +883,15 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       status: string;
       count: number;
       events: { method: string; params: any; timestamp: number }[];
+      truncated?: true;
     }
     const readLog = (extra: Record<string, unknown> = {}): Promise<NetworkLog> =>
-      run("native-network-logs", { udid: DEVICE_ID, bundleId: BUNDLE_ID, ...extra });
+      run("native-network-logs", {
+        udid: DEVICE_ID,
+        bundleId: BUNDLE_ID,
+        format: "events",
+        ...extra,
+      });
     const request = async (url: string, count = 1) =>
       (
         await (
@@ -917,6 +923,22 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       });
       expect(log.events.every((e) => typeof e.timestamp === "number")).toBe(true);
 
+      expect(await readLog({ format: "requests" })).toEqual({
+        status: "ok",
+        count: 1,
+        total: 1,
+        requests: [
+          {
+            id: "fake-1",
+            state: "complete",
+            method: "GET",
+            url: "https://example.com/a",
+            status: 200,
+            bytes: 12,
+          },
+        ],
+      });
+
       // `limit` keeps the most recent; `clear` empties the log after the read.
       expect((await readLog({ limit: 1 })).events.map((e) => e.method)).toEqual([
         "Network.loadingFinished",
@@ -937,6 +959,12 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         params: { requestId: "fake-67" },
       });
       expect(log.events[999].params.requestId).toBe("fake-400");
+      expect(log.truncated).toBe(true);
+      expect(await readLog({ format: "requests", limit: 5000 })).toMatchObject({
+        count: 334,
+        total: 334,
+        truncated: true,
+      });
     });
 
     it("keeps the capture on across restart-app, which starts an empty log", async () => {

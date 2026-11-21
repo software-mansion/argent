@@ -46,15 +46,25 @@ const zodSchema = z.object({
   ),
   limit: z
     .number()
+    .int()
+    .nonnegative()
     .optional()
     .default(50)
-    .describe("Maximum number of entries to return: the most recent ones, oldest first"),
+    .describe(
+      "Maximum number of requests (or raw events with format 'events') to return: the most recent ones, oldest first"
+    ),
+  format: z
+    .enum(["requests", "events"])
+    .optional()
+    .describe(
+      "'requests' (default): one compact row per request. 'events': iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only, the raw CDP Network.* events, several per request, with request and response headers. Neither format carries response bodies (dataReceived events hold only chunk sizes), and most request bodies are missing too: NSURLSession sends them as streams, so the event has only request.hasPostData: true. Android ignores it and always returns rows: read headers and bodies there with view-network-request-details."
+    ),
   clear: z
     .boolean()
     .optional()
     .default(false)
     .describe(
-      "Clear the log after reading. On Android, the IDs of cleared requests still work in view-network-request-details"
+      "Clear the log after reading. On Android, the IDs of cleared requests still work in view-network-request-details. Elsewhere the cleared events are gone, so read with format 'events' first if you need their headers."
     ),
   stop: z
     .boolean()
@@ -66,16 +76,33 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-interface AndroidNativeRequestLine {
+interface NativeRequestRow {
   id: string;
-  method: string;
-  url: string;
   state: AndroidNativeRecordState;
+  method?: string;
+  url?: string;
+  finalUrl?: string;
   status?: number;
   mimeType?: string;
+  bytes?: number;
   durationMs?: number;
   errorText?: string;
   rnRequestId?: number;
+}
+
+interface NativeRequestListing {
+  status: "ok";
+  count: number;
+  total: number;
+  requests: NativeRequestRow[];
+  truncated?: true;
+}
+
+interface NativeEventListing {
+  status: "ok";
+  count: number;
+  events: NetworkEvent[];
+  truncated?: true;
 }
 
 interface AndroidNativeListing {
@@ -87,7 +114,7 @@ interface AndroidNativeListing {
   captureDetail?: string;
   count: number;
   total: number;
-  requests: AndroidNativeRequestLine[];
+  requests: NativeRequestRow[];
 }
 
 interface AndroidNativeStopped {
@@ -98,7 +125,8 @@ interface AndroidNativeStopped {
 
 type Result =
   | NativeDevtoolsPrecheckBlock
-  | { status: "ok"; count: number; events: NetworkEvent[] }
+  | NativeRequestListing
+  | NativeEventListing
   | AndroidNetworkNotAttachable
   | AndroidNativeListing
   | AndroidNativeStopped;
@@ -134,13 +162,14 @@ export function createNativeNetworkLogsTool(
     description: `Retrieve network requests captured at the native level: NSURLProtocol on iOS, OkHttp on Android.
 Use when inspecting native-level HTTP traffic that view-network-logs cannot see: requests that never pass through JS XMLHttpRequest or fetch.
 On iOS it sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing. Capture starts at the first call, so the first call is usually empty: repeat the action, then call again.
-On iOS: returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
-<flag:macos-apps>On a Mac app it records NSURLSession requests, react-native-macos fetch included, with the same event fields. The first call turns capture on and earlier requests are not logged: call it once, then repeat the action. Capture stays on across restart-app with an empty log per process, and requests sent while the app starts can be missing. The statuses below are iOS only.
+Every platform returns one row per request: id, method, url, state (pending, headers, complete or failed), status, mimeType, bytes, durationMs, errorText, and finalUrl when a redirect ended elsewhere (status and mimeType are then its). count is the rows returned, total the requests in the log.
+On iOS: returns { status, count, total, requests }. A row that stays pending or headers is still running, or the app cancelled it. truncated: true means the 1000-event log dropped its oldest events: older requests are missing, and a row can lack method and url. format: "events" returns { status, count, events } instead: the raw CDP events with headers.
+<flag:macos-apps>On a Mac app it records NSURLSession requests, react-native-macos fetch included, with the same rows and format: "events". The first call turns capture on and earlier requests are not logged: call it once, then repeat the action. Capture stays on across restart-app with an empty log per process, and requests sent while the app starts can be missing. The statuses below are iOS only.
 </flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
 On Android: needs a debuggable build. The first call starts capture and usually returns armed: false. Call it again every few seconds until armed is true, then repeat the action whose requests you need: earlier requests are not captured.
 Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
-Returns { status, header, armed, capture, captureDetail, count, total, requests }. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing. Pass a request's ID (android-3f9a-12) to view-network-request-details for its headers, redirects and bodies.
+Returns { status, header, armed, capture, captureDetail, count, total, requests }; a row from a React Native request also has rnRequestId. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing. Pass a request's ID (android-3f9a-12) to view-network-request-details for its headers, redirects and bodies.
 Capture can slow the app. It stays on, and launch-app and restart-app attach it to each new process, until a call with stop: true turns it off for this app (stop-all-simulator-servers for the device also does); restart-app then starts the app without the agent. stop: true returns { status, stopped, message }, where stopped is false when capture was not on for the app. On iOS stop: true fails: capture there ends only when stop-all-simulator-servers stops this device's services and the app restarts.
 When status is not_attachable, use view-network-logs and do not retry.`,
     zodSchema,
@@ -173,9 +202,9 @@ When status is not_attachable, use view-network-logs and do not retry.`,
           params.bundleId
         );
         await app.activateNetworkInspection();
-        const events = app.networkLog().slice(-params.limit);
+        const listing = listEvents(app.networkLog(), app.networkLogEvicted(), params);
         if (params.clear) app.clearNetworkLog();
-        return { status: "ok", count: events.length, events };
+        return listing;
       }
       await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
 
@@ -203,9 +232,13 @@ When status is not_attachable, use view-network-logs and do not retry.`,
 
       api.activateNetworkInspection(params.bundleId);
 
-      const events = api.getNetworkLog(params.bundleId).slice(-params.limit);
+      const listing = listEvents(
+        api.getNetworkLog(params.bundleId),
+        api.networkLogEvicted(params.bundleId),
+        params
+      );
       if (params.clear) api.clearNetworkLog(params.bundleId);
-      return { status: "ok", count: events.length, events };
+      return listing;
     },
   };
 }
@@ -277,8 +310,7 @@ async function listAndroidNative(
   if (attached?.status === "not_attachable") return attached;
 
   const all = api.records(port);
-  const shown = all.slice(-params.limit);
-  const requests = shown.map(toRequestLine);
+  const requests = mostRecent(all, params.limit).map(toRequestLine);
   if (params.clear) api.clear();
 
   const state = api.state();
@@ -327,7 +359,7 @@ function headerDetail(state: AndroidNetworkInspectorState, callNote?: string): s
   return parts;
 }
 
-function toRequestLine(record: AndroidNativeRecord): AndroidNativeRequestLine {
+function toRequestLine(record: AndroidNativeRecord): NativeRequestRow {
   return {
     id: record.id,
     method: record.request.method,
@@ -336,8 +368,85 @@ function toRequestLine(record: AndroidNativeRecord): AndroidNativeRequestLine {
     ...(record.response
       ? { status: record.response.status, mimeType: record.response.mimeType }
       : {}),
+    ...(record.response && !sameUrl(record.response.url, record.request.url)
+      ? { finalUrl: record.response.url }
+      : {}),
+    ...(record.encodedDataLength !== undefined ? { bytes: record.encodedDataLength } : {}),
     ...(record.timing.durationMs !== undefined ? { durationMs: record.timing.durationMs } : {}),
     ...(record.errorText ? { errorText: record.errorText } : {}),
     ...(record.rnRequestId !== undefined ? { rnRequestId: record.rnRequestId } : {}),
   };
+}
+
+function mostRecent<T>(items: T[], limit: number): T[] {
+  return items.slice(Math.max(0, items.length - limit));
+}
+
+function listEvents(
+  log: NetworkEvent[],
+  evicted: boolean,
+  params: Params
+): NativeRequestListing | NativeEventListing {
+  const truncated = evicted ? { truncated: true as const } : {};
+  if (params.format === "events") {
+    const events = mostRecent(log, params.limit);
+    return { status: "ok", count: events.length, events, ...truncated };
+  }
+  const all = summarizeRequests(log);
+  const requests = mostRecent(all, params.limit);
+  return { status: "ok", count: requests.length, total: all.length, requests, ...truncated };
+}
+
+/**
+ * A response reports the canonical URL (NSURLSession turns `https://x.com` into
+ * `https://x.com/` and a host into lower case), so compare parsed forms: only a
+ * real redirect should produce a `finalUrl`.
+ */
+function sameUrl(a: string, b: string): boolean {
+  try {
+    return new URL(a).href === new URL(b).href;
+  } catch {
+    return a === b;
+  }
+}
+
+/** Fold CDP Network.* events into one row per requestId, in first-seen order. */
+export function summarizeRequests(events: NetworkEvent[]): NativeRequestRow[] {
+  const rows = new Map<string, NativeRequestRow>();
+  for (const e of events) {
+    const p = (e.params ?? {}) as Record<string, any>;
+    const id = typeof p.requestId === "string" ? p.requestId : undefined;
+    if (!id) continue;
+    let row = rows.get(id);
+    if (!row) rows.set(id, (row = { id, state: "pending" }));
+    switch (e.method) {
+      case "Network.requestWillBeSent":
+        row.method = p.request?.method;
+        row.url = p.request?.url;
+        break;
+      case "Network.responseReceived":
+        row.state = "headers";
+        row.status = p.response?.status;
+        row.mimeType = p.response?.mimeType;
+        if (row.url && p.response?.url && !sameUrl(p.response.url, row.url))
+          row.finalUrl = p.response.url;
+        break;
+      case "Network.loadingFinished":
+        row.state = "complete";
+        setSizeAndDuration(row, p);
+        break;
+      case "Network.loadingFailed":
+        row.state = "failed";
+        row.errorText = p.errorText ?? "failed";
+        setSizeAndDuration(row, p);
+        break;
+    }
+  }
+  return [...rows.values()];
+}
+
+function setSizeAndDuration(row: NativeRequestRow, final: Record<string, any>): void {
+  if (typeof final.encodedDataLength === "number") row.bytes = final.encodedDataLength;
+  if (typeof final.nativeDevtoolsDurationMs === "number")
+    row.durationMs = Math.round(final.nativeDevtoolsDurationMs);
 }

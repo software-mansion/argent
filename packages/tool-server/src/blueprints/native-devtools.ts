@@ -499,6 +499,8 @@ export interface NativeDevtoolsApi {
   activateNetworkInspection(bundleId: string): void;
   getNetworkLog(bundleId: string): NetworkEvent[];
   clearNetworkLog(bundleId: string): void;
+  /** True once the log dropped its oldest events to stay at NATIVE_NETWORK_LOG_LIMIT; cleared with the log. */
+  networkLogEvicted(bundleId: string): boolean;
   getAppState(bundleId: string): Promise<NativeAppState>;
   detectFrontmostBundleId(): Promise<string | null>;
   queryViewHierarchy(
@@ -511,6 +513,7 @@ export interface NativeDevtoolsApi {
 interface AppConnection {
   socket: net.Socket;
   networkLog: NetworkEvent[];
+  networkLogEvicted: boolean;
 }
 
 function getNativeDevtoolsSocketPath(udid: string): string {
@@ -825,7 +828,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
               existing.socket.destroy();
             }
 
-            connections.set(bundleId, { socket, networkLog: [] });
+            connections.set(bundleId, { socket, networkLog: [], networkLogEvicted: false });
 
             if (activatedBundleIds.has(bundleId)) {
               socket.write(
@@ -846,6 +849,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
               if (conn) {
                 if (conn.networkLog.length >= NATIVE_NETWORK_LOG_LIMIT) {
                   conn.networkLog.shift();
+                  conn.networkLogEvicted = true;
                 }
                 conn.networkLog.push({
                   method: p.method,
@@ -1104,8 +1108,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
       clearNetworkLog: (bundleId) => {
         const conn = connections.get(bundleId);
-        if (conn) conn.networkLog.length = 0;
+        if (!conn) return;
+        conn.networkLog.length = 0;
+        conn.networkLogEvicted = false;
       },
+
+      networkLogEvicted: (bundleId) => connections.get(bundleId)?.networkLogEvicted ?? false,
 
       async getAppState(bundleId) {
         const result = (await sendViewInspectorRpc(bundleId, "Application.getState")) as {

@@ -280,6 +280,7 @@ export function fakeMacosLibrary(
     activateNetworkInspection: async () => {},
     networkLog: () => [],
     clearNetworkLog: () => {},
+    networkLogEvicted: () => false,
   };
   return { api, calls };
 }

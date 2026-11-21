@@ -64,11 +64,11 @@ If native network capture is unavailable, use the JS runtime layer for the reque
 
 First the agent reads the list of records in the network log. The content of the list depends on the layer:
 
-| Layer                                  | List                                             |
-| -------------------------------------- | ------------------------------------------------ |
-| JS runtime, Chrome DevTools Protocol   | One line for each record                         |
-| Native `NSURLProtocol`                 | One entry for each event, with headers and times |
-| Native OkHttp (native network capture) | A header line, then one entry for each request   |
+| Layer                                  | List                                         |
+| -------------------------------------- | -------------------------------------------- |
+| JS runtime, Chrome DevTools Protocol   | One line for each record                     |
+| Native `NSURLProtocol`                 | One row for each request                     |
+| Native OkHttp (native network capture) | A header line, then one row for each request |
 
 In the JS runtime layer and in the Chrome DevTools Protocol layer, a line has this format:
 
@@ -82,7 +82,9 @@ A size with `~`, for example `~1.2 MB`, is approximate. The JS runtime layer sho
 
 In native network capture, the header line tells if the capture is active, waits for the app to load OkHttp, or is unavailable. For an unavailable capture, the header line gives the reason. Sometimes an active capture gets only some requests of the app. Then the header line tells which requests Argent captures.
 
-Then the agent reads the details of one record by its ID. The native `NSURLProtocol` layer has no details, because each entry of its list is complete. In the other layers, the details contain these items:
+In the two native layers, a row has the same fields: `id`, `method`, `url`, `state`, `status`, `mimeType`, `bytes`, `durationMs` and `errorText`. The `state` field is `pending`, `headers`, `complete` or `failed`. After a redirect to a different URL, a row also has `finalUrl`. The result has `count` for the rows in the list and `total` for the requests in the log.
+
+Then the agent reads the details of one record by its ID. The native `NSURLProtocol` layer has no details. For the headers of this layer, the agent reads the raw events with `format: "events"`. Each request has several events. In the other layers, the details contain these items:
 
 - The URL, the method and the status. In the JS runtime layer and in native network capture, the details also give the final URL after a redirect.
 - The headers of the request and of the response. In native network capture, the request headers are the headers sent on the wire. They include headers that the app code did not set, for example `Cookie` and `User-Agent`. The response headers are the headers that the app received. After OkHttp decodes a gzip response, these headers do not contain `Content-Encoding` and `Content-Length`.
@@ -124,7 +126,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - The JS runtime layer keeps 2000 records.
   - Native network capture keeps 2000 records. It keeps fewer records when the requests have very large headers or URLs.
   - The Chrome DevTools Protocol layer keeps 1000 records.
-  - The native `NSURLProtocol` layer keeps 1000 protocol events for each app. A request produces several events, so this layer keeps fewer than 1000 requests.
+  - The native `NSURLProtocol` layer keeps 1000 protocol events for each app. A request produces several events, so this layer keeps fewer than 1000 requests. When this layer removes old events, the result contains `truncated: true`.
 - The JS runtime layer does not read a binary response body, for example an image, a font, a PDF file or an `application/octet-stream` body. The record gives the type and the size of the body only. For Chromium, Argent does not show a response body that is not UTF-8 text. The details give the type and the size of this body only.
 - The JS runtime layer keeps approximately the first 1 MB of each body. The JS runtime layer also removes the oldest records when their bodies contain more than 50 MB of text.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
@@ -155,6 +157,6 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - The session file and the files of the in-app agent stay in the app until the capture starts and stops again, or until you install the app again.
   - The `adb reverse` stays until you remove it with `adb reverse --remove`, until the adb server or the device restarts, or until the USB connection of the device stops. A restart of the adb server also removes the other reverses, for example the reverse of Metro. Each `adb reverse` that stays holds one device port from 20000 to 29999.
 - Argent does not replace the data in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
-- On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a network log of this layer as you protect other data of the app.
+- On the native `NSURLProtocol` layer, the agent gets one short row for each request by default, without headers. The agent can ask for the raw events, which contain the headers. Neither form contains the bodies of responses. The raw events contain the body of a request only if the app does not send the body as a stream, and most requests send it as a stream. In the raw events, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a network log of this layer as you protect other data of the app.
 
 Argent does this with these three tools: `view-network-logs`, `view-network-request-details` and `native-network-logs`. The [tools reference](/docs/reference/tools) contains all tools.
