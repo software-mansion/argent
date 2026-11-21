@@ -6037,6 +6037,52 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     }
   });
 
+  it.each(["x", "y"])("clips only the rotated %s axis", (axis) => {
+    // Map layout coordinates through a rotation with cos = 0.8 and sin = 0.6.
+    const bounds = (x: number, y: number, w: number, h: number) => ({
+      x: 300 + 0.8 * x - 0.6 * (y + h),
+      y: 100 + 0.6 * x + 0.8 * y,
+      w: 0.8 * w + 0.6 * h,
+      h: 0.6 * w + 0.8 * h,
+    });
+    const button = (id: string, x: number, y: number) =>
+      el({
+        tag: "button",
+        attrs: { id },
+        rect: bounds(x, y, 20, 20),
+        offset: { width: 20, height: 20 },
+      });
+    const xClip = axis === "x";
+    const { tree } = run([
+      el({
+        style: {
+          transform: "matrix(0.8, 0.6, -0.6, 0.8, 0, 0)",
+          overflowX: xClip ? "clip" : "visible",
+          overflowY: xClip ? "visible" : "clip",
+        },
+        rect: bounds(0, 0, 100, 100),
+        offset: { width: 100, height: 100 },
+        client: { left: 0, top: 0, width: 100, height: 100 },
+        children: [
+          button("outside", xClip ? 102 : 20, xClip ? 20 : 102),
+          button("touching", xClip ? 100 : 20, xClip ? 20 : 100),
+          button("partial", xClip ? 90 : 20, xClip ? 20 : 90),
+          button("visible", xClip ? 20 : 120, xClip ? 120 : 20),
+        ],
+      }),
+    ]);
+    const outside = pxFrame(tree, "outside");
+    expect(outside.w * outside.h).toBe(0);
+    const touching = pxFrame(tree, "touching");
+    expect(touching.w * touching.h).toBe(0);
+    expect(pxFrame(tree, "partial")).toEqual(
+      xClip ? bounds(90, 20, 10, 20) : bounds(20, 90, 20, 10)
+    );
+    expect(pxFrame(tree, "visible")).toEqual(
+      xClip ? bounds(20, 120, 20, 20) : bounds(120, 20, 20, 20)
+    );
+  });
+
   it("reports a scroll container's content window as its clipFrame", () => {
     const { tree } = run([scroller([], { scrollSize: { width: 285, height: 400 } })]);
     const sc = findById(tree, "sc")!;

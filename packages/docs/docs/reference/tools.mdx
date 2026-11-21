@@ -109,6 +109,8 @@ With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started 
 | `await-screen-idle` | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
 
+On Chromium, `describe` reports a zero-area frame when a rotated container fully clips an element along one axis.
+
 On an iOS simulator, a line of `describe` can show:
 
 - `[disabled]` for a control that is not enabled.

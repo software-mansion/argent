@@ -101,6 +101,8 @@ async function main() {
   // row in a mirrored overflow box, are visible at frames the click really hits.
   for (const [text, condition] of [
     ["ArgentClippedRow", "hidden"],
+    ["ArgentRotatedClippedRow", "exists"],
+    ["ArgentRotatedClippedRow", "hidden"],
     ["ArgentVisibleRow", "visible"],
     ["ArgentMirroredRow", "visible"],
   ]) {

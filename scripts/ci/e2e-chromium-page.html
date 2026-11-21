@@ -48,6 +48,22 @@
         width: 42px;
         height: 32px;
       }
+      #rotatedclip {
+        position: fixed;
+        left: 8px;
+        top: 136px;
+        width: 100px;
+        height: 40px;
+        overflow-x: clip;
+        overflow-y: visible;
+        transform: rotate(15deg);
+      }
+      #rotatedclip button {
+        position: absolute;
+        left: 102px;
+        width: 42px;
+        height: 32px;
+      }
     </style>
   </head>
   <body>
@@ -79,5 +95,6 @@
         ArgentMirroredRow
       </button>
     </div>
+    <div id="rotatedclip"><button>ArgentRotatedClippedRow</button></div>
   </body>
 </html>

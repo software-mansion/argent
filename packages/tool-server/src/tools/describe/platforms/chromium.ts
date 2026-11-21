@@ -1123,8 +1123,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
   }
 
-  // Clip windows are viewport-px rects; null means only the viewport, which normRect
-  // already clamps to.
+  // Clip windows carry viewport-px bounds and, for oblique strips, a visible polygon.
+  // A null window means only the viewport, which normRect already clamps to.
   function intersect(a, b) {
     if (!a) return b;
     if (!b) return a;
@@ -1575,6 +1575,84 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     };
   }
 
+  // Clip a convex polygon against one edge. The signed distance is positive inside.
+  function clipEdge(points, distance) {
+    const kept = [];
+    let prev = points[points.length - 1];
+    if (!prev) return kept;
+    let from = distance(prev);
+    for (const next of points) {
+      const to = distance(next);
+      if ((from < 0) !== (to < 0)) {
+        const t = from / (from - to);
+        kept.push([prev[0] + t * (next[0] - prev[0]), prev[1] + t * (next[1] - prev[1])]);
+      }
+      if (to >= 0) kept.push(next);
+      prev = next;
+      from = to;
+    }
+    return kept;
+  }
+
+  // An oblique strip has an infinite bounding rect on both viewport axes. Keep the
+  // visible polygon through nested clips and take its bounds only for the reported frame.
+  function clipBox(clip, m, box) {
+    const [a, b, c, d, tx, ty] = m;
+    const obliqueStrip = (box.top === -Infinity && c && d) || (box.left === -Infinity && a && b);
+    if (!obliqueStrip && !clip?.polygon) return intersect(clip, mapRect(m, box));
+
+    const det = a * d - b * c;
+    if (!det) return { ...NO_AREA };
+    const view = intersect(clip, { left: 0, top: 0, right: w, bottom: h });
+    if (view.right <= view.left || view.bottom <= view.top) return { ...NO_AREA };
+    let points = clip?.polygon || [
+      [view.left, view.top],
+      [view.right, view.top],
+      [view.right, view.bottom],
+      [view.left, view.bottom],
+    ];
+    // Invert the box map to compare viewport points with each finite layout edge.
+    const localX = ([x, y]) => (d * (x - tx) - c * (y - ty)) / det;
+    const localY = ([x, y]) => (a * (y - ty) - b * (x - tx)) / det;
+    if (Number.isFinite(box.left)) points = clipEdge(points, (p) => localX(p) - box.left);
+    if (Number.isFinite(box.right)) points = clipEdge(points, (p) => box.right - localX(p));
+    if (Number.isFinite(box.top)) points = clipEdge(points, (p) => localY(p) - box.top);
+    if (Number.isFinite(box.bottom)) points = clipEdge(points, (p) => box.bottom - localY(p));
+    if (points.length < 3) return { ...NO_AREA };
+    // A box touching only a slanted edge spans both viewport axes but paints no area.
+    const [x0, y0] = points[0];
+    let twiceArea = 0;
+    for (let i = 2; i < points.length; i++) {
+      const [x1, y1] = points[i - 1];
+      const [x2, y2] = points[i];
+      twiceArea += (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    }
+    if (Math.abs(twiceArea) < 1e-9) return { ...NO_AREA };
+    const xs = points.map(([x]) => x);
+    const ys = points.map(([, y]) => y);
+    return {
+      left: Math.min(...xs),
+      top: Math.min(...ys),
+      right: Math.max(...xs),
+      bottom: Math.max(...ys),
+      polygon: points,
+    };
+  }
+
+  function visibleBox(el, style, r, clip) {
+    if (!clip?.polygon) return intersect(r, clip);
+    if (el instanceof HTMLElement) {
+      const width = getOffsetWidth.call(el);
+      const height = getOffsetHeight.call(el);
+      if (width && height) {
+        return clipBox(clip, boxMap(el, style, r, width, height), {
+          left: 0, top: 0, right: width, bottom: height,
+        });
+      }
+    }
+    return clipBox(clip, IDENTITY, r);
+  }
+
   // Padding box, scrollbars excluded, in layout px from the border box's top-left, and
   // boxMap's m from those to viewport px. A non-HTML clipper has no offset* to measure by:
   // an outer <svg> clips at its content box, a <foreignObject> at its rect. That rect, a
@@ -1681,13 +1759,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         if (legend) belowLegend(el, p, style, legend);
         const ox = style.overflowX;
         const oy = style.overflowY;
-        const own = mapRect(p.m, {
+        const box = {
           left: cx ? p.left - clipMargin(el, style, ox, "Left") : -Infinity,
           top: cy ? p.top - clipMargin(el, style, oy, "Top") : -Infinity,
           right: cx ? p.right + clipMargin(el, style, ox, "Right") : Infinity,
           bottom: cy ? p.bottom + clipMargin(el, style, oy, "Bottom") : Infinity,
-        });
-        inner = intersect(clip, own);
+        };
+        inner = clipBox(clip, p.m, box);
         // inner.scrollers lists, outermost first, the clippers on the chain that a user
         // can scroll content past, with the axes they scroll along and the part of their
         // window the clips above leave showing.
@@ -1698,7 +1776,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           getScrollHeight.call(el) > getClientHeight.call(el);
         const scrollers = clip && clip.scrollers;
         inner.scrollers =
-          sx || sy ? (scrollers || []).concat([{ el, sx, sy, win: own, shown: inner }]) : scrollers;
+          sx || sy
+            ? (scrollers || []).concat([{ el, sx, sy, win: mapRect(p.m, box), shown: inner }])
+            : scrollers;
       }
     }
     return clipsWithin(el, style, clips, inner);
@@ -2221,7 +2301,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (text && selfFrame.width <= 0 && selfFrame.height <= 0) {
         const box = contentBox(el);
         if (box) {
-          selfFrame = normRect(intersect(box, clip));
+          selfFrame = normRect(visibleBox(null, style, box, clip));
           r = box;
         }
       }
@@ -2246,7 +2326,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
     } else {
       r = getBCR.call(el);
-      selfFrame = normRect(intersect(r, clip));
+      selfFrame = normRect(visibleBox(el, style, r, clip));
     }
     if (scs && r && selfFrame.width > 0 && selfFrame.height > 0) {
       // Integer client sizes put a clip edge up to a pixel inside the true one.
@@ -2265,7 +2345,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           bottom: Math.min(h, ...cutsY.map((s) => s.shown.bottom)),
         };
         clipBounds = normRect(win);
-        const vis = intersect(intersect(r, clip), { left: 0, top: 0, right: w, bottom: h });
+        const vis = intersect(visibleBox(bl ? null : el, style, r, clip), {
+          left: 0, top: 0, right: w, bottom: h,
+        });
         cut = { r: vis, scs, win, cutsX, cutsY };
       }
     }
