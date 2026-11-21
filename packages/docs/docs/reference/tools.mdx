@@ -669,6 +669,8 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 | `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                                  |
 | `profiler-stack-query`            | Query native trace data for iterative native investigation                         |
 
+If Argent cannot read the UI hangs table from an Instruments trace, `profiler-load`, `profiler-stack-query`, and `profiler-combined-report` report missing hang data. An empty table gives a count of zero hangs.
+
 Argent caps Instruments recordings at 10 minutes on iOS simulators and [Mac apps](#profiling-a-mac-app). Call `native-profiler-stop` to recover the available trace after the cap or an unexpected exit.
 
 While stop is saving and exporting on the same target, a second stop joins the first. Start and analyze wait for it to finish. Retry `profiler-load` or `profiler-combined-report` after stop completes if the tool reports that the capture is still in progress.
