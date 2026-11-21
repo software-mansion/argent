@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator or iPhone, Android emulator or phone, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
+description: Interact with an iOS simulator or iPhone, Android emulator or phone, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, changing a device-wide setting (dark mode, text size, accessibility toggles, Android radios), or checking visible app state after interactions. Not for TV targets.
 ---
 
 Each tool's own description carries its parameters, defaults, return shape and examples. This skill covers choosing between tools and the gotchas those descriptions don't state.
@@ -35,6 +35,7 @@ Each tool's own description carries its parameters, defaults, return shape and e
 | Rotate device                  | `rotate`            | Orientation changes                                            |
 | Fold device                    | `fold`              | Foldables only: `references/foldables.md`                      |
 | Shake device                   | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu |
+| Device-wide setting            | `system-settings`   | Dark mode, text size, a11y toggles, Android radios             |
 | Wait for UI                    | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text  |
 | Wait for idle                  | `await-screen-idle` | Block until a non-empty screen tree stops changing (§4)        |
 

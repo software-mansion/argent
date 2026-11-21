@@ -5,6 +5,7 @@ import {
   isAndroidEmulatorSerial,
   isIosPhysicalDevice,
   isIosSimulator,
+  isWirelessAdbSerial,
   resolveDevice,
 } from "../src/utils/device-info";
 
@@ -107,5 +108,33 @@ describe("isAndroidEmulatorSerial", () => {
     expect(isAndroidEmulatorSerial("emulator-5554")).toBe(true);
     expect(isAndroidEmulatorSerial("HT82A0203045")).toBe(false);
     expect(isAndroidEmulatorSerial("192.168.1.5:5555")).toBe(false);
+  });
+});
+
+describe("isWirelessAdbSerial", () => {
+  it.each([
+    "192.168.1.42:5555",
+    "10.0.0.7:37105",
+    "[fd00::1]:5555",
+    "adb-39121FDJG0026R-tGGCXo._adb-tls-connect._tcp",
+    "adb-39121FDJG0026R-tGGCXo._adb._tcp",
+    "adb-39121FDJG0026R-tGGCXo._adb-tls-pairing._tcp",
+  ])("is true for %s", (serial) => {
+    expect(isWirelessAdbSerial(serial)).toBe(true);
+  });
+
+  it.each([
+    "emulator-5554",
+    "HT82A0203045",
+    "localhost:5555",
+    "LocalHost:5555",
+    "127.0.0.1:5555",
+    "127.0.1.1:5555",
+    "[::1]:5555",
+    "192.168.1.42:",
+    "192.168.1.42:55a5",
+    "192.168.1.42:5555 (offline)",
+  ])("is false for %s", (serial) => {
+    expect(isWirelessAdbSerial(serial)).toBe(false);
   });
 });
