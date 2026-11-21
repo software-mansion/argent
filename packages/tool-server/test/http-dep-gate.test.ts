@@ -109,8 +109,8 @@ describe("http dependency gate", () => {
     expect(res.status).toBe(400);
     expect(recordFailure).toHaveBeenCalledWith(
       "validated-thing",
-      // Schema-declared names of the failing params only — never values.
-      { invalid_params: ["count"] },
+      // Schema-declared names and fixed issue codes only — never values.
+      { invalid_params: ["count"], invalid_param_issues: ["invalid_type"] },
       {
         error_code: "HTTP_ZOD_VALIDATION_FAILED",
         failure_stage: "http_zod_validation",
@@ -141,11 +141,86 @@ describe("http dependency gate", () => {
     expect(res.status).toBe(400);
     expect(recordFailure).toHaveBeenCalledWith(
       "strict-thing",
-      { invalid_params: ["unrecognized_keys"] },
+      { invalid_params: ["unrecognized_keys"], invalid_param_issues: ["unrecognized_keys"] },
       expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
       expect.any(Number)
     );
     expect(JSON.stringify(recordFailure.mock.calls)).not.toContain("secret_user_key");
+  });
+
+  it("passes a multi-code result to recordFailure untruncated", async () => {
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "union-thing",
+      zodSchema: z.object({ button: z.union([z.enum(["up"]), z.array(z.enum(["up"]))]) }),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app).post("/tools/union-thing").send({ button: "bogus" });
+    expect(res.status).toBe(400);
+    expect(recordFailure).toHaveBeenCalledWith(
+      "union-thing",
+      {
+        invalid_params: ["button"],
+        invalid_param_issues: ["invalid_union", "invalid_value"],
+      },
+      expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
+      expect.any(Number)
+    );
+  });
+
+  it("records a parameter the call left out as missing", async () => {
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "required-thing",
+      zodSchema: z.object({ udid: z.string(), count: z.number() }),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app).post("/tools/required-thing").send({ count: "x" });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain("`udid` is required (string) and was not provided");
+    expect(recordFailure).toHaveBeenCalledWith(
+      "required-thing",
+      { invalid_params: ["udid", "count"], invalid_param_issues: ["invalid_type", "missing"] },
+      expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
+      expect.any(Number)
+    );
+  });
+
+  it("records the issue codes of every rejected parameter", async () => {
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "two-param-thing",
+      zodSchema: z.object({ timeoutMs: z.number().max(10), count: z.number() }),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app)
+      .post("/tools/two-param-thing")
+      .send({ timeoutMs: 99, count: "x" });
+    expect(res.status).toBe(400);
+    expect(recordFailure).toHaveBeenCalledWith(
+      "two-param-thing",
+      { invalid_params: ["timeoutMs", "count"], invalid_param_issues: ["invalid_type", "too_big"] },
+      expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
+      expect.any(Number)
+    );
   });
 
   it("invokes the tool normally when declared deps are present", async () => {

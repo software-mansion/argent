@@ -214,11 +214,31 @@ describe("a call that names its test by the former param name", () => {
     expect(JSON.parse(res.body.error)).toEqual([{ code: "custom", path: [], message }]);
     expect(recordFailure).toHaveBeenCalledWith(
       "e2e-execute",
-      expect.anything(),
+      expect.objectContaining({ invalid_param_issues: ["custom"] }),
       expect.objectContaining({
         error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
         failure_stage: "http_param_alias",
       }),
+      expect.any(Number)
+    );
+  });
+
+  it("records a bad value sent under the former name as its own code, not missing", async () => {
+    const recordFailure = vi.fn();
+    const { app } = createHttpApp(e2eRegistry(), { recordFailure });
+
+    const res = await request(app)
+      .post("/tools/e2e-execute")
+      .send({ flow_path: 123, project_root: root });
+
+    expect(res.status).toBe(400);
+    expect(recordFailure).toHaveBeenCalledWith(
+      "e2e-execute",
+      expect.objectContaining({
+        invalid_params: ["e2e_test_path"],
+        invalid_param_issues: ["invalid_type"],
+      }),
+      expect.objectContaining({ failure_stage: "http_zod_validation" }),
       expect.any(Number)
     );
   });
