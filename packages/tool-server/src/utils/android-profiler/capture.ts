@@ -96,7 +96,7 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
    * stdin and the PID comes back on stdout, so the argv substitution `runAdb`
    * would have applied has to be applied here.
    */
-  const child = spawn(adbPath, adbArgv(args), { stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(adbPath, adbArgv(args), { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
 
   let stdout = "";
   let stderr = "";

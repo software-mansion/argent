@@ -861,6 +861,7 @@ async function attemptBoot(params: {
   const child = spawn(params.emulatorBinary, params.emulatorArgs, {
     detached: true,
     stdio,
+    windowsHide: true,
   });
   child.unref();
   // The child holds its own handle for the log fd; close the parent's copy so a
@@ -1746,6 +1747,7 @@ async function startHarmonyEmulator(
   const child = spawn(bin, ["-start", instanceName], {
     detached: true,
     stdio: logFd === null ? "ignore" : ["ignore", logFd, logFd],
+    windowsHide: true,
   });
   child.unref();
   if (logFd !== null) {
