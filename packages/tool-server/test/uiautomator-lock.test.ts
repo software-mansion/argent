@@ -1,0 +1,109 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Both uiautomator dump sites shell out through adbExecOutBinary; record how
+// many run at once per serial.
+const inFlight = new Map<string, number>();
+const peak = new Map<string, number>();
+let totalInFlight = 0;
+let totalPeak = 0;
+let dumpOutput: string | undefined;
+vi.mock("../src/utils/adb", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/adb")>("../src/utils/adb");
+  return {
+    ...actual,
+    adbShell: vi.fn(async () => "Physical size: 1920x1080"),
+    getAndroidRuntimeKind: vi.fn(async () => "tv" as const),
+    adbExecOutBinary: vi.fn(async (serial: string) => {
+      const n = (inFlight.get(serial) ?? 0) + 1;
+      inFlight.set(serial, n);
+      peak.set(serial, Math.max(peak.get(serial) ?? 0, n));
+      totalPeak = Math.max(totalPeak, ++totalInFlight);
+      await new Promise((r) => setTimeout(r, 20));
+      totalInFlight -= 1;
+      inFlight.set(serial, (inFlight.get(serial) ?? 1) - 1);
+      if (dumpOutput !== undefined) return Buffer.from(dumpOutput);
+      return Buffer.from(
+        `<?xml version='1.0'?><hierarchy rotation="0"><node class="android.widget.Button" content-desc="Play" text="" bounds="[0,0][100,50]" focusable="true" focused="true" enabled="true" package="com.example.tv" /></hierarchy>`
+      );
+    }),
+  };
+});
+
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
+import { describeAndroid } from "../src/tools/describe/platforms/android";
+import { androidTvControlBlueprint } from "../src/blueprints/android-tv-control";
+
+async function tvApi(serial: string) {
+  const device = { id: serial, platform: "android" as const, kind: "emulator" as const };
+  return (await androidTvControlBlueprint.factory({}, device, { device })).api;
+}
+
+describe("uiautomator dumps on one device", () => {
+  beforeEach(() => {
+    inFlight.clear();
+    peak.clear();
+    totalInFlight = 0;
+    totalPeak = 0;
+    dumpOutput = undefined;
+  });
+
+  it("never overlap across the describe and Android TV dump sites", async () => {
+    const api = await tvApi("emulator-5554");
+
+    await Promise.all([
+      api.describe(),
+      describeAndroid(undefined, "emulator-5554", undefined, true),
+      api.describe(),
+      describeAndroid(undefined, "emulator-5554", undefined, true),
+    ]);
+
+    expect(peak.get("emulator-5554")).toBe(1);
+  });
+
+  it("still run in parallel on different devices", async () => {
+    const [a, b] = await Promise.all([tvApi("emulator-5554"), tvApi("emulator-5556")]);
+
+    await Promise.all([a.describe(), b.describe()]);
+
+    expect(totalPeak).toBe(2);
+  });
+});
+
+describe("a dump the system killed", () => {
+  beforeEach(() => {
+    dumpOutput = "Killed\n";
+  });
+  afterEach(() => {
+    dumpOutput = undefined;
+  });
+
+  const remedy =
+    /Killed\. Another UiAutomation client .*am force-stop com\.argent\.androiddevtools/;
+
+  it("names the UiAutomation holder on a phone describe", async () => {
+    const err = await describeAndroid(undefined, "emulator-5554", undefined, false).catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(FailureError);
+    expect((err as FailureError).message).toMatch(remedy);
+    expect((err as FailureError).message).not.toMatch(/locked|parse/i);
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.ANDROID_UIAUTOMATOR_CAPTURE_FAILED
+    );
+  });
+
+  it("reads a phone dump whose screen text says Killed as a tree", async () => {
+    dumpOutput = `<?xml version='1.0'?><hierarchy rotation="0"><node class="android.widget.TextView" text="Killed in action" bounds="[0,0][400,50]" package="com.example.news" /></hierarchy>`;
+
+    const res = await describeAndroid(undefined, "emulator-5554", undefined, false);
+
+    expect(res.tree.children.map((c) => c.label)).toEqual(["Killed in action"]);
+  });
+
+  it("names the UiAutomation holder on an Android TV describe", async () => {
+    const api = await tvApi("emulator-5554");
+
+    await expect(api.describe()).rejects.toThrow(remedy);
+  });
+});
