@@ -42,11 +42,16 @@ const emailXml = (focused: boolean) => `<?xml version='1.0' encoding='UTF-8' sta
   </node>
 </hierarchy>`;
 
-function mockRegistry(calls: Call[], getHierarchy: () => { xml: string }): Registry {
+function mockRegistry(
+  calls: Call[],
+  getHierarchy: () => { xml: string },
+  keyboardResult?: (args: Record<string, unknown>) => Record<string, unknown>
+): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       calls.push({ id, args, t: Date.now() });
       if (id === "list-devices") return { devices: [] };
+      if (id === "keyboard" && keyboardResult) return keyboardResult(args);
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -167,5 +172,97 @@ describe("type directive focus wait", () => {
     // skipping it alongside the poll leaves only the single tree read above, so
     // 10% of slack for the timer (see the case above) still pins the branch.
     expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(450);
+  });
+});
+
+describe("type directive — the keyboard tool's read-back verdict", () => {
+  const focusedEmail = () => ({ xml: emailXml(true) });
+
+  it("fails the step when the keyboard reports the text did not land", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, focusedEmail, (args) =>
+      args.text === undefined
+        ? { typed: "enter", keys: 1 }
+        : {
+            typed: String(args.text),
+            keys: 7,
+            verified: false,
+            note: "7 characters were typed and the field holds 3 in total.",
+          }
+    );
+
+    await writeFlow("bad-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "bad-type", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:fail"]);
+    expect(result.steps[0]!.reason).toBe(
+      "typed text did not land: 7 characters were typed and the field holds 3 in total."
+    );
+    // No Enter: it would submit the wrong value.
+    expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.key ?? c.args.text)).toEqual([
+      "a@b.com",
+    ]);
+  });
+
+  it("passes the step when `verified` is absent — not checked is not failed", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, focusedEmail, (args) => ({
+      typed: String(args.text ?? args.key),
+      keys: 7,
+      note: "The text was typed but not verified: no focused text field was found.",
+    }));
+
+    await writeFlow("unverified-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "unverified-type", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
+    expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.key ?? c.args.text)).toEqual([
+      "a@b.com",
+      "enter",
+    ]);
+  });
+
+  it("passes the step when the keyboard verifies the text", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, focusedEmail, (args) => ({
+      typed: String(args.text ?? args.key),
+      keys: 7,
+      verified: true,
+    }));
+
+    await writeFlow("good-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com", submit: false }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "good-type", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
   });
 });

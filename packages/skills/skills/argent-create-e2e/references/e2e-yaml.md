@@ -162,6 +162,8 @@ On Chromium a swipe is a mouse drag (`gesture-drag`), so a `from` on an `<img>`,
 
 `type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`; the runner resolves them from the same sources as the `keyboard` tool. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
 
+On an **Android phone or tablet** the runner reads the field back after it types. A read-back that shows the text is not there **fails the step**, and no Enter is pressed; the same holds for a raw `tool: keyboard` step and a `run-sequence` holding one. A read-back that cannot conclude passes.
+
 A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:`) resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition: after the first such gesture, later ones skip the settle window until a tree read succeeds again or the app relaunches.
 
 ## Verification conditions

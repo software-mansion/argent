@@ -1,8 +1,9 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { isAndroidTv } from "../../../utils/adb";
-import { injectAndroidNamedKey, injectAndroidText } from "../../../utils/android-input";
-import type { KeyboardParams, KeyboardResult } from "../types";
+import { assertTypeableAndroidText, injectAndroidNamedKey } from "../../../utils/android-input";
+import type { KeyboardParams, KeyboardResult, KeyboardVerification } from "../types";
+import { typeAndroidTextVerified } from "./android-verify";
 import { typeTv } from "./tv";
 
 // Phones / tablets inject over `adb shell input`, not the simulator-server's HID
@@ -10,15 +11,19 @@ import { typeTv } from "./tv";
 // (routine for CI / headless), so the tool reported success while typing nothing
 // (#449). `device.id` is the adb serial.
 async function typeAndroidPhone(
+  registry: Registry,
   device: DeviceInfo,
   params: KeyboardParams
 ): Promise<KeyboardResult> {
   let keysPressed = 0;
+  let verification: KeyboardVerification = {};
   // `text` and `key` are at-most-one (rejected in ../index.ts), so at most one
   // branch runs and there is no ordering to get right.
   if (params.text) {
-    await injectAndroidText(device.id, params.text);
-    // `injectAndroidText` rejects non-ASCII, so `.length` is the codepoint count
+    // Before the read-back, which may `adb install` its helper.
+    assertTypeableAndroidText(params.text);
+    verification = await typeAndroidTextVerified(registry, device, params.text);
+    // Non-ASCII is rejected above, so `.length` is the codepoint count
     // (matching the tv / simulator-server backends).
     keysPressed += params.text.length;
   }
@@ -26,7 +31,7 @@ async function typeAndroidPhone(
     await injectAndroidNamedKey(device.id, params.key);
     keysPressed++;
   }
-  return { typed: params.text ?? params.key ?? "", keys: keysPressed };
+  return { typed: params.text ?? params.key ?? "", keys: keysPressed, ...verification };
 }
 
 // An Android TV emulator classifies as platform "android" by serial shape, and TV
@@ -43,6 +48,6 @@ export function makeAndroidImpl(
     handler: async (_services, params, device) =>
       (await isAndroidTv(device.id))
         ? typeTv(registry, device, params)
-        : typeAndroidPhone(device, params),
+        : typeAndroidPhone(registry, device, params),
   };
 }

@@ -177,13 +177,9 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
       // Rejected before the dispatch, so the backend is never reached: no keys
       // injected on any of them.
       expect(injections()).toBe(0);
-      // Adds signal on ios and chromium only — those resolve a service (and
-      // would spawn one) on a call that gets through. Android injects through
-      // `adbShell` directly, and neither the vega nor the harmony branch
-      // references the registry, so a SUCCESSFUL call resolves nothing there
-      // either and this line cannot fail on those iterations. Kept because it
-      // holds for every backend and guards the two that can regress;
-      // `injections()` above is what carries the other rows.
+      // Adds signal on ios, chromium and android, which resolve a service on a
+      // call that gets through. Neither the vega nor the harmony branch
+      // references the registry, so `injections()` above carries those rows.
       expect(r.resolveService).not.toHaveBeenCalled();
     });
 
