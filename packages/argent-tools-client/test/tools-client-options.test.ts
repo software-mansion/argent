@@ -626,27 +626,30 @@ describe("refuseRelativeProjectPaths", () => {
     }
   );
 
-  it("refuses a Windows project_root on the current drive, which the tool-server's may not be", async () => {
-    vi.resetModules();
-    vi.doMock("node:path", () => ({ ...win32, default: win32 }));
-    vi.spyOn(process, "cwd").mockReturnValue("D:\\work");
-    try {
-      const { createToolsClient: createOnWindows } = await import("../src/tools-client.js");
-      const { callTool } = createOnWindows({
-        baseUrl: async () => ({ url, token: "t", remote: false }),
-        refuseRelativeProjectPaths: true,
-      });
-
-      await expect(callTool("record", { project_root: "\\team\\app" })).rejects.toThrow(
-        'project_root must be an absolute path (got "\\team\\app")'
-      );
-      expect(recordBodies()).toEqual([]);
-    } finally {
-      vi.doUnmock("node:path");
-      vi.restoreAllMocks();
+  it.each(["\\team\\app", "\\team\\$archive"])(
+    "refuses Windows project_root %s on the current drive",
+    async (root) => {
       vi.resetModules();
+      vi.doMock("node:path", () => ({ ...win32, default: win32 }));
+      vi.spyOn(process, "cwd").mockReturnValue("D:\\work");
+      try {
+        const { createToolsClient: createOnWindows } = await import("../src/tools-client.js");
+        const { callTool } = createOnWindows({
+          baseUrl: async () => ({ url, token: "t", remote: false }),
+          refuseRelativeProjectPaths: true,
+        });
+
+        await expect(callTool("record", { project_root: root })).rejects.toThrow(
+          `project_root must be an absolute path (got "${root}")`
+        );
+        expect(recordBodies()).toEqual([]);
+      } finally {
+        vi.doUnmock("node:path");
+        vi.restoreAllMocks();
+        vi.resetModules();
+      }
     }
-  });
+  );
 
   it("leaves project_root alone for a tool whose file inputs do not name it", async () => {
     const { callTool } = createToolsClient({

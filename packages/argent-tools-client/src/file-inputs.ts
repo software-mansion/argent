@@ -196,9 +196,10 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
  * ({@link isUnexpandedPath}), are left for the tool-server to refuse.
  */
 export function callerPath(p: string): string {
-  if (isUnexpandedPath(p)) return p;
   const onCurrentDrive = path.sep === "\\" && /^[\\/](?![\\/])/.test(p);
-  if (!onCurrentDrive && (path.isAbsolute(p) || path.win32.isAbsolute(p))) return p;
+  if (!onCurrentDrive && (path.isAbsolute(p) || path.win32.isAbsolute(p) || isUnexpandedPath(p))) {
+    return p;
+  }
   const { root } = path.parse(p);
   const rest = p.slice(root.length);
   if (!rest.split(/[\\/]/).includes("..")) {

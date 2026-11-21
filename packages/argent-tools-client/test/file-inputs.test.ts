@@ -745,6 +745,7 @@ describe("prepareFileInputs — relative paths", () => {
 
   it.each([
     ["\\team\\app", "D:\\team\\app"],
+    ["\\team\\$archive", "D:\\team\\$archive"],
     ["/team/app", "D:\\team\\app"],
     ["\\team\\..\\app", "D:\\team\\..\\app"],
     ["C:\\team\\app", "C:\\team\\app"],

@@ -849,6 +849,8 @@ In `ui-tree`, fields a platform cannot report yet are listed in `unsupportedFiel
 
 The client resolves a relative path in a file input of a tool against its working directory, for example `appPath` of `reinstall-app`. `GET /tools` lists the file inputs of a tool in `fileInputs`. The MCP server refuses such a path in `project_root` or `e2e_test_path`.
 
+On Windows, a path such as `\team\$archive` starts at the root of the client's current drive. For these MCP inputs, include the drive letter, for example `D:\team\$archive`.
+
 ## Footnotes
 
 Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
