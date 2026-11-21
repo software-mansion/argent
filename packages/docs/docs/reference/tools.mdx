@@ -186,6 +186,18 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
 
+Give `debugger-connect` the device ID from `list-devices`. When several devices share one Metro, Argent finds the device by its name:
+
+| Device         | Name that Argent compares with the name that Metro reports                         | Other devices that must not have the same name |
+| -------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------- |
+| iOS simulator  | The name of the simulator                                                          | The other booted simulators                    |
+| Android device | `<model> - <release> - API <level>`, from `ro.product.model` and the build version | The other devices that adb lists               |
+| Other devices  | No name. Use the `logicalDeviceId`.                                                | Not applicable                                 |
+
+When another device has the same name, `debugger-connect` fails. The error lists the `logicalDeviceId` of each device on the Metro. Give that `logicalDeviceId` to `debugger-connect`.
+
+After Argent finds a device by its name, the device ID stays bound to the app on that device. When that app exits, the `debugger-*` tools fail and do not use the other device. After the app starts again, the tools use it again.
+
 ## Native devtools
 
 On a Mac app, these tools read the app through the Argent library:

@@ -207,8 +207,8 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
  * Of `urns`, the port-keyed sessions no device-scoped teardown could ever name,
  * whatever ids it was given.
  *
- * On a Metro serving two or more devices, `selectTarget` refuses to guess which
- * target a udid or serial means and makes the caller re-target with the
+ * On a Metro serving two or more devices that their names cannot tell apart,
+ * `selectTarget` refuses to guess which target a udid or serial means and makes the caller re-target with the
  * `logicalDeviceId` Metro echoed — an opaque per-connection handle
  * `list-devices` never mints, which the debugger URN then embeds. A teardown
  * scoped to real device ids leaves that session holding its CDP socket, a bound
