@@ -11,7 +11,7 @@ import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/met
 import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
-import { selectTarget } from "../utils/debugger/target-selection";
+import { selectTarget, simulatorNameOnSharedMetro } from "../utils/debugger/target-selection";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
@@ -236,6 +236,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const selected = selectTarget(metro.targets, port, {
       ...options,
       deviceId,
+      simulatorName: await simulatorNameOnSharedMetro(deviceId, metro.targets),
     });
 
     /**
@@ -379,9 +380,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       // later tool that forwards the logicalDeviceId on this instance instead of
       // opening a second one. See utils/debugger/device-alias.ts.
       rememberDeviceAlias(api.logicalDeviceId, deviceId);
-      // Equal ids mean the caller connected with the logicalDeviceId itself, as
-      // `selectTarget` demands once a second device shares this Metro. Nothing
-      // then joins the session to a udid or serial, so a `list-devices`-scoped
+      // Equal ids mean the caller connected with the logicalDeviceId itself.
+      // Nothing then joins the session to a udid or serial, so a `list-devices`-scoped
       // `stop-all-simulator-servers` can only report it, never reach it.
       rememberLogicalKeyedDevice(api.logicalDeviceId, deviceId);
 
