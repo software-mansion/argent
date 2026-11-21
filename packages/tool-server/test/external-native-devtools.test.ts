@@ -5,7 +5,12 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
+import { FAILURE_CODES, getFailureSignal, Registry } from "@argent/registry";
+import {
+  NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS,
+  nativeDevtoolsBlueprint,
+  nativeDevtoolsRef,
+} from "../src/blueprints/native-devtools";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { resolveDevice } from "../src/utils/device-info";
 import {
@@ -39,18 +44,39 @@ let temporaryDirectory: string;
 type LentAgent = {
   close: () => Promise<void>;
   hangUp: () => void;
+  /** Calls back when the next socket closes, i.e. when we hang up. */
+  onPeerClosed: (callback: () => void) => void;
+  peerCount: () => number;
   received: Array<{ type: string; payload: Record<string, unknown> }>;
+  /** Sends the opening `Control` frame on every socket still waiting for it. */
+  sendHandshake: () => void;
   socketPath: string;
 };
 
-async function startLentAgent(): Promise<LentAgent> {
+/**
+ * `handshake` controls when the opening `Control` frame goes out: straight
+ * after accept (the default), after a delay or only when the test calls
+ * `sendHandshake`.
+ */
+async function startLentAgent(
+  options: { handshake?: "immediate" | "manual" | { delayMs: number } } = {}
+): Promise<LentAgent> {
+  const handshake = options.handshake ?? "immediate";
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
+  const awaitingHandshake: net.Socket[] = [];
+  const closeWaiters: Array<() => void> = [];
+
+  const sendControl = (socket: net.Socket) =>
+    socket.write(JSON.stringify({ payload: { bundleId: BUNDLE_ID }, type: "Control" }) + "\n");
 
   const server = net.createServer((socket) => {
     sockets.push(socket);
-    socket.write(JSON.stringify({ payload: { bundleId: BUNDLE_ID }, type: "Control" }) + "\n");
+    socket.on("close", () => closeWaiters.splice(0).forEach((callback) => callback()));
+    if (handshake === "immediate") sendControl(socket);
+    else if (handshake === "manual") awaitingHandshake.push(socket);
+    else setTimeout(() => sendControl(socket), handshake.delayMs);
 
     readline.createInterface({ input: socket }).on("line", (raw) => {
       const message = JSON.parse(raw);
@@ -76,7 +102,12 @@ async function startLentAgent(): Promise<LentAgent> {
     hangUp: () => {
       for (const socket of sockets.splice(0)) socket.destroy();
     },
+    onPeerClosed: (callback) => closeWaiters.push(callback),
+    peerCount: () => sockets.length,
     received,
+    sendHandshake: () => {
+      for (const socket of awaitingHandshake.splice(0)) sendControl(socket);
+    },
     socketPath,
   };
 }
@@ -107,12 +138,15 @@ function publishDescriptor(options: { socketPath?: string } = {}): void {
   process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
 }
 
-function instantiate(deviceId = DEVICE_ID) {
+function instantiate(deviceId = DEVICE_ID, signal?: AbortSignal) {
   const device = resolveDevice(deviceId);
-  return nativeDevtoolsBlueprint.factory({}, device, { device });
+  return nativeDevtoolsBlueprint.factory({}, device, { device }, signal);
 }
 
-/** The handshake lands a tick after connect. Wait for the app to show up. */
+/**
+ * Wait for a handshake that lands after `instantiate()` resolved. One that
+ * comes in time is already in `connections` when it resolves.
+ */
 async function waitForConnectedBundle(api: {
   listConnectedBundleIds: () => string[];
 }): Promise<void> {
@@ -122,8 +156,8 @@ async function waitForConnectedBundle(api: {
   }
 
   /**
-   * Without this the tests that assert an absence (no injection armed, no
-   * termination) would pass on an attach that never happened.
+   * Fail here rather than on the next RPC, which would only say "not
+   * connected".
    */
   throw new Error("the lent agent never reported a connected bundle");
 }
@@ -151,7 +185,6 @@ describe("a provider that lends its native-devtools agent", () => {
     publishDescriptor({ socketPath: agent.socketPath });
 
     const instance = await instantiate();
-    await waitForConnectedBundle(instance.api);
 
     expect(instance.api.listConnectedBundleIds()).toEqual([BUNDLE_ID]);
     expect(instance.api.isConnected(BUNDLE_ID)).toBe(true);
@@ -166,7 +199,7 @@ describe("a provider that lends its native-devtools agent", () => {
     publishDescriptor({ socketPath: agent.socketPath });
 
     const instance = await instantiate();
-    await waitForConnectedBundle(instance.api);
+    expect(instance.api.listConnectedBundleIds()).toEqual([BUNDLE_ID]);
 
     await expect(
       instance.api.queryViewHierarchy(BUNDLE_ID, "ViewHierarchy.describeScreen")
@@ -192,7 +225,7 @@ describe("a provider that lends its native-devtools agent", () => {
     publishDescriptor({ socketPath: agent.socketPath });
 
     const instance = await instantiate();
-    await waitForConnectedBundle(instance.api);
+    expect(instance.api.listConnectedBundleIds()).toEqual([BUNDLE_ID]);
 
     expect(instance.api.isEnvSetup()).toBe(true);
     expect(instance.api.getInitFailure()).toBeNull();
@@ -210,7 +243,7 @@ describe("a provider that lends its native-devtools agent", () => {
     publishDescriptor({ socketPath: agent.socketPath });
 
     const instance = await instantiate();
-    await waitForConnectedBundle(instance.api);
+    expect(instance.api.listConnectedBundleIds()).toEqual([BUNDLE_ID]);
     await instance.dispose();
 
     expect(fs.existsSync(agent.socketPath)).toBe(true);
@@ -227,11 +260,11 @@ describe("a provider that lends its native-devtools agent", () => {
     publishDescriptor({ socketPath: agent.socketPath });
 
     const instance = await instantiate();
-    await waitForConnectedBundle(instance.api);
+    expect(instance.api.listConnectedBundleIds()).toEqual([BUNDLE_ID]);
 
     const { createNativeNetworkLogsTool } =
       await import("../src/tools/native-devtools/native-network-logs");
-    const { Registry } = await import("@argent/registry");
+
     const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 
     await expect(
@@ -256,7 +289,7 @@ describe("a provider that lends its native-devtools agent", () => {
     publishDescriptor({ socketPath: agent.socketPath });
 
     const instance = await instantiate();
-    await waitForConnectedBundle(instance.api);
+    expect(instance.api.listConnectedBundleIds()).toEqual([BUNDLE_ID]);
 
     const terminated = new Promise<void>((resolve) =>
       instance.events.on("terminated", () => resolve())
@@ -267,7 +300,6 @@ describe("a provider that lends its native-devtools agent", () => {
 
     /** A fresh resolve attaches again and re-adopts the app on offer. */
     const reattached = await instantiate();
-    await waitForConnectedBundle(reattached.api);
     expect(reattached.api.listConnectedBundleIds()).toEqual([BUNDLE_ID]);
 
     await reattached.dispose();
@@ -281,7 +313,7 @@ describe("a provider that lends its native-devtools agent", () => {
     publishDescriptor({ socketPath: agent.socketPath });
 
     const instance = await instantiate();
-    await waitForConnectedBundle(instance.api);
+    expect(instance.api.listConnectedBundleIds()).toEqual([BUNDLE_ID]);
 
     let terminated = false;
     instance.events.on("terminated", () => {
@@ -294,6 +326,153 @@ describe("a provider that lends its native-devtools agent", () => {
     expect(terminated).toBe(false);
 
     await agent.close();
+  });
+
+  /**
+   * Accept proves only that the provider is listening; the app is not in the
+   * connection map until its `Control` frame lands. The readiness gate lets
+   * attach mode straight through, so the factory waits for that frame and the
+   * first call of a session finds the app.
+   */
+  describe("before the provider has named its app", () => {
+    it("serves the very first RPC once a prompt handshake lands", async () => {
+      const agent = await startLentAgent({ handshake: { delayMs: 100 } });
+      publishDescriptor({ socketPath: agent.socketPath });
+
+      const startedAt = Date.now();
+      const instance = await instantiate();
+
+      /** The frame ends the wait; the attach does not sit out the timeout. */
+      expect(Date.now() - startedAt).toBeLessThan(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS / 2);
+
+      /** No `waitForConnectedBundle`: the very first call must find the app. */
+      expect(instance.api.isConnected(BUNDLE_ID)).toBe(true);
+      await expect(
+        instance.api.queryViewHierarchy(BUNDLE_ID, "ViewHierarchy.describeScreen")
+      ).resolves.toEqual({ role: "AXWindow" });
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    /**
+     * A provider with no app on offer yet must still attach and adopt the app
+     * once it names one.
+     */
+    it(
+      "attaches anyway when no handshake arrives in time, and adopts a late one",
+      async () => {
+        const agent = await startLentAgent({ handshake: "manual" });
+        publishDescriptor({ socketPath: agent.socketPath });
+
+        const startedAt = Date.now();
+        const instance = await instantiate();
+        const elapsed = Date.now() - startedAt;
+
+        /**
+         * The docs, `contract.ts` and the schema promise providers 2 seconds.
+         */
+        expect(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS).toBe(2_000);
+        expect(elapsed).toBeGreaterThanOrEqual(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS - 50);
+        expect(elapsed).toBeLessThan(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS + 1_000);
+        expect(instance.api.listConnectedBundleIds()).toEqual([]);
+        await expect(
+          instance.api.queryViewHierarchy(BUNDLE_ID, "ViewHierarchy.describeScreen")
+        ).rejects.toThrow(/not connected/);
+
+        agent.sendHandshake();
+        await waitForConnectedBundle(instance.api);
+        await expect(
+          instance.api.queryViewHierarchy(BUNDLE_ID, "ViewHierarchy.describeScreen")
+        ).resolves.toEqual({ role: "AXWindow" });
+
+        await instance.dispose();
+        await agent.close();
+      },
+      NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS + 3_000
+    );
+
+    /** A service with a dead socket and no app would only fail every call. */
+    it("fails the attach when the provider hangs up before naming an app", async () => {
+      const agent = await startLentAgent({ handshake: "manual" });
+      publishDescriptor({ socketPath: agent.socketPath });
+
+      const attaching = instantiate();
+
+      /** Let the dial land before hanging up on it. */
+      while (agent.peerCount() === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      agent.hangUp();
+
+      const error = await attaching.then(
+        () => undefined,
+        (reason: unknown) => reason
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/before the provider named the app/);
+      expect(getFailureSignal(error)).toEqual({
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_ATTACH_LOST,
+        error_kind: "network",
+        failure_area: "tool_server",
+        failure_stage: "native_devtools_attach",
+      });
+
+      await agent.close();
+    });
+
+    /**
+     * Shutdown tears the service down while the factory waits and the registry
+     * has no instance to dispose yet. Its abort is the only thing that reaches
+     * the wait.
+     */
+    it("stops waiting and hangs up when the service is torn down", async () => {
+      const agent = await startLentAgent({ handshake: "manual" });
+      publishDescriptor({ socketPath: agent.socketPath });
+
+      const teardown = new AbortController();
+      const startedAt = Date.now();
+      const attaching = instantiate(DEVICE_ID, teardown.signal);
+
+      while (agent.peerCount() === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      const hungUp = new Promise<void>((resolve) => agent.onPeerClosed(resolve));
+      teardown.abort();
+
+      await expect(attaching).rejects.toThrow();
+      expect(Date.now() - startedAt).toBeLessThan(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS / 2);
+      await hungUp;
+
+      await agent.close();
+    });
+
+    /**
+     * The registry calls the factory with a live signal, but the factory awaits
+     * the capability check before it subscribes. A teardown that lands during
+     * that await must still end the attach.
+     */
+    it("gives up at once when the service is torn down before the factory subscribes", async () => {
+      const agent = await startLentAgent({ handshake: "manual" });
+      publishDescriptor({ socketPath: agent.socketPath });
+
+      const registry = new Registry();
+      registry.registerBlueprint(nativeDevtoolsBlueprint);
+      const ref = nativeDevtoolsRef(resolveDevice(DEVICE_ID));
+
+      const startedAt = Date.now();
+      const attaching = registry.resolveService(ref.urn, ref.options);
+      const disposing = registry.disposeService(ref.urn);
+
+      await expect(attaching).rejects.toThrow();
+      expect(Date.now() - startedAt).toBeLessThan(NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS / 2);
+
+      await disposing;
+      await agent.close();
+    });
   });
 
   it("refuses to inject when the provider granted the mechanism but lent no socket", async () => {
@@ -322,7 +501,6 @@ describe("a provider that lends its native-devtools agent", () => {
       publishDescriptor({ socketPath: agent.socketPath });
 
       const instance = await instantiate(IOS_UDID);
-      await waitForConnectedBundle(instance.api);
 
       expect(instance.api.socketPath).toBe(agent.socketPath);
       expect(instance.api.isEnvSetup()).toBe(true);

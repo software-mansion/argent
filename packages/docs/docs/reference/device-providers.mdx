@@ -85,6 +85,16 @@ Argent uses `native-devtools` on iOS only. `argent providers check` reports an e
 
 On Android, native network capture needs only the `adb` token. With `adb`, `native-network-logs` attaches an in-app agent to a debuggable app on the device. It also adds an `adb reverse` port forward to the device for the in-app agent. Argent removes the port forward when the capture stops. A provider that withholds `adb` also withholds native network capture.
 
+### Lend the native agent of the provider
+
+A provider that already injects its own native agent can lend that agent to Argent. The provider grants `native-devtools` and sets `nativeDevtools.socketPath` on the device. Argent then connects to that socket. Argent does not inject its own agent.
+
+The socket uses the same newline-delimited JSON messages as the agent of Argent. Send a `Control` message that names the `bundleId` of the app immediately after you accept the connection. Argent waits a maximum of 2 seconds for this message before it sends a call. If the message does not arrive in this time, calls fail as "not connected" until the message arrives.
+
+Argent can open more than one connection to the socket for the same device, one for each name of the device. Treat each connection as a separate client. Send `Control` on each connection and send each response on the connection that sent the request. Request ids are unique only within one connection.
+
+If the provider closes the connection, the next call connects again.
+
 ### One grant, both names of the device
 
 A device has two names. The first name is the `ext:` id. The second name is the real udid or serial. The agent sees both names, because the `ext:` id contains the real name.
