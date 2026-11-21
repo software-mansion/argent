@@ -346,16 +346,15 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
   const startFakeUsbmuxd = async (
     socketPath: string,
     devices: Array<{ id: number; serial: string }>,
-    connectResult: number,
+    connectResult: number | ((request: string) => number),
     options: { listDevicesDelayMs?: number } = {}
-  ): Promise<{ connectRequests: string[] }> => {
+  ): Promise<{ connectRequests: string[]; listDevicesCount: () => number }> => {
     const connectRequests: string[] = [];
-    let connectionIndex = 0;
+    let listDevicesCount = 0;
     const server = net.createServer((socket) => {
-      const index = connectionIndex;
-      connectionIndex += 1;
       void readPacket(socket).then((request) => {
-        if (index === 0) {
+        if (request.includes("<string>ListDevices</string>")) {
+          listDevicesCount += 1;
           const entries = devices
             .map(
               (device) =>
@@ -375,10 +374,11 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
           return;
         }
         connectRequests.push(request);
+        const result = typeof connectResult === "function" ? connectResult(request) : connectResult;
         socket.write(
           encodeUsbmuxPacket(
             2,
-            `<plist><dict><key>MessageType</key><string>Result</string><key>Number</key><integer>${connectResult}</integer></dict></plist>`
+            `<plist><dict><key>MessageType</key><string>Result</string><key>Number</key><integer>${result}</integer></dict></plist>`
           )
         );
       });
@@ -388,8 +388,73 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
       server.listen(socketPath, resolve);
     });
     openServers.push(server);
-    return { connectRequests };
+    return { connectRequests, listDevicesCount: () => listDevicesCount };
   };
+
+  const open = (socketPath: string) =>
+    openUsbmuxRunnerSocket({ udid: DEVICE_UDID, port: RUNNER_PORT, timeoutMs: 2_000, socketPath });
+
+  it("looks the mux DeviceID up once and reuses it for later connections", async () => {
+    const socketPath = await createSocketPath();
+    const fake = await startFakeUsbmuxd(socketPath, [{ id: 42, serial: DEVICE_UDID }], 0);
+
+    (await open(socketPath)).destroy();
+    (await open(socketPath)).destroy();
+    (await open(socketPath)).destroy();
+
+    expect(fake.listDevicesCount()).toBe(1);
+    expect(fake.connectRequests).toHaveLength(3);
+    for (const request of fake.connectRequests) {
+      expect(request).toContain("<key>DeviceID</key><integer>42</integer>");
+    }
+  });
+
+  it("looks the DeviceID up again when usbmuxd rejects the cached one", async () => {
+    const socketPath = await createSocketPath();
+    const devices = [{ id: 42, serial: DEVICE_UDID }];
+    // A re-attached device gets a new DeviceID; the old one is answered with BadDevice (2).
+    const fake = await startFakeUsbmuxd(socketPath, devices, (request) =>
+      request.includes(`<integer>${devices[0]!.id}</integer>`) ? 0 : 2
+    );
+
+    (await open(socketPath)).destroy();
+    devices[0] = { id: 43, serial: DEVICE_UDID };
+    (await open(socketPath)).destroy();
+
+    expect(fake.listDevicesCount()).toBe(2);
+    expect(
+      fake.connectRequests.map((r) => /<key>DeviceID<\/key><integer>(\d+)/.exec(r)?.[1])
+    ).toEqual(["42", "42", "43"]);
+  });
+
+  it("keeps a runner-not-listening verdict for a cached DeviceID without a new lookup", async () => {
+    const socketPath = await createSocketPath();
+    let result = 0;
+    const fake = await startFakeUsbmuxd(
+      socketPath,
+      [{ id: 42, serial: DEVICE_UDID }],
+      () => result
+    );
+
+    (await open(socketPath)).destroy();
+    result = 3;
+    const error = await open(socketPath).catch((caught: unknown) => caught);
+
+    expect((error as IosDeviceTransportError).kind).toBe("runner-not-listening");
+    expect(fake.listDevicesCount()).toBe(1);
+  });
+
+  it("reports a device that left usbmuxd as unattached even after a cached lookup", async () => {
+    const socketPath = await createSocketPath();
+    const devices = [{ id: 42, serial: DEVICE_UDID }];
+    await startFakeUsbmuxd(socketPath, devices, () => (devices.length ? 0 : 2));
+
+    (await open(socketPath)).destroy();
+    devices.length = 0;
+    const error = await open(socketPath).catch((caught: unknown) => caught);
+
+    expect((error as IosDeviceTransportError).kind).toBe("device-unattached");
+  });
 
   it("resolves the mux DeviceID and connects with the port in network byte order", async () => {
     const socketPath = await createSocketPath();
