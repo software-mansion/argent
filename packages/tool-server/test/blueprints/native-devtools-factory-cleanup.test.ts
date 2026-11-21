@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 
 const execFileMock = vi.fn();
@@ -57,9 +57,12 @@ import {
   MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
   nativeDevtoolsBlueprint,
 } from "../../src/blueprints/native-devtools";
+import { audioDir } from "../../src/utils/ios-host";
 import { processScopedUdid } from "../helpers/process-scoped-udid";
 
 const UDID = processScopedUdid("-1111-1111-1111-111111111111");
+// Arming creates the simulator's audio control directory in /tmp: remove what this file's fake simulator left.
+afterAll(() => fs.rmSync(audioDir(UDID), { recursive: true, force: true }));
 const device: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 const SOCKET_PATH = `/tmp/argent-nd-${UDID.slice(0, 8)}.sock`;
 

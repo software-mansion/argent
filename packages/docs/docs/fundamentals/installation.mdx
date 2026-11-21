@@ -9,13 +9,14 @@ sidebar_custom_props:
 
 ## Prerequisites
 
-- **Node.js 20.12** or later
+- **Node.js 22.18** or later, but not 23.0 to 23.7
 - **iOS / tvOS**: macOS with **Xcode** installed. Apple TV uses tvOS simulators, and Xcode downloads the tvOS runtime on demand.
 - **Android / Android TV**: **Android SDK Platform Tools** (`adb`), plus the **Android Emulator** package to boot AVDs from Argent. Argent finds the SDK on `PATH`, in `$ANDROID_HOME`, or in the default SDK folder. The `android.sdkRoot` config key sets another location. Create AVDs via Android Studio or `avdmanager`.
 - **Fire TV (Vega)**: the **Vega SDK** (`vega` CLI) on `PATH`, plus **Android SDK Platform Tools** (`adb`) on `PATH`. Most Vega tools, including UI inspection and screenshots, run over `adb`.
 - **HarmonyOS**: **DevEco Studio**, which ships `hdc` (the device connector) and the `Emulator` manager. Argent looks for both in `$DEVECO_STUDIO_HOME` first, then in `/Applications/DevEco-Studio.app` on macOS. Argent also finds `hdc` on `PATH`, for hosts that installed the OpenHarmony command-line tools without the IDE. A phone needs only `hdc`. Run `argent enable harmonyos` to turn on HarmonyOS support.
 - **Electron / Chromium**: nothing extra to control an already running app. Launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you.
 - **Mac apps**: macOS 14.4 or later and a build of your app. See [Mac apps](/docs/features/mac-apps).
+- **TypeScript scripts in e2e tests**: a Node.js build that includes TypeScript support. The `nodejs` package of Debian and of Ubuntu does not include it. See [TypeScript scripts](/docs/reference/e2e-yaml#typescript-scripts).
 
 ## Run `init` in your project
 
@@ -41,7 +42,9 @@ The installation wizard:
 
 - installs `@swmansion/argent` globally,
 - detects your editor and registers the MCP server,
-- copies skills and rules into your workspace.
+- copies skills into your workspace.
+
+The MCP server gives the agent its usage guidance in the server instructions. When the wizard configures the MCP server globally, it writes no rule file. When the wizard configures the MCP server for one project, it also writes a short rule into that project. This rule tells the agent what to do when the project uses Argent but Argent is not installed.
 
 <Video
   src="/video/installation-wizard.mp4"
@@ -59,10 +62,10 @@ argent init
 
 ## Install from a GitHub release
 
-Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.33.0.tgz`. It is the same file npm serves. Download it and install it globally:
+Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.34.0.tgz`. It is the same file npm serves. Download it and install it globally:
 
 ```bash
-npm install -g ./swmansion-argent-0.33.0.tgz
+npm install -g ./swmansion-argent-0.34.0.tgz
 argent init
 ```
 

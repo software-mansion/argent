@@ -37,6 +37,7 @@ export {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_EXTENSIONS,
   SCRIPT_FILE_NAME_PATTERN,
   TOOL_FILE_EXTENSIONS,
   isFileInputWire,
@@ -44,8 +45,11 @@ export {
   interpolateFileInputPath,
   hasToolFileExtension,
   isClientFileArgument,
+  isUnexpandedPath,
   toolStepFiles,
 } from "./file-inputs";
+export { LAUNCH_PLATFORMS, SELECTABLE_PLATFORMS } from "./flow-platforms";
+export type { SelectablePlatform } from "./flow-platforms";
 export type {
   FileInputWire,
   FileInputKind,
@@ -63,6 +67,7 @@ export {
   collectFlowRequests,
   completeRunExtension,
   flowMemberKey,
+  flowYamlSource,
   MAX_RUN_DEPTH,
   nestedFlowTarget,
   resolveFlowRelativeFile,

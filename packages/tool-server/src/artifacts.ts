@@ -1,6 +1,6 @@
 /**
  * Artifact HTTP transport: streams a registered file — or, for a directory
- * bundle, a gzipped tar on demand — to a remote client over `GET /artifacts/:id`.
+ * bundle, a compressed tar on demand — to a remote client over `GET /artifacts/:id`.
  * A co-located client never hits this route; it reads the file in place via the
  * handle's `hostPath`.
  *
@@ -12,7 +12,13 @@
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { createTarGzArgs } from "@argent/archive";
+import {
+  ARCHIVE_CONTENT_TYPES,
+  archiveFormatsFromAccept,
+  createCompressor,
+  createTarArgs,
+  pickArchiveFormat,
+} from "@argent/archive";
 import type { Request, Response } from "express";
 import type {
   Registry,
@@ -64,7 +70,7 @@ export function makeArtifactRoute(registry: Registry) {
     // download pays for zipping, since local clients use the directory in place
     // via the gate.
     if (entry.isDirectory) {
-      streamDirectoryAsTarGz(id, entry, res);
+      streamDirectoryAsArchive(id, entry, req, res);
       return;
     }
 
@@ -90,34 +96,60 @@ export function makeArtifactListRoute(registry: Registry) {
 }
 
 /**
- * Stream a directory as a gzipped tar via the system `tar`. `-C <parent> <base>`
- * keeps the bundle's own directory as the single top-level entry, so the client
- * unpacks it back to `<dir>/<base>`.
+ * Stream a directory as a compressed tar: zstd when the request's `Accept` lists
+ * `application/zstd`, else gzip. `-C <parent> <base>` keeps the bundle's own
+ * directory as the single top-level entry, so the client unpacks it back to
+ * `<dir>/<base>`.
  */
-function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response): void {
-  res.setHeader("Content-Type", "application/gzip");
-  res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.tar.gz"`);
+function streamDirectoryAsArchive(
+  id: string,
+  entry: ArtifactEntry,
+  req: Request,
+  res: Response
+): void {
+  const format = pickArchiveFormat(archiveFormatsFromAccept(req.headers.accept));
+  const ext = format === "zstd" ? "tar.zst" : "tar.gz";
+  res.setHeader("Content-Type", ARCHIVE_CONTENT_TYPES[format]);
+  res.setHeader("Vary", "Accept");
+  res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.${ext}"`);
 
   // stderr is ignored, not piped: an unread pipe can fill its buffer (e.g.
   // tar's "file changed as we read it" on a live trace) and deadlock the child.
-  // A truncated archive from a non-zero exit is caught client-side, where
-  // extraction fails and the artifact resolves to null.
-  const child = spawn("tar", createTarGzArgs(entry.path, "-"), {
+  const child = spawn("tar", createTarArgs(entry.path), {
     stdio: ["ignore", "pipe", "ignore"],
   });
   child.on("error", (err) => {
     if (!res.headersSent) {
+      // The answer is an error now, not the archive the headers above name.
+      res.removeHeader("Content-Disposition");
+      res.type("json");
       res.status(500).json({ error: `Failed to archive artifact "${id}": ${err.message}` });
     } else {
       res.destroy();
     }
   });
-  // Don't leave tar running if the client aborts mid-stream; `writableFinished`
-  // tells an abort apart from a clean end.
+  // EMFILE leaves no pipe. The spawn error handler above answers the request.
+  if (!child.stdout) return;
+  const compressor = createCompressor(format);
+  // On a client abort, stop tar and the compressor, which would otherwise stay
+  // alive undrained with its buffers; `writableFinished` tells an abort apart
+  // from a clean end.
   res.on("close", () => {
-    if (!res.writableFinished && child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-    }
+    if (res.writableFinished) return;
+    compressor.destroy();
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   });
-  child.stdout.pipe(res);
+  // tar still writes the end-of-archive marker after skipping a member it
+  // couldn't read, or (GNU tar) saw change. So the frame ends only on exit 0;
+  // otherwise the client gets a cut stream, even through a proxy that turns the
+  // destroy into a clean end.
+  compressor.on("error", () => res.destroy());
+  child.on("close", (code) => {
+    if (code === 0) return void compressor.end();
+    compressor.destroy();
+    // A tar that never started also closes, after the `error` handler above
+    // answered: leave that answer whole.
+    if (!res.writableEnded) res.destroy();
+  });
+  child.stdout.pipe(compressor, { end: false }).pipe(res);
 }

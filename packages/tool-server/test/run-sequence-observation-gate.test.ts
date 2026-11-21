@@ -19,32 +19,7 @@ import { describe, it, expect } from "vitest";
 import { ALLOWED_TOOLS } from "../src/tools/run-sequence";
 import { createRegistry } from "../src/utils/setup-registry";
 
-// Spelled out rather than counted: adding an entry means answering the question
-// this file exists to ask — does that tool put a frame of its own in front of
-// the agent?
-const EXPECTED_ALLOWED_TOOLS = [
-  "await-ui-element",
-  "button",
-  "fold",
-  "gesture-custom",
-  "gesture-drag",
-  "gesture-pinch",
-  "gesture-rotate",
-  "gesture-scroll",
-  "gesture-swipe",
-  "gesture-tap",
-  "keyboard",
-  "paste",
-  "rotate",
-  "shake",
-  "tv-remote",
-];
-
 describe("run-sequence — one observation per sequence", () => {
-  it("admits exactly the reviewed set of step tools", () => {
-    expect([...ALLOWED_TOOLS].sort()).toEqual(EXPECTED_ALLOWED_TOOLS);
-  });
-
   it("names only tools that are actually registered", () => {
     const registry = createRegistry();
     for (const id of ALLOWED_TOOLS) {

@@ -25,7 +25,7 @@ vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
 }));
 
 const isAndroidTvMock = vi.fn<(serial: string) => Promise<boolean>>();
-const runAdbMock = vi.fn<(argv: string[]) => Promise<string>>();
+const runAdbMock = vi.fn<(argv: string[]) => Promise<{ stdout: string; stderr: string }>>();
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   isAndroidTv: (serial: string) => isAndroidTvMock(serial),
@@ -308,7 +308,7 @@ describe("screenshot tool on Vega", () => {
     runAdbMock.mockReset().mockImplementation(async (argv) => {
       const png = new PNG({ width: dims.width, height: dims.height });
       await writeFile(join(argv[argv.length - 1]!, "shot.png"), PNG.sync.write(png));
-      return "";
+      return { stdout: "OK\r\n", stderr: "" };
     });
     const tool = createScreenshotTool({ resolveService: vi.fn() } as unknown as Registry);
     const parsed = tool.zodSchema!.parse({

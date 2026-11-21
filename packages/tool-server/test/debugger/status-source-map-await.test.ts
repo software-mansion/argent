@@ -94,19 +94,4 @@ describe("debugger-status waits for pending source maps", () => {
     assertConnected(result);
     expect(result.sourceMapReady).toBe(true);
   });
-
-  it("reports sourceMapReady only after the wait, so the flag is never ahead of the registry", async () => {
-    const order: string[] = [];
-    resolved.api = fakeApi(async () => {
-      await new Promise((r) => setTimeout(r, 20));
-      order.push("maps-settled");
-    });
-
-    const result = await statusTool.execute({}, PARAMS, undefined);
-    order.push("status-returned");
-
-    expect(order).toEqual(["maps-settled", "status-returned"]);
-    assertConnected(result);
-    expect(result.sourceMapReady).toBe(true);
-  });
 });

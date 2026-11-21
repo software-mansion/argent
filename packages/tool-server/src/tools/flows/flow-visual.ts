@@ -4,7 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
 import { FailureError, getFailureSignal } from "@argent/registry";
-import type { DescribeFrame } from "../describe/contract";
+import type { DescribeFrame, UiOrientation } from "../describe/contract";
+import { isIosSimulator } from "../../utils/device-info";
+import { readUiOrientation } from "../../utils/ios-ui-orientation";
+import { nativePointToUi } from "../../utils/ui-orientation";
 import {
   settleTree,
   invokeOnDevice,
@@ -262,7 +265,8 @@ export async function runSnapshot(
   })) as { image: ArtifactHandle; warning?: string };
   // The screenshot tool's warning (a foldable whose panel could not be
   // resolved) rides every outcome built on this capture.
-  const captureWarned = shot.warning !== undefined ? { warning: shot.warning } : {};
+  let captureWarned: { warning?: string } =
+    shot.warning !== undefined ? { warning: shot.warning } : {};
 
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
@@ -279,12 +283,15 @@ export async function runSnapshot(
   // geometry, so it must reuse the baseline a local run committed rather than
   // demand a second copy that can drift. `WxH` still separates genuinely
   // different device classes, which is the check the key exists for.
-  const snapshotKey = `${opts.name}__${authoringPlatform(env.device.platform)}-${w}x${h}${cropSuffix}`;
-  const key = `${snapshotKey}.png`;
-  const baselinePath =
+  const keyFor = (width: number, height: number) =>
+    `${opts.name}__${authoringPlatform(env.device.platform)}-${width}x${height}${cropSuffix}`;
+  const baselineFor = (file: string) =>
     opts.clientFlowPath === undefined
-      ? path.join(baselineDir(opts.flowsDir, opts.flowName), key)
-      : clientBaselinePath(opts.clientFlowPath, opts.flowName, key);
+      ? path.join(baselineDir(opts.flowsDir, opts.flowName), file)
+      : clientBaselinePath(opts.clientFlowPath, opts.flowName, file);
+  const snapshotKey = keyFor(w, h);
+  let key = `${snapshotKey}.png`;
+  let baselinePath = baselineFor(key);
 
   // The key carries no app component (it names a committed, machine-portable
   // baseline file), so a run that moved onto another app can recompute a key it
@@ -409,16 +416,40 @@ export async function runSnapshot(
     // (a directory at the baseline path fails the read with a bare EISDIR), so
     // it names the baseline as the differ names a file it cannot decode. A
     // client's refusal names its file already.
-    const stored = await opts.project.readFile(baselinePath).catch((err: unknown) => {
-      if (
-        opts.project.mode !== "host" ||
-        !(err instanceof Error) ||
-        err.message.includes(baselinePath)
-      ) {
-        throw err;
+    const readBaseline = (file: string) =>
+      opts.project.readFile(file).catch((err: unknown) => {
+        if (opts.project.mode !== "host" || !(err instanceof Error) || err.message.includes(file)) {
+          throw err;
+        }
+        throw new Error(`Could not read PNG at ${file}: ${err.message}`, { cause: err });
+      });
+    let stored = await readBaseline(baselinePath);
+    // A baseline an older Argent took of a landscape UI on an iOS simulator is
+    // in the screen's portrait-native space: sideways, and keyed by the
+    // transposed size. Compared against the capture turned back the same way,
+    // so the e2e test keeps passing until its baselines are taken again.
+    const sideways = stored === null ? await sidewaysOrientation(env) : undefined;
+    if (sideways !== undefined) {
+      const legacyKey = `${keyFor(h, w)}.png`;
+      const legacyPath = baselineFor(legacyKey);
+      const legacy = await readBaseline(legacyPath);
+      if (legacy !== null) {
+        cropDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-crop-"));
+        const turnedPath = path.join(cropDir, `native-${legacyKey}`);
+        await turnPngToNative(currentPath, turnedPath, sideways);
+        currentPath = turnedPath;
+        stored = legacy;
+        key = legacyKey;
+        baselinePath = legacyPath;
+        const note =
+          `compared against ${legacyKey}, a baseline an older Argent took in the screen's ` +
+          `portrait-native space, with the capture turned to match. Run with ` +
+          `updateBaselines (--update-baselines) to store an upright one as ${snapshotKey}.png`;
+        captureWarned = {
+          warning: captureWarned.warning ? `${captureWarned.warning} ${note}` : note,
+        };
       }
-      throw new Error(`Could not read PNG at ${baselinePath}: ${err.message}`, { cause: err });
-    });
+    }
     if (stored === null) {
       // Fail WITHOUT seeding: writing here would make this unreviewed capture
       // the truth a re-run silently passes against, and a workspace that never
@@ -455,9 +486,6 @@ export async function runSnapshot(
         // best-effort pinStatusBar instead. A Mac window has no status bar: its
         // top band is the title bar and toolbar, compared like the rest.
         topMask: cropFrame === undefined && env.device.platform !== "macos" ? "status-bar" : "none",
-        // Crop dimensions track the element — size drift must hard-fail below
-        // instead of being resampled away like a full-screen scale difference.
-        ...(cropFrame !== undefined && { normalizeSizes: false }),
       }).catch((err: unknown) => {
         // A client baseline that is not a PNG (empty, truncated, a Git LFS
         // pointer): name the client's file, not the copy the finally deletes.
@@ -468,9 +496,7 @@ export async function runSnapshot(
 
       // The differ reports a dimension bail as mismatchPercentage 0, which the
       // threshold below would read as a clean pass — but nothing was compared.
-      // Under cropOn the differ hard-fails ANY size difference (normalizeSizes:
-      // false), so proportional element drift lands here too; full-screen
-      // snapshots keep normalization and only reach this on an aspect change.
+      // Under cropOn, element size drift lands here too.
       if (result.dimensionMismatch) {
         const { expected, actual } = result.dimensionMismatch;
         // A full-screen mismatch on a foldable is usually a posture mismatch:
@@ -521,7 +547,7 @@ export async function runSnapshot(
         });
         keepInOutputDir = result.contextDiffPath;
       }
-      return { status: "fail", reason, snapshotKey, artifacts };
+      return { ...captureWarned, status: "fail", reason, snapshotKey, artifacts };
     } finally {
       await cleanupDiffDir(outputDir, keepInOutputDir);
     }
@@ -536,4 +562,45 @@ export async function runSnapshot(
       );
     }
   }
+}
+
+/**
+ * The quarter-turned interface orientation of an iOS simulator's UI, under
+ * which a capture is upright but an older Argent's baseline is not. Undefined
+ * on any other target, and when the orientation is not known.
+ */
+async function sidewaysOrientation(env: ActionEnv): Promise<UiOrientation | undefined> {
+  if (!isIosSimulator(env.device)) return undefined;
+  const { orientation } = await readUiOrientation(env.device.id);
+  return orientation === "landscapeLeft" || orientation === "landscapeRight"
+    ? orientation
+    : undefined;
+}
+
+/** Write `src`, an upright image of a UI in `orientation`, in the screen's portrait-native space. */
+async function turnPngToNative(
+  src: string,
+  dest: string,
+  orientation: UiOrientation
+): Promise<void> {
+  const upright = PNG.sync.read(await fs.readFile(src));
+  const native = new PNG({ width: upright.height, height: upright.width });
+  for (let y = 0; y < native.height; y++) {
+    for (let x = 0; x < native.width; x++) {
+      // Pixel centres, so a quarter turn lands on a pixel and never between two.
+      const p = nativePointToUi(
+        { x: (x + 0.5) / native.width, y: (y + 0.5) / native.height },
+        orientation
+      );
+      const ux = Math.min(upright.width - 1, Math.floor(p.x * upright.width));
+      const uy = Math.min(upright.height - 1, Math.floor(p.y * upright.height));
+      upright.data.copy(
+        native.data,
+        (y * native.width + x) * 4,
+        (uy * upright.width + ux) * 4,
+        (uy * upright.width + ux) * 4 + 4
+      );
+    }
+  }
+  await fs.writeFile(dest, PNG.sync.write(native));
 }

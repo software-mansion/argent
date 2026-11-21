@@ -5,6 +5,7 @@ import { dirname, join } from "path";
 import { reactProfilerAnalyzeTool } from "../../src/tools/profiler/react/react-profiler-analyze";
 import { cacheProfilerPaths } from "../../src/blueprints/react-profiler-session";
 import { buildAstIndexWithDiagnostics } from "../../src/utils/react-profiler/pipeline/06-resolve/ast-index";
+import type { RnPlatform } from "../../src/utils/react-profiler/types/input";
 
 const tempDirs: string[] = [];
 
@@ -36,7 +37,7 @@ let session = 0;
 /** Run the real analyze tool on a session where `names` render in six hot commits. */
 async function analyze(
   names: string[],
-  params: { project_root: string; platform?: "ios" | "android" },
+  params: { project_root: string; platform?: RnPlatform },
   options: { hotCommitIndices?: number[] | null; metroRoot?: string; bundleUrl?: string } = {}
 ): Promise<Record<string, unknown> & { report: string }> {
   const debugDir = makeTempDir("analyze-session-");
@@ -399,6 +400,34 @@ describe("which platform analyze uses", () => {
     expect(fileCell(report, "List")).toBe("`src/List.android.tsx:1`");
   });
 
+  it("reads a react-native-macos recording and uses the .macos file over the .ios one", async () => {
+    const root = project({ ...variants, "src/List.macos.tsx": component("List", "MACOS") });
+
+    const { report } = await analyze(
+      ["List"],
+      { project_root: root },
+      { bundleUrl: bundle("macos") }
+    );
+
+    expect(fileCell(report, "List")).toBe("`src/List.macos.tsx:1`");
+    expect(report).toContain("MACOS");
+    expect(report).not.toContain("IOS");
+  });
+
+  it("takes platform macos from the caller when there is no recording", async () => {
+    const root = project({
+      "src/List.tsx": component("List", "BASE"),
+      "src/List.ios.tsx": component("List", "IOS"),
+    });
+
+    const { report } = await analyze(["List"], { project_root: root, platform: "macos" });
+
+    // react-native-macos does not bundle .ios files: the base file is the Mac app's.
+    expect(fileCell(report, "List")).toBe("`src/List.tsx:1`");
+    expect(report).toContain("BASE");
+    expect(report).not.toContain("IOS");
+  });
+
   it("drops nothing and names both files when no one knows the platform", async () => {
     const root = project(variants);
 
@@ -414,7 +443,7 @@ describe("buildAstIndexWithDiagnostics with a platform", () => {
   const list = (marker: string) => component("List", marker);
   const entry = (marker: string) => component("PokemonEntry", marker);
 
-  async function primary(files: Record<string, string>, platform?: "ios" | "android") {
+  async function primary(files: Record<string, string>, platform?: RnPlatform) {
     const root = project(files);
     const { index } = await buildAstIndexWithDiagnostics(root, platform);
     return index.get("List")?.file.slice(root.length + 1);
@@ -432,6 +461,46 @@ describe("buildAstIndexWithDiagnostics with a platform", () => {
     expect(
       await primary({ "src/List.tsx": list("BASE"), "src/List.native.tsx": list("N") }, "ios")
     ).toBe("src/List.native.tsx");
+  });
+
+  it("follows Metro's order for macOS: macos, then native, then base, and never ios", async () => {
+    const all = {
+      "src/List.tsx": list("BASE"),
+      "src/List.native.tsx": list("NATIVE"),
+      "src/List.ios.tsx": list("IOS"),
+      "src/List.android.tsx": list("ANDROID"),
+      "src/List.macos.tsx": list("MACOS"),
+      "src/List.web.tsx": list("WEB"),
+    };
+    expect(await primary(all, "macos")).toBe("src/List.macos.tsx");
+    const { "src/List.macos.tsx": _macos, ...withoutMacos } = all;
+    expect(await primary(withoutMacos, "macos")).toBe("src/List.native.tsx");
+    expect(
+      await primary({ "src/List.tsx": list("BASE"), "src/List.ios.tsx": list("IOS") }, "macos")
+    ).toBe("src/List.tsx");
+    expect(await primary({ "src/List.ios.tsx": list("IOS") }, "macos")).toBeUndefined();
+  });
+
+  it("keeps one file per module for macOS, so the shadowed variants leave no hint", async () => {
+    const root = project({
+      "src/List.tsx": list("BASE"),
+      "src/List.native.tsx": list("NATIVE"),
+      "src/List.ios.tsx": list("IOS"),
+      "src/List.macos.tsx": list("MACOS"),
+    });
+
+    const { index } = await buildAstIndexWithDiagnostics(root, "macos");
+
+    expect(index.get("List")?.file).toBe(join(root, "src/List.macos.tsx"));
+    expect(index.get("List")?.otherMatches).toBeUndefined();
+  });
+
+  it("does not bundle a .macos file for iOS or Android", async () => {
+    expect(await primary({ "src/List.macos.tsx": list("MACOS") }, "ios")).toBeUndefined();
+    expect(await primary({ "src/List.macos.tsx": list("MACOS") }, "android")).toBeUndefined();
+    const withBase = { "src/List.tsx": list("BASE"), "src/List.macos.tsx": list("MACOS") };
+    expect(await primary(withBase, "ios")).toBe("src/List.tsx");
+    expect(await primary(withBase, "android")).toBe("src/List.tsx");
   });
 
   it("ranks .native above the base file where path order says the opposite", async () => {
