@@ -325,8 +325,8 @@ export const FAILURE_CODES = {
   // The launch test ran, but Argent read no launch measurements from its result.
   LAUNCH_ANALYSIS_NO_SAMPLES: "LAUNCH_ANALYSIS_NO_SAMPLES",
 
-  // iOS and Android share one capture path (simulator-server frames into
-  // ffmpeg), so these name the failing stage, not the device family.
+  // iOS and Android share the capture code, so these name the failing stage,
+  // not the device family.
   SCREEN_RECORDING_FACTORY_OPTIONS_MISSING: "SCREEN_RECORDING_FACTORY_OPTIONS_MISSING",
   SCREEN_RECORDING_WRONG_PLATFORM: "SCREEN_RECORDING_WRONG_PLATFORM",
   SCREEN_RECORDING_ALREADY_ACTIVE: "SCREEN_RECORDING_ALREADY_ACTIVE",
