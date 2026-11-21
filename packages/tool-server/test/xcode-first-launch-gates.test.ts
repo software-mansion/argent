@@ -123,6 +123,7 @@ import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-de
 import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
 import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-devtools-status";
 import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
@@ -438,13 +439,11 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
   };
   const BUNDLE_ID = "com.example.app";
   const AT_POINT = { x: 10, y: 10 };
-  // Built through its factory since #1164; the registry it takes serves only Android.
-  const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+  // native-network-logs is not here: a read of an app whose capture is not started runs no simctl.
   const TOOLS = [
     [nativeDescribeScreenTool, {}],
     [nativeFindViewsTool, {}],
     [nativeFullHierarchyTool, {}],
-    [nativeNetworkLogsTool, {}],
     [nativeDevtoolsStatusTool, {}],
     [nativeViewAtPointTool, AT_POINT],
     [nativeUserInteractableViewAtPointTool, AT_POINT],
@@ -460,6 +459,9 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     registry = new Registry();
     registry.registerBlueprint(nativeDevtoolsBlueprint);
     for (const [tool] of TOOLS) registry.registerTool(tool as never);
+    // Built on this registry: the read names the service only when this registry runs it.
+    registry.registerTool(createNativeNetworkLogsTool(registry) as never);
+    registry.registerTool(createNetworkCaptureStartTool(registry) as never);
     return createHttpApp(registry).app;
   }
 
@@ -643,11 +645,6 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     });
     readline.createInterface({ input: agent }).on("line", (line) => {
       const { type, payload } = JSON.parse(line);
-      // The agent acknowledges Network.enable, which native-network-logs waits for.
-      if (type === "CDP") {
-        agent.write(JSON.stringify({ type, payload: { id: payload.id, result: {} } }) + "\n");
-        return;
-      }
       if (type !== "ViewInspector") return;
       const result = { screenFrame: { x: 0, y: 0, width: 1, height: 1 }, elements: [] };
       agent.write(JSON.stringify({ type, payload: { id: payload.id, result } }) + "\n");
@@ -683,11 +680,6 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
       });
       readline.createInterface({ input: agent }).on("line", (line) => {
         const { type, payload } = JSON.parse(line);
-        // The agent acknowledges Network.enable, which native-network-logs waits for.
-        if (type === "CDP") {
-          agent.write(JSON.stringify({ type, payload: { id: payload.id, result: {} } }) + "\n");
-          return;
-        }
         if (type !== "ViewInspector") return;
         const result = { screenFrame: { x: 0, y: 0, width: 1, height: 1 }, elements: [] };
         agent.write(JSON.stringify({ type, payload: { id: payload.id, result } }) + "\n");
@@ -795,6 +787,110 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
       expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
       expect(xcrunCalls()).toEqual([]);
       agent.destroy();
+    }
+  );
+
+  // A read starts nothing, so before network-capture-start it has nothing to check.
+  it("native-network-logs answers not started and runs no simctl for an app whose capture was never started", async () => {
+    pending.simctl = true;
+    const app = nativeApp();
+    const res = await request(app)
+      .post("/tools/native-network-logs")
+      .send({ udid: SIM.id, bundleId: BUNDLE_ID });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ status: "ok", started: false, total: 0 });
+    expect(res.body.data.header).toMatch(/^ios-native: not started, 0 requests/);
+    expect(xcrunCalls()).toEqual([]);
+    expect(registry!.getSnapshot().services.has(nativeDevtoolsRef(SIM).urn)).toBe(false);
+  });
+
+  // Once capture is started, the read checks an unconnected app as the other reads do.
+  it("native-network-logs answers 424 for an app whose capture was started before the install went pending", async () => {
+    answerWithEmptyOutput();
+    const app = nativeApp();
+    const start = await request(app)
+      .post("/tools/network-capture-start")
+      .send({ udid: SIM.id, bundleId: BUNDLE_ID });
+    expect(start.status).toBe(200);
+
+    pending.simctl = true;
+    execFileMock.mockClear();
+    const res = await request(app)
+      .post("/tools/native-network-logs")
+      .send({ udid: SIM.id, bundleId: BUNDLE_ID });
+
+    expect(res.status).toBe(424);
+    expect(res.body.error).toMatch(/-runFirstLaunch/);
+    expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+    expect(xcrunCalls()).toEqual([]);
+  });
+
+  // The app answers this one over its own socket too.
+  it("native-network-logs keeps serving a connected app whose capture is started", async () => {
+    const device: DeviceInfo = { ...SIM, id: processScopedUdid("-1523-4000-8000-000000000008") };
+    answerWithEmptyOutput();
+    const app = nativeApp();
+    const ref = nativeDevtoolsRef(device);
+    const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+
+    const agent = net.createConnection(api.socketPath, () => {
+      agent.write(JSON.stringify({ type: "Control", payload: { bundleId: BUNDLE_ID } }) + "\n");
+    });
+    readline.createInterface({ input: agent }).on("line", (line) => {
+      const { type, payload } = JSON.parse(line);
+      // The agent acknowledges Network.enable, which network-capture-start waits for.
+      if (type !== "CDP") return;
+      agent.write(JSON.stringify({ type, payload: { id: payload.id, result: {} } }) + "\n");
+    });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE_ID)).toBe(true));
+    const start = await request(app)
+      .post("/tools/network-capture-start")
+      .send({ udid: device.id, bundleId: BUNDLE_ID });
+    expect(start.body.data.layers).toContainEqual({ layer: "ios-native", armed: true });
+
+    pending.simctl = true;
+    execFileMock.mockClear();
+    const res = await request(app)
+      .post("/tools/native-network-logs")
+      .send({ udid: device.id, bundleId: BUNDLE_ID });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ status: "ok", armed: true });
+    expect(xcrunCalls()).toEqual([]);
+    agent.destroy();
+  });
+
+  // Starting checks an unconnected app as the reads do, so the refusal reaches it too.
+  it.each([
+    ["a service created while the install is pending", false],
+    ["a service that armed the simulator before the install went pending", true],
+  ])(
+    "network-capture-start answers 424 with what to do for an app that is not connected, on %s",
+    async (_name, armedBefore) => {
+      if (armedBefore) answerWithEmptyOutput();
+      const app = nativeApp();
+      if (armedBefore) {
+        const ref = nativeDevtoolsRef(SIM);
+        const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+        expect(api.isEnvSetup()).toBe(true);
+      }
+
+      pending.simctl = true;
+      execFileMock.mockClear();
+      const res = await request(app)
+        .post("/tools/network-capture-start")
+        .send({ udid: SIM.id, bundleId: BUNDLE_ID });
+
+      expect(res.status).toBe(424);
+      expect(res.body.error).toMatch(/-runFirstLaunch/);
+      expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(xcrunCalls()).toEqual([]);
+      // The refused start left capture off.
+      const read = await request(app)
+        .post("/tools/native-network-logs")
+        .send({ udid: SIM.id, bundleId: BUNDLE_ID });
+      expect(read.body.data.started).toBe(false);
     }
   );
 });
