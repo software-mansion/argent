@@ -114,17 +114,16 @@ export function isGloballyInstalled(): boolean {
   return getRemainingGlobalBinaryPath() !== null;
 }
 
-// The first argent on PATH, unless a project copy shadows it: package-manager
-// runs put the project's bin first, which says nothing about the global
-// install behind it.
-function getFirstOnPathGlobalBinaryPath(): string | null {
+// Null when a project copy is first on PATH: package-manager runs put the
+// project's bin there, which says nothing about the global install behind it.
+function getUnshadowedGlobalBinaryPath(): string | null {
   const first = getPermanentBinaryPaths()[0];
-  return first !== undefined && !isProjectBinPath(first) ? first : null;
+  return first !== undefined && !isProjectBinPath(first) ? getRemainingGlobalBinaryPath() : null;
 }
 
-/** True iff the `argent` first on PATH is a global install, not a project copy. */
+/** True iff a live global install is on PATH with no project copy before it. */
 export function isGlobalInstallFirstOnPath(): boolean {
-  return getFirstOnPathGlobalBinaryPath() !== null;
+  return getUnshadowedGlobalBinaryPath() !== null;
 }
 
 /**
@@ -200,7 +199,7 @@ export function cliPathOf(packageRoot: string): string | null {
  */
 export function getGloballyInstalledLaunchPaths(): { node: string; cli: string } | null {
   if (process.platform === "win32") return null;
-  const binaryPath = getFirstOnPathGlobalBinaryPath();
+  const binaryPath = getUnshadowedGlobalBinaryPath();
   if (!binaryPath) return null;
   const packageRoot = packageRootOf(binaryPath);
   const cli = packageRoot ? cliPathOf(packageRoot) : null;

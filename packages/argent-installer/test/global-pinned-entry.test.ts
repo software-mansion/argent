@@ -68,6 +68,17 @@ describe.skipIf(process.platform === "win32")("getGloballyInstalledLaunchPaths",
 
     expect(getGloballyInstalledLaunchPaths()).toBeNull();
   });
+
+  it("pins the install behind a stale version-manager shim", () => {
+    const { binDir, cli } = stagePrefix(path.join(tmpDir, "prefix"), true);
+    const shims = path.join(tmpDir, "shims");
+    fs.mkdirSync(shims);
+    fs.writeFileSync(path.join(shims, "argent"), "#!/bin/sh\nexit 127\n", { mode: 0o755 });
+    vi.stubEnv("PATH", [shims, binDir, SYSTEM_PATH].join(path.delimiter));
+
+    expect(getGloballyInstalledLaunchPaths()).toEqual({ node: path.join(binDir, "node"), cli });
+  });
+
   it("returns null for a project's node_modules/.bin that holds a node", () => {
     const { cli } = stagePrefix(path.join(tmpDir, "prefix"), true);
     const projectBin = path.join(tmpDir, "project", "node_modules", ".bin");
@@ -96,6 +107,15 @@ describe.skipIf(process.platform === "win32")("isGlobalInstallFirstOnPath", () =
     fs.symlinkSync(cli, path.join(projectBin, "argent"));
     vi.stubEnv("npm_config_local_prefix", path.join(tmpDir, "project"));
     vi.stubEnv("PATH", [projectBin, binDir, SYSTEM_PATH].join(path.delimiter));
+
+    expect(isGlobalInstallFirstOnPath()).toBe(false);
+  });
+
+  it("is false when only a stale version-manager shim is on PATH", () => {
+    const shims = path.join(tmpDir, "shims");
+    fs.mkdirSync(shims);
+    fs.writeFileSync(path.join(shims, "argent"), "#!/bin/sh\nexit 127\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${shims}${path.delimiter}${SYSTEM_PATH}`);
 
     expect(isGlobalInstallFirstOnPath()).toBe(false);
   });
