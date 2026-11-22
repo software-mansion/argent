@@ -1265,6 +1265,7 @@ describe("network-capture-start", () => {
         intent: "started",
         mark: { install: null },
         installed: false,
+        physicalDeviceId: IOS_UDID,
         port: PORT,
       });
     });

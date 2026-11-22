@@ -236,6 +236,7 @@ async function startJsLayer(
       intent: "started",
       mark: { install: null },
       installed: installedHere,
+      physicalDeviceId: udid,
       ...(installedHere && found?.paused ? { paused: true as const } : {}),
     });
     return {
@@ -265,7 +266,12 @@ async function startJsLayer(
     return unavailable("js", text);
   }
 
-  const capture: JsCapture = { bundleId, intent: "started", installed: installedHere };
+  const capture: JsCapture = {
+    bundleId,
+    intent: "started",
+    installed: installedHere,
+    physicalDeviceId: udid,
+  };
   setJsCapture(payload, capture);
   try {
     capture.mark = await readMark(dbg);

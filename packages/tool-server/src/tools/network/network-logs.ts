@@ -42,6 +42,20 @@ const PAUSED_BY_STOP =
   "JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since";
 
 /**
+ * The debugger of a read of the capture. A start or stop opened it with the
+ * device's udid, so a read that opens it again, after a disconnect, does too.
+ */
+export function jsCaptureDebuggerRef(
+  params: { port?: number; device_id?: string },
+  capture: JsCapture
+): ServiceRef {
+  const urn = debuggerServiceRef(params);
+  return capture.physicalDeviceId && typeof urn === "string"
+    ? { urn, options: { physicalDeviceId: capture.physicalDeviceId } }
+    : urn;
+}
+
+/**
  * The JS capture a read of `payload` reads, or undefined before any start. A runtime of another
  * app than the capture's has no capture of its own.
  */
@@ -301,7 +315,8 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     // Vega has no network-capture-start, so its read still installs the interceptor.
     if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
     // A read never starts capture: before a start it reaches nothing in the app.
-    return jsCapture(payload) ? { debugger: debuggerServiceRef(params) } : {};
+    const capture = jsCapture(payload);
+    return capture ? { debugger: jsCaptureDebuggerRef(params, capture) } : {};
   },
   async execute(services, params) {
     const device = resolveDevice(params.device_id);
