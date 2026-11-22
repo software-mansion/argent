@@ -5,19 +5,18 @@ name: Publish to MCP Registry
 #
 # The registry accepts a version only once npm serves it: it fetches
 # @swmansion/argent@<version> from registry.npmjs.org and requires that
-# package's mcpName to match the server name. A release reaches npm last. The
-# tag push creates the GitHub release (release.yml), and a maintainer then
-# dispatches publish-npm.yml. So this follows that publish, not the tag or the
-# release event. A release created with GITHUB_TOKEN would not trigger a
-# workflow anyway.
+# package's mcpName to match the server name. Pushing the tag runs
+# publish-npm.yml, which publishes to npm and only then creates the GitHub
+# release. So this follows that publish, not the tag or the release event. A
+# release created with GITHUB_TOKEN would not trigger a workflow anyway.
 #
 # Triggers:
 #
-#   workflow_run       → after a successful "Publish npm package" dispatch that
-#                        really published. Only such a run uploads the
-#                        npm-tarball artifact, and the version is read from the
-#                        package.json inside it. Canary pushes, dry runs and
-#                        prereleases are skipped.
+#   workflow_run       → after a successful "Publish npm package" release run
+#                        (a v* tag push or a dispatch) that really published.
+#                        Only such a run uploads the npm-tarball artifact, and
+#                        the version is read from the package.json inside it.
+#                        Canary pushes, dry runs and prereleases are skipped.
 #   workflow_dispatch  → publishes a version already on npm, e.g. to backfill a
 #                        release or to retry after a fix to this file (a job
 #                        re-run reuses the workflow file of the original run).
@@ -50,10 +49,13 @@ jobs:
   resolve:
     runs-on: ubuntu-latest
     # Canary publishes (push to main) and failed runs have nothing to list.
+    # A tag push run's head_branch is the tag name.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'workflow_dispatch' &&
-       github.event.workflow_run.conclusion == 'success')
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.event == 'workflow_dispatch' ||
+        (github.event.workflow_run.event == 'push' &&
+         startsWith(github.event.workflow_run.head_branch, 'v'))))
     outputs:
       # Empty when there is nothing to publish.
       version: ${{ steps.version.outputs.version }}

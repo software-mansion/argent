@@ -8,23 +8,40 @@ on:
       - "packages/skills/skills/**/SKILL.md"
       - "scripts/grade-skills.mjs"
   pull_request:
-    paths:
-      - "packages/skills/skills/**/SKILL.md"
-      - "scripts/grade-skills.mjs"
 
 jobs:
+  changes:
+    name: Select Skill Description Quality paths
+    uses: ./.github/workflows/pr-check-paths.yml
+    with:
+      paths: |-
+        packages/skills/skills/**/SKILL.md
+        scripts/grade-skills.mjs
+
   skill-descriptions:
     name: Skill description quality
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check path selection
+        if: needs.changes.result != 'success' || needs.changes.outputs.relevant != 'true'
+        shell: bash
+        run: |
+          test '${{ needs.changes.result }}:${{ needs.changes.outputs.relevant }}' = 'success:false'
+          echo "No matching files changed."
+
       - name: Checkout
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/checkout@v7
 
       - name: Set up Node.js
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: "22"
 
       - name: Grade skill descriptions
+        if: needs.changes.outputs.relevant == 'true'
         run: node scripts/grade-skills.mjs

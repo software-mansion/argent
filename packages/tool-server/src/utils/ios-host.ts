@@ -3,8 +3,10 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import type { DeviceInfo } from "@argent/registry";
 import {
+  audioDylibPath,
   axServiceBinaryPath,
   axServiceBinaryPathTcp,
   bootstrapDylibPath,
@@ -14,6 +16,7 @@ import {
 } from "@argent/native-devtools-ios";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { PS_BIN } from "./vega-process";
+import { clearAudioLeftovers } from "./ios-audio-leftovers";
 import {
   simctlArgsForUdid,
   simctlTargetForUdid,
@@ -21,7 +24,7 @@ import {
   simctlTargetForWithdrawal,
 } from "./ios-device-sets";
 import { isTvOsSimulator } from "./ios-devices";
-import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
+import { clearAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
   reverseStart as simRemoteReverseStart,
   reverseStop as simRemoteReverseStop,
@@ -189,6 +192,40 @@ function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: st
   return fs.existsSync(entry);
 }
 
+/** Control directory of the audio mock; set in every armed simulator, created by the host on first use. */
+export function audioDir(udid: string): string {
+  // The full UDID: unlike the native-devtools socket there is no unix path length to stay under, and two simulators
+  // must never share a control directory.
+  return `/tmp/argent-audio-${udid}`;
+}
+
+const AUDIO_ALWAYS_INSERTED_FLAG = "ios-audio-always-inserted";
+
+/** Basename of the audio hook, to recognise a copy an older install inserted from another path. */
+const AUDIO_DYLIB_BASENAME = "libArgentAudio.dylib";
+
+/**
+ * Whether arming a simulator also inserts the audio hook, so audio tools work on any app launched after arming
+ * without a restart. The hook stays dormant (no thread, no CoreAudio load) until the app opens audio. Read per arming
+ * so `argent disable ios-audio-always-inserted` applies without a tool-server restart; disabled, the hook is
+ * inserted by the first audio tool call instead.
+ */
+function audioAlwaysInserted(): boolean {
+  return isFeatureEnabled(AUDIO_ALWAYS_INSERTED_FLAG);
+}
+
+/**
+ * The audio hook's dylib, or null when this install has none (it ships separately from the other dylibs).
+ * Arming goes on without it: only the audio tools need it, and they say how to get it.
+ */
+function installedAudioDylib(): string | null {
+  try {
+    return audioDylibPath();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Everything in `currentValue` that is not ours, in order. What both arming and
  * withdrawing agree on. Arming appends our bootstrap to it, withdrawing keeps
@@ -206,7 +243,9 @@ export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: st
 
 /**
  * What `DYLD_INSERT_LIBRARIES` should become once we hand the simulator back;
- * the same preserved entries, with nothing of ours appended. `null` means the
+ * the same preserved entries, with nothing of ours appended. The audio hook goes
+ * too, by basename: arming keeps an existing one in place (the first audio tool
+ * call may have inserted it), but it is ours all the same. `null` means the
  * variable held only our own entries and should be unset outright rather than
  * left as an empty string, which dyld treats as a malformed list.
  */
@@ -214,8 +253,23 @@ export function withdrawDyldInsertLibraries(
   currentValue: string,
   bootstrapPath: string
 ): string | null {
-  const preserved = preservedDyldInsertLibraries(currentValue, bootstrapPath);
+  const preserved = preservedDyldInsertLibraries(currentValue, bootstrapPath).filter(
+    (entry) => path.basename(entry) !== AUDIO_DYLIB_BASENAME
+  );
   return preserved.length === 0 ? null : preserved.join(":");
+}
+
+/**
+ * Appends one more dylib of ours to the list without disturbing the bootstrap or
+ * foreign entries. An older copy of the same dylib (by basename) is replaced so
+ * an upgrade does not accumulate stale paths. Exported for ios-audio.ts.
+ */
+export function appendDyldInsertLibrary(currentValue: string, dylibPath: string): string {
+  const name = path.basename(dylibPath);
+  const kept = splitDyldInsertLibraries(currentValue).filter(
+    (entry) => entry !== dylibPath && path.basename(entry) !== name
+  );
+  return [...kept, dylibPath].join(":");
 }
 
 async function ensureAccessibilityEnabled(udid: string): Promise<void> {
@@ -252,6 +306,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
 async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint): Promise<void> {
   // tvOS simulators require a TVOSSIMULATOR-platform dylib — dyld silently skips
   // the IOSSIMULATOR slice and native injection never connects.
+  const tvOs = await isTvOsSimulator(udid);
   const bootstrapPath = await bootstrapPathFor(udid, endpoint);
 
   /**
@@ -270,7 +325,15 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
-  const updated = buildDyldInsertLibraries(existing, bootstrapPath);
+  if (!tvOs && endpoint.transport === "unix") {
+    // Every arming, flag or not: apps keep loading the audio hook a killed tool-server inserted, and would keep
+    // hearing the silence of its input even if no audio tool is called again.
+    await clearAudioLeftovers(audioDir(nativeId)).catch(() => {});
+  }
+  let updated = buildDyldInsertLibraries(existing, bootstrapPath);
+  const audioDylib =
+    !tvOs && endpoint.transport === "unix" && audioAlwaysInserted() ? installedAudioDylib() : null;
+  if (audioDylib) updated = appendDyldInsertLibrary(updated, audioDylib);
 
   if (updated !== existing) {
     await execFileAsync(
@@ -313,6 +376,29 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
     );
   }
 
+  if (audioDylib) {
+    // Best-effort: the injection above is in place, so a failure here must cost only the audio tools, not the arming.
+    try {
+      // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
+      fs.mkdirSync(audioDir(nativeId), { recursive: true, mode: 0o700 });
+      await execFileAsync(
+        "xcrun",
+        [
+          ...prefix,
+          "spawn",
+          nativeId,
+          "launchctl",
+          "setenv",
+          "ARGENT_AUDIO_DIR",
+          audioDir(nativeId),
+        ],
+        { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+      );
+    } catch (err) {
+      process.stderr.write(`[ios-host] audio setup failed for ${nativeId}: ${String(err)}\n`);
+    }
+  }
+
   await ensureAccessibilityEnabled(udid);
 }
 
@@ -327,9 +413,10 @@ async function bootstrapPathFor(udid: string, endpoint: IosEndpoint): Promise<st
 }
 
 /**
- * Undo {@linkcode setupNativeDevtoolsEnvLocal}: take our bootstrap back out of
- * `DYLD_INSERT_LIBRARIES` and drop the endpoint variable, leaving anything a
- * third party put there untouched.
+ * Undo {@linkcode setupNativeDevtoolsEnvLocal}: take our bootstrap and the
+ * audio hook back out of `DYLD_INSERT_LIBRARIES` and drop the endpoint variable
+ * and the audio control directory, leaving anything a third party put there
+ * untouched.
  *
  * Only ever removes what still names us. A provider that armed its own
  * injection over ours already owns both variables and clearing its endpoint
@@ -377,6 +464,10 @@ async function withdrawNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoin
 
   if (ours && (await getenv(name)) === ours) {
     await setenv(["unsetenv", name]);
+  }
+
+  if ((await getenv("ARGENT_AUDIO_DIR")) === audioDir(nativeId)) {
+    await setenv(["unsetenv", "ARGENT_AUDIO_DIR"]);
   }
 }
 
@@ -433,6 +524,11 @@ async function listRunningApps(udid: string): Promise<string> {
     }
   );
   return stdout;
+}
+
+/** Pid of the app's running process from the simulator's launchd, or null when it is not running. */
+export async function runningAppPid(udid: string, bundleId: string): Promise<number | null> {
+  return parseUIKitApplicationJobs(await listRunningApps(udid)).get(bundleId) ?? null;
 }
 
 async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
@@ -573,7 +669,7 @@ export const localIosHost: IosHost = {
   listRunningBundleIds: listRunningUIKitApplicationBundleIds,
   inspectRunningApp: inspectRunningAppLocal,
   async bootstrapAx(udid) {
-    await ensureAutomationEnabled(udid);
+    await clearAutomationEnabled(udid);
     return { entitlementBypassActive: await isEntitlementBypassActive(udid) };
   },
   spawnAxDaemon: spawnAxDaemonLocal,
@@ -581,7 +677,12 @@ export const localIosHost: IosHost = {
   async stopProxy() {},
 };
 
-/** Accessibility `defaults` keys (all `-bool true`) that describe-driven tools need. */
+/**
+ * Accessibility `defaults` keys (all `-bool true`) written on cloud sims.
+ * `AutomationEnabled` makes UIKit label a text field with its placeholder;
+ * local iPhone and iPad sims leave it out to keep Full Keyboard Access working
+ * ({@linkcode clearAutomationEnabled}).
+ */
 const ACCESSIBILITY_DEFAULT_FLAGS = [
   "AutomationEnabled",
   "AccessibilityEnabled",
@@ -608,9 +709,8 @@ export const remoteIosHost: IosHost = {
     const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
     return { running: parseUIKitApplicationJobs(stdout).has(bundleId), process: null };
   },
-  // The same accessibility `defaults write`s the local host performs, routed
-  // through the remote generic spawn. The entitlement-bypass plist is assumed
-  // active on cloud sims.
+  // Accessibility `defaults write`s routed through the remote generic spawn.
+  // The entitlement-bypass plist is assumed active on cloud sims.
   async bootstrapAx(udid) {
     for (const flag of ACCESSIBILITY_DEFAULT_FLAGS) {
       await simRemoteSpawn(udid, {

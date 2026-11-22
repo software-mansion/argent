@@ -61,9 +61,11 @@ import {
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
+import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
+import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
 import {
   MACOS_DESCRIBE_LIMITS,
   MACOS_JUDGING_LIMITS,
@@ -72,6 +74,7 @@ import {
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { IOS_TEXT_INPUT_ROLE } from "./flow-ios-tree";
 import {
   getDescribeTapPoint,
   type DescribeFrame,
@@ -227,13 +230,14 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
     }
     return (
       settle +
-      // Name both axes: `normRect` clamps each edge on its own, so a
+      // Name both axes: the walker clips each edge on its own, so a
       // horizontally scrolled node comes back zero-WIDTH at a normal height.
-      "A zero-area frame in `describe` means off-viewport — zero height for a node above or " +
-      "below the viewport, zero width for one left or right of it, since the walker clamps " +
-      "each edge on its own — and the fix there is a `scroll-to` before the check rather than " +
-      "a different selector; a password field reaches the runner under the name `[password]`, " +
-      "so only an `id`/`role` selector can match it"
+      "A zero-area frame in `describe` means off-viewport, clipped by an `overflow` ancestor " +
+      "or inside a closed `<details>` (its `<summary>` opens it) — zero height for a node cut " +
+      "off above or below, zero width for one cut off left or right, since the walker clips " +
+      "each edge on its own — and the fix for a scrolled-out node is a `scroll-to` before the " +
+      "check rather than a different selector; a password field reaches the runner under the " +
+      "name `[password]`, so only an `id`/`role` selector can match it"
     );
   }
   if (platform === "macos") {
@@ -308,8 +312,9 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "Both read the same DOM but project it differently, and here it is the RUNNER's side to " +
       "check: the live wait passed, so the recorder's tree did hold a matching element and its " +
       "5000-node walk limit is not what went wrong. The runner tree keeps only addressable nodes " +
-      "(id, label, value, clickable or focused) whose frame the walker did not clamp to zero " +
-      "area for being off-viewport, and it redacts a password field's name to `[password]`." +
+      "(id, label, value, clickable or focused) whose frame the walker did not clip to zero " +
+      "area (off-viewport, or cut off by an `overflow` ancestor), and it redacts a password " +
+      "field's name to `[password]`." +
       SCREEN_MAY_HAVE_MOVED
     );
   }
@@ -744,6 +749,19 @@ function innermostTreeReason(message: string): string {
 }
 
 /**
+ * The node a recorded selector is derived from. On an iOS simulator the value
+ * of a text input is the text typed into it, and that text never becomes a
+ * selector: it does not name the field, and it can be the value of a
+ * `{{secret:…}}` placeholder, which must not reach the YAML. Without it the
+ * field records by its label, then by its role.
+ */
+function withoutTypedText(node: DescribeNode, { source }: DescribeTreeData): DescribeNode {
+  return source === "native-devtools" && node.role === IOS_TEXT_INPUT_ROLE
+    ? { ...node, value: undefined }
+    : node;
+}
+
+/**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
  * Returns the selector (possibly with a caveat warning), or a warning
@@ -777,19 +795,18 @@ async function captureTapSelector(
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
     );
-    const { tree, uiOrientation } = data;
+    const { tree } = data;
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
-    const selector = deriveSelector(node);
+    const selector = deriveSelector(withoutTypedText(node, data));
     if (!selector)
       return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
     // Replay resolves through selectorToFrame, whose ranking (exact match →
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
     // winning frame to cover the tapped point, or the recorded step would
-    // silently retarget and coordinates are safer. Ranked in the reading order
-    // replay will rank in: the UI's, on a landscape UI.
-    const resolved = selectorToFrame(tree, selector, uiOrientation);
+    // silently retarget and coordinates are safer.
+    const resolved = selectorToFrame(tree, selector);
     if (!resolved) {
       // Defensive: a selector derived from a visible node matches that node
       // under matchNode's semantics, so this should be unreachable. Kept in
@@ -1036,14 +1053,12 @@ const RUN_TARGET_COMMAND = "e2e-execute";
  * Rewrite a nested `flow-execute` target from `e2e_test_path` to the equivalent
  * `name`, in place — or reject the call before anything runs.
  *
- * `flow-add-step` forwards the nested call's arguments as opaque JSON, so a
- * `e2e_test_path` inside them never crosses flow-execute's file-input boundary and
- * `resolveFlowSource` would reject it outright. A sibling of the recording, or
- * a test in the project's other e2e test directory, is the one target with a
- * boundary-verified equivalent: the same file the `name` + `project_root` pair
- * already resolves to, beside a directory flow-start-recording established
- * through its own boundary. Every other e2e_test_path is refused here —
- * a raw `tool:` step has no boundary to resolve a path through at replay either.
+ * The recorder keeps a nested `e2e_test_path` only as the `name` it equals. A
+ * sibling of the recording, or a test in the project's other e2e test
+ * directory, is the one target with such a name: the same file the `name` +
+ * `project_root` pair already resolves to, beside a directory
+ * flow-start-recording established through its own boundary. Every other
+ * e2e_test_path is refused here.
  * The on-disk spelling is the answer of `project`, on the client over a link;
  * a linked call whose client sent no files has no answer to give, and is
  * refused.
@@ -1060,10 +1075,10 @@ async function rewriteSiblingFlowPath(
 
   const invalid = (detail: string): FailureError =>
     new FailureError(
-      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": ${detail}. e2e_test_path carries no ` +
-        `file-input resolution through e2e-add-step's opaque args — pass name + project_root ` +
-        `for an e2e test saved beside the recording, or add a \`run: <relative path>.yaml\` step to ` +
-        `the e2e test YAML by hand for a cross-directory target.`,
+      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": ${detail}. The recorder keeps ` +
+        `an e2e_test_path only as the name it equals — pass name + project_root for an e2e test saved ` +
+        `beside the recording, or add a \`run: <relative path>.yaml\` step to the e2e test YAML ` +
+        `by hand for a cross-directory target.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_add_step_flow_path",
@@ -1112,7 +1127,11 @@ async function rewriteSiblingFlowPath(
   ) {
     throw invalid(
       `it is not in the recording's e2e test directory ("${flowsDir}") or the project's other ` +
-        `e2e test directory, and a raw tool: step has no boundary to resolve a path through at replay`
+        `e2e test directory` +
+        (path.isAbsolute(flowPath)
+          ? ""
+          : `, as the tool server resolves a relative path against its own cwd ("${process.cwd()}"), ` +
+            `not the calling agent's - pass the absolute path`)
     );
   }
   // basename leaves a suffix in place when stripping it would leave nothing, and
@@ -1561,8 +1580,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         ? new ClientProjectAccess(stepFiles)
         : new HostProjectAccess();
 
-      // A nested flow-execute must never carry a raw e2e_test_path into the live
-      // invoke — it has no boundary metadata there and would be rejected.
       if (command === RUN_TARGET_COMMAND) {
         await rewriteSiblingFlowPath(session, args, project, linked);
       }
@@ -1688,6 +1705,20 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           }
         );
       }
+      if (isDebuggerNotConnectedResult(params.command, toolResult)) {
+        // debugger-log-registry's note is consumed as it is read, so this
+        // message is the only place it can still reach the agent.
+        const note = (toolResult as { note?: unknown }).note;
+        throw new FailureError(
+          `${params.command}: debugger not connected (${toolResult.reason}) - nothing was recorded. ${toolResult.detail} ${toolResult.guidance}${typeof note === "string" ? ` ${note}` : ""}`,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_NOT_CONNECTED,
+            failure_stage: "flow_add_step_debugger_not_connected",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          }
+        );
+      }
 
       // A wait that HELD is asked the runner's tree as well, so the author
       // learns now — rather than after polish — whether the conversion is safe.
@@ -1767,11 +1798,21 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A right-click must survive it as `button`, or replay would left-click.
       // Left is the default (absent).
       const tapButton = isTap && args.button === "right" ? { button: "right" as const } : {};
+      const heldKeys = Array.isArray(args.modifiers)
+        ? MACOS_MODIFIERS.filter((m) => (args.modifiers as unknown[]).includes(m))
+        : [];
+      const tapModifiers = isTap && heldKeys.length > 0 ? { modifiers: heldKeys } : {};
 
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
-        step = { kind: "tap", selector: captured.selector, ...tapTimes, ...tapButton };
+        step = {
+          kind: "tap",
+          selector: captured.selector,
+          ...tapTimes,
+          ...tapButton,
+          ...tapModifiers,
+        };
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
@@ -1782,6 +1823,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           y: args.y as number,
           ...tapTimes,
           ...tapButton,
+          ...tapModifiers,
         };
         warning = captured?.warning;
       } else if (isLaunch) {

@@ -173,6 +173,14 @@ const FLOW_SCRIPT_FILES = [
   "flow-script-watchdog-lifeline.mjs",
   "flow-script-watchdog-deadline.mjs",
 ];
+// The cabled-iPhone screen-capture helper ships as source: the tool-server
+// compiles it with `xcrun swiftc` on first use. It resolves the sources at
+// `<pkg>/assets/ios-screen-stream/` from its bundled `__dirname`.
+const IOS_SCREEN_STREAM_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/tool-server/src/tools/screen-recording/ios-device-stream"
+);
+const IOS_SCREEN_STREAM_DEST = path.resolve(__dirname, "../assets/ios-screen-stream");
 const IOS_RUNNER_SRC = path.resolve(WORKSPACE_ROOT, "packages/ios-device-runner/ArgentRunner");
 const IOS_RUNNER_DEST = path.resolve(__dirname, "../dist/ios-device-runner/ArgentRunner");
 // Local state that must never ship: per-user schemes/breakpoints, Xcode and
@@ -361,6 +369,18 @@ const ASSETS = [
     required: false,
     copiedLabel: "Argent.tracetemplate",
     missLabel: "Argent.tracetemplate",
+  },
+  {
+    kind: "dir",
+    src: IOS_SCREEN_STREAM_SRC,
+    dest: IOS_SCREEN_STREAM_DEST,
+    clean: true,
+    required: true,
+    copiedLabel: "iPhone screen-capture helper source",
+    missLabel: "iPhone screen-capture helper source",
+    // The TypeScript beside it is bundled into tool-server.cjs.
+    filter: (src) => !src.endsWith(".ts"),
+    hint: "screen-recording-start needs it to record a cabled iPhone.",
   },
   // Android profiler capture reads this via @argent/native-devtools-android's
   // `traceConfigPath()`, which resolves `<pkg>/assets/argent.tracecfg.pbtxt` —

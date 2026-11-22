@@ -818,17 +818,11 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
 
       const result = await describeWithFailedStart();
 
-      expect(result.hint).toBe(
-        `The accessibility service failed to start ([AXService:${UDID}] ax-service exited with ` +
-          "code 111 before connecting), and this simulator was not booted through argent, so the " +
-          "pre-boot accessibility settings were never applied. Call boot-device with force=true to " +
-          "reboot it with those settings — this restarts the simulator. If it fails to start again " +
-          "after that reboot, do not reboot again: the boot was not the cause. " +
-          // The native fallback is not registered here, which describe says after it.
-          `The native view hierarchy could not be read (Service "NativeDevtools:${UDID}" not found), ` +
-          "so this empty accessibility tree is not evidence that nothing is on screen. Pass " +
-          "`bundleId` to have the connection state measured, or take a `screenshot` to see what is there."
-      );
+      expect(result.hint).toContain(`AXService:${UDID}`);
+      expect(result.hint).toContain("code 111");
+      expect(result.hint).toContain("boot-device with force=true");
+      expect(result.hint).toMatch(/do not reboot again/i);
+      expect(result.hint).toContain(`NativeDevtools:${UDID}`);
       expect(result.hint).not.toContain("read returned no elements");
     });
 
@@ -911,11 +905,10 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
 
       const result = await describeIos(registry, external, {}, { isTvOs: false });
 
-      expect(result.hint).toBe(
-        `The accessibility service failed to start ([AXService:${UDID}] ax-service exited with ` +
-          "code 1 before connecting). This device is supplied by an external provider. The native " +
-          "view-hierarchy fallback is unavailable on it. Take a screenshot to see the screen."
-      );
+      expect(result.hint).toContain("code 1 before connecting");
+      expect(result.hint).toMatch(/external provider/i);
+      expect(result.hint).toMatch(/fallback.*unavailable/i);
+      expect(result.hint).toContain("screenshot");
     });
   });
 

@@ -137,6 +137,10 @@ export const INSTALLER_COMMAND_META: Record<InstallerCommand, InstallerCommandMe
       NON_INTERACTIVE_OPTION,
       NO_TELEMETRY_OPTION,
       {
+        flag: "--no-allowlist",
+        description: "Skip adding Argent tools to editor auto-approve lists.",
+      },
+      {
         flag: "--from <path>",
         description: "Install from a local tarball or package spec instead of the npm release.",
       },
