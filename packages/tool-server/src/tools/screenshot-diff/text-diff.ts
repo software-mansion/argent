@@ -325,10 +325,10 @@ function protectValueSymbols(text: string): string {
         return `${prefix}${VALUE_SYMBOL_TOKENS[symbol] ?? symbol}${digit}`;
       }
     )
-    .replace(/(\p{N})([+-])(\p{N})/gu, (match, left: string, symbol: string, right: string) => {
-      return `${left}${VALUE_SYMBOL_TOKENS[symbol] ?? symbol}${right}`;
+    .replace(/(\p{N})([+-])(?=\p{N})/gu, (match, left: string, symbol: string) => {
+      return `${left}${VALUE_SYMBOL_TOKENS[symbol] ?? symbol}`;
     })
-    .replace(/([\p{L}\p{N}])\s*\/\s*([\p{L}\p{N}])/gu, `$1${VALUE_SYMBOL_TOKENS["/"]}$2`);
+    .replace(/([\p{L}\p{N}])\s*\/\s*(?=[\p{L}\p{N}])/gu, `$1${VALUE_SYMBOL_TOKENS["/"]}`);
 }
 
 function restoreValueSymbols(text: string): string {
