@@ -58,7 +58,10 @@ interface FakeAgent {
   close(): void;
 }
 
-/** `reply` answers each CDP request that carries an id; `undefined` leaves it unanswered. */
+/**
+ * `reply` answers each CDP request that carries an id; `undefined` leaves it
+ * unanswered, and a `delayMs` in the answer sends it that much later.
+ */
 function connectAgent(
   reply: (msg: Message) => Record<string, unknown> | undefined = () => ({ result: {} })
 ): Promise<FakeAgent> {
@@ -91,9 +94,13 @@ function connectAgent(
         );
         const answer = msg.type === "CDP" && payload.id !== undefined ? reply(msg) : undefined;
         if (answer) {
-          socket.write(
-            JSON.stringify({ type: "CDP", payload: { id: payload.id, ...answer } }) + "\n"
-          );
+          const { delayMs, ...rest } = answer as { delayMs?: number };
+          const send = () =>
+            socket.write(
+              JSON.stringify({ type: "CDP", payload: { id: payload.id, ...rest } }) + "\n"
+            );
+          if (delayMs) setTimeout(send, delayMs);
+          else send();
         }
       }
     });
@@ -294,6 +301,20 @@ describe("native devtools network conditions", () => {
       ["CDP", "Network.enable", {}],
     ]);
   });
+
+  it("keeps the throttle after a stop whose Network.disable the app answers too late", async () => {
+    const { api, agent } = await setup((msg) =>
+      msg.payload.method === "Network.disable" ? { result: {}, delayMs: 5_500 } : { result: {} }
+    );
+    void api.startNetworkCapture(BUNDLE, 8081);
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    agent.received.length = 0;
+
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toMatchObject({ confirmed: false });
+
+    // The app reads in order, so it gets the throttle after the disable that ended it.
+    expect(agent.received).toEqual([["CDP", "Network.disable", {}], BYPASS_METRO, EMULATE_SLOW]);
+  }, 15_000);
 
   it("keeps the throttle after a stop of network capture, whose Network.disable ends it in the app", async () => {
     const { api, agent } = await setup();

@@ -597,7 +597,7 @@ export interface NativeDevtoolsApi {
   /**
    * Throttles one app's URL loading, or with `null` removes the throttle, and
    * resolves once a connected app confirms it. Sticky like
-   * {@link activateNetworkInspection}: re-sent after every Network.enable and
+   * {@link startNetworkCapture}: re-sent after every Network.enable and
    * reconnect, since both reset the app's conditions.
    */
   setNetworkConditions(bundleId: string, throttle: NetworkThrottle | null): Promise<void>;
@@ -1124,9 +1124,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       providerCapture.set(bundleId, await readCaptureEnabled(bundleId));
     };
 
-    /** Clearing the throttle must not turn off capture that someone else relies on. */
+    /**
+     * Clearing the throttle must not turn off capture that someone else relies on.
+     * An activation of a lent agent only reads the provider's capture, so there
+     * only the provider's setting counts.
+     */
     const keepsCapture = (bundleId: string): boolean =>
-      activatedBundleIds.has(bundleId) || providerCapture.get(bundleId) === true;
+      lentSocketPath ? providerCapture.get(bundleId) === true : activatedBundleIds.has(bundleId);
 
     const applyThrottle = async (bundleId: string, throttle: NetworkThrottle): Promise<void> => {
       await noteProviderCapture(bundleId);
@@ -1550,11 +1554,18 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
               "the device provider keeps its own capture setting for the app; argent records none of its new requests",
           };
         }
+        const disabling = conn.cdp.request(
+          "Network.disable",
+          {},
+          { timeoutMs: NETWORK_DISABLE_TIMEOUT_MS }
+        );
+        // Network.disable also ends the app's throttle, which outlasts the capture.
+        // The app reads in order, so the throttle sent now comes after the disable,
+        // also when the app answers the disable late or not at all.
+        reapplyStoredThrottle(bundleId);
         try {
-          await conn.cdp.request("Network.disable", {}, { timeoutMs: NETWORK_DISABLE_TIMEOUT_MS });
+          await disabling;
           unconfirmedStopBundleIds.delete(bundleId);
-          // Network.disable also ends the app's throttle, which outlasts the capture.
-          reapplyStoredThrottle(bundleId);
           return { confirmed: true };
         } catch (err) {
           // A process whose connection closed sends nothing more, and its next one is not armed.
