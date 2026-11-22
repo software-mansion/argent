@@ -104,6 +104,17 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   };
 });
 
+const launchPaths = vi.hoisted(() => ({
+  value: null as { node: string; cli: string } | null,
+  globalFirstOnPath: true,
+}));
+
+vi.mock("../src/topology.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/topology.js")>()),
+  getGloballyInstalledLaunchPaths: () => launchPaths.value,
+  isGlobalInstallFirstOnPath: () => launchPaths.globalFirstOnPath,
+}));
+
 class ExitSentinel extends Error {
   constructor(public readonly code: number | undefined) {
     super(`process.exit(${code})`);
@@ -127,6 +138,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   topologyState.globalInstalled = true;
   topologyState.globalVersion = "1.0.0";
+  launchPaths.value = null;
+  launchPaths.globalFirstOnPath = true;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-update-decline-"));
   originalCwd = process.cwd();
   // Sandbox HOME: the accepted-update path runs the real config refresh, which
@@ -586,6 +599,98 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
       "installation:cli_update_complete",
       expect.anything()
     );
+  });
+
+  function stagePinnedPaths(prefixName = "prefix"): { node: string; cli: string } {
+    const prefix = path.join(tmpDir, prefixName);
+    const node = path.join(prefix, "bin", "node");
+    const cli = path.join(prefix, "lib", "node_modules", "@swmansion", "argent", "dist", "cli.js");
+    fs.mkdirSync(path.dirname(node), { recursive: true });
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.writeFileSync(node, "");
+    fs.writeFileSync(cli, "");
+    return { node, cli };
+  }
+
+  async function updateWithCursorEntry(entry: object): Promise<unknown> {
+    const cursorGlobal = path.join(tmpDir, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(cursorGlobal), { recursive: true });
+    fs.writeFileSync(cursorGlobal, JSON.stringify({ mcpServers: { argent: entry } }));
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.some((a) => a.includes("@swmansion/argent"))) {
+        topologyState.globalVersion = "99.0.0";
+      }
+      return undefined;
+    }) as never);
+
+    await update(["--yes"]);
+
+    return (
+      JSON.parse(fs.readFileSync(cursorGlobal, "utf8")) as { mcpServers: { argent: unknown } }
+    ).mcpServers.argent;
+  }
+
+  it("rewrites a bare global entry to the absolute paths of the global install", async () => {
+    launchPaths.value = stagePinnedPaths();
+
+    const entry = await updateWithCursorEntry({ command: "argent", args: ["mcp"] });
+
+    expect(entry).toEqual({
+      command: launchPaths.value.node,
+      args: [launchPaths.value.cli, "mcp"],
+    });
+  });
+
+  it("keeps a live absolute-path entry when no global install is first on PATH", async () => {
+    const { node, cli } = stagePinnedPaths();
+    launchPaths.globalFirstOnPath = false;
+
+    const entry = await updateWithCursorEntry({ command: node, args: [cli, "mcp"] });
+
+    expect(entry).toEqual({ command: node, args: [cli, "mcp"] });
+  });
+
+  it("moves a live absolute-path entry to the global install this run resolves", async () => {
+    const old = stagePinnedPaths("v22");
+    launchPaths.value = stagePinnedPaths("v24");
+
+    const entry = await updateWithCursorEntry({ command: old.node, args: [old.cli, "mcp"] });
+
+    expect(entry).toEqual({
+      command: launchPaths.value.node,
+      args: [launchPaths.value.cli, "mcp"],
+    });
+  });
+
+  it("moves a live absolute-path entry to bare argent when the install on PATH cannot be pinned", async () => {
+    const { node, cli } = stagePinnedPaths();
+
+    const entry = await updateWithCursorEntry({ command: node, args: [cli, "mcp"] });
+
+    const notes = promptsMock.note.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(notes).toContain("now runs the bare argent command");
+    expect(entry).toEqual({ command: "argent", args: ["mcp"] });
+  });
+
+  it("reports nothing kept when run from $HOME, where Cursor's project file is its global file", async () => {
+    launchPaths.value = stagePinnedPaths();
+    const pinned = { command: launchPaths.value.node, args: [launchPaths.value.cli, "mcp"] };
+    process.chdir(tmpDir);
+
+    const entry = await updateWithCursorEntry(pinned);
+
+    const notes = promptsMock.note.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(notes).not.toContain("kept its absolute-path entry");
+    expect(entry).toEqual(pinned);
+  });
+
+  it("replaces a dead absolute-path entry when this run cannot resolve the global install", async () => {
+    const { node, cli } = stagePinnedPaths();
+    fs.rmSync(node);
+
+    const entry = await updateWithCursorEntry({ command: node, args: [cli, "mcp"] });
+
+    expect(entry).toEqual({ command: "argent", args: ["mcp"] });
   });
 
   it("repairs a corrupted (unparseable) argent entry instead of skipping it as customized", async () => {

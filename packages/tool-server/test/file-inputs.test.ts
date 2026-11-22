@@ -363,6 +363,29 @@ describe("resolveFileInputs", () => {
     ).rejects.toThrow(/does not exist on the tool-server host/);
   });
 
+  it.each(["file", "directory"] as const)(
+    "%s kind says a path with ~ is not an absolute path",
+    async (kind) => {
+      const spec: FileInputSpec[] = [{ target: "p", path: "${p}", kind }];
+      await expect(
+        resolveFileInputs({ fileInputs: spec }, { p: wire({ path: "~/shots/a.png" }) })
+      ).rejects.toThrow('Path "~/shots/a.png" is not an absolute path.');
+    }
+  );
+
+  it.each(["file", "directory", "tar-upload"] as const)(
+    "%s kind says a missing Windows absolute path is not on this host",
+    async (kind) => {
+      const spec: FileInputSpec[] = [{ target: "p", path: "${p}", kind }];
+      const err = await resolveFileInputs(
+        { fileInputs: spec },
+        { p: wire({ path: "C:\\Users\\me\\App.app" }) }
+      ).catch((e: unknown) => e);
+      expect((err as Error).message).toMatch(/not found|does not exist/);
+      expect((err as Error).message).not.toContain("not an absolute path");
+    }
+  );
+
   it("probe kind never fails and reports presence via metadata", async () => {
     const spec: FileInputSpec[] = [{ target: "dir", path: "${dir}", kind: "probe" }];
     const ghost = path.join(tmpDir, "ghost-dir");

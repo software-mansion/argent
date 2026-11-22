@@ -199,6 +199,7 @@ describe("the combined report's leaks on a Mac app", () => {
       uiHangs: [],
       cpuHotspots: [],
       memoryLeaks: [ATTRIBUTED, UNATTRIBUTED],
+      hangsRecorded: true,
       leaksRecorded: true,
       mallocStackLogging: false,
       wallClockStartMs: 1_000_000,

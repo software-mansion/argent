@@ -702,8 +702,8 @@ function exactFieldCount(
 }
 
 /**
- * The on-screen frame of a selector's best visible match — what a `tap`/`type`
- * action targets. An accessible container (e.g. a Touchable on iOS) aggregates
+ * The best visible match of a selector — the element a `tap`/`type` action
+ * targets. An accessible container (e.g. a Touchable on iOS) aggregates
  * its descendants' labels, so a substring text selector matches the container
  * as well as the leaf carrying the text, and the container's centre can sit
  * over a different child entirely. Matches are therefore ranked: exact field
@@ -722,7 +722,7 @@ function exactFieldCount(
  * emission order, and two frames with different extents are two different tap
  * centres, so the tie continues into "most specific" instead.
  */
-export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
+export function selectorToNode(root: DescribeNode, selector: Selector): DescribeNode | undefined {
   const visible = frontmost(findAll(root, selector).filter(isVisible));
   if (visible.length === 0) return undefined;
   if (!hasOwnConstraint(selector)) {
@@ -730,7 +730,7 @@ export function selectorToFrame(root: DescribeNode, selector: Selector): Describ
     for (const n of visible) {
       if (first === undefined || compareBelowPick(n.frame, first.frame) < 0) first = n;
     }
-    return first?.frame;
+    return first;
   }
   const fullTextRegex = fullConsumptionRegex(selector);
   let best: DescribeNode | undefined;
@@ -751,7 +751,12 @@ export function selectorToFrame(root: DescribeNode, selector: Selector): Describ
       best = n;
     }
   }
-  return best?.frame;
+  return best;
+}
+
+/** The frame of {@link selectorToNode}'s match. */
+export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
+  return selectorToNode(root, selector)?.frame;
 }
 
 const GENERIC_ROLES = new Set([

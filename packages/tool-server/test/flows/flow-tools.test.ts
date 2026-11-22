@@ -1482,8 +1482,7 @@ describe("flow-add-step", () => {
     expect(parseFlow(await onDisk("compose-path")).steps).toEqual([
       { kind: "run", flow: "login.yaml" },
     ]);
-    // The live sub-invoke gets no file-input boundary, so it must run the
-    // sibling by name…
+    // The live sub-invoke runs the sibling by name, as the recorded run: does…
     const nested = (registry.invokeTool as any).mock.calls[0][1];
     expect(nested).toEqual({ name: "login", project_root: tmpDir });
     // …which a real tool-server resolves to that same file.
@@ -1492,6 +1491,39 @@ describe("flow-add-step", () => {
       flowName: "login",
       viaUpload: false,
     });
+  });
+
+  it("runs and records a tool step that names an e2e_test_path, without a link", async () => {
+    const registry = new Registry();
+    registry.registerTool(flowReadPrerequisiteTool as never);
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "prereq-path", project_root: tmpDir });
+    const target = path.join(tmpDir, "elsewhere.yaml");
+    await fs.writeFile(target, "executionPrerequisite: Signed in\nsteps:\n  - echo: hi\n", "utf8");
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "prereq-path",
+        project_root: tmpDir,
+        command: "e2e-read-prerequisite",
+        args: JSON.stringify({ e2e_test_path: target, project_root: tmpDir }),
+      }
+    );
+
+    expect(result.toolResult).toEqual({
+      e2eTest: "elsewhere",
+      flow: "elsewhere",
+      executionPrerequisite: "Signed in",
+    });
+    expect(parseFlow(await onDisk("prereq-path")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "e2e-read-prerequisite",
+        args: { e2e_test_path: target, project_root: tmpDir },
+      },
+    ]);
   });
 
   it("names the e2e_test_path the author wrote when the rewritten call is rejected", async () => {
@@ -1648,6 +1680,34 @@ describe("flow-add-step", () => {
 
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(parseFlow(await readFlowFile("compose-outside")).steps).toEqual([]);
+  });
+
+  it("says a relative sibling e2e_test_path was resolved against the tool server's cwd", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-relative", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          name: "compose-relative",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify({ e2e_test_path: ".argent/e2e/login.yaml", project_root: tmpDir }),
+        }
+      )
+    ).rejects.toThrow(
+      `or the project's other e2e test directory, as the tool server resolves a relative path ` +
+        `against its own cwd ("${process.cwd()}"), not the calling agent's - pass the absolute path.`
+    );
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await readFlowFile("compose-relative")).steps).toEqual([]);
   });
 
   it('rejects a sibling e2e_test_path containing a ".." segment without running it', async () => {

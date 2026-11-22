@@ -1,7 +1,9 @@
 import WebSocket from "ws";
 import { FAILURE_CODES, FailureError, TypedEventEmitter, getFailureSignal } from "@argent/registry";
 import * as crypto from "node:crypto";
+import { sleep } from "../timing";
 import { expoManifestOrigin, metroOriginCandidates } from "./metro-origin";
+import { WATCH_PROMISE_FUNCTION, takeSettledScript } from "./scripts/await-promise";
 
 export interface ScriptInfo {
   scriptId: string;
@@ -101,6 +103,20 @@ function formatExceptionDetails(details: CDPExceptionDetails): string {
   return `${description}\n${frameLines}`;
 }
 
+interface RuntimeResponse {
+  result?: { type?: string; value?: unknown; objectId?: string };
+  exceptionDetails?: CDPExceptionDetails;
+}
+
+function runtimeException(details: CDPExceptionDetails): FailureError {
+  return new FailureError(formatExceptionDetails(details), {
+    error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
+    failure_stage: "debugger_cdp_evaluate",
+    failure_area: "tool_server",
+    error_kind: "unknown",
+  });
+}
+
 interface PendingRequest {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
@@ -114,6 +130,7 @@ interface PendingBinding {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const PROMISE_POLL_INTERVAL_MS = 100;
 
 /**
  * How long a Metro socket must stay open before argent trusts its Origin. Expo
@@ -145,12 +162,19 @@ export class CDPClient {
   private paused: { callFrames: unknown; reason: string } | undefined;
   private wsUrl: string;
   private sendOrigin: boolean;
+  /**
+   * Hermes ignores `awaitPromise`, so {@linkcode evaluateAwaited} waits for a
+   * returned Promise inside the app instead. Set only for Hermes behind the
+   * modern inspector: it relies on `Runtime.callFunctionOn`.
+   */
+  private readonly awaitPromisesInApp: boolean;
 
-  constructor(wsUrl: string, options?: { sendOrigin?: boolean }) {
+  constructor(wsUrl: string, options?: { sendOrigin?: boolean; awaitPromisesInApp?: boolean }) {
     this.wsUrl = wsUrl;
     // Default true matches Metro / Expo. Chromium's devtools target rejects an
     // upgrade carrying an Origin header, so those callers pass `sendOrigin: false`.
     this.sendOrigin = options?.sendOrigin !== false;
+    this.awaitPromisesInApp = options?.awaitPromisesInApp === true;
   }
 
   async connect(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
@@ -487,25 +511,79 @@ export class CDPClient {
     // awaitPromise a Promise expression yields a bare Promise handle.
     const returnByValue = options?.returnByValue ?? true;
     const awaitPromise = options?.awaitPromise ?? true;
-    const result = (await this.send(
+    const result = await this.runtimeCall(
       "Runtime.evaluate",
       { expression, returnByValue, awaitPromise },
       options?.timeout
-    )) as {
-      result?: { type?: string; value?: unknown; description?: string };
-      exceptionDetails?: CDPExceptionDetails;
-    };
+    );
+    return result?.value;
+  }
 
-    if (result.exceptionDetails) {
-      throw new FailureError(formatExceptionDetails(result.exceptionDetails), {
-        error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
-        failure_stage: "debugger_cdp_evaluate",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      });
+  /**
+   * {@linkcode evaluate}, also on runtimes that ignore `awaitPromise`: a
+   * returned Promise yields the value it resolves to, and a rejection throws
+   * like an exception. A Promise still pending after {@linkcode DEFAULT_TIMEOUT_MS}
+   * fails with DEBUGGER_CDP_REQUEST_TIMEOUT.
+   */
+  async evaluateAwaited(expression: string): Promise<unknown> {
+    if (!this.awaitPromisesInApp) return this.evaluate(expression);
+
+    const result = await this.runtimeCall("Runtime.evaluate", { expression, returnByValue: false });
+    const objectId = result?.objectId;
+    if (!objectId || (result?.type !== "object" && result?.type !== "function")) {
+      return result?.value;
     }
 
-    return result.result?.value;
+    const slot = `__argentPromise_${crypto.randomUUID().replace(/-/g, "")}`;
+    let watched: unknown;
+    try {
+      const response = await this.runtimeCall("Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: WATCH_PROMISE_FUNCTION,
+        arguments: [{ value: slot }],
+        returnByValue: true,
+      });
+      watched = response?.value;
+    } finally {
+      this.send("Runtime.releaseObject", { objectId }).catch(() => {});
+    }
+
+    if (watched !== slot) return watched;
+    return this.waitForSettled(slot);
+  }
+
+  private async runtimeCall(
+    method: string,
+    params: Record<string, unknown>,
+    timeout?: number
+  ): Promise<RuntimeResponse["result"]> {
+    const response = (await this.send(method, params, timeout)) as RuntimeResponse;
+    if (response.exceptionDetails) throw runtimeException(response.exceptionDetails);
+    return response.result;
+  }
+
+  private async waitForSettled(slot: string): Promise<unknown> {
+    const take = takeSettledScript(slot);
+    const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
+
+    let taken = await this.evaluate(take);
+    while (taken === slot && Date.now() < deadline) {
+      await sleep(PROMISE_POLL_INTERVAL_MS);
+      taken = await this.evaluate(take);
+    }
+    if (taken !== slot) return taken;
+
+    this.evaluate(`delete globalThis[${JSON.stringify(slot)}]`).catch(() => {});
+    throw new FailureError(
+      `The expression returned a Promise that did not settle within ${DEFAULT_TIMEOUT_MS}ms. The ` +
+        `expression ran, and running it again repeats its side effects.`,
+      {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+        failure_stage: "debugger_cdp_await_promise",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+      }
+    );
   }
 
   /**
