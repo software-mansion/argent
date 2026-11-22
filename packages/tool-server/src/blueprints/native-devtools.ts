@@ -1124,9 +1124,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       providerCapture.set(bundleId, await readCaptureEnabled(bundleId));
     };
 
-    /** Clearing the throttle must not turn off capture that someone else relies on. */
+    /**
+     * Clearing the throttle must not turn off capture that someone else relies on.
+     * An activation of a lent agent only reads the provider's capture, so there
+     * only the provider's setting counts.
+     */
     const keepsCapture = (bundleId: string): boolean =>
-      activatedBundleIds.has(bundleId) || providerCapture.get(bundleId) === true;
+      lentSocketPath ? providerCapture.get(bundleId) === true : activatedBundleIds.has(bundleId);
 
     const applyThrottle = async (bundleId: string, throttle: NetworkThrottle): Promise<void> => {
       await noteProviderCapture(bundleId);
