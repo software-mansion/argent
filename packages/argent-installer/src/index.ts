@@ -24,5 +24,6 @@ export {
   findConfiguredAdapterScopes,
   getManagedContentTargets,
   hasCustomizingEnv,
+  isPinnedGlobalEntry,
   type McpServerEntry,
 } from "./mcp-configs.js";

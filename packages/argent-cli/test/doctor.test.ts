@@ -81,6 +81,29 @@ describe("classifyMcpEntry", () => {
     expect(classifyMcpEntry(entry, ctx()).status).toBe("error");
   });
 
+  it("checks both paths of a pinned global entry", () => {
+    const node = path.join(projectRoot, "bin", "node");
+    const cli = path.join(
+      projectRoot,
+      "lib",
+      "node_modules",
+      "@swmansion",
+      "argent",
+      "dist",
+      "cli.js"
+    );
+    const entry = { command: node, args: [cli, "mcp"] };
+    fs.mkdirSync(path.dirname(node), { recursive: true });
+    fs.writeFileSync(node, "");
+    const missing = classifyMcpEntry(entry, ctx());
+    expect(missing.status).toBe("error");
+    expect(missing.label).toContain(`${cli} does not exist`);
+
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.writeFileSync(cli, "");
+    expect(classifyMcpEntry(entry, ctx()).status).toBe("ok");
+  });
+
   it("warns about an entry it could not read", () => {
     expect(classifyMcpEntry({ command: "", args: [] }, ctx()).status).toBe("warn");
   });

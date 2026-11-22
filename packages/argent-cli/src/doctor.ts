@@ -18,6 +18,7 @@ import {
   globalInstallCommand,
   hasCustomizingEnv,
   isGloballyInstalled,
+  isPinnedGlobalEntry,
   listBundledSkills,
   probeLocalInstall,
   projectInstallCommand,
@@ -158,6 +159,13 @@ function classifyNodeScript(entry: McpServerEntry, ctx: EntryContext): DoctorChe
     : entryCheck("error", entry, `${script} does not exist`, { fix: ctx.projectInstallFix });
 }
 
+function classifyPinnedEntry(entry: McpServerEntry, initFix: string): DoctorCheck {
+  const missing = [entry.command, entry.args[0]].find((p) => !fs.existsSync(p));
+  return missing
+    ? entryCheck("error", entry, `${missing} does not exist`, { fix: initFix })
+    : entryCheck("ok", entry);
+}
+
 function classifyPackageRunner(entry: McpServerEntry, ctx: EntryContext): DoctorCheck {
   const fetchesPackage = entry.args.some(
     (arg) => arg === PACKAGE_NAME || arg.startsWith(`${PACKAGE_NAME}@`)
@@ -177,6 +185,7 @@ export function classifyMcpEntry(entry: McpServerEntry, ctx: EntryContext): Doct
   if (entry.command === MCP_BINARY_NAME) return classifyArgentOnPath(entry, ctx);
   if (entry.command === "node") return classifyNodeScript(entry, ctx);
   if (PACKAGE_RUNNERS.has(entry.command)) return classifyPackageRunner(entry, ctx);
+  if (isPinnedGlobalEntry(entry)) return classifyPinnedEntry(entry, initFix);
   if (path.isAbsolute(entry.command) && !fs.existsSync(entry.command)) {
     return entryCheck("error", entry, `${entry.command} does not exist`, { fix: initFix });
   }
