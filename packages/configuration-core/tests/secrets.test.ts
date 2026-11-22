@@ -202,6 +202,25 @@ describe("degradation", () => {
     expect(sources.filter((s) => s.label === globalSecrets())).toHaveLength(1);
     expect(lookupSecret("APP_PASSWORD", sources)).toBe("shared");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "lists a file shared by both scopes once when HOME is a symlink",
+    () => {
+      const linkedHome = path.join(projectDir, "home");
+      fs.symlinkSync(homeDir, linkedHome);
+      write(globalSecrets(), "APP_PASSWORD=shared\n");
+      // Physical, like process.cwd().
+      const cwd = path.join(homeDir, "Downloads");
+      fs.mkdirSync(cwd);
+      const sources = secretSources({ cwd, homeDir: linkedHome, env: NO_ENV });
+      expect(sources.map((s) => s.label)).toEqual([
+        "environment (ARGENT_SECRET_*)",
+        path.join(linkedHome, ".argent", "secrets.env"),
+        path.join(linkedHome, ".env.local"),
+        path.join(linkedHome, ".env"),
+      ]);
+    }
+  );
 });
 
 describe("diagnostics", () => {

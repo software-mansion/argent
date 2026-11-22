@@ -36,7 +36,7 @@ Each tool's own description carries its parameters, defaults, return shape and e
 | Fold device                    | `fold`              | Foldables only: `references/foldables.md`                      |
 | Shake device                   | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu |
 | Wait for UI                    | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text  |
-| Wait for idle                  | `await-screen-idle` | Block until a non-empty screen tree stops changing (§4)        |
+| Wait for idle                  | `await-screen-idle` | Block until a non-empty tree holds for `minStableMs` (§4)      |
 
 ## 3. Finding Tap Targets
 
