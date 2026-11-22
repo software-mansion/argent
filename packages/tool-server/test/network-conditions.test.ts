@@ -175,6 +175,30 @@ describe("network-conditions on an Android emulator", () => {
   });
 
   it.each([
+    { probe: "ADB disconnect", result: new Error("device disconnected") },
+    { probe: "unrecognized network state", result: "Active default network: unknown\n" },
+  ])("times out and restores the radios after a persistent $probe", async ({ result }) => {
+    if (result instanceof Error) vi.mocked(adbShell).mockRejectedValue(result);
+    else vi.mocked(adbShell).mockResolvedValue(result);
+    vi.useFakeTimers();
+    try {
+      const offline = networkConditionsTool
+        .execute({} as never, { udid: androidEmulator, offline: true })
+        .catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(16_000);
+      const err = await offline;
+      expect(err).toBeInstanceOf(Error);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_OFFLINE_TIMEOUT);
+      expect(adbArgs().slice(-2)).toEqual([
+        ["-s", androidEmulator, "shell", "svc", "wifi", "enable"],
+        ["-s", androidEmulator, "shell", "svc", "data", "enable"],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
     {
       network: "Ethernet",
       agent:
@@ -186,7 +210,7 @@ describe("network-conditions on an Android emulator", () => {
       network: "Wi-Fi",
       agent:
         "NetworkAgentInfo{network{100}  handle{1}  ni{WIFI CONNECTED} nc{[ Transports: WIFI Capabilities: INTERNET]}",
-      message: /still up after 15 s/,
+      message: /could not confirm it was offline after 15 s/,
       code: FAILURE_CODES.ANDROID_OFFLINE_TIMEOUT,
     },
   ])(
