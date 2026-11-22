@@ -1068,8 +1068,23 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       providerCapture.delete(bundleId);
     };
 
+    /**
+     * Sends the bypass and the conditions together, after the new connection,
+     * Network.enable or Network.disable that reset the conditions. The app
+     * reads the two in order. A wait for the bypass reply would leave the app
+     * unthrottled for that round trip.
+     */
     const reapplyThrottle = (bundleId: string, throttle: NetworkThrottle): void => {
-      applyThrottle(bundleId, throttle).catch((err: unknown) => {
+      const reapplying = async (): Promise<void> => {
+        await noteProviderCapture(bundleId);
+        await Promise.all([
+          sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", {
+            bypassPorts: [throttle.metroPort],
+          }),
+          sendCdpRpc(bundleId, "Network.emulateNetworkConditions", { ...throttle.conditions }),
+        ]);
+      };
+      reapplying().catch((err: unknown) => {
         const reason = err instanceof Error ? err.message : String(err);
         process.stderr.write(
           `[native-devtools] could not re-apply network conditions to ${bundleId}: ${reason}\n`
