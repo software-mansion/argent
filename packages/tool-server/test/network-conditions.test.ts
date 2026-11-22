@@ -232,6 +232,45 @@ describe("network-conditions on an Android emulator", () => {
     }
   );
 
+  it("runs overlapping calls for one emulator one after the other", async () => {
+    const { calls, services } = fakeNetworkShaper();
+    let radiosOn = true;
+    let finishDisable = (): void => {};
+    const disablePaused = new Promise<void>((resolve) => (finishDisable = resolve));
+    vi.mocked(runAdb).mockImplementation(async (args) => {
+      const command = (args as string[]).slice(3).join(" ");
+      calls.push(command);
+      if (command === "svc wifi disable") await disablePaused;
+      if (command.startsWith("svc wifi")) radiosOn = command.endsWith("enable");
+      return { stdout: "", stderr: "" };
+    });
+    vi.mocked(adbShell).mockImplementation(
+      async () => `Active default network: ${radiosOn ? "101" : "none"}\n`
+    );
+
+    const offline = networkConditionsTool.execute(services, {
+      udid: androidEmulator,
+      offline: true,
+    });
+    await vi.waitFor(() => expect(calls).toContain("svc wifi disable"));
+    const throttled = networkConditionsTool.execute(services, {
+      udid: androidEmulator,
+      latencyMs: 400,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    finishDisable();
+    await Promise.all([offline, throttled]);
+
+    expect(calls).toEqual([
+      "clear",
+      "svc wifi disable",
+      "svc data disable",
+      "svc wifi enable",
+      "svc data enable",
+      "throttle",
+    ]);
+  });
+
   it("removes the proxy and turns the radios on at a reset, then waits until a network is up", async () => {
     const { calls, services } = fakeNetworkShaper();
     vi.mocked(adbShell)

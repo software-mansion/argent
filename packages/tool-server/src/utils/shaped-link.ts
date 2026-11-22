@@ -5,6 +5,7 @@ import type { NetworkConditions } from "./network-conditions";
 const SLICE_BYTES = 16 * 1024;
 const MAX_QUEUED_BYTES = 64 * 1024 * 1024;
 const SEND_CREDIT_MS = 20;
+const MAX_REQUEST_LINE = 8192;
 
 /** One direction of the link, shared by every connection so a speed limit caps their sum. */
 export class LinkDirection {
@@ -151,6 +152,7 @@ class DelayedQueue {
 
 /** The device's connection to the proxy, as the shaped link delivers it in both directions. */
 class ShapedSocket extends Duplex {
+  private requestHead = "";
   private requestLine: string | null = null;
   private readonly upload: DelayedQueue;
   private readonly download: DelayedQueue;
@@ -221,7 +223,7 @@ class ShapedSocket extends Duplex {
   }
 
   private onDeviceData(chunk: Buffer): void {
-    this.requestLine ??= firstLine(chunk);
+    if (this.requestLine === null) this.readRequestLine(chunk);
     this.uploadsSending++;
     this.socket.pause();
     this.upload.push(chunk, () => {
@@ -233,6 +235,15 @@ class ShapedSocket extends Duplex {
   private onDeviceEnd(): void {
     this.deviceEnded = true;
     if (this.upload.empty) this.push(null);
+  }
+
+  private readRequestLine(chunk: Buffer): void {
+    this.requestHead += chunk.toString("latin1", 0, MAX_REQUEST_LINE - this.requestHead.length);
+    const end = this.requestHead.indexOf("\r\n");
+    if (end === -1 && this.requestHead.length < MAX_REQUEST_LINE) return;
+    this.requestLine = end === -1 ? this.requestHead : this.requestHead.slice(0, end);
+    this.requestHead = "";
+    if (this.isBypassed(this.requestLine)) this.upload.repace();
   }
 
   private whenDeviceHasRoom(callback: () => void): void {
@@ -273,11 +284,6 @@ class ShapedSocket extends Duplex {
     this.pendingFinal = null;
     final?.();
   }
-}
-
-function firstLine(chunk: Buffer): string {
-  const end = chunk.indexOf("\r\n");
-  return chunk.toString("latin1", 0, end === -1 ? Math.min(chunk.length, 8192) : end);
 }
 
 /** Shapes every device connection it attaches, all sharing one link. */

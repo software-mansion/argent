@@ -2,6 +2,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, runAdb } from "../../../utils/adb";
 import { externalClaimForAnyId } from "../../../utils/external-devices";
+import { withKeyedLock } from "../../../utils/keyed-lock";
 import { metroPort } from "../../../utils/debugger/metro-port";
 import type { NetworkConditions } from "../../../utils/network-conditions";
 import { requestedConditions, type NetworkConditionsParams } from "../schema";
@@ -10,6 +11,8 @@ import type { AndroidServices, NetworkConditionsResult } from "../types";
 const NETWORK_UP_TIMEOUT_MS = 15_000;
 const NETWORK_DOWN_TIMEOUT_MS = 15_000;
 const NETWORK_POLL_MS = 500;
+
+const transitionLocks = new Map<string, Promise<unknown>>();
 
 function providerEmulator(): FailureError {
   return new FailureError(
@@ -129,28 +132,34 @@ async function turnRadiosOn(serial: string): Promise<void> {
   await waitForNetwork(serial);
 }
 
+async function applyConditions(
+  services: AndroidServices,
+  params: NetworkConditionsParams
+): Promise<NetworkConditionsResult> {
+  const serial = params.udid;
+  const conditions = requestedConditions(params);
+  const shaper = services.networkShaper;
+
+  if (conditions?.offline) {
+    await shaper.clear();
+    await goOffline(serial);
+  } else if (conditions && shapesTraffic(conditions)) {
+    if (externalClaimForAnyId(serial)) throw providerEmulator();
+    await turnRadiosOn(serial);
+    await shaper.throttle(conditions, metroPort({ device_id: serial, port: params.port }));
+  } else {
+    await shaper.clear();
+    await turnRadiosOn(serial);
+  }
+  return { scope: "device", conditions };
+}
+
 export const androidImpl: PlatformImpl<
   AndroidServices,
   NetworkConditionsParams,
   NetworkConditionsResult
 > = {
   requires: ["adb"],
-  async handler(services, params) {
-    const serial = params.udid;
-    const conditions = requestedConditions(params);
-    const shaper = services.networkShaper;
-
-    if (conditions?.offline) {
-      await shaper.clear();
-      await goOffline(serial);
-    } else if (conditions && shapesTraffic(conditions)) {
-      if (externalClaimForAnyId(serial)) throw providerEmulator();
-      await turnRadiosOn(serial);
-      await shaper.throttle(conditions, metroPort({ device_id: serial, port: params.port }));
-    } else {
-      await shaper.clear();
-      await turnRadiosOn(serial);
-    }
-    return { scope: "device", conditions };
-  },
+  handler: (services, params) =>
+    withKeyedLock(transitionLocks, params.udid, () => applyConditions(services, params)),
 };
