@@ -62,7 +62,7 @@ const STOP_REPLY = {
  */
 function recordingApp(
   stopReply: Record<string, unknown> = STOP_REPLY,
-  bytes = "mp4 bytes",
+  bytes: string | Buffer = "mp4 bytes",
   extra: Parameters<typeof fakeMacosApp>[0] = {}
 ) {
   let outputPath = "";
@@ -88,6 +88,33 @@ async function makeSession() {
 }
 
 const START = { timeLimitSeconds: 60, watermark: true, trimStatic: true, showTouches: true };
+
+/**
+ * Has each write to a file opened with "wx", which is how the video is copied
+ * out, write only `take(length, n)` of its `length` bytes (n counts the
+ * writes), or fail when `take` returns an error.
+ */
+function limitOutputWrites(take: (length: number, n: number) => number | Error) {
+  const open = fs.open.bind(fs);
+  let writes = 0;
+  const spy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+    const handle = await open(file, flags, mode);
+    if (flags !== "wx") return handle;
+    const write = handle.write.bind(handle) as (
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position?: number
+    ) => Promise<{ bytesWritten: number; buffer: Buffer }>;
+    handle.write = (async (buffer: Buffer, offset: number, length: number, position?: number) => {
+      const n = take(length, writes++);
+      if (n instanceof Error) throw n;
+      return write(buffer, offset, Math.min(n, length), position);
+    }) as typeof handle.write;
+    return handle;
+  });
+  return { restore: () => spy.mockRestore(), writes: () => writes };
+}
 
 /**
  * A real registry whose Mac app connection is `app`; its dispose (what
@@ -481,6 +508,57 @@ describe("Mac app screen recording", () => {
     await startMacosCapture(api, app, START);
     const err = await errorOf(stopMacosCapture(api));
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING);
+  });
+
+  it("hands over the whole video when each write of the copy takes only part of it", async () => {
+    // Longer than one copy chunk, with no two chunks alike.
+    const video = Buffer.alloc((1 << 20) * 2 + 12_345);
+    for (let i = 0; i < video.length; i++) video[i] = (i * 31 + (i >> 11)) & 0xff;
+    const { api } = await makeSession();
+    const { app } = recordingApp(STOP_REPLY, video);
+    const started = await startMacosCapture(api, app, START);
+    const short = limitOutputWrites((length) => Math.ceil(length / 3));
+    try {
+      const stopped = await stopMacosCapture(api);
+      const copy = await fs.readFile(started.outputFile);
+      expect(copy.length).toBe(video.length);
+      expect(copy.equals(video)).toBe(true);
+      expect(stopped.sizeBytes).toBe(video.length);
+      // Each of the three chunks took many writes.
+      expect(short.writes()).toBeGreaterThan(30);
+    } finally {
+      short.restore();
+    }
+  });
+
+  it.each([
+    ["takes none of a write", () => 0, /could not be written to/],
+    [
+      "takes part of a write and refuses the rest, as at a file size limit",
+      (length: number, n: number) =>
+        n === 0
+          ? Math.floor(length / 2)
+          : Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" }),
+      /EFBIG/,
+    ],
+  ])("fails the stop and leaves no file when the copy %s", async (_what, take, reason) => {
+    const { api } = await makeSession();
+    const { app } = recordingApp();
+    const started = await startMacosCapture(api, app, START);
+    const appFile = appFileOf(started.outputFile);
+    const short = limitOutputWrites(take);
+    try {
+      const err = await errorOf(stopMacosCapture(api));
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING);
+      expect(err?.message).toMatch(reason);
+      expect(err?.message).not.toContain(appFile);
+    } finally {
+      short.restore();
+    }
+    // No part of the video is handed over as if it were all of it.
+    await expect(fs.lstat(started.outputFile)).rejects.toThrow();
+    await expect(fs.lstat(appFile)).rejects.toThrow();
+    expect(api.recordingActive || api.stopPending || api.pendingRetrieval).toBe(false);
   });
 
   it("ends the in-app recording when the session is torn down", async () => {

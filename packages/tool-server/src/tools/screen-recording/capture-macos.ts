@@ -182,7 +182,19 @@ async function copyFromDescriptor(from: string, to: string): Promise<number> {
           copied
         );
         if (bytesRead === 0) break;
-        await dst.write(chunk, 0, bytesRead);
+        // A write can take only part of what it is given, for example at a
+        // file size limit: the rest of the chunk is written before the next
+        // read, so `copied` never counts a byte that is not in `to`.
+        for (let written = 0; written < bytesRead;) {
+          const { bytesWritten } = await dst.write(
+            chunk,
+            written,
+            bytesRead - written,
+            copied + written
+          );
+          if (bytesWritten === 0) throw outputRefused(`the video could not be written to ${to}`);
+          written += bytesWritten;
+        }
         copied += bytesRead;
       }
       // Emptied since the open.
