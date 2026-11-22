@@ -24,6 +24,7 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `rotate`                     | Set the device orientation to portrait or either landscape                                                                              |
 | `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                               |
 | `shake`                      | Shake the device                                                                                                                        |
+| `network-conditions`         | Add latency, limit the download and upload speed, or set the network offline                                                            |
 | `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                           |
 | `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                      |
 | `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                        |
@@ -78,6 +79,15 @@ On an iOS simulator:
 - Unfolded, the UI is landscape. `rotate` sets the orientation of the device, not of the UI. `Portrait` gives a landscape UI.
 - If Argent cannot find the active panel, it uses the cover panel. The tool result then has a warning.
 
+To move a full-screen app into Split View on an open iPhone Duo simulator, use one `gesture-custom` call:
+
+1. Start with the app full screen and the UI in landscape.
+2. Set `edge: "bottom"` and `interpolate: 12`. Send `Down` at (0.5, 1).
+3. Move to (0.5, 0.5) over 280 ms. Hold there with a second `Move` after 300 ms.
+4. Move to x = 0.14 for the left half or x = 0.86 for the right half over 320 ms.
+5. Keep y = 0.5. Send `Up` at the same point after 200 ms.
+6. Check that the app occupies the requested half and the Home Screen occupies the other half.
+
 On an Android emulator:
 
 - The result gives `deviceState` (`CLOSED`, `HALF_OPENED` or `OPENED`) and the matching `posture`.
@@ -90,6 +100,53 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started and that are still running. See [Mac app IDs and kinds](#start-and-restart-an-app).
 
+### Network conditions
+
+`network-conditions` sets the network conditions of an iOS simulator app, an Android emulator or a Chromium tab. Each call replaces the conditions of the previous call.
+
+| Parameter      | Description                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------------- |
+| `udid`         | The device                                                                                                |
+| `bundleId`     | iOS only, and required on iOS: the app to throttle                                                        |
+| `port`         | iOS only: the Metro port that Argent does not throttle. The default is the Metro port of the device.      |
+| `latencyMs`    | The minimum time from a request to its response, in milliseconds, from 0 to 60000                         |
+| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.                                              |
+| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.                                                |
+| `offline`      | `true` makes requests fail as if no network is available. On Android, `adb reverse` ports stay reachable. |
+
+A call without `latencyMs`, `downloadKbps`, `uploadKbps` and `offline` removes the throttle, also when it has `port`. An unknown parameter fails the call. The result contains `scope` and `conditions`. `conditions` is `null` after a removal. `scope` tells which traffic Argent changes:
+
+| `scope`  | Target             | Traffic                                                                                  |
+| -------- | ------------------ | ---------------------------------------------------------------------------------------- |
+| `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`) |
+| `device` | Android emulator   | The traffic of the emulator network. Only `offline` is available.                        |
+| `tab`    | Chromium, Electron | The requests of the page in the active tab                                               |
+
+`latencyMs` sets a minimum. A response that takes longer than `latencyMs` gets no extra delay.
+
+On iOS:
+
+- The app must not be an Apple system app, and the native devtools must connect to it. If the result has a `status` field, follow its `message`, as for `native-network-logs`.
+- Argent delays the data that the app receives. The server gets each request and each upload immediately. With `uploadKbps`, the app gets the response after the time that the upload would take.
+- `downloadKbps` and `uploadKbps` are limits for the whole app. Requests that run at the same time share them. The app gets the response data at the download speed, as on a slow network.
+- `offline: true` also fails the requests that are already running, with the error `-1009` ("The Internet connection appears to be offline.").
+- While Argent shapes or inspects the requests of the app, the app does not use its HTTP cache. Each request goes to the server, and `offline` fails a request also when the cache has a response for it.
+- Argent does not change WebSocket connections and requests to the Metro port. Set `port` when Metro does not use the default port of the device.
+- After a restart of the app, Argent applies the conditions again when the native devtools connect. Requests before that time have no throttle.
+- On a simulator from a [device provider](./device-providers.mdx), a removal leaves the network capture of the provider as it was. A restart of the app removes the conditions there. Call `network-conditions` again after it.
+- When the tool-server stops or `stop-all-simulator-servers` stops the native devtools, the app removes the conditions.
+
+On Android, the emulator console cannot shape the Wi-Fi network of current system images. Thus `latencyMs`, `downloadKbps` and `uploadKbps` fail on an Android emulator. `offline: true` turns off Wi-Fi and mobile data with `svc`. Argent reports offline only when Android confirms that the emulator has no default network. If Argent cannot confirm this within 15 seconds, it tries to turn both radios on again and fails the call. An Android TV emulator connects over Ethernet, so `offline` fails there with `error_kind: "unsupported"`. On other emulators the call fails with `error_kind: "timeout"`. Call `network-conditions` again after a timeout. A call without conditions does nothing when the emulator has a network. Otherwise it turns on Wi-Fi and mobile data, and fails with `error_kind: "timeout"` when no network comes up within 15 seconds. The emulator stays offline after the tool-server stops.
+
+While the Android emulator is offline:
+
+- Requests through `adb reverse` still work, because adb carries them.
+- The emulator cannot reach the host at `10.0.2.2`. A React Native app that loads from Metro at `10.0.2.2` loses its connection to Metro. The debugger tools then cannot reach the app until the network comes back.
+
+On Chromium, Argent applies the conditions to the page of the active tab. Argent applies them again after a tab switch with `chromium-tabs`, and before a tab that `chromium-tabs` opens loads its URL. When `chromium-tabs close` closes the active tab, Argent moves to another tab and applies the conditions there. Service workers, web workers and cross-site iframes keep the full speed. When the active tab closes outside Argent, or when another DevTools client detaches from the page, the conditions can go away. Call `network-conditions` again.
+
+`network-conditions` fails on a physical iPhone and on a physical Android device.
+
 ## Inspecting the screen
 
 | Tool                | Description                                                                      |
@@ -97,14 +154,18 @@ With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started 
 | `screenshot`        | Capture the device screen                                                        |
 | `describe`          | Get the accessibility / DOM element tree for the current screen                  |
 | `screenshot-diff`   | Compare two PNG screenshots and return a visual-diff summary                     |
-| `await-screen-idle` | Block until the screen has rendered content and stopped changing                 |
+| `await-screen-idle` | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
+
+On Chromium, `describe` reports a zero-area frame when a rotated container fully clips an element along one axis.
 
 On an iOS simulator, a line of `describe` can show:
 
 - `[disabled]` for a control that is not enabled.
 - `[selected]` for a selected control.
 - `hint="..."` for an element that has a VoiceOver hint. `describe` omits a hint that is identical to the label. A physical iPhone does not report the VoiceOver hint.
+
+On an iOS simulator, `describe` can show the placeholder of an empty text field as its value, with no label. Thus an empty text field looks like a text field that contains that text. `describe` can also omit a text field that has no accessibility label or identifier, such as the Settings search field. This can also occur when the text field contains text. In both cases, take a screenshot to examine the text field.
 
 On a physical iPhone, `describe` includes a web sign-in sheet or an in-app Safari view that covers the app. The system alert that asks to sign in with a website shows only after `launch-app com.apple.springboard`.
 
@@ -125,7 +186,7 @@ On a physical iPhone, `describe` includes a web sign-in sheet or an in-app Safar
 | `screen-recording-start` | Start recording the screen to an h264 mp4                                          |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                                          |
 
-`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. On a local iOS simulator, `gesture-custom` accepts `edge` for a system gesture. Use `top`, `right`, `bottom`, or `left` in upright screen coordinates. Send one finger with `Down`, optional `Move` events, and `Up`. After a simulator-server restart, the first `Down` can take up to 35 seconds. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
 
 Through the MCP server, an interaction tool and `await-ui-element` return a screenshot and the element tree after the screen stops changing. These limits apply:
 
@@ -176,6 +237,10 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process            |
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
+
+When the expression of `debugger-evaluate` returns a Promise, Argent waits up to 10 seconds and returns the value it resolves to. A rejection fails the call with the reason. On Vega and on React Native 0.75 and older, the result is the internal fields of the Promise.
+
+When two or more devices share one Metro, Metro does not list the device IDs from `list-devices`. For a booted local iOS simulator, Argent selects the app on the Metro device with the same name as the simulator. Argent does this only when exactly one booted local simulator and exactly one Metro device have that name. A simulator name with `&` or `+` never matches, because Metro lists it differently. For any other simulator, emulator or physical device ID, the debugger tools return `DEBUGGER_TARGET_DEVICE_MISMATCH` with the `logicalDeviceId` of each device on Metro, and `debugger-status` and `debugger-log-registry` return `not_connected` with the same list. Pass that `logicalDeviceId` as `device_id` in the next calls.
 
 ## Native devtools
 
@@ -480,6 +545,20 @@ On a Mac app, pass `modifiers` to `gesture-tap` as a list of keys from `control`
 
 Use `scale: 1.0` for one pixel per point. By default, screenshots downscale windows larger than 768 points on the longest side, to at least 0.6 pixels per point. The minimum explicit scale is `0.1`. Mac apps ignore `ARGENT_SCREENSHOT_SCALE` and `rotation`.
 
+#### Rotated devices
+
+All coordinates use the UI as the user sees it, also when the UI is landscape or upside down. On an iOS simulator, Argent turns these surfaces to the orientation of the UI:
+
+- Screenshots
+- `describe` frames
+- The points of the native view tools
+- The tap points of `debugger-component-tree`
+- The coordinates of the gesture tools
+
+Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `button`, `launch-app`, `restart-app`, `open-url`, `terminate-app` and `reinstall-app`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
+
+If Argent cannot read the orientation, the tool result has a note. For a live capture of `screenshot-diff`, the note is in the summary. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
+
 Scrolling targets the nearest scrollable content under the point. Web content scrolls first; an enclosing native scroll view can take over at the page boundary. The call fails if no eligible content can scroll.
 
 `scrolled: true` does not prove movement. Compare the tree before and after scrolling to detect the end of a list.
@@ -712,6 +791,8 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 | `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                                  |
 | `profiler-stack-query`            | Query native trace data for iterative native investigation                         |
 
+If Argent cannot read the UI hangs table from an Instruments trace, `profiler-load`, `profiler-stack-query`, and `profiler-combined-report` report missing hang data. An empty table gives a count of zero hangs.
+
 Argent caps Instruments recordings at 10 minutes on iOS simulators and [Mac apps](#profiling-a-mac-app). Call `native-profiler-stop` to recover the available trace after the cap or an unexpected exit.
 
 While stop is saving and exporting on the same target, a second stop joins the first. Start and analyze wait for it to finish. Retry `profiler-load` or `profiler-combined-report` after stop completes if the tool reports that the capture is still in progress.
@@ -895,9 +976,24 @@ Some agent tools do not always give the same result as the hidden tool:
 - `react-profiler-renders` reads only the top 30 levels of the React fiber tree and counts the mounted components, not the re-renders. For render counts, use `profiler-commit-query` with `mode: "render_counts"` after a profiling session.
 - `e2e-execute` without `prerequisiteAcknowledged` returns the execution prerequisite and runs no step only when the e2e test has a prerequisite. When the e2e test has no prerequisite, `e2e-execute` runs the e2e test.
 
+On Chromium, `fill` fails with `FILL_UNSUPPORTED_FIELD` and changes nothing for:
+
+- text longer than the `maxlength` of the field
+- text that a number input does not hold as a number
+- whitespace around an address in an email input
+- focus in a cross-origin frame, a closed shadow root or an `<embed>`
+
+When a Chromium page does not answer for 10 seconds, for example while it shows a JavaScript dialog, `fill` fails with `FILL_NOT_VERIFIED`. If the page does not answer before the edit, `fill` changes nothing.
+
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones and Mac apps are not supported yet.
 
 In `ui-tree`, fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. On Android, `roots` holds one root per window, topmost first. A system dialog, such as a runtime permission prompt or a crash dialog, sets `alertVisible`, and every node of the app it covers is `covered`. When Android hides the app's window under the dialog, `foregroundApp` is unset. `foreground-app` returns the same `foregroundApp` and `alertVisible` without reading the tree, plus the app's `name` on iOS.
+
+## Relative paths
+
+The client resolves a relative path in a file input of a tool against its working directory, for example `appPath` of `reinstall-app`. `GET /tools` lists the file inputs of a tool in `fileInputs`. The MCP server refuses such a path in `project_root` or `e2e_test_path`.
+
+On Windows, a path such as `\team\$archive` starts at the root of the client's current drive. For these MCP inputs, include the drive letter, for example `D:\team\$archive`.
 
 ## Footnotes
 

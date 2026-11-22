@@ -392,8 +392,42 @@ describe("argent providers dispatch", () => {
     expect(fs.existsSync(providersDir)).toBe(false);
   });
 
+  it.each([["check"], ["publish", "--stdin"]])(
+    "accepts --schema-version on %j",
+    async (...argv) => {
+      withStdin(JSON.stringify(descriptor()));
+
+      expect(await runProviders(...argv, "--schema-version", "1")).toBe(0);
+    }
+  );
+
   it("exits 2 on a stray operand for a subcommand that takes none", async () => {
     expect(await runProviders("list", "acme")).toBe(2);
+  });
+
+  it("exits 2 rather than withdrawing for real under --dry-run, which only prune reads", async () => {
+    withStdin(JSON.stringify(descriptor()));
+    await runProviders("publish", "--stdin", "--pid", String(process.pid));
+
+    expect(await runProviders("withdraw", "acme-3f2a9c", "--dry-run")).toBe(2);
+    expect(stderr()).toContain("--dry-run does not apply to `argent providers withdraw`");
+    expect(fs.existsSync(path.join(providersDir, "acme-3f2a9c.json"))).toBe(true);
+  });
+
+  it.each([
+    [["publish", "--stdin", "--dry-run"], "--dry-run"],
+    [["list", "--pid", "5"], "--pid"],
+    [["check", "--stdin"], "--stdin"],
+    [["prune", "--file=d.json"], "--file"],
+    [["withdraw", "acme", "--schema-version", "1"], "--schema-version"],
+    [["withdraw", "acme", "--file", "d.json"], "--file"],
+    [["list", "--file", "d.json"], "--file"],
+  ])("exits 2 on %j, naming the flag it does not read", async (argv, flag) => {
+    withStdin(JSON.stringify(descriptor()));
+
+    expect(await runProviders(...argv)).toBe(2);
+    expect(stderr()).toContain(`${flag} does not apply to \`argent providers ${argv[0]}\``);
+    expect(fs.existsSync(providersDir)).toBe(false);
   });
 });
 

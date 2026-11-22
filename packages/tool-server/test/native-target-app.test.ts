@@ -37,6 +37,7 @@ function makeApi(apps: NativeAppState[]): NativeDevtoolsApi {
     takeCaptureGap: () => false,
     networkRecords: () => undefined,
     networkCaptureAfterLaunch: async () => undefined,
+    setNetworkConditions: async () => {},
     getAppState: async (bundleId) => {
       const app = byBundleId.get(bundleId);
       if (!app) throw new Error(`unknown bundleId: ${bundleId}`);

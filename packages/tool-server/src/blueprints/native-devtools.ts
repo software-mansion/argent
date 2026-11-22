@@ -17,6 +17,7 @@ import {
 } from "@argent/registry";
 import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
 import { XcodeFirstLaunchPendingError } from "../utils/dependency-errors";
+import type { CdpNetworkConditions } from "../utils/network-conditions";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
@@ -167,6 +168,8 @@ const NATIVE_DEVTOOLS_AGE_SLOP_MS = 3000;
  */
 export const NATIVE_DEVTOOLS_CONNECT_BUDGET_MS = 15_000;
 
+const LENT_RELEASE_TIMEOUT_MS = 1_000;
+
 /**
  * The agent-facing remedy for each measured state. `connected` is excluded at
  * the type level so an unhandled future state is a compile error rather than a
@@ -268,6 +271,12 @@ export function buildInitFailedResult(
   };
 }
 
+/** Conditions for one app, and the Metro port its throttle leaves alone. */
+export interface NetworkThrottle {
+  conditions: CdpNetworkConditions;
+  metroPort: number;
+}
+
 export type NativeDevtoolsPrecheckBlock =
   | NativeDevtoolsInitFailedResult
   | { status: "restart_required"; message: string }
@@ -276,7 +285,7 @@ export type NativeDevtoolsPrecheckBlock =
 
 /**
  * Every tool whose handler answers a blocked precheck with one of these status
- * objects instead of doing its work. The six feature tools run the 3-arg
+ * objects instead of doing its work. The seven feature tools run the 3-arg
  * overload and can return any of the four; the rest run the 2-arg one and can
  * only return `init_failed`.
  */
@@ -285,6 +294,7 @@ const NATIVE_DEVTOOLS_PRECHECK_TOOLS = new Set([
   "native-find-views",
   "native-full-hierarchy",
   "native-network-logs",
+  "network-conditions",
   "native-view-at-point",
   "native-user-interactable-view-at-point",
   "native-devtools-status",
@@ -533,6 +543,13 @@ export interface NativeDevtoolsApi {
    * capture is off for the app. Never throws.
    */
   networkCaptureAfterLaunch(bundleId: string): Promise<string | undefined>;
+  /**
+   * Throttles one app's URL loading, or with `null` removes the throttle, and
+   * resolves once a connected app confirms it. Sticky like
+   * {@link activateNetworkInspection}: re-sent after every Network.enable and
+   * reconnect, since both reset the app's conditions.
+   */
+  setNetworkConditions(bundleId: string, throttle: NetworkThrottle | null): Promise<void>;
   getAppState(bundleId: string): Promise<NativeAppState>;
   detectFrontmostBundleId(): Promise<string | null>;
   queryViewHierarchy(
@@ -724,6 +741,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     const activatedBundleIds = new Set<string>();
     const captureGaps = new Set<string>();
+    const networkConditions = new Map<string, NetworkThrottle>();
+    /** Attach mode: whether the provider's capture was on before Argent first throttled the app. */
+    const providerCapture = new Map<string, boolean>();
+    /** Apps that a failed call may have left partly throttled, so a reset still clears them. */
+    const unconfirmedThrottles = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
     /** Woken whenever a connection is armed, learns its pid or closes. */
     const connectionWaiters = new Set<() => void>();
@@ -794,15 +816,21 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       return runEnsureEnv();
     };
 
+    const writeMessage = (socket: net.Socket, type: string, payload: unknown): void => {
+      socket.write(JSON.stringify({ type, payload }) + "\n");
+    };
+
     const isAppRunning = async (bundleId: string): Promise<boolean> => {
       const runningBundleIds = await host.listRunningBundleIds(udid);
       return runningBundleIds.has(bundleId);
     };
 
-    function sendViewInspectorRpc(
+    function sendRpc(
       targetBundleId: string,
-      method: InspectorMethod,
-      params: Record<string, unknown> = {}
+      type: "ViewInspector" | "CDP",
+      method: string,
+      params: Record<string, unknown>,
+      timeoutMs: number
     ): Promise<unknown> {
       const conn = connections.get(targetBundleId);
       if (!conn) {
@@ -816,27 +844,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         );
       }
       const id = nextRpcId++;
-      // A heavy cold start can stall the app for several seconds, and the flow
-      // runner re-reads the hierarchy through exactly that window. Give the
-      // flows' workhorse read time to ride the stall out instead of failing the
-      // step — mirroring the Android devtools client's 5s default / 15s
-      // getHierarchy tiers. Everything else (including the per-read
-      // Application.getState probe and the interactive point queries) keeps the
-      // 5s ceiling so one-shot agent tools stay snappy on a wedged app.
-      const timeoutMs = method === "ViewHierarchy.getFullHierarchy" ? 15_000 : 5_000;
       return new Promise((resolve, reject) => {
         pendingRpc.set(id, { resolve, reject });
-        conn.socket.write(
-          JSON.stringify({
-            type: "ViewInspector",
-            payload: { id, method, params },
-          }) + "\n"
-        );
+        writeMessage(conn.socket, type, { id, method, params });
         setTimeout(() => {
           if (pendingRpc.has(id)) {
             pendingRpc.delete(id);
             reject(
-              new FailureError(`ViewInspector RPC timed out: ${method}`, {
+              new FailureError(`${type} RPC timed out: ${method}`, {
                 error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
                 failure_stage: "native_devtools_rpc_request",
                 failure_area: "tool_server",
@@ -985,6 +1000,130 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       void settleClosedConnection(bundleId, conn);
     };
 
+    function sendViewInspectorRpc(
+      targetBundleId: string,
+      method: InspectorMethod,
+      params: Record<string, unknown> = {}
+    ): Promise<unknown> {
+      // A heavy cold start can stall the app for several seconds, and the flow
+      // runner re-reads the hierarchy through exactly that window. Give the
+      // flows' workhorse read time to ride the stall out instead of failing the
+      // step — mirroring the Android devtools client's 5s default / 15s
+      // getHierarchy tiers. Everything else (including the per-read
+      // Application.getState probe and the interactive point queries) keeps the
+      // 5s ceiling so one-shot agent tools stay snappy on a wedged app.
+      const timeoutMs = method === "ViewHierarchy.getFullHierarchy" ? 15_000 : 5_000;
+      return sendRpc(targetBundleId, "ViewInspector", method, params, timeoutMs);
+    }
+
+    /** A CDP request over the connection's requester, which also sends Network.enable. */
+    const sendCdpRpc = (
+      targetBundleId: string,
+      method: string,
+      params: Record<string, unknown> = {}
+    ): Promise<unknown> => {
+      const conn = connections.get(targetBundleId);
+      if (!conn) {
+        return Promise.reject(
+          new FailureError("Native devtools not connected for bundleId: " + targetBundleId, {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
+            failure_stage: "native_devtools_rpc_connection",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          })
+        );
+      }
+      return conn.cdp.request(method, params, { timeoutMs: 5_000 });
+    };
+
+    const readCaptureEnabled = async (bundleId: string): Promise<boolean> => {
+      const state = await sendCdpRpc(bundleId, "NativeDevtoolsIos.getConditions").catch(() => null);
+      return (state as { enabled?: unknown } | null)?.enabled !== false;
+    };
+
+    const noteProviderCapture = async (bundleId: string): Promise<void> => {
+      if (!lentSocketPath || providerCapture.has(bundleId)) return;
+      providerCapture.set(bundleId, await readCaptureEnabled(bundleId));
+    };
+
+    /** Clearing the throttle must not turn off capture that someone else relies on. */
+    const keepsCapture = (bundleId: string): boolean =>
+      activatedBundleIds.has(bundleId) || providerCapture.get(bundleId) === true;
+
+    const applyThrottle = async (bundleId: string, throttle: NetworkThrottle): Promise<void> => {
+      await noteProviderCapture(bundleId);
+      await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", {
+        bypassPorts: [throttle.metroPort],
+      });
+      await sendCdpRpc(bundleId, "Network.emulateNetworkConditions", { ...throttle.conditions });
+    };
+
+    const clearThrottle = async (bundleId: string): Promise<void> => {
+      await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", { bypassPorts: [] });
+      await sendCdpRpc(bundleId, keepsCapture(bundleId) ? "Network.enable" : "Network.disable");
+      providerCapture.delete(bundleId);
+    };
+
+    const reapplyThrottle = (bundleId: string, throttle: NetworkThrottle): void => {
+      applyThrottle(bundleId, throttle).catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `[native-devtools] could not re-apply network conditions to ${bundleId}: ${reason}\n`
+        );
+      });
+    };
+
+    /** A new connection and Network.enable both reset the app's conditions. */
+    const reapplyStoredThrottle = (bundleId: string): void => {
+      const throttle = networkConditions.get(bundleId);
+      if (throttle) reapplyThrottle(bundleId, throttle);
+    };
+
+    /**
+     * Arms the connection, and sends the app's throttle after the
+     * Network.enable that resets it. A lent agent's capture is only read, so
+     * its conditions stay.
+     */
+    const armOn = (bundleId: string, conn: AppConnection): Promise<boolean> => {
+      const sendsEnable = !lentSocketPath && !conn.armed && !conn.enabling;
+      const arming = enableOn(conn);
+      if (sendsEnable) reapplyStoredThrottle(bundleId);
+      return arming;
+    };
+
+    const storeThrottle = (bundleId: string, throttle: NetworkThrottle | null): void => {
+      if (throttle) networkConditions.set(bundleId, throttle);
+      else networkConditions.delete(bundleId);
+    };
+
+    /** A provider keeps the app connected after Argent leaves, so the app would stay throttled. */
+    const releaseLentThrottles = async (): Promise<void> => {
+      const throttled = new Set([...networkConditions.keys(), ...unconfirmedThrottles]);
+      const cleared = [...throttled]
+        .filter((bundleId) => connections.has(bundleId))
+        .map((bundleId) => clearThrottle(bundleId).catch(() => {}));
+      await Promise.race([
+        Promise.all(cleared),
+        new Promise((resolve) => setTimeout(resolve, LENT_RELEASE_TIMEOUT_MS).unref()),
+      ]);
+    };
+
+    const settleRpc = (payload: { id: number; result?: unknown; error?: { message: string } }) => {
+      const pending = pendingRpc.get(payload.id);
+      if (!pending) return;
+      pendingRpc.delete(payload.id);
+      if (payload.error) {
+        pending.reject(
+          new FailureError(payload.error.message, {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+            failure_stage: "native_devtools_rpc_response",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          })
+        );
+      } else pending.resolve(payload.result);
+    };
+
     // Stale socket file from a crashed previous run (unix-only). Never in
     // attach mode: that path is the provider's live socket, not ours.
     if (transport === "unix" && !lentSocketPath) {
@@ -1045,7 +1184,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             if (activatedBundleIds.has(bundleId)) {
               // Our own listener hears an app at its launch, so nothing was missed.
               if (!lentSocketPath) captureGaps.delete(bundleId);
-              void enableOn(conn);
+              void armOn(bundleId, conn);
+            } else {
+              reapplyStoredThrottle(bundleId);
             }
             void readConnectionPid(bundleId, conn);
             return;
@@ -1060,22 +1201,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             }
           }
 
-          if (msg.type === "ViewInspector") {
-            const p = msg.payload;
-            const pending = pendingRpc.get(p.id);
-            if (!pending) return;
-            pendingRpc.delete(p.id);
-            if (p.error) {
-              pending.reject(
-                new FailureError(p.error.message, {
-                  error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
-                  failure_stage: "native_devtools_rpc_response",
-                  failure_area: "tool_server",
-                  error_kind: "subprocess",
-                })
-              );
-            } else pending.resolve(p.result);
-          }
+          if (msg.type === "ViewInspector") settleRpc(msg.payload);
         },
       });
 
@@ -1298,7 +1424,25 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         const conn = connections.get(bundleId);
         if (!conn) return Promise.resolve(false);
         if (startedNow && !lentSocketPath) captureGaps.add(bundleId);
-        return enableOn(conn);
+        return armOn(bundleId, conn);
+      },
+
+      async setNetworkConditions(bundleId, throttle) {
+        const previous = networkConditions.get(bundleId) ?? null;
+        storeThrottle(bundleId, throttle);
+        if (!connections.has(bundleId)) return;
+        if (!throttle && !previous && !unconfirmedThrottles.has(bundleId)) return;
+        try {
+          if (throttle) await applyThrottle(bundleId, throttle);
+          else await clearThrottle(bundleId);
+          unconfirmedThrottles.delete(bundleId);
+        } catch (err) {
+          if (throttle) unconfirmedThrottles.add(bundleId);
+          if ((networkConditions.get(bundleId) ?? null) === throttle) {
+            storeThrottle(bundleId, previous);
+          }
+          throw err;
+        }
       },
 
       takeCaptureGap: (bundleId) => captureGaps.delete(bundleId),
@@ -1460,6 +1604,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       dispose: async () => {
         disposed = true;
         unregisterCaptures();
+        if (lentSocketPath) await releaseLentThrottles();
         for (const { socket, cdp } of connections.values()) {
           cdp.close();
           socket.destroy();
@@ -1469,6 +1614,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         captureGaps.clear();
         networkStores.clear();
         wakeConnectionWaiters();
+        networkConditions.clear();
+        unconfirmedThrottles.clear();
+        providerCapture.clear();
         /**
          * Attach mode owns only its end of the connection: hang up and leave
          * the provider's socket file and server exactly as they were.
