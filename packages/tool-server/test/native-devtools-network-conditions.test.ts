@@ -58,7 +58,10 @@ interface FakeAgent {
   close(): void;
 }
 
-/** `reply` answers each CDP request that carries an id; `undefined` leaves it unanswered. */
+/**
+ * `reply` answers each CDP request that carries an id; `undefined` leaves it
+ * unanswered, and a `delayMs` in the answer sends it that much later.
+ */
 function connectAgent(
   reply: (msg: Message) => Record<string, unknown> | undefined = () => ({ result: {} })
 ): Promise<FakeAgent> {
@@ -91,9 +94,13 @@ function connectAgent(
         );
         const answer = msg.type === "CDP" && payload.id !== undefined ? reply(msg) : undefined;
         if (answer) {
-          socket.write(
-            JSON.stringify({ type: "CDP", payload: { id: payload.id, ...answer } }) + "\n"
-          );
+          const { delayMs, ...rest } = answer as { delayMs?: number };
+          const send = () =>
+            socket.write(
+              JSON.stringify({ type: "CDP", payload: { id: payload.id, ...rest } }) + "\n"
+            );
+          if (delayMs) setTimeout(send, delayMs);
+          else send();
         }
       }
     });
@@ -293,6 +300,25 @@ describe("native devtools network conditions", () => {
       ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [] }],
       ["CDP", "Network.enable", {}],
     ]);
+  });
+
+  it("sends the conditions again after Network.enable without waiting for the bypass reply", async () => {
+    let slowBypass = false;
+    const { api, agent } = await setup((msg) =>
+      slowBypass && msg.payload.method === "NativeDevtoolsIos.configure"
+        ? { result: {}, delayMs: 1_000 }
+        : { result: {} }
+    );
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    agent.received.length = 0;
+    slowBypass = true;
+
+    void api.activateNetworkInspection(BUNDLE);
+
+    // A wait for the bypass reply would leave the app unthrottled for that round trip.
+    await vi.waitFor(() => expect(agent.received).toEqual([ACTIVATE, BYPASS_METRO, EMULATE_SLOW]), {
+      timeout: 500,
+    });
   });
 
   it("clears with Network.disable when network inspection was never activated", async () => {
