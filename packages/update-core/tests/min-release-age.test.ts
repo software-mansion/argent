@@ -108,6 +108,16 @@ describe("detectMinReleaseAgeMsForPm (known PM)", () => {
     expect(mockExec).toHaveBeenCalledTimes(1);
   });
 
+  it("reads the config in the given cwd, where the install will run", async () => {
+    stubPmConfig({ "pnpm config get minimumReleaseAge": "1440" });
+    expect(await detectMinReleaseAgeMsForPm("pnpm", "/home/u")).toBe(DAY_MS);
+    expect(mockExec).toHaveBeenCalledWith(
+      "pnpm config get minimumReleaseAge",
+      expect.objectContaining({ cwd: "/home/u" }),
+      expect.any(Function)
+    );
+  });
+
   it("returns 0 for bun (no `config get`, covered by the override instead)", async () => {
     stubPmConfig({});
     expect(await detectMinReleaseAgeMsForPm("bun")).toBe(0);

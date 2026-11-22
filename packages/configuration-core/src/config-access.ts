@@ -6,7 +6,7 @@
 
 import * as path from "node:path";
 import { resolveProjectRoot, type FlagScope } from "./flags.js";
-import { resolveHomeDir, type ConfigPathOptions } from "./paths.js";
+import { isHomeDir, resolveHomeDir, type ConfigPathOptions } from "./paths.js";
 import { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
 import { applyMergePolicy } from "./merge.js";
 import {
@@ -201,6 +201,8 @@ export function listConfig(
   options: ConfigPathOptions = {},
   registry: readonly ConfigDefinition[] = CONFIG_SCHEMA
 ): ConfigEntryView[] {
+  // A home-rooted project's file is the global one: list its values once, as global.
+  const projectIsHome = isHomeDir(resolveProjectRoot(options.cwd ?? process.cwd()), options);
   return registry.map((def) => ({
     key: def.key,
     description: def.description,
@@ -209,7 +211,7 @@ export function listConfig(
     ...(describeExpectedValue(def) ? { expected: describeExpectedValue(def)! } : {}),
     ...(def.example ? { example: def.example } : {}),
     effective: getConfigValue(def, options),
-    project: readScopeValue(def, "project", options),
+    project: projectIsHome ? undefined : readScopeValue(def, "project", options),
     global: readScopeValue(def, "global", options),
   }));
 }
@@ -285,10 +287,12 @@ export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): str
     );
   }
   const home = resolveHomeDir(options);
+  const projectRoot = resolveProjectRoot(options.cwd ?? process.cwd());
   const global = resolveDeviceSetEntries(readScopeValue(def, "global", options), home, home);
   const project = resolveDeviceSetEntries(
     readScopeValue(def, "project", options),
-    resolveProjectRoot(options.cwd ?? process.cwd()),
+    // A home-rooted project reads the global file; HOME's spelling lets the dedupe drop it.
+    isHomeDir(projectRoot, options) ? home : projectRoot,
     home
   );
   return Array.from(new Set([...global, ...project]));

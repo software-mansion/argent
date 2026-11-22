@@ -191,7 +191,7 @@ describe("macOS flow tree projection", () => {
     ]);
     const tree = await flowTree({ web });
     const check = (selector: Selector, expected: string, mode: "equals" | "contains") =>
-      evaluateCondition("text", expected, findAll(tree, selector), mode, undefined, true);
+      evaluateCondition("text", expected, findAll(tree, selector), mode, true);
     expect(check({ text: "Beta paragraph" }, beta, "equals")).toBe(true);
     expect(check({ text: "Beta paragraph" }, "third line", "contains")).toBe(false);
     expect(check({ identifier: "ed" }, `${alpha} ${beta}`, "equals")).toBe(true);
@@ -214,9 +214,7 @@ describe("macOS flow tree projection", () => {
       frame: { x: 0.036, y: 0.082, width: 0.033, height: 0.036 },
       children: [],
     };
-    expect(evaluateCondition("text", "query1", [field, button], "contains", undefined, true)).toBe(
-      true
-    );
+    expect(evaluateCondition("text", "query1", [field, button], "contains", true)).toBe(true);
   });
 
   it("reads collected text with whitespace runs as single spaces", async () => {
