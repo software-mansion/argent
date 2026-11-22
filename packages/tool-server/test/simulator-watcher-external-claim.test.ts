@@ -127,10 +127,11 @@ function makeApi(): NativeDevtoolsApi {
     isAppRunning: async () => false,
     listConnectedBundleIds: () => [],
     appConnectionState: async () => "stale_process",
-    activateNetworkInspection: () => {},
+    activateNetworkInspection: async () => false,
+    takeCaptureGap: () => false,
+    networkRecords: () => undefined,
+    networkCaptureAfterLaunch: async () => undefined,
     setNetworkConditions: async () => {},
-    getNetworkLog: () => [],
-    clearNetworkLog: () => {},
     getAppState: async () => {
       throw new Error("not implemented");
     },

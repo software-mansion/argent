@@ -643,6 +643,11 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     });
     readline.createInterface({ input: agent }).on("line", (line) => {
       const { type, payload } = JSON.parse(line);
+      // The agent acknowledges Network.enable, which native-network-logs waits for.
+      if (type === "CDP") {
+        agent.write(JSON.stringify({ type, payload: { id: payload.id, result: {} } }) + "\n");
+        return;
+      }
       if (type !== "ViewInspector") return;
       const result = { screenFrame: { x: 0, y: 0, width: 1, height: 1 }, elements: [] };
       agent.write(JSON.stringify({ type, payload: { id: payload.id, result } }) + "\n");
@@ -678,6 +683,11 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
       });
       readline.createInterface({ input: agent }).on("line", (line) => {
         const { type, payload } = JSON.parse(line);
+        // The agent acknowledges Network.enable, which native-network-logs waits for.
+        if (type === "CDP") {
+          agent.write(JSON.stringify({ type, payload: { id: payload.id, result: {} } }) + "\n");
+          return;
+        }
         if (type !== "ViewInspector") return;
         const result = { screenFrame: { x: 0, y: 0, width: 1, height: 1 }, elements: [] };
         agent.write(JSON.stringify({ type, payload: { id: payload.id, result } }) + "\n");
