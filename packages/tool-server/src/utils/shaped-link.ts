@@ -34,6 +34,8 @@ export class LinkDirection {
   }
 }
 
+const UNSHAPED = new LinkDirection();
+
 interface QueuedSlice {
   arrivesAt: number;
   chunk: Buffer;
@@ -149,6 +151,7 @@ class DelayedQueue {
 
 /** The device's connection to the proxy, as the shaped link delivers it in both directions. */
 class ShapedSocket extends Duplex {
+  private requestLine: string | null = null;
   private readonly upload: DelayedQueue;
   private readonly download: DelayedQueue;
   private deviceEnded = false;
@@ -159,16 +162,17 @@ class ShapedSocket extends Duplex {
 
   constructor(
     readonly socket: net.Socket,
-    private readonly links: { upload: LinkDirection; download: LinkDirection }
+    private readonly links: { upload: LinkDirection; download: LinkDirection },
+    private readonly isBypassed: (requestLine: string) => boolean
   ) {
     super();
     this.upload = new DelayedQueue(
-      () => this.links.upload,
+      () => this.linkFor("upload"),
       (chunk) => this.deliverToProxy(chunk),
       () => this.onUploadDrain()
     );
     this.download = new DelayedQueue(
-      () => this.links.download,
+      () => this.linkFor("download"),
       (chunk) => this.deliverToDevice(chunk),
       () => this.onDownloadDrain()
     );
@@ -211,7 +215,13 @@ class ShapedSocket extends Duplex {
     callback(err);
   }
 
+  private linkFor(direction: "upload" | "download"): LinkDirection {
+    const bypassed = this.requestLine !== null && this.isBypassed(this.requestLine);
+    return bypassed ? UNSHAPED : this.links[direction];
+  }
+
   private onDeviceData(chunk: Buffer): void {
+    this.requestLine ??= firstLine(chunk);
     this.uploadsSending++;
     this.socket.pause();
     this.upload.push(chunk, () => {
@@ -265,13 +275,18 @@ class ShapedSocket extends Duplex {
   }
 }
 
+function firstLine(chunk: Buffer): string {
+  const end = chunk.indexOf("\r\n");
+  return chunk.toString("latin1", 0, end === -1 ? Math.min(chunk.length, 8192) : end);
+}
+
 /** Shapes every device connection it attaches, all sharing one link. */
 export class ShapedLink {
   private readonly links = { upload: new LinkDirection(), download: new LinkDirection() };
   private readonly sockets = new Set<ShapedSocket>();
 
-  attach(socket: net.Socket): Duplex {
-    const shaped = new ShapedSocket(socket, this.links);
+  attach(socket: net.Socket, isBypassed: (requestLine: string) => boolean): Duplex {
+    const shaped = new ShapedSocket(socket, this.links, isBypassed);
     this.sockets.add(shaped);
     socket.on("close", () => this.sockets.delete(shaped));
     return shaped;

@@ -13,10 +13,13 @@ afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
-async function startShapedServer(onDevice: (shaped: Duplex) => void) {
+async function startShapedServer(
+  onDevice: (shaped: Duplex) => void,
+  isBypassed: (requestLine: string) => boolean = () => false
+) {
   const link = new ShapedLink();
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-    const shaped = link.attach(socket);
+    const shaped = link.attach(socket, isBypassed);
     shaped.on("error", () => {});
     onDevice(shaped);
   });
@@ -192,6 +195,20 @@ describe("ShapedLink", () => {
     link.setConditions({ downloadKbps: 1000, uploadKbps: 2000 });
 
     expect(await download).toBeLessThan(800 + 4 * SLACK_MS);
+  });
+
+  it("leaves a connection unshaped while its first request line is bypassed", async () => {
+    let bypassed = true;
+    const { link, port } = await startShapedServer(echo, (line) => bypassed && line === "GET /a");
+    const device = await connectDevice(port);
+    link.setConditions({ latencyMs: LATENCY_MS });
+
+    const whileBypassed = await timeEcho(device, "GET /a\r\n");
+    bypassed = false;
+    const afterwards = await timeEcho(device, "next");
+
+    expect(whileBypassed).toBeLessThan(LATENCY_MS / 2);
+    expect(afterwards).toBeGreaterThan(LATENCY_MS - SLACK_MS);
   });
 
   it("delivers what is queued before it passes on the server's half-close", async () => {

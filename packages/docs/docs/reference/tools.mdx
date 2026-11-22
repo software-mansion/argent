@@ -28,7 +28,7 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                           |
 | `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                      |
 | `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                        |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, native network capture                                |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, native network capture, the Android throttle proxy    |
 | `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                        |
 
 Through the MCP server, `list-devices` returns a shorter text than the SDK and `argent run`:
@@ -104,23 +104,23 @@ With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started 
 
 `network-conditions` sets the network conditions of an iOS simulator app, an Android emulator or a Chromium tab. Each call replaces the conditions of the previous call.
 
-| Parameter      | Description                                                                                               |
-| -------------- | --------------------------------------------------------------------------------------------------------- |
-| `udid`         | The device                                                                                                |
-| `bundleId`     | iOS only, and required on iOS: the app to throttle                                                        |
-| `port`         | iOS only: the Metro port that Argent does not throttle. The default is the Metro port of the device.      |
-| `latencyMs`    | The minimum time from a request to its response, in milliseconds, from 0 to 60000                         |
-| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.                                              |
-| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.                                                |
-| `offline`      | `true` makes requests fail as if no network is available. On Android, `adb reverse` ports stay reachable. |
+| Parameter      | Description                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `udid`         | The device                                                                                                  |
+| `bundleId`     | iOS only, and required on iOS: the app to throttle                                                          |
+| `port`         | iOS and Android: the Metro port that Argent does not throttle. The default is the Metro port of the device. |
+| `latencyMs`    | The minimum time from a request to its response, in milliseconds, from 0 to 60000                           |
+| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.                                                |
+| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.                                                  |
+| `offline`      | `true` makes requests fail as if no network is available. On Android, `adb reverse` ports stay reachable.   |
 
 A call without `latencyMs`, `downloadKbps`, `uploadKbps` and `offline` removes the throttle, also when it has `port`. An unknown parameter fails the call. The result contains `scope` and `conditions`. `conditions` is `null` after a removal. `scope` tells which traffic Argent changes:
 
-| `scope`  | Target             | Traffic                                                                                  |
-| -------- | ------------------ | ---------------------------------------------------------------------------------------- |
-| `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`) |
-| `device` | Android emulator   | The traffic of the emulator network. Only `offline` is available.                        |
-| `tab`    | Chromium, Electron | The requests of the page in the active tab                                               |
+| `scope`  | Target             | Traffic                                                                                                              |
+| -------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`)                             |
+| `device` | Android emulator   | The HTTP, HTTPS and WebSocket traffic of all apps that use the proxy of the system. `offline` turns off the network. |
+| `tab`    | Chromium, Electron | The requests of the page in the active tab                                                                           |
 
 `latencyMs` sets a minimum. A response that takes longer than `latencyMs` gets no extra delay.
 
@@ -136,12 +136,18 @@ On iOS:
 - On a simulator from a [device provider](./device-providers.mdx), a removal leaves the network capture of the provider as it was. A restart of the app removes the conditions there. Call `network-conditions` again after it.
 - When the tool-server stops or `stop-all-simulator-servers` stops the native devtools, the app removes the conditions.
 
-On Android, the emulator console cannot shape the Wi-Fi network of current system images. Thus `latencyMs`, `downloadKbps` and `uploadKbps` fail on an Android emulator. `offline: true` turns off Wi-Fi and mobile data with `svc`. Argent reports offline only when Android confirms that the emulator has no default network. If Argent cannot confirm this within 15 seconds, it tries to turn both radios on again and fails the call. An Android TV emulator connects over Ethernet, so `offline` fails there with `error_kind: "unsupported"`. On other emulators the call fails with `error_kind: "timeout"`. Call `network-conditions` again after a timeout. A call without conditions does nothing when the emulator has a network. Otherwise it turns on Wi-Fi and mobile data, and fails with `error_kind: "timeout"` when no network comes up within 15 seconds. The emulator stays offline after the tool-server stops.
+On Android, Argent sets the global HTTP proxy of the emulator (`settings put global http_proxy`) to a proxy on the host at `10.0.2.2`:
 
-While the Android emulator is offline:
+- The proxy adds `latencyMs` to each round trip, also on kept-alive connections. A new HTTPS connection pays it more than once: for the tunnel, the TLS handshake and the request.
+- `downloadKbps` and `uploadKbps` limit the total speed of all connections together.
+- HTTP, HTTPS and WebSocket traffic goes through the proxy. Requests to the Metro port (`port`) at `10.0.2.2` or the loopback of the emulator keep their speed. A connection keeps the target of its first request.
+- A request to `localhost` reaches the host port that `adb reverse` maps it to. Without a reverse, it fails with HTTP 502 while the throttle is on. Chromium and WebView send `localhost` requests directly.
+- Raw sockets, UDP, QUIC, DNS, apps that ignore the system proxy (such as Flutter `dart:io`) and connections opened before the call keep their speed. Restart the app to shape all its requests.
+- When the emulator has no network, a throttle turns on Wi-Fi and mobile data first, and fails with `error_kind: "timeout"` when no network comes up within 15 seconds.
+- The call fails when the emulator already has a proxy that Argent did not set, and on an emulator from a device provider.
+- A removal, a tool-server stop and `stop-all-simulator-servers` remove the proxy. A removal fails with `error_kind: "timeout"` when Android does not apply it within 5 seconds. After a crash of the tool-server, apps cannot connect until the agent calls `network-conditions` again.
 
-- Requests through `adb reverse` still work, because adb carries them.
-- The emulator cannot reach the host at `10.0.2.2`. A React Native app that loads from Metro at `10.0.2.2` loses its connection to Metro. The debugger tools then cannot reach the app until the network comes back.
+`offline: true` removes the proxy and turns off Wi-Fi and mobile data with `svc`. Argent reports offline only when Android confirms that the emulator has no default network. If Argent cannot confirm this within 15 seconds, it tries to turn both radios on again and fails the call. An Android TV emulator connects over Ethernet, so `offline` fails there with `error_kind: "unsupported"`. On other emulators the call fails with `error_kind: "timeout"`. Call `network-conditions` again after a timeout. A call without conditions removes the proxy, and does nothing more when the emulator has a network. Otherwise it turns on Wi-Fi and mobile data, and fails with `error_kind: "timeout"` when no network comes up within 15 seconds. The emulator stays offline after the tool-server stops.
 
 On Chromium, Argent applies the conditions to the page of the active tab. Argent applies them again after a tab switch with `chromium-tabs`, and before a tab that `chromium-tabs` opens loads its URL. When `chromium-tabs close` closes the active tab, Argent moves to another tab and applies the conditions there. Service workers, web workers and cross-site iframes keep the full speed. When the active tab closes outside Argent, or when another DevTools client detaches from the page, the conditions can go away. Call `network-conditions` again.
 

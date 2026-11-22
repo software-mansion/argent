@@ -103,3 +103,16 @@ async function deviceDroppedProxy(serial: string): Promise<boolean> {
   }
   return false;
 }
+
+export function parseAdbReverses(output: string): Map<number, number> {
+  const reverses = new Map<number, number>();
+  for (const match of output.matchAll(/\btcp:(\d+)\s+tcp:(\d+)\b/g)) {
+    reverses.set(Number(match[1]), Number(match[2]));
+  }
+  return reverses;
+}
+
+export async function listAdbReverses(serial: string): Promise<Map<number, number>> {
+  const { stdout } = await runAdb(["-s", serial, "reverse", "--list"], { timeoutMs: 5_000 });
+  return parseAdbReverses(stdout);
+}

@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as http from "node:http";
 import * as net from "node:net";
 import {
+  requestLineTarget,
   startShapingProxy,
   type ProxyTarget,
   type ShapingProxy,
@@ -53,10 +54,12 @@ async function startUpgradeOrigin() {
 }
 
 async function startProxy(
-  resolve: (host: string, port: number) => ProxyTarget | null = (host, port) => ({ host, port })
+  resolve: (host: string, port: number) => ProxyTarget | null = (host, port) => ({ host, port }),
+  bypass: (host: string, port: number) => boolean = () => false
 ): Promise<ShapingProxy> {
   const proxy = await startShapingProxy({
     resolveTarget: async (host, port) => resolve(host, port),
+    bypass,
   });
   cleanups.push(() => proxy.close());
   return proxy;
@@ -153,6 +156,19 @@ async function upgradeThroughProxy(proxy: ShapingProxy, port: number) {
   return { status, echoMs: performance.now() - started };
 }
 
+describe("requestLineTarget", () => {
+  it.each([
+    ["CONNECT example.com:443 HTTP/1.1", { host: "example.com", port: 443 }],
+    ["CONNECT [::1]:8081 HTTP/1.1", { host: "::1", port: 8081 }],
+    ["GET http://10.0.2.2:8081/index.bundle HTTP/1.1", { host: "10.0.2.2", port: 8081 }],
+    ["POST http://example.com/ HTTP/1.1", { host: "example.com", port: 80 }],
+    ["GET /index.bundle HTTP/1.1", null],
+    ["CONNECT example.com:99999 HTTP/1.1", null],
+  ])("reads %j", (line, target) => {
+    expect(requestLineTarget(line)).toEqual(target);
+  });
+});
+
 describe("the shaping proxy", () => {
   it("forwards plain requests and adds the latency to each on a kept-alive connection", async () => {
     const origin = await startOrigin();
@@ -222,6 +238,34 @@ describe("the shaping proxy", () => {
     await waitFor(() => text().startsWith("HTTP/1.1 502"));
   });
 
+  it("leaves a bypassed target unshaped, in plain requests and tunnels", async () => {
+    const origin = await startOrigin();
+    const proxy = await startProxy(undefined, (_host, port) => port === origin);
+    proxy.setConditions({ latencyMs: LATENCY_MS });
+
+    const plain = await viaProxy(proxy, `http://127.0.0.1:${origin}/`);
+    const { socket } = await openTunnel(proxy, `127.0.0.1:${origin}`);
+    const tunneled = await roundTripThroughTunnel(socket, origin);
+
+    expect(plain.ms).toBeLessThan(LATENCY_MS / 2);
+    expect(tunneled).toBeLessThan(LATENCY_MS / 2);
+  });
+
+  it("shapes an open connection once its target is no longer bypassed", async () => {
+    const origin = await startOrigin();
+    let bypassedPort = origin;
+    const proxy = await startProxy(undefined, (_host, port) => port === bypassedPort);
+    proxy.setConditions({ latencyMs: LATENCY_MS });
+    const { socket } = await openTunnel(proxy, `127.0.0.1:${origin}`);
+
+    const bypassed = await roundTripThroughTunnel(socket, origin);
+    bypassedPort = 1;
+    const shaped = await roundTripThroughTunnel(socket, origin);
+
+    expect(bypassed).toBeLessThan(LATENCY_MS / 2);
+    expect(shaped).toBeGreaterThan(LATENCY_MS - SLACK_MS);
+  });
+
   it("drops the proxy's hop-by-hop headers before it forwards a request", async () => {
     const origin = await startOrigin();
     const proxy = await startProxy();
@@ -274,6 +318,7 @@ describe("the shaping proxy", () => {
         await sleep(300);
         return { host, port };
       },
+      bypass: () => false,
     });
     cleanups.push(() => slowProxy.close());
     const { socket } = await rawDeviceSocket(slowProxy);
@@ -306,6 +351,7 @@ describe("the shaping proxy", () => {
     const origin = await startOrigin();
     const proxy = await startShapingProxy({
       resolveTarget: async (host, port) => ({ host, port }),
+      bypass: () => false,
     });
     const { socket } = await openTunnel(proxy, `127.0.0.1:${origin}`);
     const closed = new Promise((resolve) => socket.once("close", resolve));
