@@ -199,7 +199,7 @@ function transportFailureSignal(kind: IosDeviceTransportErrorKind): FailureSigna
   }
 }
 
-export interface RunCommandOptions {
+interface RunCommandOptions {
   /** Read-only commands may be retried by the send layer. */
   readOnly?: boolean;
   timeoutMs?: number;

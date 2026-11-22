@@ -40,14 +40,6 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
     }
   }
 
-  let strictModeEnabled = false;
-  const indexJs = await readFileSafe(join(projectRoot, "index.js"));
-  const indexTs = await readFileSafe(join(projectRoot, "index.ts"));
-  const indexSource = (indexJs ?? "") + (indexTs ?? "");
-  if (indexSource.includes("<StrictMode>") || indexSource.includes("StrictMode")) {
-    strictModeEnabled = true;
-  }
-
   let buildMode: "dev" | "prod" = "dev";
   if (input.flamegraph) {
     for (const node of input.flamegraph.nodes) {
@@ -77,7 +69,10 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
         }
       }
     } else {
-      const podfile = await readFileSafe(join(projectRoot, "ios", "Podfile"));
+      // react-native-macos keeps the Mac app's pods in macos/.
+      const podfile = await readFileSafe(
+        join(projectRoot, platform === "macos" ? "macos" : "ios", "Podfile")
+      );
       if (podfile) {
         if (
           newArchDefault &&
@@ -94,7 +89,6 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
 
   return {
     reactCompilerEnabled,
-    strictModeEnabled,
     buildMode,
     rnArchitecture,
     projectRoot,

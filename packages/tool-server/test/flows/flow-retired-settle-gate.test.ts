@@ -153,7 +153,7 @@ describe("flow-execute refuses the retired `settle` key through the real registr
 
     // The refusal is what the flow author reads, so it must locate the step and
     // carry the rename guidance whole.
-    expect(messageOf(err)).toContain('Flow "swipe-settle" step 1');
+    expect(messageOf(err)).toContain('E2E test "swipe-settle" step 1');
     expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
     expect(messageOf(err)).toContain(RENAME_GUIDANCE);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
@@ -287,6 +287,16 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     expect(steps[0]!.reason).toContain('fragment "settle-fragment.yaml" step 1');
     expect(steps[0]!.reason).toContain("gesture-swipe's retired `settle` key");
     expect(steps[0]!.reason).toContain("momentum: false");
+  });
+
+  it("quotes a refused fragment's target on one line", async () => {
+    await fs.mkdir(path.join(tmpDir, ".argent", "flows", "sub\nx"), { recursive: true });
+    await writeSteps("sub\nx/settle-fragment", [swipeStep({ settle: true })]);
+    await writeSteps("composed", [{ kind: "run", flow: "sub\nx/settle-fragment.yaml" }]);
+
+    const steps = await runFlowSteps("composed", IOS_DEVICE);
+
+    expect(steps[0]!.reason).toContain('fragment "sub\\nx/settle-fragment.yaml" step 1');
   });
 
   // The gate never guesses at a tool it cannot look up: an unknown tool's step

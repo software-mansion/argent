@@ -6,12 +6,10 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // these unit tests stub the tree fetch itself.
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "native-devtools",
-    })
-  ),
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => ({
+    tree: currentTree(),
+    source: "native-devtools",
+  })),
 }));
 
 import {
@@ -163,7 +161,7 @@ describe("regex text selectors: parse/serialize", () => {
           executionPrerequisite: "",
           steps: [{ kind: "tap", selector }],
         })
-      ).toThrow(/cannot serialize loose flow selector.*only a loose text-only selector/i);
+      ).toThrow(/cannot serialize loose e2e test selector.*only a loose text-only selector/i);
     }
   });
 
@@ -189,7 +187,7 @@ describe("regex text selectors: parse/serialize", () => {
           executionPrerequisite: "",
           steps: [{ kind: "tap", selector } as never],
         })
-      ).toThrow(/cannot serialize flow selector: unknown key `junk` - allowed keys:/i);
+      ).toThrow(/cannot serialize e2e test selector: unknown key `junk` - allowed keys:/i);
     }
   });
 
@@ -203,7 +201,7 @@ describe("regex text selectors: parse/serialize", () => {
       { identifier: "ok", id: "other" },
     ]) {
       expect(() => selectorToYaml(selector as never)).toThrow(
-        /cannot serialize flow selector: unknown key `id`/i
+        /cannot serialize e2e test selector: unknown key `id`/i
       );
     }
   });
@@ -251,6 +249,20 @@ describe("regex text selectors: parse/serialize", () => {
     expect(() =>
       parseFlow("steps:\n  - type: { into: { text: { matches: '(' } }, text: hi }\n")
     ).toThrow(/not a valid regular expression/i);
+  });
+
+  it("keeps the engine's message about an invalid pattern on one line", () => {
+    let message = "";
+    try {
+      parseFlow('steps:\n  - tap: { text: { matches: "(a\\nb\\e[31m" } }\n');
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(
+      "is not a valid regular expression: Invalid regular expression: /(a\\nb\\u001b[31m/"
+    );
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("\u001b");
   });
 });
 

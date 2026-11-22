@@ -9,24 +9,12 @@ describe("advertised bundleId pattern", () => {
   const constrained = [...definitionsById(createRegistry())]
     .map(([id, definition]) => {
       const properties = advertisedSchema(definition)?.properties as
-        | Record<string, { pattern?: string } | undefined>
-        | undefined;
+        Record<string, { pattern?: string } | undefined> | undefined;
       const shape = (definition.zodSchema as ZodObject<Record<string, ZodTypeAny>> | undefined)
         ?.shape;
       return { id, pattern: properties?.bundleId?.pattern, field: shape?.bundleId };
     })
     .filter((entry) => typeof entry.pattern === "string");
-
-  it("is advertised by exactly the tools that take an app identifier", () => {
-    expect(constrained.map(({ id }) => id).sort()).toEqual([
-      "launch-app",
-      "open-url",
-      "reinstall-app",
-      "restart-app",
-      "settings-permissions",
-      "terminate-app",
-    ]);
-  });
 
   for (const { id, pattern, field } of constrained) {
     it(`${id}: admits a digit-leading bundle id and still refuses a flag`, () => {

@@ -1,7 +1,11 @@
+import type { Stats } from "node:fs";
+import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import {
+  canonicalToolId,
   FILE_INPUT_MARKER,
   isClientFileArgument,
+  isUnexpandedPath,
   nestedFlowTarget,
   toolStepFiles,
   type FileInputWire,
@@ -10,8 +14,8 @@ import {
   type ToolStepFile,
 } from "@argent/registry";
 import { FileInputError, resolveFileInputs } from "../../file-inputs";
-import { flowNameCasingError } from "./flow-utils";
-import { ClientProjectAccess, type ProjectAccess } from "./project-access";
+import { escapeInline, flowNameCasingError } from "./flow-utils";
+import { ClientProjectAccess, resolveSavedTest, type ProjectAccess } from "./project-access";
 
 /** The stage each step kind an upload cannot carry is refused under. */
 export const UPLOAD_STAGE_BY_KIND = {
@@ -25,23 +29,30 @@ export const UPLOAD_STAGE_BY_KIND = {
 
 /** The flow a nested `tool: flow-execute` step names, quoted in the refusal's step list. */
 function nestedFlowRef(args: Record<string, unknown>): string {
-  if (typeof args.name === "string") return ` (name: ${args.name})`;
-  if (typeof args.flow_path === "string") return ` (flow_path: ${args.flow_path})`;
+  if (typeof args.name === "string") return ` (name: ${escapeInline(args.name)})`;
+  if (typeof args.e2e_test_path === "string")
+    return ` (e2e_test_path: ${escapeInline(args.e2e_test_path)})`;
   return "";
 }
 
-/** The file inputs a `tool:` step's args fill in for the tool it names ({@link toolStepFiles}). */
+/**
+ * The file inputs a `tool:` step's args fill in for the tool it names
+ * ({@link toolStepFiles}). A `project_root` probe is not one: the e2e tools
+ * that declare it read the project through their other inputs.
+ */
 function toolStepFilePaths(
   registry: Registry,
   tool: string,
   args: Record<string, unknown>
 ): ToolStepFile[] {
-  return toolStepFiles(registry.getTool(tool)?.fileInputs, args);
+  return toolStepFiles(registry.getTool(tool)?.fileInputs, args).filter(
+    ({ spec }) => spec.kind !== "probe" || spec.target !== "project_root"
+  );
 }
 
 /**
  * A `file` input whose path is one argument of the step, as written (not a
- * path the tool builds out of several, such as `flow_file`).
+ * path the tool builds out of several, such as `e2e_test_file`).
  */
 function isFileArgument({ spec }: ToolStepFile): boolean {
   return spec.kind === "file" && spec.path === `\${${spec.target}}`;
@@ -64,9 +75,7 @@ function servedToolInput(file: ToolStepFile, withFiles: boolean): boolean {
  * missing, `relative` when the path is relative, `extension` when its name is
  * not one the client sends.
  */
-export function refusedToolInputFix(
-  file: ToolStepFile
-): "update" | "relative" | "extension" | undefined {
+function refusedToolInputFix(file: ToolStepFile): "update" | "relative" | "extension" | undefined {
   if (isClientFileArgument(file)) return "update";
   if (!isFileArgument(file)) return undefined;
   return path.posix.isAbsolute(file.path) ? "extension" : "relative";
@@ -93,9 +102,9 @@ export function toolStepUploadIssue(
   args: Record<string, unknown>,
   withFiles: boolean
 ): { kind: "nested" | "toolFile"; line: string; fixes: ToolFileFix[] } | undefined {
-  if (tool === "flow-execute") {
+  if (canonicalToolId(tool) === "e2e-execute") {
     if (withFiles && nestedFlowTarget(args)?.kind === "name") return undefined;
-    return { kind: "nested", line: `tool: flow-execute${nestedFlowRef(args)}`, fixes: [] };
+    return { kind: "nested", line: `tool: ${tool}${nestedFlowRef(args)}`, fixes: [] };
   }
   const refused = toolStepFilePaths(registry, tool, args).filter(
     (file) => !servedToolInput(file, withFiles)
@@ -108,7 +117,7 @@ export function toolStepUploadIssue(
   }
   return {
     kind: "toolFile",
-    line: `tool: ${tool} (${refused.map((file) => file.path).join(", ")})`,
+    line: `tool: ${tool} (${refused.map((file) => escapeInline(file.path)).join(", ")})`,
     fixes: [...fixes],
   };
 }
@@ -165,10 +174,11 @@ export function withClientPaths(prepared: PreparedToolStep, text: string): strin
  * the same paths and the same `ctx.fileInputs` as for a direct call. A file
  * the client does not have fails the step: a server file at the same path is
  * never used in its place. A `flow-execute` gets the flow it names by `name`
- * from those files instead ({@link prepareNestedFlow}). In host mode the args
- * pass through unchanged. An input whose `unwrapWhenSet` param is set stays
- * the client path, unread, as an HTTP call unwraps it: the tool's own
- * validation diagnoses the second source. The client skips such an input too.
+ * from those files instead ({@link prepareNestedFlow}). In host mode file
+ * arguments resolve in place ({@link prepareHostFileArguments}). An input whose
+ * `unwrapWhenSet` param is set stays the client path, unread, as an HTTP call
+ * unwraps it: the tool's own validation diagnoses the second source. The
+ * client skips such an input too.
  */
 export async function prepareToolStepInputs(
   registry: Registry,
@@ -176,28 +186,26 @@ export async function prepareToolStepInputs(
   toolId: string,
   args: Record<string, unknown>
 ): Promise<PreparedToolStep> {
-  if (project instanceof ClientProjectAccess && toolId === "flow-execute") {
-    return prepareNestedFlow(registry, project, args);
+  if (project instanceof ClientProjectAccess && canonicalToolId(toolId) === "e2e-execute") {
+    return prepareNestedFlow(registry, project, toolId, args);
   }
-  const files =
-    project.mode === "client"
-      ? toolStepFilePaths(registry, toolId, args).filter(
-          ({ spec }) => spec.unwrapWhenSet === undefined || args[spec.unwrapWhenSet] === undefined
-        )
-      : [];
+  const files = toolStepFilePaths(registry, toolId, args).filter(
+    ({ spec }) => spec.unwrapWhenSet === undefined || args[spec.unwrapWhenSet] === undefined
+  );
+  if (project.mode === "host") return prepareHostFileArguments(toolId, files, args);
   if (files.length === 0) return { args, cleanup: async () => {} };
   const wrapped: Record<string, unknown> = { ...args };
   for (const file of files) {
     // Not reached: the upload gate refuses such an input before step 1.
     if (!isClientFileArgument(file)) {
       throw new FileInputError(
-        `"${file.path}" (argument ${file.spec.target} of ${toolId}) cannot be read from the client`
+        `"${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId}) cannot be read from the client`
       );
     }
     const bytes = await project.readFile(file.path);
     if (bytes === null) {
       throw new FileInputError(
-        `the client has no file at "${file.path}" (argument ${file.spec.target} of ${toolId})`
+        `the client has no file at "${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId})`
       );
     }
     const wire: FileInputWire = {
@@ -217,9 +225,59 @@ export async function prepareToolStepInputs(
 }
 
 /**
+ * Wraps each file argument as an unlinked argent client does (stat, no
+ * content), giving the tool a direct call's `ctx.fileInputs`; `e2e-execute`
+ * and `e2e-read-prerequisite` refuse an `e2e_test_path` without them. A path
+ * that is not a readable file fails the step. Other inputs (directories, apps, paths
+ * built from several args) stay as written.
+ */
+async function prepareHostFileArguments(
+  toolId: string,
+  files: ToolStepFile[],
+  args: Record<string, unknown>
+): Promise<PreparedToolStep> {
+  const fileArgs = files.filter(isFileArgument);
+  if (fileArgs.length === 0) return { args, cleanup: async () => {} };
+  const wrapped: Record<string, unknown> = { ...args };
+  for (const file of fileArgs) {
+    const where = `"${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId})`;
+    let st: Stats;
+    try {
+      st = await stat(file.path);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        throw new FileInputError(`cannot read ${where}: ${escapeInline(String(code ?? err))}`);
+      }
+      const relative =
+        path.isAbsolute(file.path) || path.win32.isAbsolute(file.path)
+          ? ""
+          : isUnexpandedPath(file.path)
+            ? `; nothing expands "~", variables, commands or URLs in a file argument, so pass the file's absolute path`
+            : `; a relative path is looked up in the tool server's working directory, not the e2e test's, so pass the file's absolute path`;
+      throw new FileInputError(`there is no file at ${where}${relative}`);
+    }
+    if (!st.isFile()) throw new FileInputError(`${where} is not a file`);
+    const wire: FileInputWire = {
+      [FILE_INPUT_MARKER]: true,
+      path: file.path,
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+    };
+    wrapped[file.spec.target] = wire;
+  }
+  const resolved = await resolveFileInputs({ fileInputs: fileArgs.map((f) => f.spec) }, wrapped);
+  return {
+    args: resolved.args,
+    ...(resolved.fileInputs ? { fileInputs: resolved.fileInputs } : {}),
+    cleanup: resolved.cleanup,
+  };
+}
+
+/**
  * A nested `flow-execute` whose flow is on the client: the flow its `name`
  * names under its `project_root` is looked up in the files the client sent
- * with the call, and goes to the nested run as the `flow_file` upload of a
+ * with the call, and goes to the nested run as the `e2e_test_file` upload of a
  * linked call, so the nested run reads the client copy, also when this host
  * has a file at the same path. The nested run gets the same files with it
  * (`members`), so it finds its own `run:` fragments, nested flows,
@@ -232,11 +290,12 @@ export async function prepareToolStepInputs(
 async function prepareNestedFlow(
   registry: Registry,
   project: ClientProjectAccess,
+  toolId: string,
   args: Record<string, unknown>
 ): Promise<PreparedToolStep> {
   const target = nestedFlowTarget(args);
   if (target?.kind !== "name") return { args, cleanup: async () => {} };
-  const hop = await project.resolveFlowFile(path.dirname(target.path), `${target.name}.yaml`);
+  const hop = await resolveSavedTest(project, target.paths);
   // Refused as a run without a link refuses it: the name keys the nested
   // run's report and baselines, and no entry on the client carries it.
   if (hop.spelling.state === "case_folded") throw flowNameCasingError(target.name, hop.spelling);
@@ -248,15 +307,15 @@ async function prepareNestedFlow(
   const bytes = Buffer.from(text, "utf8");
   const wire: FileInputWire = {
     [FILE_INPUT_MARKER]: true,
-    path: target.path,
+    path: hop.path,
     size: bytes.length,
     content: bytes.toString("base64"),
   };
   const resolved = await resolveFileInputs(
-    { fileInputs: registry.getTool("flow-execute")?.fileInputs },
-    { ...args, flow_file: wire }
+    { fileInputs: registry.getTool(toolId)?.fileInputs },
+    { ...args, e2e_test_file: wire }
   );
-  const input = resolved.fileInputs?.flow_file;
+  const input = resolved.fileInputs?.e2e_test_file;
   if (input) {
     input.canonical = hop.canonical;
     input.spelling = hop.spelling;

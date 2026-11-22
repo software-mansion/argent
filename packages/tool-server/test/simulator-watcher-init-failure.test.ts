@@ -24,6 +24,22 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// The watcher reaches simctl through execSimctl (a detached spawn); route it
+// through the same mock so tests script its output alongside execFile's.
+vi.mock("../src/utils/simctl-exec", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/simctl-exec")>(
+    "../src/utils/simctl-exec"
+  );
+  return {
+    ...actual,
+    execSimctl: async (args: readonly string[]) => {
+      const result = await execFileMock("xcrun", args);
+      if (result instanceof Error) throw result;
+      return (result ?? { stdout: "" }).stdout;
+    },
+  };
+});
+
 import type { Registry } from "@argent/registry";
 import {
   MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
@@ -74,6 +90,7 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
     listConnectedBundleIds: () => [],
     appConnectionState: async () => "stale_process",
     activateNetworkInspection: () => {},
+    setNetworkConditions: async () => {},
     getNetworkLog: () => [],
     clearNetworkLog: () => {},
     getAppState: async () => {
@@ -178,6 +195,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
       listConnectedBundleIds: () => [],
       appConnectionState: async () => "stale_process",
       activateNetworkInspection: () => {},
+      setNetworkConditions: async () => {},
       getNetworkLog: () => [],
       clearNetworkLog: () => {},
       getAppState: async () => {

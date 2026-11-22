@@ -26,6 +26,7 @@ export default tseslint.config(
       "packages/docs/.docusaurus/",
       "packages/docs/static/",
       "coverage/",
+      ".claude/",
     ],
   },
 
@@ -90,6 +91,20 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+    },
+  },
+
+  {
+    files: ["packages/tool-server/{src,test}/**/*.{ts,tsx,cts,mts}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.property.name='listen'][arguments.0.value=0]:not([arguments.1.value='127.0.0.1'])",
+          message: "Bind ephemeral-port listeners to 127.0.0.1.",
+        },
+      ],
     },
   },
 

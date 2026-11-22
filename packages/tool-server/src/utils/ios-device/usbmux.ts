@@ -10,11 +10,7 @@ import {
   readUsbmuxResultCode,
 } from "./usbmux-protocol";
 
-export {
-  IosDeviceTransportError,
-  isIosDeviceTransportError,
-  type IosDeviceTransportErrorKind,
-} from "./usbmux-protocol";
+export { IosDeviceTransportError } from "./usbmux-protocol";
 
 /**
  * usbmuxd client. Opens a raw pipe to a TCP port on a physical device.

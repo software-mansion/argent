@@ -1,6 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
+import { attachAndroidNetworkInspectorToLaunch } from "../../../blueprints/android-network-inspector";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 // `am start -W` always prints a `Status:` banner, so a positive match on
@@ -52,14 +53,19 @@ function parseResolvedActivity(raw: string): string | null {
   return last;
 }
 
+const LAUNCHER = "android.intent.category.LAUNCHER";
+const LEANBACK_LAUNCHER = "android.intent.category.LEANBACK_LAUNCHER";
+
 // `isTv` resolves against LEANBACK_LAUNCHER first: Android TV apps often declare
 // no phone LAUNCHER, so a plain resolve returns the system resolver or nothing.
 // Falls back to the standard LAUNCHER so apps shipping both still launch.
+// Returns the category the activity was resolved for, so the launch can start it
+// the way a launcher does (see `launcherStartArgs`).
 export async function resolveLauncherActivity(
   udid: string,
   bundleId: string,
   isTv = false
-): Promise<string> {
+): Promise<{ component: string; category: string }> {
   // Surfaced in the failure message, e.g. to show only the system resolver matched.
   let lastRaw = "";
   const resolveFor = async (category?: string): Promise<string | null> => {
@@ -74,11 +80,11 @@ export async function resolveLauncherActivity(
   };
 
   if (isTv) {
-    const leanback = await resolveFor("android.intent.category.LEANBACK_LAUNCHER");
-    if (leanback) return leanback;
+    const leanback = await resolveFor(LEANBACK_LAUNCHER);
+    if (leanback) return { component: leanback, category: LEANBACK_LAUNCHER };
   }
   const launcher = await resolveFor();
-  if (launcher) return launcher;
+  if (launcher) return { component: launcher, category: LAUNCHER };
 
   const pmPath = await adbShell(udid, `pm path ${shellQuote(bundleId)}; true`);
   throw new FailureError(
@@ -96,6 +102,39 @@ export async function resolveLauncherActivity(
   );
 }
 
+/**
+ * Once `native-network-logs` has started native network capture for an app,
+ * the capture follows the app into each process that launch-app and
+ * restart-app start. The note in the launch result tells the caller whether
+ * the new process is instrumented, or why capture did not follow it. Best
+ * effort: a launch never fails because capture could not follow it.
+ */
+export async function followNativeNetworkCapture(
+  udid: string,
+  bundleId: string
+): Promise<{ networkCapture?: string }> {
+  try {
+    const note = await attachAndroidNetworkInspectorToLaunch(udid, bundleId);
+    return note ? { networkCapture: note } : {};
+  } catch (err) {
+    process.stderr.write(
+      `[${udid}:${bundleId}] native network capture did not follow the launch: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`
+    );
+    return {};
+  }
+}
+
+// A launcher starts an app with the MAIN action and its launcher category, and an
+// app can tell that start apart from a bare component start: an Expo development
+// build reopens its last project only for a MAIN start, and shows its own
+// launcher screen otherwise. An explicit `activity` gets no action or category,
+// since it need not be a launcher activity.
+export function launcherStartArgs(category: string | null): string {
+  return category ? ` -a android.intent.action.MAIN -c ${shellQuote(category)}` : "";
+}
+
 export const androidImpl: PlatformImpl<
   Record<string, unknown>,
   LaunchAppParams,
@@ -107,17 +146,20 @@ export const androidImpl: PlatformImpl<
     // `am start -W`, which blocks until the activity is drawn; otherwise
     // describe/tap can race a still-forking process.
     let component: string;
+    let category: string | null = null;
     if (params.activity) {
       component = normalizeActivityComponent(params.bundleId, params.activity);
     } else {
       // TV apps often declare only a LEANBACK_LAUNCHER activity.
       const isTv = await isAndroidTv(params.udid);
-      component = await resolveLauncherActivity(params.udid, params.bundleId, isTv);
+      ({ component, category } = await resolveLauncherActivity(params.udid, params.bundleId, isTv));
     }
-    const out = await adbShell(params.udid, `am start -W -n ${shellQuote(component)}`, {
+    const start = `am start -W${launcherStartArgs(category)} -n ${shellQuote(component)}`;
+    const out = await adbShell(params.udid, start, {
       timeoutMs: 30_000,
     });
     assertAmStartOk(out);
-    return { launched: true, bundleId: params.bundleId };
+    const capture = await followNativeNetworkCapture(params.udid, params.bundleId);
+    return { launched: true, bundleId: params.bundleId, ...capture };
   },
 };

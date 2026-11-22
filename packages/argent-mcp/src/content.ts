@@ -8,8 +8,7 @@ import {
 } from "@argent/tools-client";
 
 export type ContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
+  { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
 /**
  * Context for resolving artifact handles. Omitted ⇒ rendering falls back to the
@@ -30,7 +29,7 @@ function imageBlock(data: Buffer, mimeType: string): ContentBlock {
 // `file://` needs fs — Node's `fetch` only supports `http(s)://`, and the
 // ios-remote screenshot transport writes PNGs to a temp dir under a `file://`
 // URL.
-async function fetchPngBytes(url: string): Promise<Buffer | null> {
+async function fetchPngBytes(url: string, signal?: AbortSignal): Promise<Buffer | null> {
   try {
     let buf: Buffer;
     if (url.startsWith("file://")) {
@@ -38,7 +37,7 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
       const { fileURLToPath } = await import("node:url");
       buf = await readFile(fileURLToPath(url));
     } else {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal });
       if (!res.ok) return null;
       buf = Buffer.from(await res.arrayBuffer());
     }
@@ -74,7 +73,7 @@ export async function toMcpContent(
         return blocks;
       }
       // No image artifact — fall back to older tool-servers' `{ url, path }`.
-      return legacyImageContent(rewritten, suppressImage);
+      return legacyImageContent(rewritten, suppressImage, ctx.signal);
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
@@ -105,14 +104,15 @@ function stringifyForText(value: unknown): string {
  */
 async function legacyImageContent(
   result: unknown,
-  suppressImage: boolean
+  suppressImage: boolean,
+  signal?: AbortSignal
 ): Promise<ContentBlock[]> {
   if (result && typeof result === "object" && "url" in result) {
     const r = result as { url: string; path?: string };
     if (suppressImage) {
       return [{ type: "text" as const, text: `Saved: ${r.path ?? ""}` }];
     }
-    const buf = await fetchPngBytes(r.url);
+    const buf = await fetchPngBytes(r.url, signal);
     if (buf) {
       return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${r.path ?? ""}` }];
     }
@@ -151,10 +151,12 @@ export async function screenshotDiffToMcpContent(
   // The context diff's bytes come back in `images` whether the file was already
   // on this machine or had to be downloaded from a remote tool-server.
   let contextDiffPath = result.contextDiffPath;
+  let diffPath = result.diffPath;
   let materializedImages: { localPath: string; data: Buffer; mimeType: string }[] = [];
   if (ctx) {
     const { result: rewritten, images } = await materializeArtifacts(result, ctx);
     contextDiffPath = (rewritten as ScreenshotDiffResult).contextDiffPath;
+    diffPath = (rewritten as ScreenshotDiffResult).diffPath;
     materializedImages = images;
   }
 
@@ -183,10 +185,20 @@ export async function screenshotDiffToMcpContent(
   }
 
   blocks.push({ type: "text" as const, text: result.summary });
+  // The summary refers the agent to these fields by name; null ⇒ the fetch failed.
+  const paths = [
+    ["diffPath", diffPath],
+    ["contextDiffPath", contextDiffPath],
+  ] as const;
+  for (const [key, value] of paths) {
+    if (value === undefined) continue;
+    const text = `${key}: ${typeof value === "string" ? value : "(unavailable)"}`;
+    blocks.push({ type: "text", text });
+  }
   return blocks;
 }
 
-export type FlowStepResult = {
+type FlowStepResult = {
   index?: number;
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";
@@ -223,7 +235,9 @@ export type FlowStepResult = {
 };
 
 export type FlowExecuteResult = {
-  flow: string;
+  e2eTest?: string;
+  /** The `e2eTest` of a tool-server that predates that field. */
+  flow?: string;
   device?: string;
   executionPrerequisite?: string;
   ok?: boolean;
@@ -239,6 +253,8 @@ export type FlowExecuteResult = {
    * wrote, or `{ path, error }` for one it could not write.
    */
   baselineWrites?: unknown[];
+  /** A test of the same name that this one hides. */
+  warning?: string;
 };
 
 const STATUS_GLYPH: Record<string, string> = {
@@ -292,6 +308,7 @@ export async function flowRunToMcpContent(
   ctx?: ContentContext
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
+  const name = result.e2eTest ?? result.flow;
 
   if (result.executionPrerequisite) {
     blocks.push({ type: "text", text: `Prerequisite: ${result.executionPrerequisite}` });
@@ -299,8 +316,10 @@ export async function flowRunToMcpContent(
 
   blocks.push({
     type: "text",
-    text: `Running flow "${result.flow}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
+    text: `Running e2e test "${name}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
   });
+  if (typeof result.warning === "string")
+    blocks.push({ type: "text", text: `⚠ ${result.warning}` });
 
   for (let i = 0; i < result.steps.length; i++) {
     const step = result.steps[i]!;
@@ -356,7 +375,7 @@ export async function flowRunToMcpContent(
       text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}${durationSuffix(result.durationMs)}`,
     });
   } else {
-    blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
+    blocks.push({ type: "text", text: `E2E test "${name}" complete.` });
   }
   return blocks;
 }

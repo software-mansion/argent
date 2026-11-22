@@ -55,8 +55,8 @@ const registry = new Registry();
  * Enabled on a Vega VVD. Vega's React Native is a fork of RN 0.72, so it serves
  * the legacy Hermes inspector, which speaks Runtime + Debugger. Everything here
  * needs nothing beyond `Runtime.evaluate` — including the network inspector,
- * which monkey-patches `fetch` over `Runtime.evaluate` rather than using the CDP
- * `Network` domain. All six verified working on a live VVD.
+ * which patches `XMLHttpRequest` over `Runtime.evaluate` rather than using the
+ * CDP `Network` domain. All six verified working on a live VVD.
  */
 const VEGA_ENABLED_TOOLS = [
   debuggerConnectTool,
@@ -84,7 +84,7 @@ const VEGA_ENABLED_TOOLS = [
  * Either way the gate turns a hang or an unknown into an immediate 400.
  */
 const VEGA_GATED_TOOLS = [
-  createDebuggerComponentTreeTool(registry),
+  createDebuggerComponentTreeTool(),
   debuggerInspectElementTool,
   debuggerReloadMetroTool,
   createReactProfilerStartTool(registry),

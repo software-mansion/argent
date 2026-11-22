@@ -110,6 +110,12 @@ describe("reinstall-app (ios-device): system-UI pre-flight", () => {
 });
 
 describe("launch-app (ios-device): session-only registration unchanged", () => {
+  it("probes signing for the phone it launched on", async () => {
+    await launchImpl.handler({}, { udid: UDID, bundleId: SPRINGBOARD }, DEVICE);
+
+    expect(resolveRunnerSigningConfig).toHaveBeenCalledWith(UDID);
+  });
+
   it.each([SPRINGBOARD, SPOTLIGHT])(
     "%s registers the session without a devicectl launch",
     async (bundleId) => {

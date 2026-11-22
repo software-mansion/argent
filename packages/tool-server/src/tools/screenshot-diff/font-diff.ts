@@ -7,7 +7,7 @@ export interface FontGeometryImage {
   data: Buffer;
 }
 
-export interface RgbDelta {
+interface RgbDelta {
   r: number;
   g: number;
   b: number;
@@ -51,7 +51,7 @@ export interface FontGeometryEvidence {
   currentFeatures: FontGeometryFeatures;
 }
 
-export interface FontGeometryFeatures {
+interface FontGeometryFeatures {
   /** OCR text bounds, in image coordinates. */
   bounds: DiffBounds;
   /** Alias for bounds. */

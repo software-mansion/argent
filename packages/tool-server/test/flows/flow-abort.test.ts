@@ -91,6 +91,21 @@ describe("run cancellation mid-directive", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("reports an echo skipped by an abort on one line", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    currentFetch = () => ({ tree: screen([]), source: "native-devtools" });
+
+    await writeFlow("cancelled-narration", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "a\nb\u001b[31m" }],
+    });
+
+    const result = await run("cancelled-narration", mockRegistry([]), controller.signal);
+
+    expect(result.steps).toMatchObject([{ reason: "run aborted", message: "a\\nb\\u001b[31m" }]);
+  });
+
   it("reports a tap cancelled during its auto-wait as a skip, not an offscreen failure", async () => {
     const controller = new AbortController();
     // The target never appears; the run is cancelled on the third tree read
@@ -295,7 +310,7 @@ describe("run cancellation mid-directive", () => {
 
   it("reports a raw tool step cancelled inside the gesture as a skip, not the tool's error", async () => {
     const controller = new AbortController();
-    // The third dispatch site, and the one flow-yaml.md sends authors to for a
+    // The third dispatch site, and the one e2e-yaml.md sends authors to for a
     // flick faster than the swipe directive's floor: a raw `tool: gesture-swipe`
     // step, whose signal invokeSubTool forwards to the tool itself.
     currentFetch = () => ({ tree: screen([]), source: "native-devtools" });

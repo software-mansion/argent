@@ -31,13 +31,14 @@ export function label(text: string, extra: Partial<DescribeNode> = {}): Describe
   });
 }
 
-function mockRegistry(calls?: ToolCall[]): Registry {
+function mockRegistry(calls?: ToolCall[], onCall?: (call: ToolCall) => void): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
       // A failed step's screenshot (flow-failure-screen.test.ts) is not a step's action.
       if (id === "screenshot") return {};
       calls?.push({ tool: id, args });
+      onCall?.({ tool: id, args });
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -52,6 +53,8 @@ function asRun(result: FlowRunResult | { notice: string }): FlowRunResult {
 export function createFlowTestHarness(options: {
   tempDirectoryPrefix: string;
   reset?: () => void;
+  /** Where `writeFlow` saves a test: `.argent/flows` (legacy, the default) or `.argent/e2e`. */
+  dir?: "flows" | "e2e";
 }) {
   let tmpDir: string;
 
@@ -65,7 +68,7 @@ export function createFlowTestHarness(options: {
   });
 
   async function writeFlow(name: string, flow: Parameters<typeof serializeFlow>[0]): Promise<void> {
-    const dir = path.join(tmpDir, ".argent", "flows");
+    const dir = path.join(tmpDir, ".argent", options.dir ?? "flows");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, `${name}.yaml`), serializeFlow(flow), "utf8");
   }
@@ -73,20 +76,23 @@ export function createFlowTestHarness(options: {
   async function execute(
     name: string,
     calls?: ToolCall[],
-    device: string = IOS_DEVICE
+    device: string = IOS_DEVICE,
+    onCall?: (call: ToolCall) => void
   ): Promise<FlowRunResult> {
-    const tool = createRunFlowTool(mockRegistry(calls));
+    const tool = createRunFlowTool(mockRegistry(calls, onCall));
     return asRun(await tool.execute({}, { name, project_root: tmpDir, device }));
   }
 
   const run = (name: string): Promise<FlowRunResult> => execute(name);
+  /** `onCall` sees each tool call as it is made, and may throw to fail it. */
   const runWithCalls = async (
     name: string,
-    device?: string
+    device?: string,
+    onCall?: (call: ToolCall) => void
   ): Promise<FlowRunResult & { calls: ToolCall[] }> => {
     const calls: ToolCall[] = [];
-    return Object.assign(await execute(name, calls, device), { calls });
+    return Object.assign(await execute(name, calls, device, onCall), { calls });
   };
 
-  return { writeFlow, run, runWithCalls };
+  return { writeFlow, run, runWithCalls, root: () => tmpDir };
 }
