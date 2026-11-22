@@ -8,6 +8,7 @@ import { createDescribeTool } from "../src/tools/describe";
 import { describeIos, __resetBootCaveatStateForTests } from "../src/tools/describe/platforms/ios";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
+import { unknownOrientationNote } from "../src/utils/ios-ui-orientation";
 
 // describeIos probes the runtime kind to short-circuit tvOS. Mock it so these
 // unit tests stay hermetic (no real `simctl`) and default to the iOS path; the
@@ -35,6 +36,7 @@ function makeAXServiceApi(
     describe: async () => response,
     alertCheck: async () => response.alertVisible,
     livePanel: async () => null,
+    orientation: async () => ({}),
     foregroundApp: async () => ({ alertVisible: false }),
     fill: async () => ({ focused: false, verified: false }),
     tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -1053,6 +1055,7 @@ describe("describe tool — ax-service read failure", () => {
       alertCheck: async () => false,
       ping: async () => true,
       livePanel: async () => null,
+      orientation: async () => ({}),
       foregroundApp: async () => ({ alertVisible: false }),
       fill: async () => ({ focused: false, verified: false }),
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -1269,6 +1272,14 @@ describe("describe tool — ax-service daemon crash", () => {
     expect(first.source).toBe("native-devtools");
     expect(first.description).toMatch(/AXButton\s+"Go"/);
     expect(first.hint).toMatch(/ax-service.*SIGSEGV/i);
+    // The native tree's frames could not be turned upright without the
+    // service, which names the UI's orientation, and the hint says so.
+    expect(first.hint).toContain(
+      unknownOrientationNote(
+        { unknownReason: "the accessibility service is not running" },
+        "these frames are in"
+      )
+    );
     expect(second.hint).toBe(first.hint);
   });
 

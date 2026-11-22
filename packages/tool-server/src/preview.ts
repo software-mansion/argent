@@ -7,7 +7,7 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import type { Registry } from "@argent/registry";
 import { track } from "@argent/telemetry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
-import { resolveDevice } from "./utils/device-info";
+import { isIosSimulator, resolveDevice } from "./utils/device-info";
 import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "./utils/foldable";
 import { classifyDeviceForTelemetry } from "./utils/telemetry-platform";
 import { shutdownDevice } from "./utils/device-shutdown";
@@ -21,6 +21,7 @@ import {
 } from "./utils/variant-proposals";
 import type { DescribeTreeData } from "./tools/describe/contract";
 import { describeIos } from "./tools/describe/platforms/ios";
+import { readUiOrientation } from "./utils/ios-ui-orientation";
 import { describeAndroid } from "./tools/describe/platforms/android";
 
 function findUiFile(name: string): string | null {
@@ -633,10 +634,17 @@ export function createPreviewRouter(registry: Registry): Router {
       }
       const data: DescribeTreeData =
         device.platform === "ios"
-          ? await describeIos(registry, device, {})
+          ? // Drawn over the native video stream, so in its portrait-native space.
+            await describeIos(registry, device, {}, { frameSpace: "native" })
           : await describeAndroid(registry, udid);
+      // How the UI lies on that space, for the page to turn a frame by when it
+      // crops a screenshot, which is upright. Answered from the read just made.
+      const uiOrientation =
+        device.platform === "ios" && isIosSimulator(device)
+          ? (await readUiOrientation(device.id)).orientation
+          : undefined;
       res.set("Cache-Control", "no-store");
-      res.json(data);
+      res.json(uiOrientation ? { ...data, uiOrientation } : data);
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
