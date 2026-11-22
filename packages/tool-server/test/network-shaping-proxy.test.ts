@@ -72,7 +72,7 @@ function viaProxy(
   proxy: ShapingProxy,
   url: string,
   options: { agent?: http.Agent; headers?: http.OutgoingHttpHeaders } = {}
-): Promise<{ status: number; body: string; ms: number }> {
+): Promise<{ status: number; body: string; ms: number; headers: http.IncomingHttpHeaders }> {
   const started = performance.now();
   return new Promise((resolve, reject) => {
     const req = http.request({ host: "127.0.0.1", port: proxy.port, path: url, ...options });
@@ -80,7 +80,12 @@ function viaProxy(
       let body = "";
       res.on("data", (chunk: Buffer) => (body += chunk.toString()));
       res.on("end", () =>
-        resolve({ status: res.statusCode ?? 0, body, ms: performance.now() - started })
+        resolve({
+          status: res.statusCode ?? 0,
+          body,
+          ms: performance.now() - started,
+          headers: res.headers,
+        })
       );
     });
     req.on("error", reject);
@@ -233,6 +238,59 @@ describe("the shaping proxy", () => {
     const headers = JSON.parse(res.body) as Record<string, string>;
     expect(headers["x-app"]).toBe("1");
     expect(headers).not.toHaveProperty("proxy-connection");
+  });
+
+  it("drops the headers that a Connection header names, in both directions", async () => {
+    const origin = await listenOrigin(
+      http.createServer((req, res) => {
+        res.setHeader("Connection", "X-Origin-Hop");
+        res.setHeader("X-Origin-Hop", "1");
+        res.setHeader("X-Origin-App", "1");
+        res.end(JSON.stringify(req.headers));
+      })
+    );
+    const proxy = await startProxy();
+
+    const res = await viaProxy(proxy, `http://127.0.0.1:${origin}/`, {
+      headers: { "connection": "keep-alive, X-Device-Hop", "x-device-hop": "1", "x-app": "1" },
+    });
+
+    const received = JSON.parse(res.body) as Record<string, string>;
+    expect(received["x-app"]).toBe("1");
+    expect(received).not.toHaveProperty("x-device-hop");
+    expect(res.headers["x-origin-app"]).toBe("1");
+    expect(res.headers).not.toHaveProperty("x-origin-hop");
+  });
+
+  it("passes on the origin's valid early hints before its response", async () => {
+    const preloads = ["</style.css>; rel=preload; as=style", "</app.js>; rel=preload; as=script"];
+    const origin = await listenOrigin(
+      http.createServer((_req, res) => {
+        res.socket?.write("HTTP/1.1 103 Early Hints\r\nLink: not-a-link\r\n\r\n");
+        res.writeEarlyHints({ link: preloads });
+        setTimeout(() => res.end("aaaa"), 50);
+      })
+    );
+    const proxy = await startProxy();
+
+    const events = await new Promise<string[]>((resolve, reject) => {
+      const seen: string[] = [];
+      const req = http.request({
+        host: "127.0.0.1",
+        port: proxy.port,
+        path: `http://127.0.0.1:${origin}/`,
+      });
+      req.on("information", (info) => seen.push(`${info.statusCode} ${info.headers.link}`));
+      req.on("response", (res) => {
+        seen.push(`${res.statusCode}`);
+        res.resume();
+        res.on("end", () => resolve(seen));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+    expect(events).toEqual([`103 ${preloads.join(", ")}`, "200"]);
   });
 
   it("stops the origin's request when the device gives up on it", async () => {

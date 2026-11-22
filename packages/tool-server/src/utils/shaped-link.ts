@@ -32,9 +32,20 @@ export class LinkDirection {
     this.freeAt = start + bytes / this.bytesPerMs;
     return { sentAt: this.freeAt, arrivesAt: Math.max(this.freeAt, now) + this.delayMs };
   }
+
+  startOf(bytes: number, sentAt: number): number {
+    return this.bytesPerMs === null ? sentAt : sentAt - bytes / this.bytesPerMs;
+  }
+
+  release(bytes: number, sentAt: number, now: number): void {
+    if (this.bytesPerMs === null) return;
+    const unsentMs = Math.min(sentAt - now, bytes / this.bytesPerMs);
+    if (unsentMs > 0) this.freeAt -= unsentMs;
+  }
 }
 
 interface QueuedSlice {
+  sentAt: number;
   arrivesAt: number;
   chunk: Buffer;
 }
@@ -68,13 +79,13 @@ class DelayedQueue {
   push(chunk: Buffer, done?: () => void): void {
     const link = this.link();
     if (!link.shaping && this.empty) {
-      this.deliver(chunk);
+      this.deliver(Buffer.from(chunk));
       done?.();
       return;
     }
     let sentAt = 0;
-    for (const slice of slicesOf(chunk)) {
-      const queued = { arrivesAt: 0, chunk: slice };
+    for (const slice of slicesOf(Buffer.from(chunk))) {
+      const queued = { sentAt: 0, arrivesAt: 0, chunk: slice };
       sentAt = this.pace(queued, link);
       this.slices.push(queued);
       this.queuedBytes += slice.length;
@@ -84,18 +95,24 @@ class DelayedQueue {
   }
 
   repace(): void {
-    const link = this.link();
-    const waiting = [...this.sendTimers.values()];
-    this.stopTimers();
     this.lastArrival = 0;
-    let sentAt = 0;
-    for (const slice of this.slices) sentAt = this.pace(slice, link);
-    this.schedule();
-    for (const done of waiting) this.whenSent(sentAt, done);
+    this.repaceSlices(this.slices);
+  }
+
+  releaseWaiting(now: number): void {
+    this.release(this.waitingToSend(now), now);
+  }
+
+  repaceWaiting(now: number): void {
+    const waiting = this.waitingToSend(now);
+    if (waiting.length === 0) return;
+    this.lastArrival = this.slices[this.slices.length - waiting.length - 1]?.arrivesAt ?? 0;
+    this.repaceSlices(waiting);
   }
 
   clear(): void {
     this.stopTimers();
+    this.release(this.slices, performance.now());
     this.slices = [];
     this.queuedBytes = 0;
   }
@@ -110,8 +127,32 @@ class DelayedQueue {
   private pace(slice: QueuedSlice, link: LinkDirection): number {
     const timing = link.send(slice.chunk.length, performance.now());
     this.lastArrival = Math.max(this.lastArrival, timing.arrivesAt);
+    slice.sentAt = timing.sentAt;
     slice.arrivesAt = this.lastArrival;
     return timing.sentAt;
+  }
+
+  private waitingToSend(now: number): QueuedSlice[] {
+    const link = this.link();
+    const first = this.slices.findIndex(
+      (slice) => link.startOf(slice.chunk.length, slice.sentAt) > now
+    );
+    return first === -1 ? [] : this.slices.slice(first);
+  }
+
+  private release(slices: QueuedSlice[], now: number): void {
+    const link = this.link();
+    for (const slice of slices) link.release(slice.chunk.length, slice.sentAt, now);
+  }
+
+  private repaceSlices(slices: QueuedSlice[]): void {
+    const link = this.link();
+    const waiting = [...this.sendTimers.values()];
+    this.stopTimers();
+    let sentAt = 0;
+    for (const slice of slices) sentAt = this.pace(slice, link);
+    this.schedule();
+    for (const done of waiting) this.whenSent(sentAt, done);
   }
 
   private whenSent(sentAt: number, done: () => void): void {
@@ -187,6 +228,16 @@ class ShapedSocket extends Duplex {
     this[direction].repace();
   }
 
+  releaseWaiting(now: number): void {
+    this.upload.releaseWaiting(now);
+    this.download.releaseWaiting(now);
+  }
+
+  repaceWaiting(now: number): void {
+    this.upload.repaceWaiting(now);
+    this.download.repaceWaiting(now);
+  }
+
   override _read(): void {
     this.proxyFull = false;
     this.resumeDevice();
@@ -197,10 +248,7 @@ class ShapedSocket extends Duplex {
   }
 
   override _final(callback: () => void): void {
-    this.pendingFinal = () => {
-      this.socket.end();
-      callback();
-    };
+    this.pendingFinal = () => this.socket.end(callback);
     if (this.download.empty) this.onDownloadDrain();
   }
 
@@ -273,8 +321,17 @@ export class ShapedLink {
   attach(socket: net.Socket): Duplex {
     const shaped = new ShapedSocket(socket, this.links);
     this.sockets.add(shaped);
-    socket.on("close", () => this.sockets.delete(shaped));
+    socket.on("close", () => {
+      this.sockets.delete(shaped);
+      this.reclaimWaiting();
+    });
     return shaped;
+  }
+
+  private reclaimWaiting(): void {
+    const now = performance.now();
+    for (const shaped of this.sockets) shaped.releaseWaiting(now);
+    for (const shaped of this.sockets) shaped.repaceWaiting(now);
   }
 
   setConditions(conditions: NetworkConditions | null): void {
