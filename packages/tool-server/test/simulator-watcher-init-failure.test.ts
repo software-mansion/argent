@@ -93,6 +93,7 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
     takeCaptureGap: () => false,
     networkRecords: () => undefined,
     networkCaptureAfterLaunch: async () => undefined,
+    setNetworkConditions: async () => {},
     getAppState: async () => {
       throw new Error("not implemented");
     },
@@ -198,6 +199,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
       takeCaptureGap: () => false,
       networkRecords: () => undefined,
       networkCaptureAfterLaunch: async () => undefined,
+      setNetworkConditions: async () => {},
       getAppState: async () => {
         throw new Error("not implemented");
       },

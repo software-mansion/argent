@@ -16,9 +16,6 @@ vi.mock("child_process", async () => ({
   spawn: spawnMock,
 }));
 
-vi.mock("../src/blueprints/ax-service", () => ({
-  ensureAutomationEnabled: vi.fn(async () => undefined),
-}));
 vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryPath: () => "/fake/bin/simulator-server",
   simulatorServerRunDir: () => "/fake/bin",

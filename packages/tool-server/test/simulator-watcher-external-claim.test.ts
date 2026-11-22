@@ -131,6 +131,7 @@ function makeApi(): NativeDevtoolsApi {
     takeCaptureGap: () => false,
     networkRecords: () => undefined,
     networkCaptureAfterLaunch: async () => undefined,
+    setNetworkConditions: async () => {},
     getAppState: async () => {
       throw new Error("not implemented");
     },

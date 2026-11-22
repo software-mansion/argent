@@ -5,6 +5,7 @@ import { macosAppRef } from "../../blueprints/macos-app";
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { forgettingUiOrientation } from "../../utils/ios-ui-orientation";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type {
   LaunchAppResult,
@@ -117,9 +118,9 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
     >({
       toolId: "launch-app",
       capability,
-      ios: makeIosImpl(registry),
+      ios: forgettingUiOrientation(makeIosImpl(registry)),
       iosDevice: iosDeviceImpl,
-      iosRemote: iosRemoteImpl,
+      iosRemote: forgettingUiOrientation(iosRemoteImpl),
       android: androidImpl,
       chromium: chromiumImpl,
       vega: vegaImpl,
