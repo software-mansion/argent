@@ -454,7 +454,7 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 
       expect(fs.existsSync(result.file)).toBe(false);
       expect(result.note).toBe(
-        `No log file exists at ${result.file}, so there is nothing to grep: the counts and clusters are all that was captured. ` +
+        `No log file exists at ${result.file}, so there is nothing to grep: the counts, clusters and { entries } are all that was captured. ` +
           `Usually the disk was full or ~/.argent/tmp was not writable when this session started (if root owns ~/.argent: sudo chown -R "$USER" ~/.argent). ` +
           `Only a new debugger session gets a file: once that is fixed, call stop-all-simulator-servers with devices: ["${LOGICAL_ID}"], then debugger-connect again.`
       );

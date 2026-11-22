@@ -144,9 +144,9 @@ When the debugger cannot be reached, it returns { status: "not_connected", reaso
         }
         const inFile = api.logWriter.getFileEntryCount();
         const fileNote = !api.logWriter.hasFile()
-          ? `No log file exists at ${stats.file}, so there is nothing to grep: the counts and clusters are all that was captured. Usually the disk was full or ~/.argent/tmp was not writable when this session started (if root owns ~/.argent: sudo chown -R "$USER" ~/.argent). Only a new debugger session gets a file: once that is fixed, call stop-all-simulator-servers with devices: ["${canonicalDeviceId(params.device_id)}"], then debugger-connect again.`
+          ? `No log file exists at ${stats.file}, so there is nothing to grep: the counts, clusters and { entries } are all that was captured. Usually the disk was full or ~/.argent/tmp was not writable when this session started (if root owns ~/.argent: sudo chown -R "$USER" ~/.argent). Only a new debugger session gets a file: once that is fixed, call stop-all-simulator-servers with devices: ["${canonicalDeviceId(params.device_id)}"], then debugger-connect again.`
           : inFile === 0 && stats.totalEntries > 0
-            ? `The log file at ${stats.file} holds none of the ${stats.totalEntries} captured entries: every write to it failed (e.g. a full disk), so there is nothing to grep and the counts and clusters are all that was captured. Entries logged once the disk has room are written to it.`
+            ? `The log file at ${stats.file} holds none of the ${stats.totalEntries} captured entries: every write to it failed (e.g. a full disk), so there is nothing to grep and the counts, clusters and { entries } are all that was captured. Entries logged once the disk has room are written to it.`
             : inFile < stats.totalEntries
               ? `The log file at ${stats.file} holds only ${inFile} of the ${stats.totalEntries} captured entries: the other writes to it failed (e.g. a full disk or a file-size limit), so byLevel and clusters count entries that grepping it will not find. Entries logged once the disk has room are written to it.`
               : undefined;
