@@ -105,7 +105,8 @@ export async function setArgentProxy(serial: string, port: number): Promise<void
   }
   const applied = await proxyApplied(serial, (host, port) => `${host}:${port}` === proxy);
   if (!applied) throw installNotApplied(serial);
-  if (replaced) await writeMarker(serial, [proxy]);
+  const inTransition = state.argent.includes(proxy) && state.argent.length > 1;
+  if (replaced || inTransition) await writeMarker(serial, [proxy]);
 }
 
 /** Removes the proxy Argent set, also one a crashed tool-server left, and keeps a user's proxy. */
