@@ -124,7 +124,7 @@ describe("debugger-evaluate", () => {
     const evaluate = vi.fn().mockResolvedValue(1);
     const services = {
       debugger: {
-        cdp: { evaluate },
+        cdp: { evaluateAwaited: evaluate },
         deviceName: "MockDevice",
         appName: "MockApp",
         logicalDeviceId: undefined,

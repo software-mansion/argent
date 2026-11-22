@@ -11,7 +11,7 @@ import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/met
 import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
-import { selectTarget } from "../utils/debugger/target-selection";
+import { selectTarget, simulatorNameOnSharedMetro } from "../utils/debugger/target-selection";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
@@ -120,15 +120,6 @@ function createConsoleLogServer(
 
     server.on("error", reject);
   });
-}
-
-async function openLogWriterOrDisconnect(port: number, cdp: CDPClient): Promise<LogFileWriter> {
-  try {
-    return new LogFileWriter(port);
-  } catch (error) {
-    await cdp.disconnect();
-    throw error;
-  }
 }
 
 /**
@@ -245,6 +236,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const selected = selectTarget(metro.targets, port, {
       ...options,
       deviceId,
+      simulatorName: await simulatorNameOnSharedMetro(deviceId, metro.targets),
     });
 
     /**
@@ -272,13 +264,15 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const onPublishedBundler = publishedMetroPort(deviceId, port) === undefined;
     const proxied = onPublishedBundler ? externalJsDebuggerUrl(deviceId) : undefined;
 
-    const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
+    const cdp = new CDPClient(proxied ?? selected.webSocketUrl, {
+      awaitPromisesInApp: !selected.legacyInspector,
+    });
     await cdp.connect();
 
     // Hermes replays its buffered console messages to a new client before it
     // answers `Runtime.enable`, so the listener must be in place before the
     // setup below, or the startup logs of an app that launched earlier are lost.
-    const logWriter = await openLogWriterOrDisconnect(port, cdp);
+    const logWriter = new LogFileWriter(port);
     const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
@@ -315,15 +309,27 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      */
     const closeLog = ({ breadcrumb }: { breadcrumb: boolean }) => {
       const captured = logWriter.getStats().totalEntries;
-      const keepFile = captured > 0 && !cdp.isConnected();
+      const connectionLost = !cdp.isConnected();
+      // Past a file-size limit or on a full disk the file can exist yet hold nothing.
+      const inFile = logWriter.getFileEntryCount();
+      const stored = logWriter.hasFile() && inFile > 0;
+      const keepFile = captured > 0 && connectionLost && stored;
       if (breadcrumb && captured > 0) {
         const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
+        const since =
+          "This registry holds only what the runtime replayed or logged since, so earlier " +
+          "entries may be missing.";
         const salvage = keepFile
-          ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
-          : `The ${entries} went with it: the log file is deleted on teardown. This ` +
-            `registry holds only what the runtime replayed or logged since, so earlier entries ` +
-            `may be missing.`;
-        recordReapedSession("js-runtime-debugger", [deviceId, logicalDeviceId], salvage, keepFile);
+          ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}.`
+          : stored
+            ? `The ${entries} went with it: the log file is deleted on teardown. ${since}`
+            : `The ${entries} went with it: no log file held them. ${since}`;
+        recordReapedSession(
+          "js-runtime-debugger",
+          [deviceId, logicalDeviceId],
+          salvage,
+          connectionLost
+        );
       }
       logWriter.close({ keepFile });
     };
@@ -414,9 +420,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       // later tool that forwards the logicalDeviceId on this instance instead of
       // opening a second one. See utils/debugger/device-alias.ts.
       rememberDeviceAlias(api.logicalDeviceId, deviceId);
-      // Equal ids mean the caller connected with the logicalDeviceId itself, as
-      // `selectTarget` demands once a second device shares this Metro. Nothing
-      // then joins the session to a udid or serial, so a `list-devices`-scoped
+      // Equal ids mean the caller connected with the logicalDeviceId itself.
+      // Nothing then joins the session to a udid or serial, so a `list-devices`-scoped
       // `stop-all-simulator-servers` can only report it, never reach it.
       rememberLogicalKeyedDevice(api.logicalDeviceId, deviceId);
 
