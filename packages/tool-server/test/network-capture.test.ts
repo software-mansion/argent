@@ -3513,13 +3513,20 @@ describe("the tool definitions", () => {
       for (const id of [IOS_UDID, `remote:${IOS_UDID}`, SERIAL, "R5CT1234567"]) {
         expect(() => assertSupported(tool.id, tool.capability, resolveDevice(id))).not.toThrow();
       }
-      expect(() =>
-        assertSupported(tool.id, tool.capability, {
-          id: "macos-app-com.example.app",
-          platform: "macos",
-          kind: "catalyst",
-        })
-      ).not.toThrow();
+      // Argent drives Mac apps only on a macOS host, and CI runs this on Linux.
+      const realPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      try {
+        expect(() =>
+          assertSupported(tool.id, tool.capability, {
+            id: "macos-app-com.example.app",
+            platform: "macos",
+            kind: "catalyst",
+          })
+        ).not.toThrow();
+      } finally {
+        Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+      }
       for (const id of ["chromium-cdp-9222", "amazon-0123456789", "00008110-001A2B3C4D5E801E"]) {
         expect(() => assertSupported(tool.id, tool.capability, resolveDevice(id))).toThrow(
           UnsupportedOperationError
