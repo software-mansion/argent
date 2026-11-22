@@ -2,7 +2,7 @@ import * as zlib from "node:zlib";
 import { z } from "zod";
 import type { ServiceRef, ToolDefinition } from "@argent/registry";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
-import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "../debugger/debugger-service-ref";
+import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
 import {
   jsCapture,
   jsCapturePayload,
@@ -31,7 +31,14 @@ import {
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
-import { isRedirect, jsCaptureForRead, jsNoLog, jsNotStarted, reasonPhrase } from "./network-logs";
+import {
+  isRedirect,
+  jsCaptureDebuggerRef,
+  jsCaptureForRead,
+  jsNoLog,
+  jsNotStarted,
+  reasonPhrase,
+} from "./network-logs";
 
 const SENSITIVE_HEADER_PATTERNS = [
   "auth",
@@ -262,7 +269,8 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
     // Vega has no network-capture-start, so its read still installs the interceptor.
     if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
     // A read never starts capture: before a start it reaches nothing in the app.
-    return jsCapture(payload) ? { debugger: debuggerServiceRef(params) } : {};
+    const capture = jsCapture(payload);
+    return capture ? { debugger: jsCaptureDebuggerRef(params, capture) } : {};
   },
   async execute(services, params) {
     if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) {

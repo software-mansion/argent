@@ -15,6 +15,8 @@ import {
 } from "../../src/blueprints/network-inspector";
 import { createNetworkCaptureStartTool } from "../../src/tools/network/network-capture-start";
 import { createNetworkCaptureStopTool } from "../../src/tools/network/network-capture-stop";
+import { networkLogsTool } from "../../src/tools/network/network-logs";
+import { networkRequestTool } from "../../src/tools/network/network-request";
 import type {
   CaptureResult,
   StartedLayer,
@@ -173,6 +175,8 @@ beforeEach(() => {
   registry.registerBlueprint(fakeAndroidInspectorBlueprint);
   registry.registerTool(createNetworkCaptureStartTool(registry));
   registry.registerTool(createNetworkCaptureStopTool(registry));
+  registry.registerTool(networkLogsTool);
+  registry.registerTool(networkRequestTool);
 });
 
 afterEach(async () => {
@@ -236,6 +240,26 @@ describe.each([
       logicalDeviceId: LOGICAL_ID,
     });
   });
+
+  it.each([
+    { tool: "view-network-logs", args: {} },
+    { tool: "view-network-request-details", args: { requestId: "rn-net-1" } },
+  ])(
+    "reconnects $tool through the provider's socket after the debugger disconnects",
+    async ({ tool, args }) => {
+      publishDescriptor({ jsDebugger: true });
+      await start(udid);
+      // A CDP disconnect ends the debugger service; the capture entry stays.
+      await registry.disposeService(`JsRuntimeDebugger:${METRO_PORT}:${LOGICAL_ID}`);
+
+      // The answer is not under test, only the socket the read dials.
+      await registry
+        .invokeTool(tool, { device_id: LOGICAL_ID, port: METRO_PORT, ...args })
+        .catch(() => undefined);
+
+      expect(dialled.urls).toEqual([PROVIDER_SOCKET_URL, PROVIDER_SOCKET_URL]);
+    }
+  );
 
   it("does not start the JS layer when the provider did not grant js-debugger", async () => {
     publishDescriptor({ jsDebugger: false });
