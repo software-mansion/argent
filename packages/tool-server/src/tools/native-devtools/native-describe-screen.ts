@@ -35,7 +35,7 @@ export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:
-- raw frame and tapPoint in points, on the portrait axes of the screen
+- raw frame and tapPoint in points, on the axes of the UI as the user sees it
 - normalizedFrame and normalizedTapPoint on the same axes. gesture-tap uses
   these axes, also when the UI is landscape
 - top-level screenFrame metadata: the screen bounds on these axes

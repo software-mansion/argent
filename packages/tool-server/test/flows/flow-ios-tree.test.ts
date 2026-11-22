@@ -110,11 +110,11 @@ describe("flow iOS full-hierarchy source", () => {
   });
 
   // An unfolded foldable, or a rotated iPhone: the UI is landscape (951x669 pt
-  // window) on a portrait-native screen (669x951 pt), and touches are taken in
-  // the native space. The framework reports each view in that space as
-  // `screenFrame`, next to the screen's native size and the interface
-  // orientation on it.
-  it("normalizes screenFrame by the reported native screen size, not the landscape window", async () => {
+  // window) on a portrait-native screen (669x951 pt). The framework reports
+  // each view in that native space as `screenFrame`, next to the screen's
+  // native size and the interface orientation on it; the adapter turns the
+  // frames into the UI's upright space, the space of every other tool.
+  it("turns screenFrame into the UI's upright space", async () => {
     const raw = {
       screen: { width: 669, height: 951, interfaceOrientation: "landscapeRight" },
       windows: [
@@ -138,23 +138,25 @@ describe("flow iOS full-hierarchy source", () => {
         },
       ],
     };
-    const { tree, screen, uiOrientation } = await queryFullHierarchyTree(
-      registryFor(apiServing(raw)),
-      DEVICE
-    );
-    expect(screen).toEqual({ width: 669, height: 951 });
-    const frame = selectorToFrame(tree, { identifier: "probe.pad" })!;
-    expect(frame.x).toBeCloseTo(269 / 669, 6);
-    expect(frame.y).toBeCloseTo(500 / 951, 6);
-    expect(frame.width).toBeCloseTo(200 / 669, 6);
-    expect(frame.height).toBeCloseTo(300 / 951, 6);
-    // What the flow directions turn by, as the framework names it.
-    expect(uiOrientation).toBe("landscapeRight");
+    const data = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+    expect(data.screen).toEqual({ width: 951, height: 669 });
+    // Where the window has it: the upright space.
+    const frame = selectorToFrame(data.tree, { identifier: "probe.pad" })!;
+    expect(frame.x).toBeCloseTo(500 / 951, 6);
+    expect(frame.y).toBeCloseTo(200 / 669, 6);
+    expect(frame.width).toBeCloseTo(300 / 951, 6);
+    expect(frame.height).toBeCloseTo(200 / 669, 6);
+    expect(data).not.toHaveProperty("uiOrientation");
   });
 
-  it.each(["portrait", "portraitUpsideDown", "landscapeLeft", "landscapeRight"] as const)(
-    "reports the interface orientation the framework names: %s",
-    async (interfaceOrientation) => {
+  it.each([
+    ["portrait", { x: 0.1, y: 0.2 }, { width: 669, height: 951 }],
+    ["portraitUpsideDown", { x: 0.8, y: 0.7 }, { width: 669, height: 951 }],
+    ["landscapeLeft", { x: 0.7, y: 0.1 }, { width: 951, height: 669 }],
+    ["landscapeRight", { x: 0.2, y: 0.8 }, { width: 951, height: 669 }],
+  ] as const)(
+    "turns by the interface orientation the framework names: %s",
+    async (interfaceOrientation, origin, screen) => {
       const raw = {
         screen: { width: 669, height: 951, interfaceOrientation },
         windows: [
@@ -162,47 +164,27 @@ describe("flow iOS full-hierarchy source", () => {
             className: "UIWindow",
             windowFrame: { x: 0, y: 0, width: 669, height: 951 },
             screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-            children: [],
+            children: [
+              {
+                className: "UIButton",
+                identifier: "corner",
+                // Native (0.1, 0.2) to (0.2, 0.3).
+                screenFrame: { x: 66.9, y: 190.2, width: 66.9, height: 95.1 },
+                children: [],
+              },
+            ],
           },
         ],
       };
-      const { uiOrientation } = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
-      expect(uiOrientation).toBe(interfaceOrientation);
+      const data = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+      expect(data.screen).toEqual(screen);
+      const frame = selectorToFrame(data.tree, { identifier: "corner" })!;
+      expect(frame.x).toBeCloseTo(origin.x, 6);
+      expect(frame.y).toBeCloseTo(origin.y, 6);
     }
   );
 
-  // A game or a canvas: one full-screen view, whose screen rect is the same in
-  // both landscape orientations. The frames cannot say which way `down` is on
-  // the panel; the reported orientation can.
-  it("knows the orientation of a UI made of one full-screen view", async () => {
-    const pad = {
-      className: "PadView",
-      identifier: "sym.pad",
-      windowFrame: { x: 0, y: 0, width: 951, height: 669 },
-      screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-      children: [],
-    };
-    const serving = (interfaceOrientation: string) => ({
-      screen: { width: 669, height: 951, interfaceOrientation },
-      windows: [
-        {
-          className: "UIWindow",
-          windowFrame: { x: 0, y: 0, width: 951, height: 669 },
-          screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-          children: [pad],
-        },
-      ],
-    });
-    for (const orientation of ["landscapeLeft", "landscapeRight"]) {
-      const { uiOrientation } = await queryFullHierarchyTree(
-        registryFor(apiServing(serving(orientation))),
-        DEVICE
-      );
-      expect(uiOrientation).toBe(orientation);
-    }
-  });
-
-  it("reports no orientation when the framework names none it knows", async () => {
+  it("leaves the frames native when the framework names no orientation it knows", async () => {
     const unknown = {
       screen: { width: 669, height: 951, interfaceOrientation: "faceUp" },
       windows: [
@@ -210,34 +192,20 @@ describe("flow iOS full-hierarchy source", () => {
           className: "UIWindow",
           windowFrame: { x: 0, y: 0, width: 669, height: 951 },
           screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-          children: [],
-        },
-      ],
-    };
-    expect(
-      (await queryFullHierarchyTree(registryFor(apiServing(unknown)), DEVICE)).uiOrientation
-    ).toBeUndefined();
-    // A framework that predates screenFrame reports neither; its frames are in
-    // the window's space, where a direction needs no turning.
-    const older = {
-      windows: [
-        {
-          className: "UIWindow",
-          windowFrame: { x: 0, y: 0, width: 400, height: 800 },
           children: [
             {
               className: "UIButton",
-              identifier: "buy",
-              windowFrame: { x: 100, y: 400, width: 200, height: 40 },
+              identifier: "corner",
+              screenFrame: { x: 66.9, y: 190.2, width: 66.9, height: 95.1 },
               children: [],
             },
           ],
         },
       ],
     };
-    expect(
-      (await queryFullHierarchyTree(registryFor(apiServing(older)), DEVICE)).uiOrientation
-    ).toBeUndefined();
+    const data = await queryFullHierarchyTree(registryFor(apiServing(unknown)), DEVICE);
+    expect(data.screen).toEqual({ width: 669, height: 951 });
+    expect(selectorToFrame(data.tree, { identifier: "corner" })!.x).toBeCloseTo(0.1, 6);
   });
 
   it("falls back to windowFrame and the largest window for a framework that predates screenFrame", async () => {

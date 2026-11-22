@@ -12,6 +12,7 @@ import { stripRemotePrefix } from "../../utils/device-info";
 import { simctlTargetForUdid } from "../../utils/ios-device-sets";
 import { nodeText } from "../../utils/ui-tree-match";
 import { redactTypedSecrets, secretTypedOn, WITHHELD_INPUT_TEXT } from "../../utils/typed-secrets";
+import { isTurned, nativeTreeToUi, uiScreenSize } from "../../utils/ui-orientation";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import type { FlowTreeTarget } from "./flow-actions";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
@@ -19,7 +20,6 @@ import {
   type DescribeFrame,
   type DescribeNode,
   type DescribeTreeData,
-  type UiOrientation,
   asUiOrientation,
   parseDescribeResult,
 } from "../describe/contract";
@@ -255,15 +255,17 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
 /**
  * Like {@link adaptFullHierarchyToDescribeResult}, but also reports the screen
  * size (points) the frames were normalized against — the rotate directive needs
- * the aspect ratio for its physical-circle geometry — and how the UI lies on
- * that space, for the directives that turn a UI-space direction into it.
+ * the aspect ratio for its physical-circle geometry.
  *
- * The orientation is the one the framework reports next to the screen size
- * (`screen.interfaceOrientation`, as UIKit names interface orientations), not
- * one told from the frames: a UI made only of full-screen or centred views (a
- * game, a canvas) frames the same way in both landscape orientations. A
- * framework that predates `screenFrame` reports neither, and its frames are in
- * the window's space, where a direction needs no turning.
+ * The frames come in the screen's fixed (portrait-native) space and go out in
+ * the UI's upright one, the space every agent-facing tool and every touch uses
+ * on an iOS simulator (`utils/ios-ui-orientation.ts`); the screen size is the
+ * UI's too. The turn is by the orientation the framework reports next to the
+ * screen size (`screen.interfaceOrientation`, as UIKit names interface
+ * orientations), not one told from the frames: a UI made only of full-screen
+ * or centred views (a game, a canvas) frames the same way in both landscape
+ * orientations. A framework that predates `screenFrame` reports neither, and
+ * its frames are in the window's space, which already is the UI's.
  */
 function adaptFullHierarchy(
   raw: unknown,
@@ -271,7 +273,6 @@ function adaptFullHierarchy(
 ): {
   tree: DescribeNode;
   screen?: { width: number; height: number };
-  uiOrientation?: UiOrientation;
 } {
   const payload =
     typeof raw === "object" && raw !== null ? (raw as { windows?: unknown; screen?: unknown }) : {};
@@ -317,10 +318,10 @@ function adaptFullHierarchy(
   });
   if (!(screenW > 0 && screenH > 0)) return { tree };
   const uiOrientation = asUiOrientation(reportedScreen?.interfaceOrientation);
+  if (!isTurned(uiOrientation)) return { tree, screen: { width: screenW, height: screenH } };
   return {
-    tree,
-    screen: { width: screenW, height: screenH },
-    ...(uiOrientation ? { uiOrientation } : {}),
+    tree: nativeTreeToUi(tree, uiOrientation),
+    screen: uiScreenSize({ width: screenW, height: screenH }, uiOrientation),
   };
 }
 
@@ -637,7 +638,7 @@ export async function queryFullHierarchyTree(
     );
   }
 
-  const { tree, screen, uiOrientation } = adaptFullHierarchy(rawResult);
+  const { tree, screen } = adaptFullHierarchy(rawResult);
   // This tree reads the text of text inputs, and a field can hold a typed
   // secret in a form no value matches (capitalized, corrected, formatted). So
   // once a secret was typed on the device, a quote reads a second projection,
@@ -650,7 +651,6 @@ export async function queryFullHierarchyTree(
     ...(quotableTree ? { quotableTree } : {}),
     source: "native-devtools",
     ...(screen ? { screen } : {}),
-    ...(uiOrientation ? { uiOrientation } : {}),
   };
 }
 
