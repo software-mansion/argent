@@ -8,9 +8,8 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-c
 import {
   ANDROID_NATIVE_REQUEST_ID,
   findAndroidNativeRecord,
-  type AndroidNativeRecord,
-  type AndroidNetworkBody,
 } from "../../blueprints/android-network-inspector";
+import type { NativeNetworkBody, NativeNetworkRecord } from "../../utils/native-network-record";
 import { resolveDevice } from "../../utils/device-info";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
@@ -463,7 +462,7 @@ async function androidNativeRequestDetails(
  * Says what the request headers are when they are not simply what went on
  * the wire: without that, an absent Cookie or User-Agent reads as "not sent".
  */
-function requestHeadersNote(record: AndroidNativeRecord): string | undefined {
+function requestHeadersNote(record: NativeNetworkRecord): string | undefined {
   if (record.request.wireHeaders) {
     return record.redirects?.length
       ? "url and method are those of the request the app made. These headers were sent on the wire with the last request, to the final URL, after the hops in redirects."
@@ -486,11 +485,11 @@ interface AndroidBodyFraming {
 }
 
 async function readAndroidBody(
-  read: () => Promise<AndroidNetworkBody>,
+  read: () => Promise<NativeNetworkBody>,
   framing: AndroidBodyFraming
 ): Promise<string> {
   const mimeType = framing.mimeType ?? framing.contentType.split(";")[0]!.trim();
-  let body: AndroidNetworkBody;
+  let body: NativeNetworkBody;
   try {
     body = await read();
   } catch (err) {
