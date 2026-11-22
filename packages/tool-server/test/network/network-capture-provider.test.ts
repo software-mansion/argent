@@ -17,6 +17,7 @@ import { createNetworkCaptureStartTool } from "../../src/tools/network/network-c
 import { createNetworkCaptureStopTool } from "../../src/tools/network/network-capture-stop";
 import { networkLogsTool } from "../../src/tools/network/network-logs";
 import { networkRequestTool } from "../../src/tools/network/network-request";
+import { createStopAllSimulatorServersTool } from "../../src/tools/simulator/stop-all-simulator-servers";
 import type {
   CaptureResult,
   StartedLayer,
@@ -62,7 +63,8 @@ vi.mock("../../src/utils/debugger/cdp-client", () => ({
     addBinding = async () => {};
     connect = async () => {};
     disconnect = async () => {};
-    evaluate = async () => undefined;
+    // Every script answers as an interceptor that installed.
+    evaluate = async () => JSON.stringify({ installed: true });
     isConnected = () => true;
     pausedAt = () => undefined;
     send = async () => ({});
@@ -177,6 +179,7 @@ beforeEach(() => {
   registry.registerTool(createNetworkCaptureStopTool(registry));
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
+  registry.registerTool(createStopAllSimulatorServersTool(registry));
 });
 
 afterEach(async () => {
@@ -260,6 +263,21 @@ describe.each([
       expect(dialled.urls).toEqual([PROVIDER_SOCKET_URL, PROVIDER_SOCKET_URL]);
     }
   );
+
+  it("reconnects a read through the provider's socket after a teardown kept the capture", async () => {
+    publishDescriptor({ jsDebugger: true });
+    await start(udid);
+    // The teardown's pause cannot reach a runtime whose debugger disconnected,
+    // so the capture stays as a stopped one.
+    await registry.disposeService(`JsRuntimeDebugger:${METRO_PORT}:${LOGICAL_ID}`);
+    await registry.invokeTool("stop-all-simulator-servers", { devices: [LOGICAL_ID] });
+
+    await registry
+      .invokeTool("view-network-logs", { device_id: LOGICAL_ID, port: METRO_PORT })
+      .catch(() => undefined);
+
+    expect(dialled.urls).toEqual([PROVIDER_SOCKET_URL, PROVIDER_SOCKET_URL]);
+  });
 
   it("does not start the JS layer when the provider did not grant js-debugger", async () => {
     publishDescriptor({ jsDebugger: false });

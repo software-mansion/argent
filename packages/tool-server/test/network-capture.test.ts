@@ -2403,6 +2403,7 @@ describe("stop-all-simulator-servers", () => {
         intent: "stopped",
         mark,
         installed: true,
+        physicalDeviceId: udid,
         port: PORT,
       });
       // Once the app's runtime answers again, a stop pauses it and still counts its request.
@@ -2450,6 +2451,7 @@ describe("stop-all-simulator-servers", () => {
       intent: "stopped",
       mark,
       installed: true,
+      physicalDeviceId: IOS_UDID,
     });
     expect(rt.paused).toBe(false);
   });
@@ -2715,6 +2717,7 @@ describe("stop-all-simulator-servers", () => {
         intent: "stopped",
         mark,
         installed: true,
+        physicalDeviceId: IOS_UDID,
       });
       expect(rt.paused).toBe(false);
 

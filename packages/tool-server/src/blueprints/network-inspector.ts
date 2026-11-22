@@ -197,6 +197,7 @@ export function forgetJsCapturesOf(
         intent: "stopped",
         ...(capture.mark ? { mark: capture.mark } : {}),
         installed: true,
+        ...(capture.physicalDeviceId ? { physicalDeviceId: capture.physicalDeviceId } : {}),
       });
     } else {
       jsCaptures.delete(payload);
