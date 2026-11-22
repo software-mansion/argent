@@ -882,16 +882,11 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     interface NetworkLog {
       status: string;
       count: number;
-      events: { method: string; params: any; timestamp: number }[];
-      truncated?: true;
+      total: number;
+      requests: { id: string; state: string; method?: string; url?: string; status?: number }[];
     }
     const readLog = (extra: Record<string, unknown> = {}): Promise<NetworkLog> =>
-      run("native-network-logs", {
-        udid: DEVICE_ID,
-        bundleId: BUNDLE_ID,
-        format: "events",
-        ...extra,
-      });
+      run("native-network-logs", { udid: DEVICE_ID, bundleId: BUNDLE_ID, ...extra });
     const request = async (url: string, count = 1) =>
       (
         await (
@@ -903,27 +898,13 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         })
       ).network;
 
-    it("turns the capture on at the first call and returns the app's network events", async () => {
+    it("turns the capture on at the first call and returns the app's requests", async () => {
       await run("boot-device", { macosAppPath: appPath });
       // Off until now, as on iOS: the first call has nothing to show.
-      expect(await readLog()).toEqual({ status: "ok", count: 0, events: [] });
+      expect(await readLog()).toEqual({ status: "ok", count: 0, total: 0, requests: [] });
 
-      // One request is three events; the CDP reply frame after them is not one.
       expect(await request("https://example.com/a")).toEqual({ active: true, activations: 1 });
-      const log = await readLog();
-      expect(log.count).toBe(3);
-      expect(log.events.map((e) => e.method)).toEqual([
-        "Network.requestWillBeSent",
-        "Network.responseReceived",
-        "Network.loadingFinished",
-      ]);
-      expect(log.events[0].params).toEqual({
-        requestId: "fake-1",
-        request: { url: "https://example.com/a", method: "GET", headers: {} },
-      });
-      expect(log.events.every((e) => typeof e.timestamp === "number")).toBe(true);
-
-      expect(await readLog({ format: "requests" })).toEqual({
+      expect(await readLog()).toEqual({
         status: "ok",
         count: 1,
         total: 1,
@@ -934,16 +915,16 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
             method: "GET",
             url: "https://example.com/a",
             status: 200,
-            bytes: 12,
           },
         ],
       });
 
       // `limit` keeps the most recent; `clear` empties the log after the read.
-      expect((await readLog({ limit: 1 })).events.map((e) => e.method)).toEqual([
-        "Network.loadingFinished",
-      ]);
-      expect((await readLog({ clear: true })).count).toBe(3);
+      await request("https://example.com/b");
+      const latest = await readLog({ limit: 1 });
+      expect(latest).toMatchObject({ count: 1, total: 2 });
+      expect(latest.requests[0].url).toBe("https://example.com/b");
+      expect((await readLog({ clear: true })).count).toBe(2);
       expect((await readLog()).count).toBe(0);
     });
 
@@ -952,19 +933,10 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       await readLog();
       await request("https://example.com/many", 400);
       const log = await readLog({ limit: 5000 });
-      expect(log.count).toBe(1000);
       // 1200 events: the first 200 are gone, so the log starts inside request 67.
-      expect(log.events[0]).toMatchObject({
-        method: "Network.loadingFinished",
-        params: { requestId: "fake-67" },
-      });
-      expect(log.events[999].params.requestId).toBe("fake-400");
-      expect(log.truncated).toBe(true);
-      expect(await readLog({ format: "requests", limit: 5000 })).toMatchObject({
-        count: 334,
-        total: 334,
-        truncated: true,
-      });
+      expect(log.count).toBe(334);
+      expect(log.requests[0]).toEqual({ id: "fake-67", state: "complete" });
+      expect(log.requests[333].id).toBe("fake-400");
     });
 
     it("keeps the capture on across restart-app, which starts an empty log", async () => {
@@ -974,18 +946,18 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       // The capture was off at the launch, so that request is not in the log.
       expect((await readLog()).count).toBe(0);
       await request("https://example.com/before-restart");
-      expect((await readLog()).count).toBe(3);
+      expect((await readLog()).count).toBe(1);
 
       await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
       let log = await readLog();
       const deadline = Date.now() + 3_000;
-      while (log.count < 3 && Date.now() < deadline) {
+      while (log.count < 1 && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 50));
         log = await readLog();
       }
       // The new process's launch request, and nothing of the old process.
-      expect(log.count).toBe(3);
-      expect(log.events[0].params.request.url).toBe("https://example.com/launch");
+      expect(log.count).toBe(1);
+      expect(log.requests[0].url).toBe("https://example.com/launch");
     });
 
     it("keeps the log when the same process reconnects, and turns the capture on again", async () => {
@@ -1003,12 +975,10 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         activations: 2,
       });
       const log = await readLog();
-      expect(log.count).toBe(6);
-      expect(
-        log.events
-          .filter((e) => e.method === "Network.requestWillBeSent")
-          .map((e) => e.params.request.url)
-      ).toEqual(["https://example.com/first", "https://example.com/second"]);
+      expect(log.requests.map((r) => r.url)).toEqual([
+        "https://example.com/first",
+        "https://example.com/second",
+      ]);
     });
 
     it("refuses another app's bundle id and fails when the app does not run", async () => {

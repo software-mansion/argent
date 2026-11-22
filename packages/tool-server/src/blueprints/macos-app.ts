@@ -184,8 +184,6 @@ export interface MacosAppApi {
    */
   networkLog(): NetworkEvent[];
   clearNetworkLog(): void;
-  /** True once the log dropped its oldest events to stay at the limit; cleared with the log. */
-  networkLogEvicted(): boolean;
 }
 
 /** The protocol this tool-server speaks. The library raises it only for changes an older tool-server cannot read. */
@@ -736,12 +734,10 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   let networkInspection = false;
   let networkLog: NetworkEvent[] = [];
   let networkLogPid: number | null = null;
-  let networkLogEvicted = false;
 
   const networkLogOf = (pid: number): NetworkEvent[] => {
     if (pid !== networkLogPid) {
       networkLog = [];
-      networkLogEvicted = false;
       networkLogPid = pid;
     }
     return networkLog;
@@ -749,10 +745,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
   const recordNetworkEvent = (event: NetworkEvent, pid: number): void => {
     const log = networkLogOf(pid);
-    if (log.length >= NATIVE_NETWORK_LOG_LIMIT) {
-      log.shift();
-      networkLogEvicted = true;
-    }
+    if (log.length >= NATIVE_NETWORK_LOG_LIMIT) log.shift();
     log.push(event);
   };
 
@@ -1386,9 +1379,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     networkLog: () => [...networkLog],
     clearNetworkLog: () => {
       networkLog.length = 0;
-      networkLogEvicted = false;
     },
-    networkLogEvicted: () => networkLogEvicted,
   };
 
   return {

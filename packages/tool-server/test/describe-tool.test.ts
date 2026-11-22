@@ -67,7 +67,6 @@ function makeNativeDevtoolsApi(options: {
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],
     clearNetworkLog: () => {},
-    networkLogEvicted: () => false,
     getAppState: async (bundleId) => ({
       bundleId,
       applicationState: "active",
