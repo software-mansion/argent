@@ -1125,7 +1125,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       if (!lentSocketPath || !fs.existsSync(ownedThrottlePath(bundleId))) return;
       const method = "NativeDevtoolsIos.getConditions";
       const state = (await sendCdpRpc(bundleId, method).catch((err: unknown) => {
-        if (err instanceof Error && err.message === `Unsupported method: ${method}`)
+        if (err instanceof Error && err.message.endsWith(`Unsupported method: ${method}`))
           return null;
         throw err;
       })) as Record<string, unknown> | null;

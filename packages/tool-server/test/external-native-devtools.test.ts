@@ -967,6 +967,22 @@ describe("a provider that lends its native-devtools agent", () => {
       await agent.close();
     });
 
+    it("resets without clearing on an older provider that cannot report a leftover throttle", async () => {
+      const agent = await startLentAgent();
+      publishDescriptor({ socketPath: agent.socketPath });
+      await leaveThrottle(agent);
+      agent.failNextGetConditions("Unsupported method: NativeDevtoolsIos.getConditions");
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent)).toEqual(["NativeDevtoolsIos.getConditions"]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
     it("fails a reset when the provider does not report a throttle it may still hold", async () => {
       const agent = await startLentAgent({ conditions: { offline: true } });
       publishDescriptor({ socketPath: agent.socketPath });
