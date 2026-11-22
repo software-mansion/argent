@@ -1301,7 +1301,7 @@ describe("screenshot-diff while Xcode's install is pending", () => {
     try {
       const png = (width: number, height: number) => PNG.sync.write(new PNG({ width, height }));
       fs.writeFileSync(path.join(dir, "baseline.png"), png(2, 4));
-      fs.writeFileSync(path.join(dir, "current.png"), png(4, 2));
+      fs.writeFileSync(path.join(dir, "current.png"), png(3, 4));
 
       const result = await executeScreenshotDiffTool(
         {},

@@ -123,6 +123,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     }
 
     let uiHangs: UiHang[];
+    let hangsRecorded = true;
     let memoryLeaks: MemoryLeak[];
     // Android has no leak capture; on iOS the trace may lack a Leaks table.
     let leaksRecorded: boolean;
@@ -158,6 +159,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
         });
       }
       uiHangs = nativeApi.parsedData.uiHangs;
+      hangsRecorded = nativeApi.parsedData.hangsRecorded;
       memoryLeaks = nativeApi.parsedData.memoryLeaks;
       leaksRecorded = nativeApi.parsedData.leaksRecorded;
     }
@@ -294,7 +296,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       "React Profiler + Native Profiler — Cross-Tool Correlation",
       "",
       `**React Profiler:** ${nonMarginCommits.length} hot commits  `,
-      `**Native Profiler:** ${uiHangs.length} hangs, ` +
+      `**Native Profiler:** ${hangsRecorded ? `${uiHangs.length} hangs` : "hangs not recorded"}, ` +
         (leaksRecorded ? `${memoryLeaks.length} leaks` : `leaks not recorded`),
       "",
       `**Clock offset:** React started ${(Math.abs(reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,

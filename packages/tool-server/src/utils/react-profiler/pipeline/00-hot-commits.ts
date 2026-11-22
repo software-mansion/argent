@@ -61,12 +61,13 @@ export function buildHotCommitSummaries(
 
     const rerenderNames = new Set(rerenderEntries.map((e) => e.componentName));
 
-    // All entries, first mounts included, so navigation mount cost stays visible
+    // All entries, first mounts included, so navigation mount cost stays visible.
+    // Same-named instances nest, so `actualDuration` is maxed, not summed.
     const componentMap = new Map<
       string,
       {
         totalSelf: number;
-        totalActual: number;
+        maxActual: number;
         count: number;
         firstEntry: DevToolsFiberCommit;
         isFirstMount: boolean;
@@ -79,13 +80,13 @@ export function buildHotCommitSummaries(
       const existing = componentMap.get(e.componentName);
       if (existing) {
         existing.totalSelf += e.selfDuration ?? 0;
-        existing.totalActual += e.actualDuration ?? 0;
+        existing.maxActual = Math.max(existing.maxActual, e.actualDuration ?? 0);
         existing.count++;
         if (!isFirstMount) existing.isFirstMount = false;
       } else {
         componentMap.set(e.componentName, {
           totalSelf: e.selfDuration ?? 0,
-          totalActual: e.actualDuration ?? 0,
+          maxActual: e.actualDuration ?? 0,
           count: 1,
           firstEntry: e,
           isFirstMount,
@@ -98,7 +99,7 @@ export function buildHotCommitSummaries(
     const componentEntries: HotCommitComponentEntry[] = Array.from(componentMap.entries())
       .sort((a, b) => b[1].totalSelf - a[1].totalSelf)
       .slice(0, MAX_COMPONENT_ENTRIES)
-      .map(([name, { totalSelf, totalActual, count, firstEntry, isFirstMount }]) => {
+      .map(([name, { totalSelf, maxActual, count, firstEntry, isFirstMount }]) => {
         const cd = firstEntry.changeDescription;
         // A reason needs a re-render: mounts and fibers with no change data have none.
         const rerendered = rerenderNames.has(name);
@@ -121,7 +122,7 @@ export function buildHotCommitSummaries(
         const entry: HotCommitComponentEntry = {
           name,
           selfDurationMs: Math.round(totalSelf * 100) / 100,
-          actualDurationMs: Math.round(totalActual * 100) / 100,
+          actualDurationMs: Math.round(maxActual * 100) / 100,
           count,
           ...(isFirstMount && { isFirstMount: true }),
           ...(reason !== undefined && { reason }),
