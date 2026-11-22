@@ -41,7 +41,7 @@ function echo(shaped: Duplex): void {
   shaped.pipe(shaped);
 }
 
-async function timeEcho(device: net.Socket, message = "ping"): Promise<number> {
+async function timeEcho(device: net.Socket, message = "ping\r\n"): Promise<number> {
   const started = performance.now();
   let received = "";
   await new Promise<void>((resolve) => {

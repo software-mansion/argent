@@ -263,21 +263,30 @@ describe("the shaping proxy", () => {
       target: (port: number) => `http://127.0.0.1:${port}/`,
     },
     { name: "a tunnel", method: "CONNECT", target: (port: number) => `127.0.0.1:${port}` },
-  ])("leaves $name unshaped when its request line arrives split", async ({ method, target }) => {
-    const origin = await startOrigin();
-    const proxy = await startProxy(undefined, (_host, port) => port === origin);
-    proxy.setConditions({ latencyMs: LATENCY_MS });
-    const { socket, text } = await rawDeviceSocket(proxy);
+  ])(
+    "leaves $name unshaped when its request line arrives split behind a busy upload",
+    async ({ method, target }) => {
+      const origin = await startOrigin();
+      const shapedOrigin = await startOrigin();
+      const proxy = await startProxy(undefined, (_host, port) => port === origin);
+      proxy.setConditions({ latencyMs: LATENCY_MS, uploadKbps: 128 });
+      const busy = await rawDeviceSocket(proxy);
+      busy.socket.write(
+        `POST http://127.0.0.1:${shapedOrigin}/ HTTP/1.1\r\nContent-Length: 32768\r\n\r\n`
+      );
+      busy.socket.write(Buffer.alloc(32 * 1024, 97));
+      const { socket, text } = await rawDeviceSocket(proxy);
 
-    const started = performance.now();
-    socket.write(`${method} `);
-    await sleep(20);
-    socket.write(`${target(origin)} HTTP/1.1\r\nHost: 127.0.0.1:${origin}\r\n\r\n`);
-    await waitFor(() => text().includes("\r\n\r\n"));
+      const started = performance.now();
+      socket.write(`${method} `);
+      await sleep(20);
+      socket.write(`${target(origin)} HTTP/1.1\r\nHost: 127.0.0.1:${origin}\r\n\r\n`);
+      await waitFor(() => text().includes("\r\n\r\n"));
 
-    expect(text()).toMatch(/^HTTP\/1\.1 200/);
-    expect(performance.now() - started).toBeLessThan(LATENCY_MS / 2);
-  });
+      expect(text()).toMatch(/^HTTP\/1\.1 200/);
+      expect(performance.now() - started).toBeLessThan(LATENCY_MS / 2);
+    }
+  );
 
   it("shapes an open connection once its target is no longer bypassed", async () => {
     const origin = await startOrigin();

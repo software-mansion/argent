@@ -194,6 +194,7 @@ class DelayedQueue {
 /** The device's connection to the proxy, as the shaped link delivers it in both directions. */
 class ShapedSocket extends Duplex {
   private requestHead = "";
+  private heldRequest: Buffer[] = [];
   private requestLine: string | null = null;
   private readonly upload: DelayedQueue;
   private readonly download: DelayedQueue;
@@ -271,7 +272,18 @@ class ShapedSocket extends Duplex {
   }
 
   private onDeviceData(chunk: Buffer): void {
-    if (this.requestLine === null) this.readRequestLine(chunk);
+    if (this.requestLine !== null) return this.sendUpload(chunk);
+    this.heldRequest.push(chunk);
+    if (this.readRequestLine(chunk)) this.sendHeldRequest();
+  }
+
+  private sendHeldRequest(): void {
+    const held = Buffer.concat(this.heldRequest);
+    this.heldRequest = [];
+    this.sendUpload(held);
+  }
+
+  private sendUpload(chunk: Buffer): void {
     this.uploadsSending++;
     this.socket.pause();
     this.upload.push(chunk, () => {
@@ -282,16 +294,20 @@ class ShapedSocket extends Duplex {
 
   private onDeviceEnd(): void {
     this.deviceEnded = true;
+    if (this.requestLine === null && this.heldRequest.length > 0) {
+      this.requestLine = this.requestHead;
+      this.sendHeldRequest();
+    }
     if (this.upload.empty) this.push(null);
   }
 
-  private readRequestLine(chunk: Buffer): void {
+  private readRequestLine(chunk: Buffer): boolean {
     this.requestHead += chunk.toString("latin1", 0, MAX_REQUEST_LINE - this.requestHead.length);
     const end = this.requestHead.indexOf("\r\n");
-    if (end === -1 && this.requestHead.length < MAX_REQUEST_LINE) return;
+    if (end === -1 && this.requestHead.length < MAX_REQUEST_LINE) return false;
     this.requestLine = end === -1 ? this.requestHead : this.requestHead.slice(0, end);
     this.requestHead = "";
-    if (this.isBypassed(this.requestLine)) this.upload.repace();
+    return true;
   }
 
   private whenDeviceHasRoom(callback: () => void): void {
