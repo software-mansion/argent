@@ -51,8 +51,8 @@ function networkStayedUp(serial: string): FailureError {
 
 function networkDidNotDrop(serial: string): FailureError {
   return new FailureError(
-    `Turned Wi-Fi and mobile data off for ${serial}, but its network was still up after ` +
-      `${NETWORK_DOWN_TIMEOUT_MS / 1000} s. The emulator may be slow: call network-conditions ` +
+    `Turned Wi-Fi and mobile data off for ${serial}, but could not confirm it was offline after ` +
+      `${NETWORK_DOWN_TIMEOUT_MS / 1000} s. Check the adb connection and call network-conditions ` +
       "again. Wi-Fi and mobile data are back on.",
     {
       error_code: FAILURE_CODES.ANDROID_OFFLINE_TIMEOUT,
@@ -71,9 +71,16 @@ async function setRadios(serial: string, enabled: boolean): Promise<void> {
   });
 }
 
-async function hasDefaultNetwork(serial: string): Promise<boolean> {
-  const out = await adbShell(serial, "dumpsys connectivity | grep -m1 'Active default network'");
-  return /Active default network: \d+/.test(out);
+type NetworkState = "online" | "offline" | "unknown";
+
+async function readNetworkState(serial: string): Promise<NetworkState> {
+  const out = await adbShell(
+    serial,
+    "dumpsys connectivity | grep -m1 'Active default network'"
+  ).catch(() => "");
+  const value = /^\s*Active default network:\s*(none|\d+)\s*$/m.exec(out)?.[1];
+  if (!value) return "unknown";
+  return value === "none" ? "offline" : "online";
 }
 
 async function defaultNetworkIsEthernet(serial: string): Promise<boolean> {
@@ -83,25 +90,27 @@ async function defaultNetworkIsEthernet(serial: string): Promise<boolean> {
   return /Transports: [A-Z|]*ETHERNET/.test(agent ?? "");
 }
 
-const networkIsUp = (serial: string) => hasDefaultNetwork(serial).catch(() => false);
-
-async function pollUntil(check: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+async function waitForNetworkState(
+  serial: string,
+  expected: "online" | "offline",
+  timeoutMs: number
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await check()) return true;
+    if ((await readNetworkState(serial)) === expected) return true;
     await new Promise((resolve) => setTimeout(resolve, NETWORK_POLL_MS));
   }
   return false;
 }
 
 async function waitForNetwork(serial: string): Promise<void> {
-  const up = await pollUntil(() => networkIsUp(serial), NETWORK_UP_TIMEOUT_MS);
+  const up = await waitForNetworkState(serial, "online", NETWORK_UP_TIMEOUT_MS);
   if (!up) throw networkDidNotReturn(serial);
 }
 
 async function goOffline(serial: string): Promise<void> {
   await setRadios(serial, false);
-  const down = await pollUntil(async () => !(await networkIsUp(serial)), NETWORK_DOWN_TIMEOUT_MS);
+  const down = await waitForNetworkState(serial, "offline", NETWORK_DOWN_TIMEOUT_MS);
   if (down) return;
   const ethernet = await defaultNetworkIsEthernet(serial).catch(() => false);
   await setRadios(serial, true);
@@ -122,7 +131,7 @@ export const androidImpl: PlatformImpl<
 
     if (conditions) {
       await goOffline(serial);
-    } else if (!(await networkIsUp(serial))) {
+    } else if ((await readNetworkState(serial)) !== "online") {
       await setRadios(serial, true);
       await waitForNetwork(serial);
     }
