@@ -700,13 +700,22 @@ describe("view-network-request-details: routing an ios- ID", () => {
     ).toBe(NOT_FOUND_ELSEWHERE(UNKNOWN_ID));
   });
 
+  it("says under a Mac app id that an ios- ID comes from an iOS simulator", async () => {
+    expect(
+      await networkRequestTool.execute!(noServices, {
+        device_id: "macos-app-com.example.app",
+        requestId: UNKNOWN_ID,
+        includeBody: true,
+      })
+    ).toBe(NOT_FOUND_ELSEWHERE(UNKNOWN_ID));
+  });
+
   it.each([
     ["an iOS simulator UDID", UDID, "native-network-logs"],
     ["a Metro logicalDeviceId", "b1946ac92492d2347c6235b4d2611184", "native-network-logs"],
     ["a remote iOS simulator", `remote:${UDID}`, "native-network-logs"],
     ["a Chromium target", "chromium-cdp-9222", "view-network-logs"],
     ["a Vega device", "amazon-4a27df03c9777152", "view-network-logs"],
-    ["a Mac app", "macos-app-com.example.app", "view-network-logs"],
   ])(
     "answers an unknown ios- ID under %s with a tool that accepts it",
     async (_, deviceId, tool) => {
