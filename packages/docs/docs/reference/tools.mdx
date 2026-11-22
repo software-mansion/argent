@@ -226,17 +226,17 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 
 ## JavaScript runtime debugging
 
-| Tool                           | Description                                                               |
-| ------------------------------ | ------------------------------------------------------------------------- |
-| `debugger-connect`             | Connect to the JS runtime CDP debugger                                    |
-| `debugger-status`              | Report connection status and diagnostics                                  |
-| `debugger-evaluate`            | Execute JavaScript in the app's runtime: Hermes on device, V8 on Chromium |
-| `debugger-component-tree`      | List the React component names and testIDs on the current screen          |
-| `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate              |
-| `debugger-log-registry`        | Summarize console logs captured from the app                              |
-| `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process            |
-| `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
-| `view-network-request-details` | Get full details of one request by its `requestId`                        |
+| Tool                           | Description                                                                                                                              |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-connect`             | Connect to the JS runtime CDP debugger                                                                                                   |
+| `debugger-status`              | Report connection status and diagnostics                                                                                                 |
+| `debugger-evaluate`            | Execute JavaScript in the app's runtime: Hermes on device, V8 on Chromium                                                                |
+| `debugger-component-tree`      | List the React component names and testIDs on the current screen                                                                         |
+| `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate                                                                             |
+| `debugger-log-registry`        | Summarize console logs captured from the app                                                                                             |
+| `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process                                                                           |
+| `view-network-logs`            | Retrieve captured HTTP requests from the running app                                                                                     |
+| `view-network-request-details` | Get full details of one request by its `requestId` from `view-network-logs`, or by an `ios-` or `android-` ID from `native-network-logs` |
 
 When the expression of `debugger-evaluate` returns a Promise, Argent waits up to 10 seconds and returns the value it resolves to. A rejection fails the call with the reason. On Vega and on React Native 0.75 and older, the result is the internal fields of the Promise.
 
@@ -338,7 +338,7 @@ To capture a request:
 | `bundleId` | The bundle ID of the app                                                                                                                                                                                                                                                             |
 | `port`     | The Metro port. Argent removes the requests to this port on a local address from the list: `localhost`, `127.0.0.1` or `[::1]`. A request to this port on a different host stays in the list. This includes a request to `10.0.2.2`. The default is the Metro port of the device.    |
 | `limit`    | The maximum number of requests in the list, an integer of 0 or more. Argent returns the most recent requests, oldest first. With 0, `requests` is empty, and the result still gives the `header` and the `total`. Argent refuses a negative number or a fraction. The default is 50. |
-| `clear`    | Remove the current requests from the later lists. A request that runs at the time of the clear comes back in the list when it ends.                                                                                                                                                  |
+| `clear`    | Remove the current requests from the later lists. Their IDs stay valid. A request that runs at the time of the clear comes back in the list when it ends.                                                                                                                            |
 | `stop`     | Not available on iOS. The call fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`.                                                                                                                                                                                          |
 
 The result contains `header`, `armed`, `count`, `total` and `requests`. `count` is the number of entries in `requests`. `total` is the number of requests in the full list. The `header` line shows the state of the capture, the number of requests and, when Argent knows it, the process ID of the app, for example `ios-native: armed, 12 requests (pid 4711)`. On a local simulator without a device provider, Argent reads the process ID when the app connects. A result from before the end of this read has no process ID. On a remote simulator, and on a simulator where Argent uses the socket of a device provider, Argent does not get the process ID. There, the `header` line has no process ID. When `armed` is `false`, the `header` line gives one of these reasons:
@@ -369,7 +369,26 @@ Each entry of `requests` contains these fields:
 | `durationMs`         | The duration of the request on the network, as the in-app agent measured it, when Argent knows it. On a simulator where Argent uses the socket of a device provider, this duration does not include the delay that the throttling of the provider adds |
 | `errorText`          | The error of a failed request                                                                                                                                                                                                                          |
 
-`view-network-request-details` does not give the details of an `ios-` ID.
+An ID is valid only in the tool-server that listed it. An ID is not valid after `stop-all-simulator-servers` stops the services of the device, or after the tool-server stops. Give the ID to `view-network-request-details` together with an id of the same device. This needs no debugger connection. The details contain these items:
+
+- The request headers that the app set. The headers that iOS adds on the wire, for example `Cookie` and `User-Agent`, are not in the details. The `headersNote` field of the request says so.
+- The headers of the response.
+- The final URL of the response, after all redirects, in `response.url`.
+- The request body and the response body. Argent reads them from the app process. The `HTTPBody` of an `NSURLConnection` request comes with the request when this body is UTF-8 text, so Argent does not read it from the app process. Argent reads an `HTTPBody` that is not UTF-8 text from the app process, for example a body in ISO-8859-1.
+
+As in the other layers, Argent replaces the values of secret headers with `[REDACTED]`. Argent does not replace the data in the URLs and in the bodies. Argent shortens a body that is longer than 1000 characters. A `[TRUNCATED: ...]` line before the shortened body gives the size of the full body. Argent omits a binary body, and gives its MIME type and its size. The `NSURLProtocol` layer can keep only the start of a large body. For such a body, Argent gives the full size in bytes if Argent knows it, and the number of bytes that the layer kept. The app can end the upload of a body stream before the stream reaches its end, for example when the app cancels the task or the task times out. Then the request body contains only the bytes that the app wrote before that time. A `[TRUNCATED: ...]` line before this body tells that the upload ended, and gives the number of these bytes. It gives the full size as `unknown`.
+
+The details do not contain redirects, `fromCache` or an initiator.
+
+A body that Argent cannot read shows `[unavailable: <reason>]`, for example when the response has no body. The table gives three of the reasons:
+
+| Body                                                                                                  | Cause and action                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[unavailable: the app may still be sending this request body; read it again after the request ends]` | The request has no response yet. The app did not send all of the request body yet, or the agent no longer holds the request body. Argent gives this answer within about 5 seconds, or later while Argent reads another body of the app. Call `view-network-request-details` again after the request ends. |
+| `[unavailable: the app did not answer within 5 s; read it again later]`                               | The request has a response, but the app did not send the request body within about 5 seconds. For example, the app is busy or sends a large body. Call `view-network-request-details` again.                                                                                                              |
+| `[unavailable: the app process that made the request is gone]`                                        | The app process ended, for example after a relaunch or a crash, and Argent has no copy of the body.                                                                                                                                                                                                       |
+
+For each app on each device, Argent keeps a copy of the 64 bodies that the agent read most recently. These copies contain a maximum of 67,108,864 characters together. If one body is longer, Argent keeps a copy of only that body until the agent reads the next body. A later read of a body with a copy uses the copy. After the app process ends, a body is available only if Argent has a copy of it. The `HTTPBody` of an `NSURLConnection` request is an exception when this body is UTF-8 text. Argent keeps this body with the request. It stays available after the app process ends, and it does not count toward these limits. An `HTTPBody` that is not UTF-8 text is not an exception. If the app process ends before the agent reads this body, the body is not available. If the agent reads this body, its copy counts toward these limits.
 
 On a simulator without a device provider, when the connection of the app closes, Argent marks each request that still runs as `failed`. The `errorText` field gives one of these errors:
 
@@ -378,7 +397,7 @@ On a simulator without a device provider, when the connection of the app closes,
 | `the app process ended before the request finished`                                                      | The app process ended, or the app relaunched.                                     |
 | `the agent did not reconnect after its connection dropped, so this request's final events never arrived` | The connection closed, and Argent did not find a sign that the app process ended. |
 
-The list also contains the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the list. Argent keeps the 2000 most recent requests of each app. Argent keeps fewer requests when the requests have very large headers or URLs. Argent keeps the list until `stop-all-simulator-servers` stops the services of the device, a local simulator shuts down, or the tool-server stops.
+The list also contains the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the list. Argent keeps the 2000 most recent requests of each app. Argent keeps fewer requests when the requests have very large headers or URLs. Large UTF-8 request bodies that the app sends with `NSURLConnection` also make Argent keep fewer requests. Argent keeps the list until `stop-all-simulator-servers` stops the services of the device, a local simulator shuts down, or the tool-server stops.
 
 Argent arms each new process of the app when the process connects, also a process that starts from a tap on the home screen or from a link. While the capture is on for an app, these tools tell you:
 
