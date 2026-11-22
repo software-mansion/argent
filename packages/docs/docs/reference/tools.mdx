@@ -188,6 +188,8 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
 
+When the expression of `debugger-evaluate` returns a Promise, Argent waits up to 10 seconds and returns the value it resolves to. A rejection fails the call with the reason. On Vega and on React Native 0.75 and older, the result is the internal fields of the Promise.
+
 When two or more devices share one Metro, Metro does not list the device IDs from `list-devices`. For a booted local iOS simulator, Argent selects the app on the Metro device with the same name as the simulator. Argent does this only when exactly one booted local simulator and exactly one Metro device have that name. A simulator name with `&` or `+` never matches, because Metro lists it differently. For any other simulator, emulator or physical device ID, the debugger tools return `DEBUGGER_TARGET_DEVICE_MISMATCH` with the `logicalDeviceId` of each device on Metro, and `debugger-status` and `debugger-log-registry` return `not_connected` with the same list. Pass that `logicalDeviceId` as `device_id` in the next calls.
 
 ## Native devtools
