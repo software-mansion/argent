@@ -26,7 +26,7 @@ import type { NativeNetworkRecord, NativeRecordState } from "../../utils/native-
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
-import { iosUnavailableReason, isLiveService } from "../network/network-capture";
+import { nativeUnavailableReason, isLiveService } from "../network/network-capture";
 import type { NetworkEvent } from "../../blueprints/macos-app";
 import { macosAppServices } from "../../utils/macos-input";
 import { requireMacosAppOfBundle } from "./macos-view-hierarchy";
@@ -165,7 +165,8 @@ Android results also carry capture and captureDetail. When capture is active, ca
       if (device.platform === "android") {
         const api = services.androidNetwork as AndroidNetworkInspectorApi | undefined;
         if (!api || (!api.isStarted() && !api.isStopped())) {
-          const reason = api?.unavailableReason();
+          const reason =
+            api?.unavailableReason() ?? nativeUnavailableReason(device.id, params.bundleId);
           return reason
             ? {
                 ...unavailableListing("android-native", reason),
@@ -180,7 +181,7 @@ Android results also carry capture and captureDetail. When capture is active, ca
       // Start never captures one, so pointing at it would loop.
       if (!isInjectableBundleId(params.bundleId)) throw nonInjectableError(params.bundleId);
       const api = services.nativeDevtools as NativeDevtoolsApi | undefined;
-      const unavailable = iosUnavailableReason(device.id, params.bundleId);
+      const unavailable = nativeUnavailableReason(device.id, params.bundleId);
       if (api?.isNetworkCaptureStopped(params.bundleId)) {
         // What the stop kept needs no connection, and nothing is armed.
         const store = api.networkRecords(params.bundleId);

@@ -161,6 +161,7 @@ async function stopJsLayer(
       ...(kept?.mark ? { mark: kept.mark } : {}),
       installed: kept?.installed ?? false,
       ...(paused ? { paused: true as const } : {}),
+      physicalDeviceId: udid,
     };
     setJsCapture(payload, capture);
     return capture;

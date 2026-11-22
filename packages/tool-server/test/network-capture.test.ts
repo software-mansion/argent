@@ -37,7 +37,7 @@ import type { NativeNetworkRecord } from "../src/utils/native-network-record";
 import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
 import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
 import {
-  forgetIosUnavailableOf,
+  forgetNativeUnavailableOf,
   type CaptureResult,
   type StartedLayer,
   type StoppedLayer,
@@ -531,7 +531,7 @@ beforeEach(() => {
   metro.clear();
   connectDelayMs = 0;
   forgetJsCapturesOf();
-  forgetIosUnavailableOf();
+  forgetNativeUnavailableOf();
   ios = new FakeIos();
   android.clear();
   androidFactoryCalls = 0;
@@ -1288,6 +1288,7 @@ describe("network-capture-start", () => {
         intent: "started",
         mark: { install: null },
         installed: false,
+        physicalDeviceId: IOS_UDID,
         port: PORT,
       });
     });
@@ -2307,6 +2308,76 @@ describe("native-network-logs after a start that found the iOS layer unavailable
 
     expect(await readNative()).toMatchObject({
       header: expect.stringContaining("ios-native: not started"),
+      started: false,
+    });
+  });
+});
+
+describe("native-network-logs after a start that found the Android layer unavailable", () => {
+  beforeEach(() => {
+    registry.registerTool(createNativeNetworkLogsTool(registry));
+    serve(PORT, SERIAL, new FakeRuntime(APP));
+  });
+
+  function readNative() {
+    return registry.invokeTool<Record<string, unknown>>("native-network-logs", {
+      udid: SERIAL,
+      bundleId: APP,
+    });
+  }
+
+  it("gives the install hint of a start that found no adb, until a start reaches the inspector", async () => {
+    adbLookup.missing = true;
+    __resetDepCacheForTests();
+    const { reason } = layer(await start(SERIAL, APP), "android-native");
+    expect(reason).toContain("Android SDK Platform Tools not found");
+
+    expect(await readNative()).toEqual({
+      status: "ok",
+      header: `android-native: unavailable, 0 requests (${reason})`,
+      armed: false,
+      started: false,
+      capture: "unavailable",
+      captureDetail: reason,
+      count: 0,
+      total: 0,
+      requests: [],
+    });
+
+    adbLookup.missing = false;
+    __primeDepCacheForTests(["adb"]);
+    await start(SERIAL, APP);
+    // Without its inspector, only what the start kept could still give the old reason.
+    const inspector = nativeUrns().find((urn) => urn.startsWith("AndroidNetworkInspector:"));
+    await registry.disposeService(inspector!);
+    expect(await readNative()).toMatchObject({
+      header: expect.stringContaining("android-native: not started"),
+      started: false,
+    });
+  });
+
+  it("says why when the start could not start the service", async () => {
+    androidFor(APP).factoryError = new Error("adb: device offline");
+    const { reason } = layer(await start(SERIAL, APP), "android-native");
+
+    expect(reason).toContain("adb: device offline");
+    expect(await readNative()).toMatchObject({
+      header: `android-native: unavailable, 0 requests (${reason})`,
+      capture: "unavailable",
+      captureDetail: reason,
+      started: false,
+    });
+  });
+
+  it("forgets why at a teardown of the device", async () => {
+    adbLookup.missing = true;
+    __resetDepCacheForTests();
+    await start(SERIAL, APP);
+
+    await stopAll([SERIAL]);
+
+    expect(await readNative()).toMatchObject({
+      header: expect.stringContaining("android-native: not started"),
       started: false,
     });
   });

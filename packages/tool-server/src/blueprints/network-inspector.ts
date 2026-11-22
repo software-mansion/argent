@@ -46,6 +46,11 @@ export interface JsCapture {
   installed: boolean;
   /** A stop paused that interceptor; a start clears it. */
   paused?: true;
+  /**
+   * The udid that the start or stop gave, which a read gives the debugger it opens again after a
+   * disconnect: a provider's grant and socket go by this id, not by a Metro logicalDeviceId.
+   */
+  physicalDeviceId?: string;
 }
 
 /**

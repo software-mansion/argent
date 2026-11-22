@@ -53,7 +53,7 @@ import {
   requestedLayers,
   runLayers,
   withLayerInRetries,
-  setIosUnavailable,
+  setNativeUnavailable,
   withCaptureLock,
   type CaptureParams,
   type CaptureResult,
@@ -269,6 +269,7 @@ async function startJsLayer(
       intent: "started",
       mark: { install: null },
       installed: installedHere,
+      physicalDeviceId: udid,
       ...(installedHere && found?.paused ? { paused: true as const } : {}),
     });
     return {
@@ -298,7 +299,12 @@ async function startJsLayer(
     return unavailable("js", text);
   }
 
-  const capture: JsCapture = { bundleId, intent: "started", installed: installedHere };
+  const capture: JsCapture = {
+    bundleId,
+    intent: "started",
+    installed: installedHere,
+    physicalDeviceId: udid,
+  };
   setJsCapture(payload, capture);
   try {
     capture.mark = await readMark(dbg);
@@ -377,7 +383,7 @@ async function startIosLayer(
   }
   // Capture stays off here, so a read says why, rather than to call this tool again.
   const notTurnedOn = (reason: string): StartedLayer => {
-    setIosUnavailable(device.id, bundleId, reason);
+    setNativeUnavailable(device.id, bundleId, reason);
     return unavailable("ios-native", reason);
   };
   const missing = await missingNativeDep(device);
@@ -404,7 +410,7 @@ async function startIosLayer(
     }
   }
 
-  setIosUnavailable(device.id, bundleId);
+  setNativeUnavailable(device.id, bundleId);
   const armed = await api.startNetworkCapture(
     bundleId,
     port,
@@ -450,15 +456,22 @@ async function startAndroidLayer(
   bundleId: string,
   port: number
 ): Promise<StartedLayer> {
+  // No inspector keeps the reason of these two, so a read says why, rather than to call this tool again.
+  const notTurnedOn = (reason: string): StartedLayer => {
+    setNativeUnavailable(device.id, bundleId, reason);
+    return unavailable("android-native", reason);
+  };
   const missing = await missingNativeDep(device);
-  if (missing) return unavailable("android-native", missing.message);
+  if (missing) return notTurnedOn(missing.message);
   let api: AndroidNetworkInspectorApi;
   try {
     const ref = androidNetworkInspectorRef(device, bundleId, port);
     api = await registry.resolveService<AndroidNetworkInspectorApi>(ref.urn, ref.options);
   } catch (err) {
-    return unavailable("android-native", errorMessage(err));
+    return notTurnedOn(errorMessage(err));
   }
+  // From here the inspector keeps its own reason.
+  setNativeUnavailable(device.id, bundleId);
   const started = await api.startCapture(port);
   // The start's js layer tells whether the app's JavaScript requests are still recorded.
   if (started.unavailable) return unavailable("android-native", started.reason ?? "unavailable");
