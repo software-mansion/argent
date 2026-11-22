@@ -1,4 +1,4 @@
-import { Registry, type ServiceRef, type ToolDefinition } from "@argent/registry";
+import { type ServiceRef, type ToolDefinition } from "@argent/registry";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -163,7 +163,7 @@ const URN_TOOLS: {
   {
     name: "debugger-component-tree",
     params: {},
-    tool: createDebuggerComponentTreeTool(new Registry()),
+    tool: createDebuggerComponentTreeTool(),
   },
   { name: "debugger-connect", params: {}, tool: debuggerConnectTool },
   { name: "debugger-inspect-element", params: { x: 1, y: 1 }, tool: debuggerInspectElementTool },

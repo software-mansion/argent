@@ -1,15 +1,27 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import * as http from "node:http";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { scopeTempHome } from "../helpers/temp-home";
 
 scopeTempHome("argent-connect-failure-home-");
+
+// The log writer is built after every CDP setup call, so a throw there is the latest failure.
+const logWriterFails = vi.hoisted(() => ({ value: false }));
+vi.mock("../../src/utils/debugger/log-file-writer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/debugger/log-file-writer")>();
+  return {
+    ...actual,
+    LogFileWriter: class extends actual.LogFileWriter {
+      constructor(port: number) {
+        if (logWriterFails.value) throw new Error("log writer failed");
+        super(port);
+      }
+    },
+  };
+});
 
 /**
  * A connect that fails partway must not leave its socket open: the legacy
@@ -128,12 +140,15 @@ describe("debugger-connect failing partway", () => {
     expect(await connectAndCountOpenSockets()).toBe(0);
   });
 
-  it("closes the socket when the console log file cannot be created", async () => {
+  it("closes the socket when a step after CDP setup throws", async () => {
     rejected = null;
     title = "Hermes React Native";
     fusebox = false;
-    fs.mkdirSync(path.join(os.homedir(), ".argent"));
-    fs.writeFileSync(path.join(os.homedir(), ".argent", "tmp"), "");
-    expect(await connectAndCountOpenSockets(/EEXIST|ENOTDIR/)).toBe(0);
+    logWriterFails.value = true;
+    try {
+      expect(await connectAndCountOpenSockets("log writer failed")).toBe(0);
+    } finally {
+      logWriterFails.value = false;
+    }
   });
 });
