@@ -44,6 +44,9 @@ type LentAgent = {
   setCapture: (on: boolean) => void;
   socketPath: string;
   withholdGetConditions: () => void;
+  /** What the provider does when it sets its own conditions. */
+  setConditions: (conditions: Record<string, unknown>) => void;
+  failNextGetConditions: (message: string) => void;
 };
 
 type LentAgentOptions = {
@@ -63,12 +66,27 @@ function captureAfter(method: unknown, captureOn: boolean): boolean {
   return captureOn;
 }
 
+/** What the agent reports back: offline zeroes the rest, unlimited throughput reads as 0. */
+function storedConditions(params: Record<string, number | boolean>) {
+  if (params.offline)
+    return { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 };
+  const bytes = (value: unknown) => Math.max(0, Math.trunc(Number(value)));
+  return {
+    offline: false,
+    latency: params.latency,
+    downloadThroughput: bytes(params.downloadThroughput),
+    uploadThroughput: bytes(params.uploadThroughput),
+  };
+}
+
 function cdpReply(id: unknown, method: unknown, options: Required<LentAgentOptions>) {
   if (method === "Network.emulateNetworkConditions" && options.refusesConditions) {
     return { id, error: { message: "rejected" } };
   }
   if (method !== "NativeDevtoolsIos.getConditions") return { id, result: {} };
-  if (options.failsGetConditions) return { id, error: { message: "Unknown method" } };
+  if (options.failsGetConditions) {
+    return { id, error: { message: "Unsupported method: NativeDevtoolsIos.getConditions" } };
+  }
   return { id, result: { enabled: options.captureOn, ...options.conditions } };
 }
 
@@ -87,6 +105,7 @@ async function startLentAgent({
     conditions,
     refusesConditions,
     withholdsGetConditions: false,
+    getConditionsError: null as string | null,
   };
 
   const server = net.createServer((socket) => {
@@ -111,10 +130,14 @@ async function startLentAgent({
         const { id, method } = message.payload;
         const withheld =
           state.withholdsGetConditions && method === "NativeDevtoolsIos.getConditions";
+        const failed = method === "NativeDevtoolsIos.getConditions" && state.getConditionsError;
         if (id !== undefined && !withheld) {
-          const payload = cdpReply(id, method, state);
+          const payload = failed ? { id, error: { message: failed } } : cdpReply(id, method, state);
           socket.write(JSON.stringify({ payload, type: "CDP" }) + "\n");
         }
+        if (failed) state.getConditionsError = null;
+        if (method === "Network.emulateNetworkConditions")
+          state.conditions = storedConditions(message.payload.params);
         state.captureOn = captureAfter(method, state.captureOn);
       }
     });
@@ -135,6 +158,12 @@ async function startLentAgent({
     socketPath,
     withholdGetConditions: () => {
       state.withholdsGetConditions = true;
+    },
+    setConditions: (conditions) => {
+      state.conditions = conditions;
+    },
+    failNextGetConditions: (message) => {
+      state.getConditionsError = message;
     },
   };
 }
@@ -388,10 +417,10 @@ describe("a provider that lends its native-devtools agent", () => {
     });
 
     /** Argent's throttle outlives a tool-server that stops without clearing it. */
-    async function leaveThrottle(agent: LentAgent): Promise<void> {
+    async function leaveThrottle(agent: LentAgent, left = THROTTLE.conditions): Promise<void> {
       const earlier = await instantiate();
       await waitForConnectedBundle(earlier.api);
-      await earlier.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      await earlier.api.setNetworkConditions(BUNDLE_ID, { ...THROTTLE, conditions: left });
       const terminated = new Promise<void>((resolve) =>
         earlier.events.on("terminated", () => resolve())
       );
@@ -415,15 +444,22 @@ describe("a provider that lends its native-devtools agent", () => {
       await agent.close();
     });
 
+    const UNTHROTTLED = {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    };
+
     it.each([
       { offline: true },
       { latency: 400 },
       { downloadThroughput: 50_000 },
       { uploadThroughput: 50_000 },
     ])("clears %o that an earlier tool-server left on a reset with nothing set", async (left) => {
-      const agent = await startLentAgent({ captureOn: true, conditions: left });
+      const agent = await startLentAgent({ captureOn: true });
       publishDescriptor({ socketPath: agent.socketPath });
-      await leaveThrottle(agent);
+      await leaveThrottle(agent, { ...UNTHROTTLED, ...left });
       const instance = await instantiate();
       await waitForConnectedBundle(instance.api);
 
@@ -436,6 +472,47 @@ describe("a provider that lends its native-devtools agent", () => {
           params: { bypassPorts: [] },
         }),
         expect.objectContaining({ method: "Network.enable" }),
+      ]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("keeps the provider's conditions when they replaced the throttle an earlier tool-server left", async () => {
+      const agent = await startLentAgent();
+      publishDescriptor({ socketPath: agent.socketPath });
+      await leaveThrottle(agent);
+      agent.setConditions({ ...UNTHROTTLED, latency: 700 });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent)).toEqual(["NativeDevtoolsIos.getConditions"]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("clears a leftover throttle on a retry after the provider fails to report it", async () => {
+      const agent = await startLentAgent();
+      publishDescriptor({ socketPath: agent.socketPath });
+      await leaveThrottle(agent);
+      agent.failNextGetConditions("Temporarily unavailable");
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await expect(instance.api.setNetworkConditions(BUNDLE_ID, null)).rejects.toThrow(
+        "Temporarily unavailable"
+      );
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent)).toEqual([
+        "NativeDevtoolsIos.getConditions",
+        "NativeDevtoolsIos.getConditions",
+        "NativeDevtoolsIos.configure",
+        "Network.enable",
       ]);
 
       await instance.dispose();

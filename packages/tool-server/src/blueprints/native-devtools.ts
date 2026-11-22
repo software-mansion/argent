@@ -8,7 +8,6 @@ import {
   TypedEventEmitter,
   FAILURE_CODES,
   FailureError,
-  getFailureSignal,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceEvents,
@@ -860,9 +859,22 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         `argent-throttle-${encodeURIComponent(udid)}-${encodeURIComponent(bundleId)}`
       );
 
+    /** The conditions as the agent reports them back: offline drops the rest, throughput is whole bytes/s. */
+    const conditionsKey = (state: Record<string, unknown> | null): string => {
+      if (state?.offline === true) return "offline";
+      const amount = (key: string) => Math.max(0, Number(state?.[key]) || 0);
+      return JSON.stringify([
+        Math.round(amount("latency")),
+        Math.trunc(amount("downloadThroughput")),
+        Math.trunc(amount("uploadThroughput")),
+      ]);
+    };
+
     const applyThrottle = async (bundleId: string, throttle: NetworkThrottle): Promise<void> => {
       await noteProviderCapture(bundleId);
-      if (lentSocketPath) fs.writeFileSync(ownedThrottlePath(bundleId), "");
+      if (lentSocketPath) {
+        fs.writeFileSync(ownedThrottlePath(bundleId), conditionsKey(throttle.conditions));
+      }
       await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", {
         bypassPorts: [throttle.metroPort],
       });
@@ -883,14 +895,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     /** A crashed tool-server leaves its throttle and loses its record of the provider's capture, so keep capture on. */
     const clearLeftoverThrottle = async (bundleId: string): Promise<void> => {
       if (!lentSocketPath || !fs.existsSync(ownedThrottlePath(bundleId))) return;
-      const state = await sendCdpRpc(bundleId, "NativeDevtoolsIos.getConditions").catch(
-        (err: unknown) => {
-          if (getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR)
-            return null;
-          throw err;
-        }
-      );
-      if (!isEmulating(state as Record<string, unknown> | null)) {
+      const method = "NativeDevtoolsIos.getConditions";
+      const state = (await sendCdpRpc(bundleId, method).catch((err: unknown) => {
+        if (err instanceof Error && err.message === `Unsupported method: ${method}`) return null;
+        throw err;
+      })) as Record<string, unknown> | null;
+      const owned = fs.readFileSync(ownedThrottlePath(bundleId), "utf8");
+      if (!isEmulating(state) || conditionsKey(state) !== owned) {
         fs.rmSync(ownedThrottlePath(bundleId), { force: true });
         return;
       }
