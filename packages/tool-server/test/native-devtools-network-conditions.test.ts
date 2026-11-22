@@ -176,7 +176,7 @@ describe("native devtools network conditions", () => {
     await expect(api.setNetworkConditions(BUNDLE, SLOW)).rejects.toThrow("rejected");
     const relaunched = await connectAgent();
     agents.push(relaunched);
-    api.activateNetworkInspection(BUNDLE);
+    void api.activateNetworkInspection(BUNDLE);
 
     await vi.waitFor(() => expect(relaunched.received).toEqual([ACTIVATE]));
   });
@@ -242,12 +242,12 @@ describe("native devtools network conditions", () => {
     const { api, agent } = await setup();
     await api.setNetworkConditions(BUNDLE, SLOW);
 
-    api.activateNetworkInspection(BUNDLE);
+    void api.activateNetworkInspection(BUNDLE);
 
     const afterFirstActivation = [BYPASS_METRO, EMULATE_SLOW, ACTIVATE, BYPASS_METRO, EMULATE_SLOW];
     await vi.waitFor(() => expect(agent.received).toEqual(afterFirstActivation));
 
-    api.activateNetworkInspection(BUNDLE);
+    void api.activateNetworkInspection(BUNDLE);
     await api.setNetworkConditions(BUNDLE, SLOW);
 
     expect(agent.received).toEqual([...afterFirstActivation, BYPASS_METRO, EMULATE_SLOW]);
@@ -267,7 +267,7 @@ describe("native devtools network conditions", () => {
 
   it("re-sends the conditions when the app reconnects after a relaunch", async () => {
     const { api } = await setup();
-    api.activateNetworkInspection(BUNDLE);
+    void api.activateNetworkInspection(BUNDLE);
     await api.setNetworkConditions(BUNDLE, SLOW);
 
     const relaunched = await connectAgent();
@@ -280,7 +280,7 @@ describe("native devtools network conditions", () => {
 
   it("clears back to plain monitoring when network inspection is active", async () => {
     const { api, agent } = await setup();
-    api.activateNetworkInspection(BUNDLE);
+    void api.activateNetworkInspection(BUNDLE);
     await api.setNetworkConditions(BUNDLE, SLOW);
     agent.received.length = 0;
 
@@ -335,7 +335,7 @@ describe("native devtools network conditions", () => {
     const relaunched = await connectAgent();
     agents.push(relaunched);
     await vi.waitFor(() => expect(agent.isClosed()).toBe(true));
-    api.activateNetworkInspection(BUNDLE);
+    void api.activateNetworkInspection(BUNDLE);
 
     await vi.waitFor(() => expect(relaunched.received).toEqual([ACTIVATE]));
   });
@@ -346,7 +346,7 @@ describe("native devtools network conditions", () => {
     await api.setNetworkConditions(BUNDLE, null);
 
     const agent = await connect(api);
-    api.activateNetworkInspection(BUNDLE);
+    void api.activateNetworkInspection(BUNDLE);
 
     await vi.waitFor(() => expect(agent.received).toEqual([ACTIVATE]));
   });
