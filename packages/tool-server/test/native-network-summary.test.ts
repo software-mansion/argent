@@ -121,11 +121,56 @@ describe("native-network-logs request summary", () => {
         state: "complete",
         method: "GET",
         url: "http://127.0.0.1:4210/redirect",
+        finalUrl: "http://127.0.0.1:4210/landed",
         status: 200,
         mimeType: "application/json",
         durationMs: 19,
       },
     ]);
+  });
+
+  it("keeps the requested url and adds finalUrl after a redirect", () => {
+    const [row] = summarizeRequests([
+      ev("Network.requestWillBeSent", {
+        requestId: "1",
+        request: { method: "GET", url: "http://x/api/me" },
+      }),
+      ev("Network.responseReceived", {
+        requestId: "1",
+        response: { url: "http://x/login", status: 200, mimeType: "text/html" },
+      }),
+    ]);
+    expect(row).toMatchObject({ url: "http://x/api/me", finalUrl: "http://x/login" });
+  });
+
+  it("does not treat a canonicalized url as a redirect", () => {
+    const [row] = summarizeRequests([
+      ev("Network.requestWillBeSent", {
+        requestId: "1",
+        request: { method: "GET", url: "http://LOCALHOST:8765" },
+      }),
+      ev("Network.responseReceived", {
+        requestId: "1",
+        response: { url: "http://localhost:8765/", status: 200 },
+      }),
+    ]);
+    expect(row.finalUrl).toBeUndefined();
+  });
+
+  it("takes the url from the response when the request event is gone", () => {
+    const [row] = summarizeRequests([
+      ev("Network.responseReceived", {
+        requestId: "1",
+        response: { url: "http://x/login", status: 200, mimeType: "text/html" },
+      }),
+    ]);
+    expect(row).toEqual({
+      id: "1",
+      state: "headers",
+      url: "http://x/login",
+      status: 200,
+      mimeType: "text/html",
+    });
   });
 });
 
@@ -140,7 +185,10 @@ describe("native-network-logs execute", () => {
     __primeDepCacheForTests(["xcrun"]);
   });
 
-  const run = (log: NetworkEvent[], params: { limit?: number; clear?: boolean } = {}) => {
+  const run = (
+    log: NetworkEvent[],
+    params: { limit?: number; format?: "requests" | "events"; clear?: boolean } = {}
+  ) => {
     const stored = [...log];
     const clearNetworkLog = vi.fn(() => {
       stored.length = 0;
@@ -157,6 +205,7 @@ describe("native-network-logs execute", () => {
         udid: UDID,
         bundleId: BUNDLE,
         limit: params.limit ?? 50,
+        format: params.format,
         clear: params.clear ?? false,
       }
     );
@@ -178,6 +227,12 @@ describe("native-network-logs execute", () => {
       "http://x/c",
     ]);
     expect(out).toMatchObject({ status: "ok", count: 3, total: 3 });
+  });
+
+  it("returns the raw events with format events", async () => {
+    const out = await run(log, { format: "events", limit: 2 }).result;
+    expect(out).toEqual({ status: "ok", count: 2, events: log.slice(-2) });
+    expect((await run(log, { format: "events", limit: 0 }).result).events).toEqual(log);
   });
 
   it("limits to the most recent requests and still counts them all", async () => {
@@ -207,5 +262,13 @@ describe("native-network-logs execute", () => {
 
   it("returns every request for limit 0", async () => {
     expect(await run(log, { limit: 0 }).result).toMatchObject({ count: 3, total: 3 });
+  });
+
+  it("rejects a negative or fractional limit", () => {
+    const schema = nativeNetworkLogsTool.zodSchema!;
+    const base = { udid: UDID, bundleId: BUNDLE };
+    expect(schema.safeParse({ ...base, limit: -1 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, limit: 1.5 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, limit: 0 }).success).toBe(true);
   });
 });

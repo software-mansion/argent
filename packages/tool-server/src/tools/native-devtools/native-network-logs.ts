@@ -46,15 +46,23 @@ const zodSchema = z.object({
   ),
   limit: z
     .number()
+    .int()
+    .nonnegative()
     .optional()
     .default(50)
     .describe("Maximum number of entries to return: the most recent ones, oldest first"),
+  format: z
+    .enum(["requests", "events"])
+    .optional()
+    .describe(
+      "'requests' (default): one compact row per request. 'events': iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only, the raw CDP Network.* events with request and response headers. Response bodies are never included, and most request bodies show only request.hasPostData: true. Android ignores it."
+    ),
   clear: z
     .boolean()
     .optional()
     .default(false)
     .describe(
-      "Clear the log after reading. On Android, the IDs of cleared requests still work in view-network-request-details"
+      "Clear the log after reading. On Android, the IDs of cleared requests still work in view-network-request-details. Elsewhere the cleared events are gone, so read with format 'events' first if you need their headers."
     ),
   stop: z
     .boolean()
@@ -71,6 +79,7 @@ interface NativeRequestRow {
   state: AndroidNativeRecordState;
   method?: string;
   url?: string;
+  finalUrl?: string;
   status?: number;
   mimeType?: string;
   durationMs?: number;
@@ -111,6 +120,7 @@ interface AndroidNativeStopped {
 type Result =
   | NativeDevtoolsPrecheckBlock
   | NativeRequestListing
+  | { status: "ok"; count: number; events: NetworkEvent[] }
   | AndroidNetworkNotAttachable
   | AndroidNativeListing
   | AndroidNativeStopped;
@@ -146,8 +156,8 @@ export function createNativeNetworkLogsTool(
     description: `Retrieve network requests captured at the native level: NSURLProtocol on iOS, OkHttp on Android.
 Use when inspecting native-level HTTP traffic that view-network-logs cannot see: requests that never pass through JS XMLHttpRequest or fetch.
 On iOS it sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing. Capture starts at the first call, so the first call is usually empty: repeat the action, then call again.
-On iOS: returns { status, count, total, requests } with one row per request: id, method, url, state (pending, headers, complete or failed), status, mimeType, durationMs and errorText. count is the rows returned, total the requests in the log.
-<flag:macos-apps>On a Mac app it records NSURLSession requests, react-native-macos fetch included, with the same rows. The first call turns capture on and earlier requests are not logged: call it once, then repeat the action. Capture stays on across restart-app with an empty log per process, and requests sent while the app starts can be missing. The statuses below are iOS only.
+On iOS: returns { status, count, total, requests } with one row per request: id, method, url, state (pending, headers, complete or failed), status, mimeType, durationMs, errorText, and finalUrl after a redirect. count is the rows returned, total the requests in the log. format: "events" returns { status, count, events } instead: the raw CDP events with headers.
+<flag:macos-apps>On a Mac app it records NSURLSession requests, react-native-macos fetch included, with the same rows and format: "events". The first call turns capture on and earlier requests are not logged: call it once, then repeat the action. Capture stays on across restart-app with an empty log per process, and requests sent while the app starts can be missing. The statuses below are iOS only.
 </flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
 On Android: needs a debuggable build. The first call starts capture and usually returns armed: false. Call it again every few seconds until armed is true, then repeat the action whose requests you need: earlier requests are not captured.
@@ -185,7 +195,7 @@ When status is not_attachable, use view-network-logs and do not retry.`,
           params.bundleId
         );
         await app.activateNetworkInspection();
-        const listing = listRequests(app.networkLog(), params.limit);
+        const listing = listRequests(app.networkLog(), params);
         if (params.clear) app.clearNetworkLog();
         return listing;
       }
@@ -215,7 +225,7 @@ When status is not_attachable, use view-network-logs and do not retry.`,
 
       api.activateNetworkInspection(params.bundleId);
 
-      const listing = listRequests(api.getNetworkLog(params.bundleId), params.limit);
+      const listing = listRequests(api.getNetworkLog(params.bundleId), params);
       if (params.clear) api.clearNetworkLog(params.bundleId);
       return listing;
     },
@@ -354,9 +364,13 @@ function toRequestLine(record: AndroidNativeRecord): AndroidNativeRequestLine {
   };
 }
 
-function listRequests(log: NetworkEvent[], limit: number): NativeRequestListing {
+function listRequests(log: NetworkEvent[], params: Params): Result {
+  if (params.format === "events") {
+    const events = log.slice(-params.limit);
+    return { status: "ok", count: events.length, events };
+  }
   const all = summarizeRequests(log);
-  const requests = all.slice(-limit);
+  const requests = all.slice(-params.limit);
   return { status: "ok", count: requests.length, total: all.length, requests };
 }
 
@@ -377,6 +391,9 @@ export function summarizeRequests(events: NetworkEvent[]): NativeRequestRow[] {
         row.state = "headers";
         row.status = p.response?.status;
         row.mimeType = p.response?.mimeType;
+        if (row.url && p.response?.url && !sameUrl(p.response.url, row.url))
+          row.finalUrl = p.response.url;
+        row.url ??= p.response?.url;
         break;
       case "Network.loadingFinished":
         row.state = "complete";
@@ -395,4 +412,12 @@ export function summarizeRequests(events: NetworkEvent[]): NativeRequestRow[] {
 function setDuration(row: NativeRequestRow, final: Record<string, any>): void {
   if (typeof final.nativeDevtoolsDurationMs === "number")
     row.durationMs = Math.round(final.nativeDevtoolsDurationMs);
+}
+
+function sameUrl(a: string, b: string): boolean {
+  try {
+    return new URL(a).href === new URL(b).href;
+  } catch {
+    return a === b;
+  }
 }
