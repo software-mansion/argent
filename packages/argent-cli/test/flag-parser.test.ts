@@ -64,6 +64,24 @@ describe("flag-parser number coercion rejects empty/whitespace", () => {
   });
 });
 
+describe("nullable integer flags", () => {
+  const schema = schemaFrom({ commit_index: z.coerce.number().int().nullable().optional() });
+
+  it.each(["", "   ", "1.5"])("rejects %j as a profiler index", (value) => {
+    expect(() => parseFlags(["--commit_index", value], schema)).toThrow(
+      "--commit_index expected an integer"
+    );
+  });
+
+  it("parses an index as an integer and accepts explicit JSON null", () => {
+    expect(parseFlags(["--commit_index=0"], schema).args).toEqual({ commit_index: 0 });
+    expect(parseFlags(["--commit_index", "3"], schema).args).toEqual({ commit_index: 3 });
+    expect(parseFlags(["--commit_index-json", "null"], schema).args).toEqual({
+      commit_index: null,
+    });
+  });
+});
+
 describe("flag-parser array + -json interleave never throws a raw error", () => {
   it("throws FlagParseException (not TypeError) on interleave", () => {
     let err: unknown;

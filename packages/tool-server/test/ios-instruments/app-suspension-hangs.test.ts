@@ -584,6 +584,7 @@ describe("the suspended time next to a hang's duration", () => {
         ],
         cpuHotspots: [],
         memoryLeaks: [],
+        hangsRecorded: true,
         leaksRecorded: true,
         mallocStackLogging: null,
         wallClockStartMs: START,

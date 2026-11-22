@@ -16,6 +16,14 @@ import type { DescribeFrame, DescribeNode, UiOrientation } from "../tools/descri
  * (v, 1 - u).
  */
 
+export const screenEdges = ["top", "right", "bottom", "left"] as const;
+export type ScreenEdge = (typeof screenEdges)[number];
+
+export function uiEdgeToNative(edge: ScreenEdge, orientation: UiOrientation): ScreenEdge {
+  const turns = { portrait: 0, landscapeRight: 1, portraitUpsideDown: 2, landscapeLeft: 3 };
+  return screenEdges[(screenEdges.indexOf(edge) + turns[orientation]) % 4];
+}
+
 /** A normalized point or vector in some space. */
 interface Vec {
   x: number;

@@ -5,6 +5,7 @@ export {
   readAllToolsServerStates,
   stateFileForBundle,
   buildToolsServerEnv,
+  resolveToolsServerNode,
   spawnToolsServer,
   findFreePort,
   isToolsServerHealthy,
