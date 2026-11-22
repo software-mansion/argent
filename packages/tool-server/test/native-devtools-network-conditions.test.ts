@@ -329,6 +329,25 @@ describe("native devtools network conditions", () => {
     );
   });
 
+  it("sends the conditions again after Network.enable without waiting for the bypass reply", async () => {
+    let slowBypass = false;
+    const { api, agent } = await setup((msg) =>
+      slowBypass && msg.payload.method === "NativeDevtoolsIos.configure"
+        ? { result: {}, delayMs: 1_000 }
+        : { result: {} }
+    );
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    agent.received.length = 0;
+    slowBypass = true;
+
+    void api.startNetworkCapture(BUNDLE, 8081);
+
+    // A wait for the bypass reply would leave the app unthrottled for that round trip.
+    await vi.waitFor(() => expect(agent.received).toEqual([ACTIVATE, BYPASS_METRO, EMULATE_SLOW]), {
+      timeout: 500,
+    });
+  });
+
   it("clears with Network.disable when network inspection was never activated", async () => {
     const { api, agent } = await setup();
     await api.setNetworkConditions(BUNDLE, SLOW);
