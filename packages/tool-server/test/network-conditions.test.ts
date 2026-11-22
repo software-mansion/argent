@@ -397,6 +397,22 @@ describe("network-conditions on an iOS simulator", () => {
     expect(api.setNetworkConditions).toHaveBeenCalledWith(bundleId, null);
   });
 
+  it("sends overlapping calls for one app in the order they were made", async () => {
+    const { api, services } = fakeNativeDevtools();
+
+    await Promise.all([
+      networkConditionsTool.execute(services, { udid: iosUdid, bundleId }),
+      networkConditionsTool.execute(services, { udid: iosUdid, bundleId, latencyMs: 900 }),
+    ]);
+
+    expect(api.setNetworkConditions).toHaveBeenNthCalledWith(1, bundleId, null);
+    expect(api.setNetworkConditions).toHaveBeenNthCalledWith(
+      2,
+      bundleId,
+      expect.objectContaining({ conditions: expect.objectContaining({ latency: 900 }) })
+    );
+  });
+
   it("rejects a physical iOS device", async () => {
     const { services } = fakeNativeDevtools();
 

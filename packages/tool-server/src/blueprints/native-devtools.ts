@@ -1,11 +1,14 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { withKeyedLock } from "../utils/keyed-lock";
 import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-socket";
 import {
   TypedEventEmitter,
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceEvents,
@@ -850,8 +853,16 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const keepsCapture = (bundleId: string): boolean =>
       activatedBundleIds.has(bundleId) || providerCapture.get(bundleId) === true;
 
+    /** Attach mode: outlives a crashed tool-server, so a later reset clears only a throttle Argent set. */
+    const ownedThrottlePath = (bundleId: string): string =>
+      path.join(
+        os.tmpdir(),
+        `argent-throttle-${encodeURIComponent(udid)}-${encodeURIComponent(bundleId)}`
+      );
+
     const applyThrottle = async (bundleId: string, throttle: NetworkThrottle): Promise<void> => {
       await noteProviderCapture(bundleId);
+      if (lentSocketPath) fs.writeFileSync(ownedThrottlePath(bundleId), "");
       await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", {
         bypassPorts: [throttle.metroPort],
       });
@@ -862,6 +873,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", { bypassPorts: [] });
       await sendCdpRpc(bundleId, keepsCapture(bundleId) ? "Network.enable" : "Network.disable");
       providerCapture.delete(bundleId);
+      fs.rmSync(ownedThrottlePath(bundleId), { force: true });
     };
 
     const isEmulating = (state: Record<string, unknown> | null): boolean =>
@@ -870,9 +882,18 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     /** A crashed tool-server leaves its throttle and loses its record of the provider's capture, so keep capture on. */
     const clearLeftoverThrottle = async (bundleId: string): Promise<void> => {
-      if (!lentSocketPath) return;
-      const state = await sendCdpRpc(bundleId, "NativeDevtoolsIos.getConditions").catch(() => null);
-      if (!isEmulating(state as Record<string, unknown> | null)) return;
+      if (!lentSocketPath || !fs.existsSync(ownedThrottlePath(bundleId))) return;
+      const state = await sendCdpRpc(bundleId, "NativeDevtoolsIos.getConditions").catch(
+        (err: unknown) => {
+          if (getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR)
+            return null;
+          throw err;
+        }
+      );
+      if (!isEmulating(state as Record<string, unknown> | null)) {
+        fs.rmSync(ownedThrottlePath(bundleId), { force: true });
+        return;
+      }
       providerCapture.set(bundleId, true);
       await clearThrottle(bundleId);
     };

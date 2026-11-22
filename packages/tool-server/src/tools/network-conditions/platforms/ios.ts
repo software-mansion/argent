@@ -1,5 +1,6 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { withKeyedLock } from "../../../utils/keyed-lock";
 import { toCdpNetworkConditions } from "../../../utils/network-conditions";
 import { metroPort } from "../../../utils/debugger/metro-port";
 import {
@@ -47,31 +48,40 @@ async function isNotRunning(api: NativeDevtoolsApi, bundleId: string): Promise<b
   return state === "not_running";
 }
 
-export const iosImpl: PlatformImpl<
-  IosServices,
-  NetworkConditionsParams,
-  NetworkConditionsResult | NativeDevtoolsPrecheckBlock
-> = {
+type Result = NetworkConditionsResult | NativeDevtoolsPrecheckBlock;
+
+const appCalls = new Map<string, Promise<unknown>>();
+
+async function setAppConditions(
+  api: NativeDevtoolsApi,
+  params: NetworkConditionsParams,
+  bundleId: string
+): Promise<Result> {
+  const conditions = requestedConditions(params);
+
+  if (!conditions && !api.isConnected(bundleId)) await api.setNetworkConditions(bundleId, null);
+  if (conditions || !(await isNotRunning(api, bundleId))) {
+    const blocked = await precheckNativeDevtools(api, params.udid, bundleId);
+    if (blocked) return blocked;
+    if (!api.isConnected(bundleId)) throw notConnected(bundleId);
+  }
+
+  const throttle = conditions && {
+    conditions: toCdpNetworkConditions(conditions),
+    metroPort: metroPort({ device_id: params.udid, port: params.port }),
+  };
+  await api.setNetworkConditions(bundleId, throttle);
+  return { scope: "app", conditions };
+}
+
+export const iosImpl: PlatformImpl<IosServices, NetworkConditionsParams, Result> = {
   requires: ["xcrun"],
   async handler(services, params) {
     const { bundleId } = params;
     if (!bundleId) throw missingBundleId();
     if (!isInjectableBundleId(bundleId)) throw appleApp(bundleId);
-    const api = services.nativeDevtools;
-    const conditions = requestedConditions(params);
-
-    if (!conditions && !api.isConnected(bundleId)) await api.setNetworkConditions(bundleId, null);
-    if (conditions || !(await isNotRunning(api, bundleId))) {
-      const blocked = await precheckNativeDevtools(api, params.udid, bundleId);
-      if (blocked) return blocked;
-      if (!api.isConnected(bundleId)) throw notConnected(bundleId);
-    }
-
-    const throttle = conditions && {
-      conditions: toCdpNetworkConditions(conditions),
-      metroPort: metroPort({ device_id: params.udid, port: params.port }),
-    };
-    await api.setNetworkConditions(bundleId, throttle);
-    return { scope: "app", conditions };
+    return withKeyedLock(appCalls, `${params.udid}\n${bundleId}`, () =>
+      setAppConditions(services.nativeDevtools, params, bundleId)
+    );
   },
 };

@@ -3,7 +3,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
@@ -43,6 +43,7 @@ type LentAgent = {
   /** What the provider does when it turns its own network capture on or off. */
   setCapture: (on: boolean) => void;
   socketPath: string;
+  withholdGetConditions: () => void;
 };
 
 type LentAgentOptions = {
@@ -80,7 +81,13 @@ async function startLentAgent({
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
-  const state = { captureOn, failsGetConditions, conditions, refusesConditions };
+  const state = {
+    captureOn,
+    failsGetConditions,
+    conditions,
+    refusesConditions,
+    withholdsGetConditions: false,
+  };
 
   const server = net.createServer((socket) => {
     sockets.push(socket);
@@ -102,7 +109,9 @@ async function startLentAgent({
 
       if (message.type === "CDP") {
         const { id, method } = message.payload;
-        if (id !== undefined) {
+        const withheld =
+          state.withholdsGetConditions && method === "NativeDevtoolsIos.getConditions";
+        if (id !== undefined && !withheld) {
           const payload = cdpReply(id, method, state);
           socket.write(JSON.stringify({ payload, type: "CDP" }) + "\n");
         }
@@ -124,6 +133,9 @@ async function startLentAgent({
       state.captureOn = on;
     },
     socketPath,
+    withholdGetConditions: () => {
+      state.withholdsGetConditions = true;
+    },
   };
 }
 
@@ -176,6 +188,7 @@ async function waitForConnectedBundle(api: {
 
 beforeEach(() => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "argent-native-devtools-"));
+  vi.stubEnv("TMPDIR", temporaryDirectory);
   delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
   __resetExternalDeviceCacheForTesting();
   __resetProviderWarningsForTesting();
@@ -186,6 +199,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
   delete process.env.ARGENT_DEVICE_PROVIDERS;
   __resetDepCacheForTests();
   fs.rmSync(temporaryDirectory, { force: true, recursive: true });
@@ -372,18 +387,29 @@ describe("a provider that lends its native-devtools agent", () => {
       await agent.close();
     });
 
-    it("only reads the provider's state on a reset with nothing set", async () => {
-      const agent = await startLentAgent({
-        captureOn: false,
-        conditions: { offline: false, latency: 0, downloadThroughput: 0, uploadThroughput: 0 },
-      });
+    /** Argent's throttle outlives a tool-server that stops without clearing it. */
+    async function leaveThrottle(agent: LentAgent): Promise<void> {
+      const earlier = await instantiate();
+      await waitForConnectedBundle(earlier.api);
+      await earlier.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      const terminated = new Promise<void>((resolve) =>
+        earlier.events.on("terminated", () => resolve())
+      );
+      agent.hangUp();
+      await terminated;
+      await earlier.dispose();
+      agent.received.length = 0;
+    }
+
+    it("leaves a throttle the provider set on a reset with nothing set", async () => {
+      const agent = await startLentAgent({ conditions: { latency: 400 } });
       publishDescriptor({ socketPath: agent.socketPath });
       const instance = await instantiate();
       await waitForConnectedBundle(instance.api);
 
       await instance.api.setNetworkConditions(BUNDLE_ID, null);
 
-      expect(cdpMethods(agent)).toEqual(["NativeDevtoolsIos.getConditions"]);
+      expect(cdpMethods(agent)).toEqual([]);
 
       await instance.dispose();
       await agent.close();
@@ -397,6 +423,7 @@ describe("a provider that lends its native-devtools agent", () => {
     ])("clears %o that an earlier tool-server left on a reset with nothing set", async (left) => {
       const agent = await startLentAgent({ captureOn: true, conditions: left });
       publishDescriptor({ socketPath: agent.socketPath });
+      await leaveThrottle(agent);
       const instance = await instantiate();
       await waitForConnectedBundle(instance.api);
 
@@ -410,6 +437,28 @@ describe("a provider that lends its native-devtools agent", () => {
         }),
         expect.objectContaining({ method: "Network.enable" }),
       ]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("fails a reset when the provider does not report a throttle it may still hold", async () => {
+      const agent = await startLentAgent({ conditions: { offline: true } });
+      publishDescriptor({ socketPath: agent.socketPath });
+      await leaveThrottle(agent);
+      agent.withholdGetConditions();
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+
+      const reset = expect(instance.api.setNetworkConditions(BUNDLE_ID, null)).rejects.toThrow(
+        /timed out/
+      );
+      await vi.waitFor(() =>
+        expect(cdpMethods(agent)).toEqual(["NativeDevtoolsIos.getConditions"])
+      );
+      vi.advanceTimersByTime(5_000);
+      await reset;
 
       await instance.dispose();
       await agent.close();
