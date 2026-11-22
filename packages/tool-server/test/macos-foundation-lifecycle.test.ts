@@ -924,6 +924,10 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       const latest = await readLog({ limit: 1 });
       expect(latest).toMatchObject({ count: 1, total: 2 });
       expect(latest.requests[0].url).toBe("https://example.com/b");
+      const events = (await readLog({ format: "events", limit: 1 })) as unknown as {
+        events: { method: string }[];
+      };
+      expect(events.events.map((e) => e.method)).toEqual(["Network.loadingFinished"]);
       expect((await readLog({ clear: true })).count).toBe(2);
       expect((await readLog()).count).toBe(0);
     });
