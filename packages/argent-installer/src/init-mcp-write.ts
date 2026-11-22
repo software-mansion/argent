@@ -3,6 +3,7 @@ import pc from "picocolors";
 import {
   getMcpEntryForScope,
   isArgentManagedEntry,
+  resolveGlobalCommandMode,
   resolveLocalCommandMode,
   type McpConfigAdapter,
   type McpCommandMode,
@@ -21,8 +22,9 @@ interface McpWriteResult {
 }
 
 // Step 1c — write the MCP config files. Local mode points project-scope
-// entries at the repo-local copy and drops global-only adapters; everything
-// else keeps the bare `argent` command.
+// entries at the repo-local copy and drops global-only adapters; global-scope
+// entries run the global install (see resolveGlobalCommandMode); other
+// project-scope entries keep the bare `argent` command.
 export function writeMcpConfigs(args: {
   selectedAdapters: McpConfigAdapter[];
   installMode: InstallMode;
@@ -65,8 +67,9 @@ export function writeMcpConfigs(args: {
     }
   }
 
+  const globalCmdMode = resolveGlobalCommandMode();
   const entryFor = (configScope: "local" | "global"): McpServerEntry =>
-    getMcpEntryForScope(installMode, configScope, localCmdMode);
+    getMcpEntryForScope(installMode, configScope, localCmdMode, globalCmdMode);
 
   const stillLocalMode = (root: string): boolean =>
     readInstallRecord(root)?.mode === "local" || isDeclaredLocally(root);
