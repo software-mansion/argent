@@ -57,6 +57,12 @@ describe("flag-parser number coercion rejects empty/whitespace", () => {
     expect(parseFlags(["--n=-3"], numSchema).args.n).toBe(-3);
   });
 
+  it("rejects non-finite numbers (Infinity would be serialised as null)", () => {
+    expect(() => parseFlags(["--x=Infinity"], numSchema)).toThrow(FlagParseException);
+    expect(() => parseFlags(["--x=-Infinity"], numSchema)).toThrow(FlagParseException);
+    expect(() => parseFlags(["--x", "1e999"], numSchema)).toThrow(FlagParseException);
+  });
+
   it("rejects a non-integer / whitespace-only integer, still accepts a valid one", () => {
     expect(() => parseFlags(["--n=1.5"], numSchema)).toThrow(FlagParseException);
     expect(() => parseFlags(["--n", "   "], numSchema)).toThrow(FlagParseException);

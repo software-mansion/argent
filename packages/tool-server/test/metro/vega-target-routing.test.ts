@@ -5,6 +5,7 @@ import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
+import { guardModuleLoadErrors } from "../../src/utils/debugger/scripts/guard-module-errors";
 import { scopeTempHome } from "../helpers/temp-home";
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
@@ -70,15 +71,21 @@ let registry: Registry;
 let listTargets: unknown[] = [];
 
 const debuggerEnabled = new WeakSet<WebSocket>();
+let evaluateParams: Record<string, unknown>[] = [];
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
-  const { id, method } = JSON.parse(raw) as { id: number; method: string };
+  const { id, method, params } = JSON.parse(raw) as {
+    id: number;
+    method: string;
+    params: Record<string, unknown>;
+  };
   if (method === "Debugger.enable") {
     debuggerEnabled.add(ws);
     ws.send(JSON.stringify({ id, result: { debuggerId: "mock" } }));
     return;
   }
   if (method === "Runtime.evaluate") {
+    evaluateParams.push(params);
     ws.send(
       JSON.stringify(
         debuggerEnabled.has(ws)
@@ -131,6 +138,7 @@ afterAll(async () => {
 // each scenario needs its own Registry or the second connect would silently
 // reuse the first one's session instead of re-running target selection.
 beforeEach(() => {
+  evaluateParams = [];
   registry = new Registry();
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerTool(debuggerConnectTool);
@@ -163,6 +171,11 @@ describe("Vega target routing on a legacy Metro (no logicalDeviceId)", () => {
       expression: "1 + 1",
     });
     expect(result).toMatchObject({ result: "legacy-eval-result" });
+    expect(evaluateParams).toContainEqual({
+      expression: guardModuleLoadErrors("1 + 1"),
+      returnByValue: true,
+      awaitPromise: true,
+    });
   });
 
   it("must NOT attach to the proxy's `don't use` page even if it is listed first", async () => {
