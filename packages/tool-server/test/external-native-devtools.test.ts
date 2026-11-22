@@ -869,6 +869,38 @@ describe("a provider that lends its native-devtools agent", () => {
       await agent.close();
     });
 
+    it("does not turn on, at a reset, the capture that a start found off", async () => {
+      const agent = await startLentAgent({ captureOn: false });
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await expect(instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT)).resolves.toBe(false);
+      await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent)).not.toContain("Network.enable");
+      expect(cdpMethods(agent).at(-1)).toBe("Network.disable");
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("does not turn on, at a dispose, the capture that a start found off", async () => {
+      const agent = await startLentAgent({ captureOn: false });
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await expect(instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT)).resolves.toBe(false);
+      await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      await instance.dispose();
+
+      expect(cdpMethods(agent)).not.toContain("Network.enable");
+      expect(cdpMethods(agent).at(-1)).toBe("Network.disable");
+      await agent.close();
+    });
+
     it("turns capture back off when the provider had it off", async () => {
       const agent = await startLentAgent({ captureOn: false });
       publishDescriptor({ socketPath: agent.socketPath });
