@@ -70,6 +70,9 @@ function connectAgent(
       socket.write(JSON.stringify({ type: "Control", payload: { bundleId: BUNDLE } }) + "\n");
       resolve({ received, isClosed: () => closed, close: () => socket.destroy() });
     });
+    // A relaunch supersedes this connection, and the tool-server destroys it. A reply that it
+    // did not read yet makes Linux reset the connection, so this side gets ECONNRESET.
+    socket.on("error", () => {});
     socket.on("close", () => {
       closed = true;
     });
