@@ -93,19 +93,6 @@ function home(p: string): string {
   return p === h || p.startsWith(h + path.sep) ? `~${p.slice(h.length)}` : p;
 }
 
-function isProjectBinDir(dir: string, cwd: string): boolean {
-  if (!/[\\/]node_modules[\\/]\.bin[\\/]?$/.test(dir)) return false;
-  const owner = path.resolve(dir, "..", "..");
-  return cwd === owner || cwd.startsWith(owner + path.sep);
-}
-
-export function stripProjectBinDirs(pathValue: string, cwd: string): string {
-  return pathValue
-    .split(path.delimiter)
-    .filter((dir) => !isProjectBinDir(dir, cwd))
-    .join(path.delimiter);
-}
-
 function installSection(ctx: DoctorContext): DoctorSection {
   const packageRoot = path.dirname(path.dirname(ctx.paths.bundlePath));
   const checks = [check("info", `Running v${ctx.running}`, { detail: home(packageRoot) })];
@@ -545,7 +532,6 @@ export async function doctor(argv: string[], options: { paths: ToolsServerPaths 
     return;
   }
 
-  if (process.env.PATH) process.env.PATH = stripProjectBinDirs(process.env.PATH, process.cwd());
   const report = await collectDoctorReport(options.paths, process.cwd());
   console.log(renderDoctorReport(report, argv.includes("--verbose")));
   if (countStatus(report, "error") > 0) process.exitCode = 1;

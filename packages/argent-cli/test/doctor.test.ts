@@ -9,7 +9,6 @@ import {
   managedTargets,
   renderDoctorReport,
   resolveDoctorRoot,
-  stripProjectBinDirs,
   toolchainChecks,
   type DoctorCheck,
   type EntryContext,
@@ -112,22 +111,6 @@ describe("toolchainChecks", () => {
     expect(ios!.status).toBe("info");
     expect(android!.status).toBe("warn");
     expect(android!.fix).toContain("ANDROID_HOME");
-  });
-});
-
-describe("stripProjectBinDirs", () => {
-  it("drops the project's node_modules/.bin so a project copy does not pass for a global install", () => {
-    const value = ["/proj/node_modules/.bin", "/usr/local/bin", "/usr/bin"].join(path.delimiter);
-    expect(stripProjectBinDirs(value, "/proj/src")).toBe(
-      ["/usr/local/bin", "/usr/bin"].join(path.delimiter)
-    );
-  });
-
-  it("keeps a global bin directory that ends in node_modules/.bin", () => {
-    const value = ["/home/me/.config/yarn/global/node_modules/.bin", "/usr/bin"].join(
-      path.delimiter
-    );
-    expect(stripProjectBinDirs(value, "/proj")).toBe(value);
   });
 });
 
