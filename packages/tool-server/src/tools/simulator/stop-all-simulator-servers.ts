@@ -6,7 +6,7 @@ import {
   forgetJsCapturesOf,
   pauseJsCapturesOf,
 } from "../../blueprints/network-inspector";
-import { forgetIosUnavailableOf, withCaptureSweep } from "../network/network-capture";
+import { forgetNativeUnavailableOf, withCaptureSweep } from "../network/network-capture";
 import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
@@ -153,7 +153,7 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
         // The JS layer's capture intent outlives its service, and a stop that
         // reached no runtime stores one without any service, so it goes by device.
         forgetJsCapturesOf(scoped ? devices : undefined, paused);
-        forgetIosUnavailableOf(scoped ? devices : undefined);
+        forgetNativeUnavailableOf(scoped ? devices : undefined);
         if (!scoped) return { stopped };
         // A scoped stop that named an id owning nothing is indistinguishable
         // from a clean machine unless we say so — and when that id is a typo, its
