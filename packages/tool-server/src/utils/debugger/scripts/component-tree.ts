@@ -21,6 +21,8 @@
  * view, below the title bar. With addRootOffset, Paper rects get the window height
  * (Dimensions 'window', the window frame) minus the height of a root container that
  * fills the content view's width from its top-left corner; any other root adds 0.
+ * JS cannot read the content view's height, so a native view inside the content view
+ * below the root (a footer) counts as title bar: the tool text sends callers to describe.
  * Other platforms keep page coordinates: on Android an edge-to-edge app's viewport
  * offset is minus the status bar, which would move hosts that are placed right today.
  *

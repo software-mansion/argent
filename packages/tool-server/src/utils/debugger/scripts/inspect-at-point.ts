@@ -36,7 +36,9 @@ export const INSPECT_NO_FIBER_ROOT_ERROR =
  * measureInWindow counts from the window's content view, below the title bar, so
  * there the offset is the window height (Dimensions 'window', the window frame)
  * minus the height of a root container that fills the content view's width from
- * its top-left corner; any other root keeps (0, 0). Other platforms pass the point
+ * its top-left corner; any other root keeps (0, 0). JS cannot read the content view's
+ * height, so a native view below the root (a footer) counts as title bar: the tool
+ * text sends callers to describe. Other platforms pass the point
  * as given: on Android an edge-to-edge app's viewport offset is minus the status bar.
  *
  * Frames come from _debugStack (bundled, needs symbolication) or _debugSource,
