@@ -136,6 +136,21 @@ describe("setArgentProxy", () => {
     await expect(setArgentProxy(SERIAL, 50000)).resolves.toBeUndefined();
   });
 
+  it("forgets the old proxy after retrying a replacement whose confirmation failed", async () => {
+    const transition = "10.0.2.2:41000 10.0.2.2:50000";
+    deviceState("10.0.2.2", "50000", transition, "10.0.2.2:50000");
+    appliedReads("10.0.2.2:50000");
+    await setArgentProxy(SERIAL, 50000);
+    const marker = markerWritten();
+
+    vi.mocked(adbShell).mockReset().mockResolvedValue("");
+    vi.mocked(runAdb).mockClear();
+    deviceState("10.0.2.2", "41000", marker, "10.0.2.2:41000");
+    await clearArgentProxy(SERIAL);
+
+    expect(writes()).toEqual([`rm -f ${MARKER}`]);
+  });
+
   it("only waits for Android to apply a proxy it already asked for", async () => {
     deviceState("null", "null", "10.0.2.2:50000", "10.0.2.2:50000");
     appliedReads("null:null", "10.0.2.2:50000");
