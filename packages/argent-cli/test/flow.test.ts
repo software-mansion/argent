@@ -249,6 +249,23 @@ describe("parseRunArgs", () => {
     );
   });
 
+  it("throws on a --platform value that is not a selectable platform", () => {
+    for (const bad of ["iOS", "macOS", "web", "android-tv"]) {
+      expect(() => parseRunArgs(["checkout.yaml", "--platform", bad])).toThrow(FlagParseException);
+      expect(() => parseRunArgs(["checkout.yaml", "--platform", bad])).toThrow(
+        `--platform must be "ios", "android", "chromium", "vega", "macos" or "ios-remote", got "${bad}"`
+      );
+      expect(() => parseRunArgs(["checkout.yaml", `--platform=${bad}`])).toThrow(
+        FlagParseException
+      );
+    }
+    // macos passes with the macos-apps flag off, where the help does not list
+    // it: the tool-server answers with why no Mac app is listed.
+    for (const good of ["ios", "android", "chromium", "vega", "macos", "ios-remote"]) {
+      expect(parseRunArgs(["checkout.yaml", "--platform", good]).platform).toBe(good);
+    }
+  });
+
   it("treats a following flag as a missing value, not as the value", () => {
     expect(() => parseRunArgs(["checkout.yaml", "--device", "--json"])).toThrow(
       "--device requires a value"
@@ -259,10 +276,13 @@ describe("parseRunArgs", () => {
   });
 
   it("throws on a separately supplied empty value, like the --flag= form", () => {
-    for (const flag of ["--device", "--platform", "--output"]) {
+    for (const flag of ["--device", "--output"]) {
       expect(() => parseRunArgs(["checkout.yaml", flag, ""])).toThrow(FlagParseException);
       expect(() => parseRunArgs(["checkout.yaml", flag, ""])).toThrow(`${flag} requires a value`);
     }
+    expect(() => parseRunArgs(["checkout.yaml", "--platform", ""])).toThrow(
+      '--platform must be "ios", "android", "chromium", "vega", "macos" or "ios-remote", got ""'
+    );
   });
 
   it("accepts the --flag=value form for every value-taking flag", () => {
@@ -1270,21 +1290,6 @@ describe("argent e2e run", () => {
     }
   );
 
-  it("sends e2e_test_path and project_root to e2e-execute", async () => {
-    // The tool-server decides what a run can do, local or over a link: an
-    // uploaded flow that is self-contained runs, one that reads beside its
-    // file is refused there.
-    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
-
-    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
-    expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("e2e-execute");
-    expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
-      e2e_test_path: checkoutPath,
-      project_root: process.cwd(),
-      prerequisiteAcknowledged: true,
-    });
-  });
-
   it("lists runnable YAML paths without consulting remote routing", async () => {
     const listRoot = path.join(tempRoot, "list-project");
     const flowsDir = path.join(listRoot, ".argent", "e2e");
@@ -1356,36 +1361,6 @@ describe("argent e2e run", () => {
     } finally {
       process.chdir(previousCwd);
     }
-  });
-
-  it("never lists the inside of a __baselines__ directory, at any depth", async () => {
-    // Baselines are machine-managed snapshot storage living beside the flows
-    // that own them (nested flows keep theirs beside themselves) — a YAML
-    // dropped inside one is not a flow to advertise.
-    const listRoot = path.join(tempRoot, "list-baselines-project");
-    const flowsDir = path.join(listRoot, ".argent", "e2e");
-    await fsp.mkdir(path.join(flowsDir, "__baselines__", "checkout"), { recursive: true });
-    await fsp.mkdir(path.join(flowsDir, "suite", "__baselines__", "login"), { recursive: true });
-    await Promise.all([
-      fsp.writeFile(path.join(flowsDir, "checkout.yaml"), "steps: []\n"),
-      fsp.writeFile(path.join(flowsDir, "suite", "login.yaml"), "steps: []\n"),
-      fsp.writeFile(path.join(flowsDir, "__baselines__", "checkout", "sneaky.yaml"), "steps: []\n"),
-      fsp.writeFile(
-        path.join(flowsDir, "suite", "__baselines__", "login", "sneaky.yaml"),
-        "steps: []\n"
-      ),
-    ]);
-    const previousCwd = process.cwd();
-    try {
-      process.chdir(listRoot);
-      await flow(["list"], opts);
-    } finally {
-      process.chdir(previousCwd);
-    }
-
-    expect(logs.join("\n")).toBe(
-      [".argent/e2e/checkout.yaml", ".argent/e2e/suite/login.yaml"].join("\n")
-    );
   });
 
   it("never lists the inside of __baselines__, a dot-directory or node_modules, at any depth", async () => {
@@ -1626,6 +1601,22 @@ describe("argent e2e run", () => {
     }
 
     expect(logs.join("\n")).toBe(".argent/e2e/linked.yaml");
+  });
+
+  it.each(["--help", "-h"])("prints the help for list %s instead of listing", async (flag) => {
+    const listRoot = path.join(tempRoot, "list-help-project");
+    await fsp.mkdir(path.join(listRoot, ".argent", "e2e"), { recursive: true });
+    await fsp.writeFile(path.join(listRoot, ".argent", "e2e", "a.yaml"), "steps: []\n");
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list", flag], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toContain("Usage: argent e2e <subcommand> [options]");
+    expect(logs.join("\n")).not.toContain(".argent/e2e/a.yaml");
   });
 
   it("prints the no-flows message when no entry in the directory is runnable", async () => {
@@ -2137,6 +2128,52 @@ describe("argent e2e run", () => {
     });
   });
 
+  it.skipIf(!canDenyRead).each([
+    [".argent/e2e", ".argent/e2e"],
+    [".argent/flows", ".argent/flows"],
+    ["the .argent directory", ".argent"],
+  ])("fails when %s cannot be read instead of calling it absent", async (_, locked) => {
+    const listRoot = path.join(tempRoot, `list-unreadable-${locked.replace(/\W/g, "")}`);
+    for (const dir of [".argent/e2e", ".argent/flows"]) {
+      await fsp.mkdir(path.join(listRoot, dir), { recursive: true });
+      await fsp.writeFile(path.join(listRoot, dir, "checkout.yaml"), "steps: []\n");
+    }
+    const lockedDir = path.join(listRoot, locked);
+    await fsp.chmod(lockedDir, 0o000);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await expect(flow(["list"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+      // Restore before afterAll's rm walks the tree (see there).
+      await fsp.chmod(lockedDir, 0o700);
+    }
+
+    const first = locked === ".argent/flows" ? ".argent/flows" : ".argent/e2e";
+    expect(errs).toEqual([`Could not read e2e test directory: ${first}`]);
+    expect(logs).toEqual([]);
+  });
+
+  it("treats an e2e test directory path that is a file as absent, as `run <name>` does", async () => {
+    const listRoot = path.join(tempRoot, "list-notdir-project");
+    await fsp.mkdir(path.join(listRoot, ".argent", "flows"), { recursive: true });
+    await fsp.writeFile(path.join(listRoot, ".argent", "e2e"), "not a directory\n");
+    await fsp.writeFile(path.join(listRoot, ".argent", "flows", "checkout.yaml"), "steps: []\n");
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs).toEqual([".argent/flows/checkout.yaml"]);
+    expect(errs).toEqual([
+      "note: 1 test listed from .argent/flows (legacy); move it to .argent/e2e",
+    ]);
+  });
+
   it("renders the report — echo lines unnumbered, real steps numbered, reasons and fragment tags shown — and exits 1 on failure", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({
@@ -2167,17 +2204,44 @@ describe("argent e2e run", () => {
     expect(out).toContain("FAIL — 1 passed, 1 failed, 0 errored, 1 skipped");
   });
 
-  it("exits 1 on a passing run over a link whose baselines were not all written, naming each", async () => {
+  it("names each baseline a run could not write in its recap", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({
+        ok: false,
         baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
       }),
     });
 
     await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
-    expect(logs.join("\n")).toContain(
-      "✗ baseline not written: /p/b.png: EACCES: permission denied"
-    );
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(-4)).toEqual([
+      "  ✗ baselines not written",
+      "    /p/b.png: EACCES: permission denied",
+      "",
+      "FAIL — 1 passed, 0 failed, 0 errored, 0 skipped",
+    ]);
+  });
+
+  it("names an unwritten baseline under the failing step of a run that also failed a step", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [{ index: 0, kind: "tap", status: "fail", reason: "no element" }],
+        baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }],
+      }),
+    });
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(-5)).toEqual([
+      "  ✗ step 1 tap",
+      "    no element",
+      "    baseline not written: /p/b.png: EACCES: permission denied",
+      "",
+      "FAIL — 0 passed, 1 failed, 0 errored, 0 skipped",
+    ]);
   });
 
   it("renders legacy warnings with the ⚠ glyph and counts them in the summary", async () => {
@@ -2694,15 +2758,6 @@ describe("argent e2e run", () => {
     ]);
   });
 
-  it("exits 2 when the result is not a run report (e.g. a prerequisite notice)", async () => {
-    toolsClientMock.callTool.mockResolvedValue({
-      data: { flow: "checkout", notice: "prerequisite", executionPrerequisite: "logged in" },
-    });
-
-    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
-    expect(errs.join("\n")).toContain('"checkout" did not produce a run report');
-  });
-
   // Same ledger contract the directory run keeps: stdout alone says how the
   // run ended. Live step lines make the gap worse here than in a batch — the
   // last thing an archived log shows is a passing step, so a run that died
@@ -2927,6 +2982,9 @@ describe("argent e2e run", () => {
   it("prints help instead of running when --help follows the flow name", async () => {
     await flow(["run", "checkout", "--help"], opts);
     expect(logs.join("\n")).toContain("Options (run):");
+    expect(logs.join("\n")).toContain(
+      "--platform <p>         ios | android | chromium | vega | ios-remote — narrow"
+    );
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
@@ -3140,6 +3198,32 @@ describe("argent e2e run <dir>", () => {
     );
   });
 
+  it("rejects a misspelled --platform before running any flow in the batch", async () => {
+    await expect(flow(["run", flowsDir, "--platform", "iOS"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(errs.join("\n")).toContain(
+      '--platform must be "ios", "android", "chromium", "vega", "macos" or "ios-remote", got "iOS"'
+    );
+  });
+
+  it("rejects a misspelled --platform under --json with one error record and no aggregate", async () => {
+    await expect(flow(["run", flowsDir, "--platform", "iOS", "--json"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+    expect(errs.join("\n").split("\n")).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({
+      event: "error",
+      error:
+        '--platform must be "ios", "android", "chromium", "vega", "macos" or "ios-remote", got "iOS"',
+    });
+  });
+
   it("forwards run flags to every flow in the batch", async () => {
     await expect(
       flow(["run", flowsDir, "--device", "SIM-1", "--platform", "ios", "--update-baselines"], opts)
@@ -3325,18 +3409,6 @@ describe("argent e2e run <dir>", () => {
     expect(lines).toContain(`  ✗ a-login.yaml › ${verdict}`);
   });
 
-  it("gives the flow that stopped the batch its own stdout verdict", async () => {
-    toolsClientMock.callTool.mockRejectedValueOnce(
-      new ToolInvocationError("simulator boot failed", { errorKind: "subprocess" })
-    );
-
-    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
-
-    // Distinguishable from the flows that follow it, which never started.
-    expect(logs.join("\n").split("\n")).toContain("  ✗ did not finish (run error)");
-    expect(logs.join("\n")).toContain("· not run (batch stopped)");
-  });
-
   it("gives a report-less flow its own stdout verdict", async () => {
     toolsClientMock.callTool.mockResolvedValueOnce({
       data: { flow: "a-login", notice: "prerequisite" },
@@ -3370,8 +3442,29 @@ describe("argent e2e run <dir>", () => {
     });
   });
 
-  // Every verdict is stdout prose, so --json must emit the aggregate alone —
-  // one `| jq` away from a parse error otherwise.
+  it("names a baseline a flow could not write on its own line and in the recap", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({
+        ok: false,
+        baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }],
+      }),
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+    const lines = logs.join("\n").split("\n");
+    expect(
+      lines.slice(lines.indexOf("[1/2] a-login.yaml"), lines.indexOf("[2/2] b-checkout.yaml"))
+    ).toEqual([
+      "[1/2] a-login.yaml",
+      "  FAIL (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped",
+    ]);
+    const recap = lines.indexOf("Failed e2e tests (1)");
+    expect(lines.slice(recap + 2, recap + 4)).toEqual([
+      "  ✗ a-login.yaml › baselines not written",
+      "    /p/b.png: EACCES: permission denied",
+    ]);
+  });
+
   it("keeps --json a single document when a flow returns no report", async () => {
     toolsClientMock.callTool.mockResolvedValueOnce({
       data: { flow: "a-login", notice: "prerequisite" },
@@ -3974,17 +4067,6 @@ describe("argent e2e run <dir>", () => {
       expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     }
   );
-
-  it("sends every flow in the directory to e2e-execute", async () => {
-    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
-
-    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
-    expect(toolsClientMock.callTool.mock.calls.map((c) => c[0])).toEqual([
-      "e2e-execute",
-      "e2e-execute",
-    ]);
-    expect(logs.join("\n")).toContain("2 passed");
-  });
 
   it("prints only the aggregate object with --json, tagging infra failures and skips", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

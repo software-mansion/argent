@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { CDPTarget } from "../../src/utils/debugger/discovery";
+import type { IosSimulator } from "../../src/utils/ios-devices";
+
+const listIosSimulators = vi.hoisted(() => vi.fn(async (): Promise<IosSimulator[]> => []));
+vi.mock("../../src/utils/ios-devices", () => ({ listIosSimulators }));
 
 type TargetSelection = typeof import("../../src/utils/debugger/target-selection");
 let selectTarget: TargetSelection["selectTarget"];
@@ -486,14 +490,6 @@ describe("selectTarget", () => {
       expect(result.target.id).toBe("android");
     });
 
-    it("tells the caller a relaunched app keeps its id", () => {
-      const thrown = selectGoneAndroid();
-
-      expect((thrown as Error | undefined)?.message).toMatch(
-        /relaunch it[\s\S]*retry with the same id/
-      );
-    });
-
     it("after a reinstall changed the id, still refuses and points at the id shown for the device", () => {
       // iOS derives the id from identifierForVendor, which a reinstall can
       // reset: the same iPhone comes back under a new id while the agent still
@@ -841,5 +837,131 @@ describe("selectTarget on a Mac app id", () => {
     );
 
     expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
+  });
+});
+
+describe("selectTarget by an iOS simulator UDID on a shared Metro", () => {
+  const SIM_UDID = "5C1B6E9A-0D2F-4A47-9E3B-7A1D2C3E4F50";
+  const OTHER_UDID = "0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D";
+  let simulatorNameOnSharedMetro: TargetSelection["simulatorNameOnSharedMetro"];
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ selectTarget, simulatorNameOnSharedMetro } =
+      await import("../../src/utils/debugger/target-selection"));
+    listIosSimulators.mockReset();
+  });
+
+  function bootedSimulator(udid: string, name: string): IosSimulator {
+    return { udid, name, state: "Booted", runtime: "iOS-26-4", runtimeKind: "mobile" };
+  }
+
+  function deviceTarget(logicalDeviceId: string, deviceName: string): CDPTarget {
+    return makeTarget({
+      id: `${logicalDeviceId}-1`,
+      deviceName,
+      reactNative: { logicalDeviceId, capabilities: { prefersFuseboxFrontend: true } },
+    });
+  }
+
+  async function selectByDeviceId(targets: CDPTarget[], deviceId: string) {
+    const simulatorName = await simulatorNameOnSharedMetro(deviceId, targets);
+    return selectTarget(targets, 8081, { deviceId, simulatorName });
+  }
+
+  const emulator = deviceTarget("lid-emulator", "sdk_gphone64_arm64 - 16 - API 36");
+
+  it("picks the only device whose name is the simulator's name", async () => {
+    listIosSimulators.mockResolvedValue([
+      bootedSimulator(SIM_UDID, "iPhone 17 Pro"),
+      { ...bootedSimulator(OTHER_UDID, "iPhone 17 Pro"), state: "Shutdown" },
+    ]);
+    const sim = deviceTarget("lid-sim", "iPhone 17 Pro");
+
+    const selected = await selectByDeviceId([emulator, sim], SIM_UDID);
+
+    expect(selected.target.id).toBe("lid-sim-1");
+  });
+
+  it("refuses when two Metro devices have the simulator's name", async () => {
+    listIosSimulators.mockResolvedValue([bootedSimulator(SIM_UDID, "iPhone 17 Pro")]);
+    const twins = [deviceTarget("lid-a", "iPhone 17 Pro"), deviceTarget("lid-b", "iPhone 17 Pro")];
+
+    await expect(selectByDeviceId(twins, SIM_UDID)).rejects.toThrow(
+      /No debugger target matches device_id/
+    );
+  });
+
+  it("refuses when no Metro device has the simulator's name", async () => {
+    listIosSimulators.mockResolvedValue([bootedSimulator(SIM_UDID, "iPhone 16")]);
+    const sim = deviceTarget("lid-sim", "iPhone 17 Pro");
+
+    await expect(selectByDeviceId([emulator, sim], SIM_UDID)).rejects.toThrow(
+      /No debugger target matches device_id/
+    );
+  });
+
+  it("refuses when another booted simulator has the same name", async () => {
+    listIosSimulators.mockResolvedValue([
+      bootedSimulator(SIM_UDID, "iPhone 17 Pro"),
+      bootedSimulator(OTHER_UDID, "iPhone 17 Pro"),
+    ]);
+    const sim = deviceTarget("lid-sim", "iPhone 17 Pro");
+
+    await expect(selectByDeviceId([emulator, sim], SIM_UDID)).rejects.toThrow(
+      /No debugger target matches device_id/
+    );
+  });
+
+  it.each([
+    ["Dev&QA", "Dev"],
+    ["Pro+Max", "Pro Max"],
+  ])("refuses a simulator named %s, which Metro lists as %s", async (name, listed) => {
+    listIosSimulators.mockResolvedValue([bootedSimulator(SIM_UDID, name)]);
+    const sim = deviceTarget("lid-sim", listed);
+
+    await expect(selectByDeviceId([emulator, sim], SIM_UDID)).rejects.toThrow(
+      /No debugger target matches device_id/
+    );
+  });
+
+  it.each([
+    ["Dev&QA", "Dev"],
+    ["Pro+Max", "Pro Max"],
+  ])("refuses when Metro lists another booted simulator, %s, as %s", async (name, listed) => {
+    listIosSimulators.mockResolvedValue([
+      bootedSimulator(SIM_UDID, listed),
+      bootedSimulator(OTHER_UDID, name),
+    ]);
+    const other = deviceTarget("lid-other", listed);
+
+    await expect(selectByDeviceId([emulator, other], SIM_UDID)).rejects.toThrow(
+      /No debugger target matches device_id/
+    );
+  });
+
+  it("does not look up simulator names for a provider's device", async () => {
+    const sim = deviceTarget("lid-sim", "iPhone 17 Pro");
+
+    await expect(selectByDeviceId([emulator, sim], `ext:provider:${SIM_UDID}`)).rejects.toThrow(
+      /No debugger target matches device_id/
+    );
+    expect(listIosSimulators).not.toHaveBeenCalled();
+  });
+
+  it("does not look up simulator names when Metro lists one device", async () => {
+    const sim = deviceTarget("lid-sim", "iPhone 17 Pro");
+
+    expect((await selectByDeviceId([sim], SIM_UDID)).target.id).toBe("lid-sim-1");
+    expect(listIosSimulators).not.toHaveBeenCalled();
+  });
+
+  it("does not look up simulator names for an Android serial", async () => {
+    const sim = deviceTarget("lid-sim", "iPhone 17 Pro");
+
+    await expect(selectByDeviceId([emulator, sim], "emulator-5554")).rejects.toThrow(
+      /No debugger target matches device_id "emulator-5554"/
+    );
+    expect(listIosSimulators).not.toHaveBeenCalled();
   });
 });

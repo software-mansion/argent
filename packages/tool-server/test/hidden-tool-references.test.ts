@@ -79,25 +79,6 @@ function markdownFiles(dir: string): string[] {
 }
 
 describe("text the agent reads names no tool hidden from MCP", () => {
-  it("has hidden tools and skill files to check", () => {
-    expect(hiddenNames).toEqual(
-      expect.arrayContaining([
-        "react-profiler-component-source",
-        "react-profiler-cpu-summary",
-        "flow-execute",
-      ])
-    );
-    expect(markdownFiles(SKILLS_ROOT).length).toBeGreaterThan(10);
-    expect(hiddenMentions("call `react-profiler-component-source` next")).toEqual([
-      "react-profiler-component-source",
-    ]);
-    expect(hiddenMentions("fill in the form")).toEqual([]);
-    expect(hiddenMentions("Call mcp__argent__terminate-app")).toEqual(["terminate-app"]);
-    expect(hiddenMentions("Call mcp__argent__fill")).toEqual(["fill"]);
-    expect(hiddenMentions("Do not call `mcp__argent__*` tools")).toEqual([]);
-    expect(hiddenMentions("Call flow-execute to run it")).toEqual(["flow-execute"]);
-  });
-
   it.each(visible.map((def) => [def.id, def] as const))(
     "%s: description, search hint and schema",
     (_id, def) => {

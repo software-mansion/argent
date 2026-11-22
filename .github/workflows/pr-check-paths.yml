@@ -1,0 +1,50 @@
+name: Check PR paths
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: Git glob pathspecs, one per line
+        required: true
+        type: string
+    outputs:
+      relevant:
+        description: Whether to run the check
+        value: ${{ jobs.paths.outputs.relevant }}
+
+permissions:
+  contents: read
+
+jobs:
+  paths:
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.diff.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          # The three-dot diff needs both histories, but only compares trees.
+          fetch-depth: 0
+          sparse-checkout: .github/workflows
+          persist-credentials: false
+
+      - name: Check for relevant changes
+        id: diff
+        shell: bash
+        env:
+          PATHS: ${{ inputs.paths }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          relevant=true
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            mapfile -t paths <<< "$PATHS"
+            if git --glob-pathspecs diff --quiet --no-renames "$BASE...$HEAD_SHA" -- "${paths[@]}"; then
+              relevant=false
+            else
+              status=$?
+              [[ $status == 1 ]] || exit "$status"
+            fi
+          fi
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
