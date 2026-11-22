@@ -1,3 +1,4 @@
+import { ensureDeviceReady } from "../../src/utils/ios-device/devicectl";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -5,6 +6,7 @@ import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/regist
 import { iosDeviceRunnerBlueprint } from "../../src/blueprints/ios-device-runner";
 import { reserveLaunchMeasurement } from "../../src/utils/ios-device/runner-reservation";
 import { IosDeviceTransportError } from "../../src/utils/ios-device/usbmux-protocol";
+import { TunnelConnectError } from "../../src/utils/ios-device/runner-route";
 import {
   createRunnerClient,
   waitForRunnerReady,
@@ -22,7 +24,7 @@ import {
 import { readRunnerCrashSummary } from "../../src/utils/ios-device/runner-crash";
 
 vi.mock("../../src/utils/ios-device/devicectl", () => ({
-  ensureDeviceReady: vi.fn(async () => {}),
+  ensureDeviceReady: vi.fn(async () => null),
 }));
 vi.mock("../../src/utils/ios-device/runner-build", () => ({
   ensureRunnerArtifact: vi.fn(async () => ({
@@ -501,6 +503,10 @@ describe("ios-device-runner blueprint: recoverable classification", () => {
     ).toBe(false);
     expect(recoverable(new Error("connect ECONNREFUSED 127.0.0.1:8080"))).toBe(false);
     expect(recoverable(new Error("the tunnel did not accept connection"))).toBe(false);
+    // The typed tunnel connect failure is: the runner may sit on a stale address.
+    expect(
+      recoverable(new TunnelConnectError("runner-not-listening", "refused", { retryable: true }))
+    ).toBe(true);
     // A RunnerCommandError means the runner answered, so it is alive, with
     // one exception: RUNNER_WEDGED is the runner's own verdict that its main
     // thread is stuck past recovery, and only a fresh runner clears that.
@@ -583,5 +589,19 @@ describe("ios-device-runner blueprint: signing", () => {
     await createInstance();
 
     expect(resolveRunnerSigningConfig).toHaveBeenCalledWith(DEVICE_UDID);
+  });
+});
+
+describe("CoreDevice runner bootstrap", () => {
+  it("passes the tunnel address and uses the runner-selected port", async () => {
+    vi.mocked(ensureDeviceReady).mockResolvedValueOnce("fd12::1");
+    const { api } = await createInstance();
+    expect(api.udid).toBe(DEVICE_UDID);
+    expect(launchRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ tunnelAddress: "fd12::1" })
+    );
+    expect(createRunnerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ udid: DEVICE_UDID, port: RUNNER_PORT })
+    );
   });
 });

@@ -9,6 +9,7 @@ import {
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
+import { guardModuleLoadErrors } from "../../src/utils/debugger/scripts/guard-module-errors";
 import { scopeTempHome } from "../helpers/temp-home";
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
@@ -27,6 +28,7 @@ let cdpConn: WebSocket | null = null;
 let mockPort: number;
 let registry: Registry;
 let sourceMapRequests = 0;
+const evaluateParams: Record<string, unknown>[] = [];
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
   const msg = JSON.parse(raw);
@@ -69,6 +71,7 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
       break;
 
     case "Runtime.evaluate":
+      evaluateParams.push(params);
       ws.send(
         JSON.stringify({
           id,
@@ -227,6 +230,10 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
     })) as { result: unknown };
 
     expect(result.result).toBe("eval-result-42");
+    expect(evaluateParams).toContainEqual({
+      expression: guardModuleLoadErrors("1 + 1"),
+      returnByValue: false,
+    });
   });
 
   it("connects to Metro without downloading unused source maps", async () => {

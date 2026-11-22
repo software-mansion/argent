@@ -25,6 +25,8 @@ import {
 } from "../../../utils/ios-profiler/render";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
+const HANGS_NOT_RECORDED = "_No UI hang data was recorded._";
+
 const stackQueryMode = {
   hang_stacks: "hang stacks",
   function_callers: "function callers",
@@ -188,7 +190,8 @@ export function renderThreadBreakdownIos(
   cpuSamples: CpuSample[],
   cpuHotspots: CpuHotspot[],
   threadFilter: string | undefined,
-  topN: number
+  topN: number,
+  hangsRecorded = true
 ): string {
   const threadWeight = new Map<string, number>();
   const threadSamples = new Map<string, number>();
@@ -213,9 +216,9 @@ export function renderThreadBreakdownIos(
   const lines: string[] = [
     `## Thread CPU Breakdown${threadFilter ? ` (filter: "${threadFilter}")` : ""}`,
     "",
-    "| Thread | Weight (ms) | % | Samples |",
-    "|---|---|---|---|",
   ];
+  if (!hangsRecorded) lines.push(HANGS_NOT_RECORDED, "");
+  lines.push("| Thread | Weight (ms) | % | Samples |", "|---|---|---|---|");
 
   for (const [thread, weight] of sorted) {
     const weightMs = Math.round(weight / 1_000_000);
@@ -235,8 +238,9 @@ export function renderThreadBreakdownIos(
       lines.push("| Function | Weight (ms) | % | During Hang |");
       lines.push("|---|---|---|---|");
       for (const h of threadHotspots.slice(0, topN)) {
+        const hangStatus = hangsRecorded ? (h.duringHang ? "Yes" : "No") : "Not recorded";
         lines.push(
-          `| \`${escapeMarkdownTableCell(demangleSymbol(h.dominantFunction))}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
+          `| \`${escapeMarkdownTableCell(demangleSymbol(h.dominantFunction))}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${hangStatus} |`
         );
       }
     }
@@ -342,6 +346,7 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
           error_kind: "validation",
         });
       }
+      if (!data.hangsRecorded) return HANGS_NOT_RECORDED;
       return renderHangStacksIos(data.cpuSamples, data.uiHangs, params.hang_index, params.top_n);
     }
     case "function_callers": {
@@ -360,7 +365,8 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         data.cpuSamples,
         data.cpuHotspots,
         params.thread,
-        params.top_n
+        params.top_n,
+        data.hangsRecorded
       );
     case "leak_stacks":
       // Capture mode from parsedData, frozen with the leaks it describes — the
@@ -416,7 +422,14 @@ const zodSchema = z.object({
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe("Query mode; see Modes in the tool description."),
-  hang_index: z.coerce.number().int().optional().describe("0-based index into the hang list"),
+  // Without `.nullable()`, `z.coerce.number()` reads null as hang 0.
+  hang_index: z.coerce
+    .number()
+    .int()
+    .nullable()
+    .transform((value) => value ?? undefined)
+    .optional()
+    .describe("0-based index into the hang list"),
   function_name: z.string().optional().describe("Native function name"),
   thread: z
     .string()

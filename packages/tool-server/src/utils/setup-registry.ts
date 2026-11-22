@@ -42,6 +42,7 @@ import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
 import { createRotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
+import { networkConditionsTool } from "../tools/network-conditions";
 import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
@@ -107,6 +108,7 @@ import { menuBarTool } from "../tools/menu-bar";
 import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
 import { resolveDevice } from "./device-info";
 import { setLivePanelSourceProvider } from "./foldable";
+import { setUiOrientationSourceProvider } from "./ios-ui-orientation";
 
 export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
@@ -118,6 +120,12 @@ export function createRegistry(): Registry {
   // touch and capture (`utils/foldable.ts`); that daemon is a service of this
   // registry, started on first use like a `describe` starts it.
   setLivePanelSourceProvider((udid) => {
+    const ref = axServiceRef(resolveDevice(udid));
+    return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
+  });
+  // The same daemon names the interface orientation, which the tools turn
+  // captures, frames and touches by on an iOS simulator (`utils/ios-ui-orientation.ts`).
+  setUiOrientationSourceProvider((udid) => {
     const ref = axServiceRef(resolveDevice(udid));
     return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
   });
@@ -169,6 +177,7 @@ export function createRegistry(): Registry {
   registry.registerTool(menuBarTool);
   registry.registerTool(createRotateTool(registry));
   registry.registerTool(shakeTool);
+  registry.registerTool(networkConditionsTool);
   registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));
@@ -176,7 +185,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createDebuggerStatusTool(registry));
   registry.registerTool(debuggerEvaluateTool);
   registry.registerTool(debuggerReloadMetroTool);
-  registry.registerTool(createDebuggerComponentTreeTool(registry));
+  registry.registerTool(createDebuggerComponentTreeTool());
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(createDebuggerLogRegistryTool(registry));
   registry.registerTool(networkLogsTool);
