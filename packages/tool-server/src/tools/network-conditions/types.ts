@@ -1,6 +1,5 @@
 import type { ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
-import type { AndroidNetworkShaperApi } from "../../blueprints/android-network-shaper";
 import type { NetworkConditions } from "../../utils/network-conditions";
 
 export interface NetworkConditionsResult {
@@ -12,4 +11,4 @@ export interface NetworkConditionsResult {
 
 export type IosServices = { nativeDevtools: NativeDevtoolsApi };
 export type ChromiumServices = { chromium: ChromiumCdpApi };
-export type AndroidServices = { networkShaper: AndroidNetworkShaperApi };
+export type AndroidServices = Record<string, never>;

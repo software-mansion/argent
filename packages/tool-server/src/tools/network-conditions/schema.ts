@@ -16,7 +16,7 @@ export const networkConditionsZodSchema = z
       .optional()
       .describe("iOS only, and required there: the bundle id of the app to throttle."),
     port: metroPortField.describe(
-      "iOS and Android: the Metro port the throttle leaves alone. Omit it to use this device's port (8081 by default)."
+      "iOS only: the Metro port the throttle leaves alone. Omit it to use this device's port (8081 by default)."
     ),
     latencyMs: z
       .number()
@@ -24,14 +24,21 @@ export const networkConditionsZodSchema = z
       .min(0)
       .max(60_000)
       .optional()
-      .describe("Minimum time in milliseconds from sending a request to its response."),
+      .describe(
+        "Minimum time in milliseconds from sending a request to its response. iOS and Chromium only."
+      ),
     downloadKbps: z
       .number()
       .int()
       .min(1)
       .optional()
-      .describe("Download limit in kilobits per second."),
-    uploadKbps: z.number().int().min(1).optional().describe("Upload limit in kilobits per second."),
+      .describe("Download limit in kilobits per second. iOS and Chromium only."),
+    uploadKbps: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe("Upload limit in kilobits per second. iOS and Chromium only."),
     offline: z
       .boolean()
       .optional()
