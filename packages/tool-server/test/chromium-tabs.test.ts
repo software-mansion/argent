@@ -42,20 +42,23 @@ function tgt(id: string) {
 }
 
 describe("TabsManager", () => {
-  let cdp: { reconnect: ReturnType<typeof vi.fn> };
+  let cdp: { reconnect: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> };
   let onActivated: ReturnType<typeof vi.fn>;
+  let throttled: boolean;
   let mgr: ReturnType<typeof createTabsManager>;
 
   beforeEach(() => {
     browserSend.mockClear();
     listMock.mockReset();
-    cdp = { reconnect: vi.fn(async () => {}) };
+    cdp = { reconnect: vi.fn(async () => {}), send: vi.fn(async () => ({})) };
     onActivated = vi.fn(async () => {});
+    throttled = true;
     mgr = createTabsManager({
       cdp: cdp as never,
       port: 9222,
       initialTargetId: "A",
       onActivated: onActivated as never,
+      networkThrottled: () => throttled,
     });
   });
 
@@ -103,12 +106,102 @@ describe("TabsManager", () => {
   it("open() creates a target via Target.createTarget, activates it, applies label", async () => {
     listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
     const tabs = await mgr.open({ url: "https://x.test", label: "docs" });
-    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", { url: "https://x.test" });
+    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", { url: "about:blank" });
     expect(cdp.reconnect).toHaveBeenCalledWith("ws://127.0.0.1:9222/devtools/page/TID-NEW");
     expect(mgr.activeTargetId()).toBe("TID-NEW");
     const created = tabs.find((t) => t.targetId === "TID-NEW")!;
     expect(created.active).toBe(true);
     expect(created.label).toBe("docs");
+  });
+
+  it("open() loads the url only after the new tab's session is prepared", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+    const order: string[] = [];
+    onActivated.mockImplementation(async () => {
+      order.push("activated");
+    });
+    cdp.send.mockImplementation(async (method: string) => {
+      order.push(method);
+      return {};
+    });
+
+    await mgr.open({ url: "https://x.test" });
+
+    await vi.waitFor(() =>
+      expect(order).toEqual(["activated", "Page.navigate", "Page.resetNavigationHistory"])
+    );
+    expect(cdp.send).toHaveBeenCalledWith(
+      "Page.navigate",
+      { url: "https://x.test", transitionType: "typed" },
+      expect.any(Number)
+    );
+  });
+
+  it("open() retries the history reset until the load has committed", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+    const reset = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Not attached to an active page"))
+      .mockResolvedValue({});
+    cdp.send.mockImplementation(async (method: string) =>
+      method === "Page.resetNavigationHistory" ? reset() : {}
+    );
+
+    await mgr.open({ url: "https://x.test" });
+
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledTimes(2));
+  });
+
+  it("open() returns without waiting for the page to answer", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+    cdp.send.mockImplementation(() => new Promise(() => {}));
+
+    await expect(mgr.open({ url: "https://x.test" })).resolves.toBeDefined();
+  });
+
+  it.each(["", "about:blank"])(
+    "open() reports the requested url for a tab still listed at %j",
+    async (listedUrl) => {
+      listMock.mockResolvedValue([
+        tgt("A"),
+        { ...tgt("TID-NEW"), title: "about:blank", url: listedUrl },
+      ]);
+
+      const tabs = await mgr.open({ url: "https://x.test" });
+
+      expect(tabs.find((t) => t.targetId === "TID-NEW")!.url).toBe("https://x.test");
+    }
+  );
+
+  it("open() hands a url that loads no network page straight to the new tab", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+
+    await mgr.open({ url: "file:///tmp/index.html" });
+
+    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", {
+      url: "file:///tmp/index.html",
+    });
+    expect(cdp.send).not.toHaveBeenCalled();
+  });
+
+  it("open() hands the url straight to the new tab while no network conditions are set", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+    throttled = false;
+
+    await mgr.open({ url: "https://x.test" });
+
+    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", { url: "https://x.test" });
+    expect(cdp.send).not.toHaveBeenCalled();
+    expect(mgr.activeTargetId()).toBe("TID-NEW");
+  });
+
+  it("open() hands the url to a tab it does not activate", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+
+    await mgr.open({ url: "https://x.test", activate: false });
+
+    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", { url: "https://x.test" });
+    expect(cdp.send).not.toHaveBeenCalled();
   });
 
   it("open() explains an Electron refusal instead of passing its bare error through", async () => {
@@ -135,14 +228,38 @@ describe("TabsManager", () => {
     listMock
       .mockResolvedValueOnce([tgt("A"), tgt("B")]) // initial list() to assign ids
       .mockResolvedValueOnce([tgt("A"), tgt("B")]) // close(): resolve ref
-      .mockResolvedValueOnce([tgt("B")]) // close(): remaining after closeTarget
       .mockResolvedValue([tgt("B")]); // final list()
+    const order: string[] = [];
+    cdp.reconnect.mockImplementation(async (url: string) => {
+      order.push(`reconnect ${url}`);
+    });
+    browserSend.mockImplementationOnce(async (method: string) => {
+      order.push(method);
+      return {};
+    });
     await mgr.list();
     const tabs = await mgr.close("t1");
+    expect(order).toEqual(["reconnect ws://127.0.0.1:9222/devtools/page/B", "Target.closeTarget"]);
     expect(browserSend).toHaveBeenCalledWith("Target.closeTarget", { targetId: "A" });
-    expect(cdp.reconnect).toHaveBeenCalledWith("ws://127.0.0.1:9222/devtools/page/B");
     expect(mgr.activeTargetId()).toBe("B");
     expect(tabs.map((t) => t.targetId)).toEqual(["B"]);
+  });
+
+  it("close() leaves out a closed tab that Chrome still lists", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("B")]);
+    await mgr.list();
+    const tabs = await mgr.close("t2");
+    expect(tabs.map((t) => t.tabId)).toEqual(["t1"]);
+  });
+
+  it("close() falls back to a tab it can attach to", async () => {
+    const detached = { ...tgt("B"), webSocketDebuggerUrl: undefined };
+    listMock.mockResolvedValue([tgt("A"), detached, tgt("C")]);
+
+    await mgr.close();
+
+    expect(cdp.reconnect).toHaveBeenCalledWith("ws://127.0.0.1:9222/devtools/page/C");
+    expect(browserSend).toHaveBeenCalledWith("Target.closeTarget", { targetId: "A" });
   });
 });
 

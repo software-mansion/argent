@@ -1,5 +1,11 @@
 import * as fs from "node:fs";
-import { updateConfig, type ConfigPathOptions, type FlagScope } from "@argent/configuration-core";
+import * as path from "node:path";
+import {
+  isHomeDir,
+  updateConfig,
+  type ConfigPathOptions,
+  type FlagScope,
+} from "@argent/configuration-core";
 import { configFilePath } from "./paths.js";
 
 // Consent is evaluated on every track() so a running tool server sees opt-outs.
@@ -91,7 +97,8 @@ function readPersistedConsent(cwd: string): PersistedConsent | null {
   const projectPath = configFilePath("project", { cwd });
   const global = readConfigOverrideAt(globalPath);
   // A project rooted at `~` reads the same file twice; count it once.
-  const project = projectPath === globalPath ? null : readConfigOverrideAt(projectPath);
+  const projectRoot = path.dirname(path.dirname(projectPath));
+  const project = isHomeDir(projectRoot) ? null : readConfigOverrideAt(projectPath);
 
   if (project === false && global === false) {
     return { enabled: false, detail: "config.json (project and global)" };

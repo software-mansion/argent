@@ -426,6 +426,7 @@ function stubService(note: () => Promise<string | undefined>) {
     takeCaptureGap: () => false,
     networkRecords: () => undefined,
     networkCaptureAfterLaunch,
+    setNetworkConditions: async () => {},
     getAppState: async () => {
       throw new Error("not implemented");
     },
