@@ -698,8 +698,8 @@ function describeValue(value) {
   if (value === undefined) return "undefined";
   const type = typeof value;
   if (type === "number") {
-    if (Number.isNaN(value)) return "NaN";
     if (Number.isFinite(value)) return "a number";
+    if (Number.isNaN(value)) return "NaN";
     return value > 0 ? "Infinity" : "-Infinity";
   }
   if (type === "function") return "a function";

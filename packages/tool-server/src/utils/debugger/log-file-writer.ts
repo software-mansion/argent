@@ -58,6 +58,8 @@ export class LogFileWriter {
   private fd: number | null = null;
   private bytesWritten = 0;
   private entryCount = 0;
+  private fileEntryCount = 0;
+  private midLine = false;
   private levelCounts: Record<string, number> = {};
   private clusters = new Map<string, ClusterState>();
   private ready = false;
@@ -66,7 +68,11 @@ export class LogFileWriter {
   constructor(port: number) {
     const timestamp = Date.now();
     const dir = path.join(os.homedir(), ".argent", "tmp");
-    fs.mkdirSync(dir, { recursive: true });
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      // Unwritable ~/.argent: open() fails too and the writer runs fileless.
+    }
     pruneStaleLogs(dir);
     this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}-p${process.pid}.log`);
     liveLogFiles.add(this.filePath);
@@ -109,11 +115,23 @@ export class LogFileWriter {
     // Nothing reopens the file, so a line with no open file is lost: the entry
     // survives only in the counts and clusters.
     if (this.ready && this.fd !== null) {
-      const buf = Buffer.from(line);
-      fs.writeSync(this.fd, buf);
+      try {
+        const bytes = Buffer.from(this.midLine ? `\n${line}` : line);
+        // Positional, so a truncate below never leaves the fd offset past EOF.
+        // Short of the whole line at a file-size limit or on a full disk.
+        const written = fs.writeSync(this.fd, bytes, 0, bytes.length, this.bytesWritten);
+        if (written === bytes.length) {
+          this.bytesWritten += written;
+          this.midLine = false;
+          this.fileEntryCount++;
+        } else {
+          this.dropTornLine(this.fd, bytes, written);
+        }
+      } catch {
+        // Past that limit it throws, and the entry is left to the counts and clusters.
+      }
     }
 
-    this.bytesWritten += Buffer.byteLength(line);
     this.entryCount++;
 
     this.levelCounts[entry.level] = (this.levelCounts[entry.level] || 0) + 1;
@@ -139,8 +157,28 @@ export class LogFileWriter {
     return rich;
   }
 
+  /** A torn line past " | " would parse as a whole entry with its message cut. */
+  private dropTornLine(fd: number, bytes: Buffer, written: number): void {
+    try {
+      fs.ftruncateSync(fd, this.bytesWritten);
+    } catch {
+      // The torn line stays, so the next line must not continue it.
+      this.bytesWritten += written;
+      if (written > 0) this.midLine = bytes[written - 1] !== 0x0a; // "\n"
+    }
+  }
+
   getFilePath(): string {
     return this.filePath;
+  }
+
+  /** Entries whose whole line reached the file; `totalEntries` also counts the rest. */
+  getFileEntryCount(): number {
+    return this.fileEntryCount;
+  }
+
+  hasFile(): boolean {
+    return fs.existsSync(this.filePath);
   }
 
   getStats(): LogStats {

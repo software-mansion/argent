@@ -55,6 +55,11 @@ describe("flow script executor — output validation", () => {
       "output.ratio is Infinity; output numbers must be finite",
     ],
     [
+      "-Infinity",
+      `output.floor = -Infinity;`,
+      "output.floor is -Infinity; output numbers must be finite",
+    ],
+    [
       "a function",
       `output.items = [1, 2, { handler: () => {} }];`,
       "output.items[2].handler is a function; output must be JSON-compatible data",
@@ -145,9 +150,15 @@ describe("flow script executor — output validation", () => {
     expect(result.failure?.message).toBe("output is a string; output must be a plain object");
   });
 
+  it.each(["5", "0", "-3", "1.5"])(
+    "names a finite number replacing output as a number (%s)",
+    async (n) => {
+      const result = await run(`output = ${n};`);
+      expect(result.failure?.message).toBe("output is a number; output must be a plain object");
+    }
+  );
+
   it.each([
-    ["5", "a number"],
-    ["0", "a number"],
     ["new Error('e')", "an Error"],
     ["new ArrayBuffer(1)", "an ArrayBuffer"],
     ["new Int8Array(1)", "an Int8Array"],

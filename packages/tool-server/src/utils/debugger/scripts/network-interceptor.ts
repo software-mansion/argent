@@ -15,6 +15,11 @@
  *
  * The script never modifies a request. Idempotent per JS context.
  */
+
+/** A body of one of these MIME types is not text. The iOS native layer reads the same list. */
+export const BINARY_BODY_TYPES =
+  /^(image\/(?!svg)|audio\/|video\/|font\/|application\/(octet-stream|pdf|zip|gzip|wasm|x-protobuf)$)/;
+
 export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   var g = globalThis;
   if (g.__argent_network_v2) return JSON.stringify({ installed: false, reason: 'already installed' });
@@ -93,7 +98,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   }
 
   // A body of one of these types is not text: its size is recorded and it is not read as text.
-  var BINARY_TYPES = /^(image\\/(?!svg)|audio\\/|video\\/|font\\/|application\\/(octet-stream|pdf|zip|gzip|wasm|x-protobuf)$)/;
+  var BINARY_TYPES = ${BINARY_BODY_TYPES};
   function isBinaryType(mime) {
     return typeof mime === 'string' && BINARY_TYPES.test(mime.toLowerCase());
   }

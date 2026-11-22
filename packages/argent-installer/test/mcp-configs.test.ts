@@ -164,6 +164,12 @@ describe("isArgentManagedEntry", () => {
       })
     ).toBe(true);
     expect(isArgentManagedEntry({ command: "yarn", args: ["argent", "mcp"] })).toBe(true);
+    expect(
+      isArgentManagedEntry({
+        command: "/opt/homebrew/bin/node",
+        args: ["/opt/homebrew/lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(true);
     // The shape argent itself wrote up to v0.9.x (env dropped in 0.10 by
     // #238): still argent-authored, still repairable.
     expect(
@@ -197,6 +203,25 @@ describe("isArgentManagedEntry", () => {
     expect(isArgentManagedEntry({ command: "", args: [] })).toBe(false);
     expect(isArgentManagedEntry(null)).toBe(false);
     expect(isArgentManagedEntry({ command: "docker", args: ["run", "argent", "mcp"] })).toBe(false);
+    // Near misses of the absolute-path global pin.
+    const absCli = "/usr/lib/node_modules/@swmansion/argent/dist/cli.js";
+    expect(isArgentManagedEntry({ command: "/usr/bin/node", args: [absCli, "mcp", "--x"] })).toBe(
+      false
+    );
+    expect(isArgentManagedEntry({ command: "/usr/bin/bun", args: [absCli, "mcp"] })).toBe(false);
+    expect(isArgentManagedEntry({ command: "node", args: [absCli, "mcp"] })).toBe(false);
+    expect(
+      isArgentManagedEntry({
+        command: "/usr/bin/node",
+        args: ["/Users/me/dev/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(false);
+    expect(
+      isArgentManagedEntry({
+        command: "/usr/bin/node",
+        args: ["../node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(false);
   });
 });
 
