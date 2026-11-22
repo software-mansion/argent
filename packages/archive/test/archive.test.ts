@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -295,6 +295,75 @@ describe.each(ARCHIVE_FORMATS)("createArchiveFile (%s)", (format) => {
 });
 
 describe("safeExtractArchive input", () => {
+  it("rejects with the original reason before extraction", async () => {
+    const reason = new Error("cancelled");
+    await expect(
+      safeExtractArchive(
+        path.join(tmpDir, "missing"),
+        tmpDir,
+        "Bundle.app",
+        AbortSignal.abort(reason)
+      )
+    ).rejects.toBe(reason);
+    await expect(fs.stat(path.join(tmpDir, "Bundle.app"))).rejects.toThrow();
+  });
+
+  it.each(["-t", "-tv"])(
+    "stops tar on %s without starting -x or removing an existing member",
+    async (pass) => {
+      const archivePath = path.join(tmpDir, "small.archive");
+      await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "zstd"));
+      const dest = await fs.mkdtemp(path.join(tmpDir, "dest-"));
+      await fs.mkdir(path.join(dest, "Bundle.app"));
+      await fs.writeFile(path.join(dest, "Bundle.app", "cached"), "keep");
+      const listed = path.join(tmpDir, "listed");
+      const extracted = path.join(tmpDir, "extracted");
+      await tarOnPath(
+        [
+          `[ "$1" = -x ] && touch "${extracted}"`,
+          `if [ "$1" = ${pass} ]; then touch "${listed}"; exec sleep 30; fi`,
+          UNREADING_TAR,
+        ].join("\n")
+      );
+      const started = performance.now();
+      await expect(
+        safeExtractArchive(archivePath, dest, "Bundle.app", AbortSignal.timeout(300))
+      ).rejects.toMatchObject({ name: "TimeoutError" });
+      expect(performance.now() - started).toBeLessThan(5_000);
+      expect(existsSync(listed)).toBe(true);
+      expect(existsSync(extracted)).toBe(false);
+      expect(await fs.readFile(path.join(dest, "Bundle.app", "cached"), "utf8")).toBe("keep");
+    }
+  );
+
+  it("waits for tar to close before rejecting an interrupted extraction", async () => {
+    const archivePath = path.join(tmpDir, "small.archive");
+    await fs.writeFile(archivePath, compress(Buffer.alloc(10240), "gzip"));
+    const ready = path.join(tmpDir, "extracting");
+    const stopped = path.join(tmpDir, "stopped");
+    await tarOnPath(
+      [
+        UNREADING_TAR,
+        'if [ "$1" = -x ]; then',
+        `  trap 'sleep 0.2; touch "${stopped}"; exit 0' TERM`,
+        `  touch "${ready}"`,
+        "  while :; do sleep 0.05; done",
+        "fi",
+      ].join("\n")
+    );
+
+    const controller = new AbortController();
+    const reason = new Error("cancelled during extraction");
+    const extraction = safeExtractArchive(archivePath, tmpDir, "Bundle.app", controller.signal);
+    try {
+      await vi.waitFor(() => expect(existsSync(ready)).toBe(true));
+    } finally {
+      controller.abort(reason);
+      await expect(extraction).rejects.toBe(reason);
+    }
+    expect(existsSync(stopped)).toBe(true);
+  });
+
   it("extracts a gzipped tar written by the system tar", async () => {
     await fs.mkdir(path.join(tmpDir, "Legacy.app"));
     await fs.writeFile(path.join(tmpDir, "Legacy.app", "Info.plist"), "<plist/>");

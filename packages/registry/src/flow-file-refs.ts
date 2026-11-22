@@ -87,6 +87,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * The text the runner hands the YAML parser for a flow file: whitespace around
+ * the content is dropped, but the line breaks before it are kept, so a parse
+ * error names the file's own line.
+ */
+export function flowYamlSource(content: string): string {
+  return content.replace(/^\s+/, (lead) => lead.replace(/[^\n]/g, "")).trimEnd();
+}
+
+/**
  * The project files a parsed flow document makes the runner read: the `run:`
  * targets of its steps and of the steps of its block directives (`when:`),
  * taken or not, spelled as the runner keeps them (extension completed), the

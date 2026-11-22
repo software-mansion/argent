@@ -322,6 +322,18 @@ describe("a run: fragment with requirements", () => {
     );
   });
 
+  it("quotes a fragment path that holds a newline on one line", async () => {
+    await fs.mkdir(path.join(tmpDir, ".argent", "e2e", "sub\nx"), { recursive: true });
+    await writeFlow("sub\nx/android-part", { requires: { platform: ["android"] } });
+    await writeFlow("root", { steps: [{ kind: "run", flow: "sub\nx/android-part" }, TAP] });
+    const { registry } = mockRegistry([ios(IOS)]);
+    const result = await run(registry, "root");
+    expect(result.steps[0].reason).toMatch(
+      /^Fragment "sub\\nx\/android-part.yaml" declares requires: \{ platform: \[android\] \}, which excludes device /
+    );
+    expect(result.steps[0].reason).not.toContain("\n");
+  });
+
   it("runs when the run device meets them", async () => {
     await writeFlow("ios-part", { requires: { platform: ["ios"] } });
     await writeFlow("root", { steps: [{ kind: "run", flow: "ios-part" }] });
