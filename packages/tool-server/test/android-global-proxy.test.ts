@@ -17,7 +17,8 @@ import {
 const SERIAL = "emulator-5554";
 const MARKER = "/data/local/tmp/argent-network-proxy";
 
-const APPLIED_PORT_READ = "settings get global global_http_proxy_port";
+const APPLIED_READ =
+  "settings get global global_http_proxy_host; settings get global global_http_proxy_port";
 
 function deviceState(host: string, port: string, marker = "", setting = "null"): void {
   vi.mocked(adbShell).mockResolvedValueOnce(
@@ -25,8 +26,16 @@ function deviceState(host: string, port: string, marker = "", setting = "null"):
   );
 }
 
-function appliedPortReads(...ports: string[]): void {
-  for (const port of ports) vi.mocked(adbShell).mockResolvedValueOnce(`${port}\n`);
+function appliedReads(...proxies: string[]): void {
+  const reads = proxies.map((proxy) => `${proxy.replace(":", "\n")}\n`);
+  vi.mocked(adbShell).mockImplementation(async (_serial, command) =>
+    command === APPLIED_READ ? (reads.length > 1 ? reads.shift()! : reads[0]!) : ""
+  );
+}
+
+function markerWritten(): string {
+  const command = writes().find((written) => written.startsWith("echo "))!;
+  return command.slice("echo ".length, command.indexOf(" >"));
 }
 
 function writes(): string[] {
@@ -63,39 +72,91 @@ describe("parseGlobalProxyState", () => {
     expect(parseGlobalProxyState(output).active).toBe(active);
   });
 
-  it("reads the marker as the proxy Argent set", () => {
-    expect(parseGlobalProxyState("null\nnull\nnull\n10.0.2.2:50000\n").argent).toBe(
-      "10.0.2.2:50000"
-    );
+  it("reads the marker as the proxies Argent set", () => {
+    expect(
+      parseGlobalProxyState("null\nnull\nnull\n10.0.2.2:41000 10.0.2.2:50000\n").argent
+    ).toEqual(["10.0.2.2:41000", "10.0.2.2:50000"]);
   });
 });
 
 describe("setArgentProxy", () => {
-  it("writes the marker before it points the emulator at the proxy", async () => {
+  it("writes the marker before it points the emulator at the proxy and waits for Android to apply it", async () => {
     deviceState("null", "null");
+    appliedReads("null:null", "10.0.2.2:50000");
 
     await setArgentProxy(SERIAL, 50000);
 
     expect(writes()).toEqual([
       `echo 10.0.2.2:50000 > ${MARKER}`,
       "settings put global http_proxy 10.0.2.2:50000",
+      APPLIED_READ,
+      APPLIED_READ,
     ]);
   });
 
-  it("replaces the proxy a crashed tool-server left", async () => {
+  it("replaces the proxy a crashed tool-server left and then forgets the old one", async () => {
     deviceState("10.0.2.2", "41000", "10.0.2.2:41000");
+    appliedReads("10.0.2.2:50000");
 
     await setArgentProxy(SERIAL, 50000);
 
-    expect(writes()).toContain("settings put global http_proxy 10.0.2.2:50000");
+    expect(writes()).toEqual([
+      `echo 10.0.2.2:41000 10.0.2.2:50000 > ${MARKER}`,
+      "settings put global http_proxy 10.0.2.2:50000",
+      APPLIED_READ,
+      `echo 10.0.2.2:50000 > ${MARKER}`,
+    ]);
   });
 
-  it("changes nothing when the emulator already uses this proxy", async () => {
-    deviceState("10.0.2.2", "50000", "10.0.2.2:50000");
+  it("still removes the old proxy after a replacement that failed midway", async () => {
+    deviceState("10.0.2.2", "41000", "10.0.2.2:41000");
+    vi.mocked(runAdb).mockRejectedValueOnce(new Error("device offline"));
+    await expect(setArgentProxy(SERIAL, 50000)).rejects.toThrow("device offline");
+    const marker = markerWritten();
+
+    vi.mocked(adbShell).mockReset().mockResolvedValue("");
+    vi.mocked(runAdb).mockClear();
+    deviceState("10.0.2.2", "41000", marker);
+    appliedReads("10.0.2.2:0");
+    await clearArgentProxy(SERIAL);
+
+    expect(writes()).toContain("settings put global http_proxy :0");
+  });
+
+  it("retries a replacement that failed midway", async () => {
+    deviceState("10.0.2.2", "41000", "10.0.2.2:41000");
+    vi.mocked(runAdb).mockRejectedValueOnce(new Error("device offline"));
+    await expect(setArgentProxy(SERIAL, 50000)).rejects.toThrow("device offline");
+    const marker = markerWritten();
+
+    vi.mocked(adbShell).mockReset().mockResolvedValue("");
+    vi.mocked(runAdb).mockClear();
+    deviceState("10.0.2.2", "41000", marker);
+    appliedReads("10.0.2.2:50000");
+
+    await expect(setArgentProxy(SERIAL, 50000)).resolves.toBeUndefined();
+  });
+
+  it("only waits for Android to apply a proxy it already asked for", async () => {
+    deviceState("null", "null", "10.0.2.2:50000", "10.0.2.2:50000");
+    appliedReads("null:null", "10.0.2.2:50000");
 
     await setArgentProxy(SERIAL, 50000);
 
-    expect(writes()).toEqual([]);
+    expect(writes()).toEqual([APPLIED_READ, APPLIED_READ]);
+  });
+
+  it("fails when Android does not apply the proxy in time", async () => {
+    deviceState("null", "null");
+    vi.mocked(adbShell).mockResolvedValue("null\nnull\n");
+    vi.useFakeTimers();
+    try {
+      const set = setArgentProxy(SERIAL, 50000).catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(String(await set)).toMatch(/did not apply it within 5 s/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -114,14 +175,14 @@ describe("setArgentProxy", () => {
 describe("clearArgentProxy", () => {
   it("deletes the settings only after the device has applied the removal", async () => {
     deviceState("10.0.2.2", "41000", "10.0.2.2:41000");
-    appliedPortReads("41000", "0");
+    appliedReads("10.0.2.2:41000", "10.0.2.2:0");
 
     await clearArgentProxy(SERIAL);
 
     expect(writes()).toEqual([
       "settings put global http_proxy :0",
-      APPLIED_PORT_READ,
-      APPLIED_PORT_READ,
+      APPLIED_READ,
+      APPLIED_READ,
       "settings delete global http_proxy; settings delete global global_http_proxy_host; " +
         "settings delete global global_http_proxy_port; settings delete global global_http_proxy_exclusion_list",
       `rm -f ${MARKER}`,
@@ -130,7 +191,7 @@ describe("clearArgentProxy", () => {
 
   it("removes a proxy the device has not copied to its host and port yet", async () => {
     deviceState("null", "null", "10.0.2.2:41000", "10.0.2.2:41000");
-    appliedPortReads("0");
+    appliedReads("null:0");
 
     await clearArgentProxy(SERIAL);
 
@@ -149,7 +210,7 @@ describe("clearArgentProxy", () => {
       vi.useRealTimers();
     }
 
-    const commands = writes().filter((command) => command !== APPLIED_PORT_READ);
+    const commands = writes().filter((command) => command !== APPLIED_READ);
     expect(commands).toEqual(["settings put global http_proxy :0"]);
   });
 

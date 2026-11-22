@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import * as net from "node:net";
-import type { Duplex } from "node:stream";
+import { Readable, type Duplex } from "node:stream";
 import { LinkDirection, ShapedLink } from "../src/utils/shaped-link";
 
 const LATENCY_MS = 300;
@@ -221,6 +221,104 @@ describe("ShapedLink", () => {
     await new Promise((resolve) => device.once("end", resolve));
 
     expect(received).toBe(100_000);
+  });
+
+  it("delivers the whole response to a device that half-closed and reads slowly", async () => {
+    const chunks = Array.from({ length: 256 }, () => Buffer.alloc(64 * 1024, 97));
+    const { link, port } = await startShapedServer((shaped) => {
+      shaped.resume();
+      shaped.on("end", () => Readable.from(chunks).pipe(shaped));
+    });
+    link.setConditions({ latencyMs: 100 });
+    const device = await connectDevice(port);
+    device.pause();
+    device.end();
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    let received = 0;
+    device.on("data", (chunk: Buffer) => (received += chunk.length));
+    device.resume();
+    await new Promise((resolve) => device.once("end", resolve));
+
+    expect(received).toBe(16 * 1024 * 1024);
+  });
+
+  it("keeps its own copy of the bytes it still holds after the write callback", async () => {
+    const { link, port } = await startShapedServer((shaped) => {
+      const chunk = Buffer.from("first");
+      shaped.write(chunk, () => chunk.fill("x"));
+    });
+    link.setConditions({ latencyMs: 200 });
+    const device = await connectDevice(port);
+
+    const received = await new Promise<string>((resolve) =>
+      device.once("data", (chunk: Buffer) => resolve(chunk.toString()))
+    );
+
+    expect(received).toBe("first");
+  });
+
+  it("gives the speed limit a destroyed connection did not use to a new connection", async () => {
+    let connections = 0;
+    const { link, port } = await startShapedServer((shaped) => {
+      if (connections++ > 0) {
+        shaped.write("a");
+        return;
+      }
+      shaped.write(Buffer.alloc(32 * 1024));
+      shaped.destroy();
+    });
+    link.setConditions({ downloadKbps: 128 });
+    const cancelled = await connectDevice(port);
+    cancelled.resume();
+    await new Promise((resolve) => cancelled.once("end", resolve));
+
+    const started = performance.now();
+    const device = await connectDevice(port);
+    await new Promise((resolve) => device.once("data", resolve));
+
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it("gives the speed limit a destroyed connection did not use to a connection queued behind it", async () => {
+    const servers: Duplex[] = [];
+    const { link, port } = await startShapedServer((shaped) => servers.push(shaped));
+    link.setConditions({ downloadKbps: 128 });
+    const cancelled = await connectDevice(port);
+    const device = await connectDevice(port);
+    cancelled.resume();
+    await waitFor(() => servers.length === 2);
+
+    servers[0]!.write(Buffer.alloc(32 * 1024));
+    servers[1]!.write("a");
+    const started = performance.now();
+    servers[0]!.destroy();
+    await new Promise((resolve) => device.once("data", resolve));
+
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it("keeps a download going while other connections open and close", async () => {
+    let downloads = 0;
+    const { link, port } = await startShapedServer((shaped) => {
+      if (downloads++ === 0) shaped.write(Buffer.alloc(64 * 1024));
+      shaped.on("end", () => shaped.end());
+      shaped.resume();
+    });
+    link.setConditions({ downloadKbps: 128 });
+    const device = await connectDevice(port);
+    let received = 0;
+    device.on("data", (chunk: Buffer) => (received += chunk.length));
+
+    const churnUntil = performance.now() + 2_500;
+    while (performance.now() < churnUntil) {
+      const other = await connectDevice(port);
+      other.resume();
+      other.end();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+
+    expect(received).toBeGreaterThanOrEqual(32 * 1024);
   });
 
   it.each([null, { latencyMs: 200 }])(

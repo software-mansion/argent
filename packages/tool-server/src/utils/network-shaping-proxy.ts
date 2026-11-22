@@ -51,10 +51,28 @@ export function requestLineTarget(line: string): ProxyTarget | null {
   return method === "CONNECT" ? parseAuthority(target) : httpTarget(URL.parse(target));
 }
 
+function connectionOptions(headers: http.IncomingHttpHeaders): string[] {
+  return (headers.connection ?? "").split(",").map((name) => name.trim().toLowerCase());
+}
+
 function forwardedHeaders(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
-  return Object.fromEntries(
-    Object.entries(headers).filter(([name]) => !HOP_BY_HOP_HEADERS.has(name))
-  );
+  const dropped = new Set([...HOP_BY_HOP_HEADERS, ...connectionOptions(headers)]);
+  return Object.fromEntries(Object.entries(headers).filter(([name]) => !dropped.has(name)));
+}
+
+function earlyHints(headers: http.IncomingHttpHeaders): Record<string, string | string[]> {
+  const hints = forwardedHeaders(headers) as Record<string, string | string[]>;
+  const { link } = hints;
+  return typeof link === "string" ? { ...hints, link: link.split(/,\s*(?=<)/) } : hints;
+}
+
+function relayEarlyHints(info: http.InformationEvent, res: http.ServerResponse): void {
+  if (info.statusCode !== 103) return;
+  try {
+    res.writeEarlyHints(earlyHints(info.headers));
+  } catch {
+    // Node rejects a Link value it cannot parse; the final response still follows.
+  }
 }
 
 function originRequestHead(req: http.IncomingMessage, path: string): string {
@@ -98,6 +116,7 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
     options.resolveTarget(target.host, target.port).catch(() => null);
 
   const relayResponse = (upstream: http.ClientRequest, res: http.ServerResponse): void => {
+    upstream.on("information", (info) => relayEarlyHints(info, res));
     upstream.on("response", (response) => {
       try {
         const headers = forwardedHeaders(response.headers);
