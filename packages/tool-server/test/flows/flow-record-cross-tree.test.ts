@@ -1487,11 +1487,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // The cap ELIDES THE MIDDLE: the note about a dark final poll lives at the END.
   it("keeps the tail of an over-long reason, where the final-poll note lives", async () => {
     const wall = "Lorem ipsum dolor sit amet ".repeat(60);
-    // Trusted reads keep the condition false, then the source dies on the last
-    // poll. That tail is inside CONDITION_DARK_TAIL_TOLERANCE_MS, so it stays firm.
+    // Trusted reads keep the condition false until 600ms, then the source dies
+    // for the last 400ms of the window: past one poll interval, inside
+    // CONDITION_DARK_TAIL_TOLERANCE_MS, so it stays firm.
     const probeStartedAt = Date.now();
     fetchRunnerTree = async () => {
-      if (Date.now() - probeStartedAt > 900) throw new Error("native devtools went away");
+      if (Date.now() - probeStartedAt >= 900) throw new Error("native devtools went away");
       return { tree: iosRunnerTree([iosLabel(`Total ${wall}`)]), source: "native-devtools" };
     };
     await startRecording("tail");

@@ -312,6 +312,29 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     expect(result.steps[0].reason).not.toMatch(/no element matched/);
   });
 
+  it("lands the final poll on the deadline, not a poll interval past it", async () => {
+    // The dark tail runs to the final poll, so the last sleep is clamped to the
+    // deadline: unclamped, the 300ms polls of a 1000ms window end at 1200ms.
+    const readsAt: number[] = [];
+    currentFetch = () => {
+      readsAt.push(Date.now());
+      return {
+        tree: screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+
+    await writeFlow("clamped-await", {
+      executionPrerequisite: "",
+      steps: [{ kind: "await", condition: "exists", selector: { text: "Done" }, timeout: 1000 }],
+    });
+
+    const result = await run("clamped-await");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(readsAt.at(-1)! - readsAt[0]!).toBeLessThan(1_200);
+  });
+
   it("assert text: does not quote stale element text from before the reads went dark", async () => {
     // Read 1 sees the banner saying "Loading"; then the source dies. Quoting
     // `its text was "Loading"` at the deadline would present a first-poll
