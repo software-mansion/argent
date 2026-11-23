@@ -301,7 +301,7 @@ On a React Native Mac app, use `view-network-logs` for JavaScript requests and `
 | `layer`           | Use `js` for the JS runtime or `native` for the native layer. Omit to control all supported layers. On Chromium, each call acts on the `chromium` layer.                                                                                             |
 | `logicalDeviceId` | Only for a Metro server that two or more devices use. The `logicalDeviceId` of the device on this Metro server. See [Several devices on one Metro server](#several-devices-on-one-metro-server).                                                     |
 
-On a Mac app, `layer` works as on iOS. The `js` layer reaches the app through Metro. Thus it also captures a React Native app that Argent did not start. An example is a build with the hardened runtime that you start from Xcode. The `macos-native` layer captures only a copy of the app that Argent starts. For a build that Argent does not start, the start reports the `macos-native` layer as unavailable. The reasons are in the table under [Start](#start).
+On a Mac app, `layer` works as on iOS. The `js` layer reaches the app through Metro. Thus it also captures a React Native app that Argent did not start. An example is a build with the hardened runtime that you start from Xcode. The `macos-native` layer captures only a copy of the app that Argent starts. For a build that Argent cannot start, for example a build with the hardened runtime, the start reports the `macos-native` layer as unavailable. A copy that Argent did not start can run from a build that Argent can start, for example a Debug build that you start from Xcode. Then the `macos-native` layer is not armed, and its `reason` tells you to quit this copy. The reasons are in the table under [Start](#start).
 
 #### One layer
 
@@ -362,11 +362,17 @@ A native layer that is not armed often arms later without a new start. For examp
 | `android-native` | The app did not run at the start. `launch-app` or `restart-app` attaches the in-app agent to its next process.                               | absent        |
 | `android-native` | The in-app agent captures no requests in this process, for example because R8 fully minified OkHttp.                                         | `true`        |
 | `macos-native`   | The app is an Apple app. Argent does not load its library into an Apple app.                                                                 | `true`        |
-| `macos-native`   | Argent does not start the app: an Electron app, or a build that the hardened runtime keeps the library out of.                               | `true`        |
+| `macos-native`   | Argent cannot start the app: an Electron app, or a build that the hardened runtime keeps the library out of. See the list below the table.   | `true`        |
 | `macos-native`   | The app does not run. `boot-device`, `launch-app` or `restart-app` starts it, and Argent arms its process.                                   | absent        |
-| `macos-native`   | A copy of the app that Argent did not start runs. The reason gives its process ID. Quit this copy, then start the app with Argent.           | absent        |
+| `macos-native`   | A copy that Argent did not start runs a build Argent can start. The reason gives its process ID. Quit it, then start the app with Argent.    | absent        |
 | `macos-native`   | No copy that Argent started runs. Argent cannot find the app build, so it cannot find other copies. Use `boot-device` with `macosAppPath`.   | absent        |
 | `chromium`       | Argent cannot reach the app over the Chrome DevTools Protocol.                                                                               | `true`        |
+
+To find a Mac app build that the hardened runtime keeps the library out of, Argent checks one build of the app:
+
+- The build that Argent started last.
+- If Argent did not start the app, the build of a copy that runs. An example is a Release build that you open in the Finder.
+- If Argent did not start the app and no copy runs, Argent checks no build. Spotlight finds a build, but you can start a different build, for example a Debug build.
 
 On iOS, Argent cannot tell an app that does not run from an app that is not installed. Thus the `ios-native` reason that tells you to call `restart-app` also says this: if `restart-app` cannot start the app, the bundle ID is not installed on the simulator.
 
@@ -380,7 +386,7 @@ When two or more devices use one Metro server, Argent cannot find the JS runtime
 
 The `js` layer uses `logicalDeviceId`. The native layer always uses `udid`, so a call with `layer: "native"` does not use `logicalDeviceId`. A stop without `logicalDeviceId` does not stop the `js` layer that a start with `logicalDeviceId` started. The result of such a stop gives the `js` layer `armed: true`. Its `reason` tells the agent to call `network-capture-stop` again with the `logicalDeviceId`. `stop-all-simulator-servers` with `udid` in `devices` does not stop it either: also put the `logicalDeviceId` in `devices`. Alternatively, give each device its own Metro port.
 
-When all layers that the call starts are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each of these layers. A start with `layer` fails when its layer is unavailable, also when the other layer can capture. An Apple app runs no React Native JS. Thus on iOS and on a Mac app, both layers of an Apple app are unavailable. A start for an Apple app always fails. On a Mac app, a start without `layer` for a React Native build that Argent does not start succeeds when the `js` layer can capture. When the native layer is unavailable because Argent cannot find `adb` or the Xcode command-line tools, the error is `TOOL_DEPENDENCY_MISSING`. On a remote iOS simulator, both layers use `sim-remote`. Without `sim-remote`, the start fails with the error `TOOL_DEPENDENCY_MISSING` before it starts a layer.
+When all layers that the call starts are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each of these layers. A start with `layer` fails when its layer is unavailable, also when the other layer can capture. An Apple app runs no React Native JS. Thus on iOS and on a Mac app, both layers of an Apple app are unavailable. A start for an Apple app always fails. On a Mac app, a start without `layer` for a React Native build that Argent cannot start succeeds when the `js` layer can capture. When the native layer is unavailable because Argent cannot find `adb` or the Xcode command-line tools, the error is `TOOL_DEPENDENCY_MISSING`. On a remote iOS simulator, both layers use `sim-remote`. Without `sim-remote`, the start fails with the error `TOOL_DEPENDENCY_MISSING` before it starts a layer.
 
 A second call of `network-capture-start` keeps the requests that Argent recorded.
 
@@ -486,14 +492,14 @@ In the first two cases, for an ID from `view-network-logs`, `view-network-reques
 
 The `header` line of `native-network-logs` gives one of these states after the name of the layer:
 
-| State          | Meaning                                                                                                                                                                                                                                       |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `armed`        | The capture is ready in the current process of the app.                                                                                                                                                                                       |
-| `not armed`    | The capture is started, but it is not ready. The `header` line gives the reason.                                                                                                                                                              |
-| `not attached` | Android only. A process of the app with the in-app agent ended. The current process has no in-app agent, or the app exited.                                                                                                                   |
-| `stopped`      | `network-capture-stop` stopped the capture. The list contains the requests from before the stop.                                                                                                                                              |
-| `not started`  | No capture is started for the app, or `stop-all-simulator-servers` ended it. On a Mac app, `stop-simulator-server` also ends it. The list is empty.                                                                                           |
-| `unavailable`  | The last start found that Argent cannot capture the app. Examples: an Android build that is not debuggable, an `adb` that Argent cannot find, or a Mac app that Argent does not start. The `header` line gives the reason. The list is empty. |
+| State          | Meaning                                                                                                                                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `armed`        | The capture is ready in the current process of the app.                                                                                                                                                                                     |
+| `not armed`    | The capture is started, but it is not ready. The `header` line gives the reason.                                                                                                                                                            |
+| `not attached` | Android only. A process of the app with the in-app agent ended. The current process has no in-app agent, or the app exited.                                                                                                                 |
+| `stopped`      | `network-capture-stop` stopped the capture. The list contains the requests from before the stop.                                                                                                                                            |
+| `not started`  | No capture is started for the app, or `stop-all-simulator-servers` ended it. On a Mac app, `stop-simulator-server` also ends it. The list is empty.                                                                                         |
+| `unavailable`  | The last start found that Argent cannot capture the app. Examples: an Android build that is not debuggable, an `adb` that Argent cannot find, or a Mac app that Argent cannot start. The `header` line gives the reason. The list is empty. |
 
 When the expression of `debugger-evaluate` returns a Promise, Argent waits up to 10 seconds and returns the value it resolves to. A rejection fails the call with the reason. On Vega and on React Native 0.75 and older, the result is the internal fields of the Promise.
 
