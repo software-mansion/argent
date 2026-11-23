@@ -1,5 +1,3 @@
-import * as os from "os";
-import * as path from "path";
 import { promises as fs } from "fs";
 import { spawn } from "child_process";
 import type { LivePanel } from "../../utils/foldable";
@@ -21,6 +19,7 @@ import {
   statNonEmptyOutput,
   type StartRecordingResult,
   type StopRecordingFile,
+  recordingOutputPath,
 } from "./session-guards";
 import {
   buildWatermarkGraph,
@@ -430,10 +429,7 @@ export async function startCapture(
   // start or stop is rejected instead of racing this one through the async
   // connect/spawn window; the finally clears it on every exit.
   api.startPending = true;
-  const outputFile = path.join(
-    os.tmpdir(),
-    `argent-screen-recording-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
-  );
+  const outputFile = recordingOutputPath(api.deviceId);
   try {
     if (params.server) {
       return await startServerCapture(api, { ...params, server: params.server, outputFile });

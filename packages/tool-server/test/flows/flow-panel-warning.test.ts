@@ -36,11 +36,12 @@ function screen(children: DescribeNode[]): DescribeNode {
  * A registry whose gesture tools answer like the real ones on a foldable whose
  * panel could not be resolved (`warning` on the result), or plainly.
  */
-function mockRegistry(warn: boolean, calls: string[]): Registry {
+function mockRegistry(warn: boolean | (() => string), calls: string[]): Registry {
   return {
     invokeTool: vi.fn(async (id: string) => {
       if (id === "list-devices") return { devices: [] };
       calls.push(id);
+      if (typeof warn === "function") return { ok: true, warning: warn() };
       return warn ? { ok: true, warning: WARNING } : { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -57,7 +58,10 @@ async function writeFlow(name: string, steps: FlowStep[]): Promise<void> {
   );
 }
 
-async function run(name: string, warn: boolean): Promise<FlowRunResult & { calls: string[] }> {
+async function run(
+  name: string,
+  warn: boolean | (() => string)
+): Promise<FlowRunResult & { calls: string[] }> {
   const calls: string[] = [];
   const tool = createRunFlowTool(mockRegistry(warn, calls));
   const result = await tool.execute({}, { name, project_root: tmpDir, device: DEVICE });
@@ -107,6 +111,31 @@ describe("a gesture tool's panel warning reaches the flow step report", () => {
     expect(warned.steps[0]!.status).toBe("fail");
     expect(warned.steps[0]!.reason).toContain("reached the end of the scroll");
     expect(warned.steps[0]!.warning).toContain("could not be resolved");
+  });
+
+  it("keeps scrolling after a warned increment and reports that warning", async () => {
+    let swipes = 0;
+    currentTree = () =>
+      screen([
+        n({ label: `Row ${swipes}`, frame: { x: 0, y: 0.1, width: 1, height: 0.1 } }),
+        ...(swipes >= 3
+          ? [n({ label: "Target", frame: { x: 0, y: 0.5, width: 1, height: 0.1 } })]
+          : []),
+      ]);
+    await writeFlow("scroll-far", [
+      { kind: "scroll-to", target: { text: "Target" }, direction: "down" },
+    ]);
+    const warned = await run("scroll-far", () => `${WARNING} (swipe ${++swipes})`);
+    expect(warned.calls).toEqual(["gesture-swipe", "gesture-swipe", "gesture-swipe"]);
+    expect(warned.steps[0]).toMatchObject({ status: "pass", warning: `${WARNING} (swipe 1)` });
+  });
+
+  it("dispatches every gesture of a chained pinch after a warned one and reports the first warning", async () => {
+    await writeFlow("pinch-20", [{ kind: "pinch", scale: 20 }]);
+    let pinches = 0;
+    const warned = await run("pinch-20", () => `${WARNING} (pinch ${++pinches})`);
+    expect(warned.calls).toEqual(["gesture-pinch", "gesture-pinch", "gesture-pinch"]);
+    expect(warned.steps[0]).toMatchObject({ status: "pass", warning: `${WARNING} (pinch 1)` });
   });
 
   it("leaves a step without a warning when the tool had none", async () => {
