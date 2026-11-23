@@ -12,7 +12,13 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
 import { unchangedTreeNote } from "../src/unchanged-tree.js";
-import { setFlag } from "@argent/configuration-core";
+import {
+  getWhatsNewSeenVersion,
+  setFlag,
+  setWhatsNewSeenVersion,
+  unsetFlag,
+} from "@argent/configuration-core";
+import { getInstalledVersion } from "../src/installed-version.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -35,6 +41,7 @@ beforeAll(async () => {
   vi.resetModules();
   ({ startMcpServer } = await import("../src/mcp-server.js"));
   toolsClient = await import("@argent/tools-client");
+  setWhatsNewSeenVersion(getInstalledVersion());
 });
 
 afterAll(() => {
@@ -475,6 +482,45 @@ describe("startMcpServer tool calls", () => {
     expect(content[0]).toEqual({ type: "text", text: "a note" });
     expect(textOf(result)).toContain('"ok": true');
   });
+
+  it("tells the agent what is new on the first call after an update, and only then", async () => {
+    const version = getInstalledVersion();
+    setWhatsNewSeenVersion("0.0.1");
+    try {
+      const first = await client.callTool({ name: "noted", arguments: {} });
+      const second = await client.callTool({ name: "noted", arguments: {} });
+
+      const firstContent = first.content as Array<{ type: string; text?: string }>;
+      expect(firstContent.at(-1)?.text).toMatch(
+        new RegExp(`^Argent was updated to v${version} before this session\\.`)
+      );
+      expect(textOf(second)).not.toContain("Argent was updated");
+      expect(getWhatsNewSeenVersion()).toBe(version);
+    } finally {
+      setWhatsNewSeenVersion(version);
+    }
+  });
+
+  it("sends no what's new note when the whats-new flag is off", async () => {
+    const version = getInstalledVersion();
+    setWhatsNewSeenVersion("0.0.1");
+    setFlag("whats-new", false, "global", { homeDir: TEST_HOME });
+    try {
+      const other = await connect({
+        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+        simulatorServerDir: "",
+        nativeDevtoolsDir: "",
+      });
+      const result = await other.callTool({ name: "noted", arguments: {} });
+      await other.close();
+
+      expect(textOf(result)).not.toContain("Argent was updated");
+      expect(getWhatsNewSeenVersion()).toBe("0.0.1");
+    } finally {
+      unsetFlag("whats-new", "global", { homeDir: TEST_HOME });
+      setWhatsNewSeenVersion(version);
+    }
+  });
 });
 
 describe("startMcpServer tool listing per client", () => {
@@ -546,14 +592,19 @@ describe("startMcpServer tool listing per client", () => {
 describe("startMcpServer screen capture after an interaction", () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
   const CAPTURE_LISTING = {
-    tools: ["gesture-tap", "await-ui-element", "await-screen-idle", "screenshot", "describe"].map(
-      (name) => ({
-        name,
-        description: name,
-        inputSchema: { type: "object", properties: {} },
-        ...(name === "screenshot" ? { outputHint: "image" } : {}),
-      })
-    ),
+    tools: [
+      "gesture-tap",
+      "tv-remote",
+      "await-ui-element",
+      "await-screen-idle",
+      "screenshot",
+      "describe",
+    ].map((name) => ({
+      name,
+      description: name,
+      inputSchema: { type: "object", properties: {} },
+      ...(name === "screenshot" ? { outputHint: "image" } : {}),
+    })),
   };
   // Short, so a capture call that never answers ends the test in about a second.
   const CAPTURE_MS = 1_000;
@@ -604,6 +655,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     stub = await startStub({
       routes: {
         "/tools/gesture-tap": (res) => send(res, 200, { data: { tapped: true } }),
+        "/tools/tv-remote": (res) => send(res, 200, { data: { pressed: ["down"], count: 1 } }),
         "/tools/await-ui-element": (res) => send(res, 200, { data: waitResult }),
         "/tools/await-screen-idle": (res) => {
           if (idleHangs) return;
@@ -726,6 +778,22 @@ describe("startMcpServer screen capture after an interaction", () => {
     ]);
     expect(content[0]!.text).toContain('"tapped": true');
     expect(content.at(-1)!.text).toContain("button Done");
+  });
+
+  it("appends the screenshot and the focus view after a TV remote press", async () => {
+    vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "");
+    const result = await client.callTool({
+      name: "tv-remote",
+      arguments: { udid: "u", button: "down" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const idle = stub.requests.find((r) => r.url === "/tools/await-screen-idle");
+    expect(JSON.parse(idle!.body)).toEqual({ udid: "u", timeoutMs: 1500 });
+    const text = textOf(result);
+    expect(text).toContain('"pressed"');
+    expect(text).toContain("--- Screen after action ---");
+    expect(text).toContain(AUTO_DESCRIBE_HEADER);
   });
 
   it("keeps describe's hint with the element tree", async () => {

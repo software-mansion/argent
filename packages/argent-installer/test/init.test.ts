@@ -4,7 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SKILLS_DIR, ARGENT_SKILLS_REPO, buildArgentSkillsSource } from "../src/utils.js";
 import * as p from "@clack/prompts";
-import { printFirstRunNotice, resolveTelemetryConsent } from "../src/first-run-notice.js";
+import {
+  printFirstRunNotice,
+  resolveTelemetryConsent,
+  seedWhatsNewVersion,
+} from "../src/first-run-notice.js";
+import { getWhatsNewSeenVersion, setWhatsNewSeenVersion } from "@argent/configuration-core";
 import {
   hasShownFirstRunNotice,
   markFirstRunNoticeShown,
@@ -75,6 +80,36 @@ describe("printFirstRunNotice", () => {
     _resetConsentCacheForTest();
     printFirstRunNotice();
     expect(hasShownFirstRunNotice()).toBe(false);
+  });
+});
+
+describe("seedWhatsNewVersion", () => {
+  let tmp: string;
+  const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "argent-installer-whats-new-"));
+    process.env.HOME = tmp;
+    process.env.USERPROFILE = tmp;
+  });
+
+  afterEach(() => {
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("records the version of a fresh install", () => {
+    seedWhatsNewVersion("0.35.0");
+    expect(getWhatsNewSeenVersion()).toBe("0.35.0");
+  });
+
+  it("keeps the version an earlier install recorded", () => {
+    setWhatsNewSeenVersion("0.34.0");
+    seedWhatsNewVersion("0.35.0");
+    expect(getWhatsNewSeenVersion()).toBe("0.34.0");
   });
 });
 

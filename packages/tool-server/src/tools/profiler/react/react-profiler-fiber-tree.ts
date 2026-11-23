@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
@@ -128,7 +128,7 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
       `Failed to read React fiber tree: ${failureSignal.error_code}`,
   },
   // RN-only: walks the fiber tree via the React DevTools backend hook.
-  capability: REACT_PROFILER_TOOL_CAPABILITY,
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     // Same key as react-profiler-start, so a forwarded logicalDeviceId reads its run.
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
