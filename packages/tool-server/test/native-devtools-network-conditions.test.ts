@@ -45,7 +45,7 @@ const SLOW_CONDITIONS = {
 };
 const SLOW: NetworkThrottle = { conditions: SLOW_CONDITIONS, metroPort: 8081 };
 
-// Turning network inspection on sends Network.enable, which resets the app's conditions.
+// A start of network capture sends Network.enable, which resets the app's conditions.
 const ACTIVATE = ["CDP", "Network.enable", {}];
 const BYPASS_METRO = ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [8081] }];
 const EMULATE_SLOW = ["CDP", "Network.emulateNetworkConditions", SLOW_CONDITIONS];
@@ -188,7 +188,7 @@ describe("native devtools network conditions", () => {
     await expect(api.setNetworkConditions(BUNDLE, SLOW)).rejects.toThrow("rejected");
     const relaunched = await connectAgent();
     agents.push(relaunched);
-    void api.activateNetworkInspection(BUNDLE);
+    void api.startNetworkCapture(BUNDLE, 8081);
 
     await vi.waitFor(() => expect(relaunched.received).toEqual([ACTIVATE]));
   });
@@ -256,12 +256,12 @@ describe("native devtools network conditions", () => {
     const { api, agent } = await setup();
     await api.setNetworkConditions(BUNDLE, SLOW);
 
-    void api.activateNetworkInspection(BUNDLE);
+    void api.startNetworkCapture(BUNDLE, 8081);
 
     const afterFirstActivation = [BYPASS_METRO, EMULATE_SLOW, ACTIVATE, BYPASS_METRO, EMULATE_SLOW];
     await vi.waitFor(() => expect(agent.received).toEqual(afterFirstActivation));
 
-    void api.activateNetworkInspection(BUNDLE);
+    void api.startNetworkCapture(BUNDLE, 8081);
     await api.setNetworkConditions(BUNDLE, SLOW);
 
     expect(agent.received).toEqual([...afterFirstActivation, BYPASS_METRO, EMULATE_SLOW]);
@@ -281,7 +281,7 @@ describe("native devtools network conditions", () => {
 
   it("re-sends the conditions when the app reconnects after a relaunch", async () => {
     const { api } = await setup();
-    void api.activateNetworkInspection(BUNDLE);
+    void api.startNetworkCapture(BUNDLE, 8081);
     await api.setNetworkConditions(BUNDLE, SLOW);
 
     const relaunched = await connectAgent();
@@ -294,7 +294,7 @@ describe("native devtools network conditions", () => {
 
   it("clears back to plain monitoring when network inspection is active", async () => {
     const { api, agent } = await setup();
-    void api.activateNetworkInspection(BUNDLE);
+    void api.startNetworkCapture(BUNDLE, 8081);
     await api.setNetworkConditions(BUNDLE, SLOW);
     agent.received.length = 0;
 
@@ -304,6 +304,33 @@ describe("native devtools network conditions", () => {
       ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [] }],
       ["CDP", "Network.enable", {}],
     ]);
+  });
+
+  it("keeps the throttle after a stop whose Network.disable the app answers too late", async () => {
+    const { api, agent } = await setup((msg) =>
+      msg.payload.method === "Network.disable" ? { result: {}, delayMs: 5_500 } : { result: {} }
+    );
+    void api.startNetworkCapture(BUNDLE, 8081);
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    agent.received.length = 0;
+
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toMatchObject({ confirmed: false });
+
+    // The app reads in order, so it gets the throttle after the disable that ended it.
+    expect(agent.received).toEqual([["CDP", "Network.disable", {}], BYPASS_METRO, EMULATE_SLOW]);
+  }, 15_000);
+
+  it("keeps the throttle after a stop of network capture, whose Network.disable ends it in the app", async () => {
+    const { api, agent } = await setup();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    agent.received.length = 0;
+
+    expect(await api.stopNetworkCapture(BUNDLE)).toEqual({ confirmed: true });
+
+    await vi.waitFor(() =>
+      expect(agent.received).toEqual([["CDP", "Network.disable", {}], BYPASS_METRO, EMULATE_SLOW])
+    );
   });
 
   it("sends the conditions again after Network.enable without waiting for the bypass reply", async () => {
@@ -317,7 +344,7 @@ describe("native devtools network conditions", () => {
     agent.received.length = 0;
     slowBypass = true;
 
-    void api.activateNetworkInspection(BUNDLE);
+    void api.startNetworkCapture(BUNDLE, 8081);
 
     // A wait for the bypass reply would leave the app unthrottled for that round trip.
     await vi.waitFor(() => expect(agent.received).toEqual([ACTIVATE, BYPASS_METRO, EMULATE_SLOW]), {
@@ -368,7 +395,7 @@ describe("native devtools network conditions", () => {
     const relaunched = await connectAgent();
     agents.push(relaunched);
     await vi.waitFor(() => expect(agent.isClosed()).toBe(true));
-    void api.activateNetworkInspection(BUNDLE);
+    void api.startNetworkCapture(BUNDLE, 8081);
 
     await vi.waitFor(() => expect(relaunched.received).toEqual([ACTIVATE]));
   });
@@ -379,7 +406,7 @@ describe("native devtools network conditions", () => {
     await api.setNetworkConditions(BUNDLE, null);
 
     const agent = await connect(api);
-    void api.activateNetworkInspection(BUNDLE);
+    void api.startNetworkCapture(BUNDLE, 8081);
 
     await vi.waitFor(() => expect(agent.received).toEqual([ACTIVATE]));
   });

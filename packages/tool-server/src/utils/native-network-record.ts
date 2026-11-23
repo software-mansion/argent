@@ -3,8 +3,8 @@ import { externalNativeId } from "./external-devices";
 
 /**
  * The request records of the native network layers, Android's in-app agent and
- * iOS's alike: one record per request, in the same shape on both platforms, so
- * a reader handles one type.
+ * the one of iOS and Mac apps alike: one record per request, in the same shape
+ * on every platform, so a reader handles one type.
  */
 
 export type NativeRecordState = "pending" | "headers" | "complete" | "failed";
@@ -24,7 +24,7 @@ interface NativeRedirect {
 
 export interface NativeNetworkRecord {
   id: string;
-  layer: "android-native" | "ios-native";
+  layer: "android-native" | "ios-native" | "macos-native";
   layerId: string;
   connection: number;
   rnRequestId?: number;
