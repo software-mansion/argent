@@ -19,13 +19,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  docs-publish:
-    name: Publish to GitHub Pages
+  build:
+    name: Build docs
     if: github.repository == 'software-mansion/argent'
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     defaults:
       run:
         working-directory: packages/docs
@@ -53,6 +50,17 @@ jobs:
         with:
           path: packages/docs/build
 
+  # A separate job: deploy-pages lists the run's artifacts right away, and in the
+  # same job that list can still miss the artifact uploaded a moment earlier.
+  docs-publish:
+    name: Publish to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5

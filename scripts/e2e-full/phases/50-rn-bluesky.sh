@@ -20,10 +20,12 @@ _metro_ready() { curl -fsS -m 3 "http://127.0.0.1:${1}/status" 2>/dev/null | gre
 
 # A fetch the harness sends itself must reach view-network-logs and open in
 # view-network-request-details.
-_assert_network_capture() { # phase device-args
-  local P="$1" D="$2"
-  # Capture starts at the first network-tool call, and the reload cleared it.
-  run_tool view-network-logs "{$D}" >/dev/null 2>&1
+_assert_network_capture() { # phase device-args capture-args
+  local P="$1" D="$2" CAP="$3"
+  # The network reads only read: capture starts here, before the request they list.
+  # status is "ok" also when no layer armed, so check the JS layer that
+  # view-network-logs reads.
+  assert_true "$P" network-capture-start capture-start "{$CAP}" 'any(.layers[]; .layer == "js" and .armed == true)'
   run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
   local FETCH_RC=$RT_RC
   sleep 2
@@ -38,6 +40,7 @@ _assert_network_capture() { # phase device-args
     # The fetch above is the harness's own, so a missing id is a capture regression.
     fail "$P" view-network-request-details netdetails "no request id in view-network-logs: $(rt_detail 160)"
   fi
+  assert_true "$P" network-capture-stop capture-stop "{$CAP}" 'all(.layers[]; .armed == false)'
 }
 
 run_phase() {
@@ -51,7 +54,7 @@ run_phase() {
   # Blanket-skipped with one reason whenever the tier is gated.
   local RN_TOOLS="debugger-connect debugger-status debugger-evaluate debugger-log-registry \
     debugger-component-tree debugger-inspect-element debugger-reload-metro \
-    view-network-logs view-network-request-details \
+    network-capture-start network-capture-stop view-network-logs view-network-request-details \
     react-profiler-start react-profiler-stop react-profiler-status react-profiler-analyze \
     react-profiler-renders react-profiler-fiber-tree react-profiler-cpu-summary react-profiler-component-source \
     profiler-load profiler-cpu-query profiler-commit-query profiler-stack-query profiler-combined-report \
@@ -133,7 +136,8 @@ run_phase() {
   assert_ok    "$P" debugger-reload-metro reload "{$D}"
   sleep 4  # reload drops the runtime; let it re-register
 
-  _assert_network_capture "$P" "$D"
+  local CAP="\"udid\":\"$DEV\",\"bundleId\":\"$PKG\",\"port\":$MPORT"
+  _assert_network_capture "$P" "$D" "$CAP"
 
   run_tool react-profiler-start "{$D}"
   if [ "$RT_RC" -eq 0 ]; then

@@ -278,26 +278,50 @@ test("capability denial fails when the refusal names another capability", () => 
 });
 
 const D = '"device_id":"emulator-5554","port":8081';
+const CAP = '"udid":"emulator-5554","bundleId":"xyz.blueskyweb.app","port":8081';
 
 /**
- * view-network-logs' reply, from the tool's own execute over a runtime whose
- * interceptor recorded `entries`.
+ * view-network-logs' reply, from the tool's own execute over a started capture
+ * whose interceptor recorded `entries`.
  * @param {object[]} entries
  */
 async function networkLogs(entries) {
   const { networkLogsTool } = toolServer("tools/network/network-logs.js");
-  const { NETWORK_INTERCEPTOR_SCRIPT } = toolServer(
-    "utils/debugger/scripts/network-interceptor.js"
-  );
-  const evaluate = async (/** @type {string} */ script) =>
-    script === NETWORK_INTERCEPTOR_SCRIPT
-      ? undefined
-      : JSON.stringify({ entries, total: entries.length, interceptorInstalled: true });
+  const { jsCapturePayload, setJsCapture } = toolServer("blueprints/network-inspector.js");
+  setJsCapture(jsCapturePayload(8081, "emulator-5554"), {
+    bundleId: "xyz.blueskyweb.app",
+    intent: "started",
+    installed: true,
+  });
+  const evaluate = async () =>
+    JSON.stringify({ entries, total: entries.length, interceptorInstalled: true });
   return networkLogsTool.execute(
-    { inspector: { port: 8081, cdp: { evaluate } } },
+    { debugger: { cdp: { evaluate } } },
     { device_id: "emulator-5554", port: 8081, pageIndex: "latest" }
   );
 }
+
+// Shaped like network-capture-start's and network-capture-stop's results.
+const CAPTURE_REPLIES = {
+  "network-capture-start": {
+    out: JSON.stringify({
+      status: "ok",
+      layers: [
+        { layer: "js", armed: true },
+        { layer: "android-native", armed: true },
+      ],
+    }),
+  },
+  "network-capture-stop": {
+    out: JSON.stringify({
+      status: "ok",
+      layers: [
+        { layer: "js", armed: false, total: 2 },
+        { layer: "android-native", armed: false, total: 0 },
+      ],
+    }),
+  },
+};
 
 // Shaped like the interceptor's createRecord/setResponse.
 const request = (/** @type {number} */ id, /** @type {string} */ url, complete = true) => ({
@@ -317,31 +341,37 @@ const request = (/** @type {number} */ id, /** @type {string} */ url, complete =
 });
 
 const NETWORK_CALLS = [
-  { tool: "view-network-logs", args: `{${D}}` },
+  { tool: "network-capture-start", args: `{${CAP}}` },
   {
     tool: "debugger-evaluate",
     args: `{${D},"expression":"fetch('https://example.com').then(()=>0)"}`,
   },
   { tool: "view-network-logs", args: `{${D},"pageIndex":"latest"}` },
 ];
+const CAPTURE_STOP_CALL = { tool: "network-capture-stop", args: `{${CAP}}` };
 
 test("network capture opens the newest request view-network-logs lists", async () => {
   const out = await networkLogs([
     request(1, "https://bsky.social/xrpc/app.bsky.feed.getTimeline"),
     request(2, "https://example.com/", false),
   ]);
-  const { calls, results } = harness("50-rn-bluesky.sh", `_assert_network_capture rn '${D}'`, {
-    replies: { "view-network-logs": { out } },
-  });
+  const { calls, results } = harness(
+    "50-rn-bluesky.sh",
+    `_assert_network_capture rn '${D}' '${CAP}'`,
+    { replies: { ...CAPTURE_REPLIES, "view-network-logs": { out } } }
+  );
   assert.deepEqual(calls, [
     ...NETWORK_CALLS,
     { tool: "view-network-request-details", args: `{${D},"requestId":"rn-net-2"}` },
+    CAPTURE_STOP_CALL,
   ]);
   assert.deepEqual(
     results.map(({ tool, status }) => ({ tool, status })),
     [
+      { tool: "network-capture-start", status: "pass" },
       { tool: "view-network-logs", status: "pass" },
       { tool: "view-network-request-details", status: "pass" },
+      { tool: "network-capture-stop", status: "pass" },
     ]
   );
 });
@@ -360,20 +390,27 @@ for (const { name, fetchRc, detail } of [
   },
 ]) {
   test(`network capture fails when ${name}`, async () => {
-    const { calls, results } = harness("50-rn-bluesky.sh", `_assert_network_capture rn '${D}'`, {
-      replies: {
-        "debugger-evaluate": { rc: fetchRc },
-        "view-network-logs": { out: await networkLogs([]) },
-      },
-    });
-    assert.deepEqual(calls, NETWORK_CALLS);
+    const { calls, results } = harness(
+      "50-rn-bluesky.sh",
+      `_assert_network_capture rn '${D}' '${CAP}'`,
+      {
+        replies: {
+          ...CAPTURE_REPLIES,
+          "debugger-evaluate": { rc: fetchRc },
+          "view-network-logs": { out: await networkLogs([]) },
+        },
+      }
+    );
+    assert.deepEqual(calls, [...NETWORK_CALLS, CAPTURE_STOP_CALL]);
     assert.deepEqual(
       results.map(({ tool, status }) => ({ tool, status })),
       [
+        { tool: "network-capture-start", status: "pass" },
         { tool: "view-network-logs", status: "pass" },
         { tool: "view-network-request-details", status: "fail" },
+        { tool: "network-capture-stop", status: "pass" },
       ]
     );
-    assert.match(results[1].detail, detail);
+    assert.match(results[2].detail, detail);
   });
 }

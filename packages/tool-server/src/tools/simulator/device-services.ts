@@ -16,7 +16,11 @@ import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profile
 import { MACOS_APP_NAMESPACE } from "../../blueprints/macos-app";
 import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
-import { externalNativeId } from "../../utils/external-devices";
+import {
+  externalClaimForNativeId,
+  externalNativeId,
+  isExternalDeviceUrn,
+} from "../../utils/external-devices";
 
 /**
  * The one URN matcher both `stop-simulator-server` and
@@ -68,6 +72,16 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
  * so either spelling of the device matches.
  */
 const APP_KEYED_NAMESPACES: readonly string[] = [ANDROID_NETWORK_INSPECTOR_NAMESPACE];
+
+/**
+ * Namespaces whose URN holds the device's native id (udid or adb serial) also
+ * when the service was asked for with its `ext:` id, so either spelling of the
+ * device matches.
+ */
+const NATIVE_ID_KEYED_NAMESPACES: readonly string[] = [
+  ...APP_KEYED_NAMESPACES,
+  NATIVE_DEVTOOLS_NAMESPACE,
+];
 
 /**
  * Every namespace whose service belongs to exactly one device. Membership is
@@ -170,7 +184,7 @@ export function deviceIdOwningUrn(
     if (portion === undefined) continue;
     const tail = portion.toLowerCase();
     const owner = deviceIds.find((id) => {
-      const spellings = APP_KEYED_NAMESPACES.includes(namespace)
+      const spellings = NATIVE_ID_KEYED_NAMESPACES.includes(namespace)
         ? [id, externalNativeId(id)]
         : [id];
       return spellings.some((spelling) => {
@@ -201,6 +215,20 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
     if (portion !== undefined) return portion;
   }
   return undefined;
+}
+
+/**
+ * Whether `urn` is a device provider's service, which a teardown drops without
+ * shutting anything down. An `ext:`-keyed URN is one. A native devtools URN holds
+ * the udid under both of the device's names, and on a device a provider claims,
+ * that service only attaches to the agent the provider lends.
+ */
+export function isProviderOwnedUrn(urn: string): boolean {
+  if (isExternalDeviceUrn(urn)) return true;
+  const portion = deviceIdOfUrn(urn, [NATIVE_DEVTOOLS_NAMESPACE]);
+  if (portion === undefined) return false;
+  const suffix = URN_SUFFIXES.find((s) => s !== "" && portion.endsWith(s)) ?? "";
+  return externalClaimForNativeId(portion.slice(0, portion.length - suffix.length)) !== undefined;
 }
 
 /**

@@ -125,6 +125,18 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       });
     }
 
+    /**
+     * The device's own id, when the payload names its runtime by the
+     * logicalDeviceId Metro gave it on a Metro several devices share. No
+     * provider claims a logicalDeviceId, so the provider's grant and socket are
+     * looked up by this id, while Metro's target is still picked by the
+     * payload's.
+     */
+    const physicalDeviceId =
+      typeof options?.physicalDeviceId === "string" && options.physicalDeviceId
+        ? options.physicalDeviceId
+        : deviceId;
+
     // A remote (cloud) sim reaches the developer's LOCAL Metro over a sim-remote
     // reverse tunnel: the sim's localhost:<port> is forwarded out to this host.
     // Only the app→Metro hop needs it — discoverMetro below still reaches Metro
@@ -141,14 +153,14 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      * this blueprint, so one check here covers them all. A no-op for every
      * device Argent booted itself.
      */
-    await assertExternalCapability(JS_RUNTIME_DEBUGGER_NAMESPACE, deviceId, "js-debugger");
+    await assertExternalCapability(JS_RUNTIME_DEBUGGER_NAMESPACE, physicalDeviceId, "js-debugger");
 
     const metro = await discoverMetro(port).catch((error: unknown) => {
       /**
        * An explicit `port` outranks the one a provider publishes, so a caller
        * that passed `8081` out of habit lands here with no way to guess why.
        */
-      const published = publishedMetroPort(deviceId, port);
+      const published = publishedMetroPort(physicalDeviceId, port);
 
       if (published !== undefined && error instanceof FailureError) {
         error.message +=
@@ -186,8 +198,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      * A provider that published a socket but no `metroPort` names no bundler to
      * disagree with, so its socket still stands.
      */
-    const onPublishedBundler = publishedMetroPort(deviceId, port) === undefined;
-    const proxied = onPublishedBundler ? externalJsDebuggerUrl(deviceId) : undefined;
+    const onPublishedBundler = publishedMetroPort(physicalDeviceId, port) === undefined;
+    const proxied = onPublishedBundler ? externalJsDebuggerUrl(physicalDeviceId) : undefined;
 
     const cdp = new CDPClient(proxied ?? selected.webSocketUrl, {
       awaitPromisesInApp: !selected.legacyInspector,

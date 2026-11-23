@@ -36,6 +36,11 @@ export const IOS_NATIVE_REQUEST_ID = /^ios-[0-9a-f]{4}-\d+$/;
 /** Shared by every store of the tool-server, so ids never repeat across apps or devices. */
 let nextRecordNumber = 1;
 
+/** The number of the last record issued: a record numbered higher came after this call. */
+export function lastIosRecordNumber(): number {
+  return nextRecordNumber - 1;
+}
+
 /** A request body read answers within this, with the body or with why it did not come. */
 const POST_DATA_WAIT_MS = 5_000;
 /**
@@ -134,11 +139,13 @@ export interface IosNetworkRecordStore extends IosNetworkRecords {
 /**
  * One app's records. They belong to the app, not to a connection, so a
  * reconnect and a relaunch keep the history. `state` reads the app's live
- * connection, which the native-devtools service owns.
+ * connection, which the native-devtools service owns. While `recording` is
+ * false, a new request gets no record; the events of a recorded one still fold.
  */
 export function createIosNetworkRecords(
   state: () => IosNetworkCaptureState,
-  link: IosAgentLink
+  link: IosAgentLink,
+  recording: () => boolean = () => true
 ): IosNetworkRecordStore {
   const records: NativeNetworkRecord[] = [];
   let recordChars = 0;
@@ -471,7 +478,7 @@ export function createIosNetworkRecords(
       if (method === "Network.requestWillBeSent") {
         // A redirect hop of a request already recorded, not a new request.
         if (p.redirectResponse !== undefined && p.redirectResponse !== null) return;
-        startRecord(connection, layerId, p);
+        if (recording()) startRecord(connection, layerId, p);
         return;
       }
       const record = byLayerId.get(keyOf(connection, layerId));
@@ -641,6 +648,18 @@ function withinWait(
 interface IosNetworkCaptures {
   readonly udid: string;
   readonly bundleIds: ReadonlySet<string>;
+  /**
+   * The apps network-capture-start started, also on a device whose provider
+   * lent its agent. When absent, `bundleIds`.
+   */
+  readonly startedBundleIds?: ReadonlySet<string>;
+  /** The apps whose capture network-capture-stop stopped. */
+  readonly stoppedBundleIds: ReadonlySet<string>;
+  /**
+   * The stopped apps whose connected process did not acknowledge
+   * Network.disable, so it can still intercept requests.
+   */
+  readonly unconfirmedStopBundleIds?: ReadonlySet<string>;
   readonly stores: ReadonlyMap<string, IosNetworkRecords>;
 }
 
@@ -671,13 +690,27 @@ export function findIosNativeRecord(
   return undefined;
 }
 
+/** Some app on some simulator has capture started or stopped, so its ids can be listed. */
+export function hasIosNetworkCapture(): boolean {
+  return [...liveCaptures].some(
+    (captures) =>
+      (captures.startedBundleIds ?? captures.bundleIds).size > 0 ||
+      captures.stoppedBundleIds.size > 0
+  );
+}
+
 /**
  * Capture is on for the app and the app connected at least once. An app that
  * never connected, such as a mistyped or uninstalled bundle id, has no process
- * that capture runs in.
+ * that capture runs in. A stop that the connected process did not acknowledge
+ * counts as on, because that process can still intercept.
  */
 function capturing(captures: IosNetworkCaptures, bundleId: string): boolean {
-  return captures.bundleIds.has(bundleId) && captures.stores.has(bundleId);
+  return (
+    (captures.bundleIds.has(bundleId) ||
+      captures.unconfirmedStopBundleIds?.has(bundleId) === true) &&
+    captures.stores.has(bundleId)
+  );
 }
 
 /**
@@ -689,7 +722,7 @@ export function liveIosNetworkCaptures(deviceId: string): string[] {
   const bundleIds = new Set<string>();
   for (const captures of liveCaptures) {
     if (deviceKeyOf(captures.udid) !== key) continue;
-    for (const bundleId of captures.bundleIds) {
+    for (const bundleId of [...captures.bundleIds, ...(captures.unconfirmedStopBundleIds ?? [])]) {
       if (capturing(captures, bundleId)) bundleIds.add(bundleId);
     }
   }
