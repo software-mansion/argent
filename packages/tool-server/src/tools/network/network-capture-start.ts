@@ -22,6 +22,7 @@ import {
   findJsCapture,
   forgetJsCapture,
   installNetworkInterceptor,
+  NO_XHR_YET,
   jsCapturePayload,
   setJsCapture,
   setJsUnavailable,
@@ -338,7 +339,7 @@ async function startJsLayer(
     const api = await registry.resolveService<NetworkInspectorApi>(`NetworkInspector:${payload}`);
     const install = await installNetworkInterceptor(api.cdp, payload, dbg.runtimeApp);
     if (install.installed) return { layer: "js", armed: true };
-    if (install.reason === "no XMLHttpRequest yet") {
+    if (install.reason === NO_XHR_YET) {
       return {
         layer: "js",
         armed: false,

@@ -96,7 +96,11 @@ On an Android emulator:
 - On a generic foldable profile, closed shows only the left part of the display, and `describe` frames do not match taps. Use a Pixel Fold profile to test the cover panel.
 - A physical device and an emulator without a hinge reject the call.
 
-Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent does not select a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
+Argent supports physical iPhones. Physical iPads are not supported. `list-devices` shows a physical iPhone as an iOS entry with kind `device`. The state is `connected` when the device is reachable over USB or the network. The state is `paired` when the device is remembered but unreachable. Argent never selects a physical device automatically. Specify its UDID.
+
+For network access, CoreDevice must report `transportType: localNetwork`. Argent brings the tunnel up on the first call and needs its IPv6 address in `fc00::/7`. Argent binds its runner to this address. Processes that can reach the tunnel endpoint can send runner commands. If the runner stops answering on its tunnel address, for example after the address changes, Argent restarts it on the current address and retries the call once.
+
+See [Physical iOS devices](/docs/features/physical-ios-devices) for signing requirements and the app-scoped interaction contract.
 
 With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started and that are still running. See [Mac app IDs and kinds](#start-and-restart-an-app).
 
@@ -245,6 +249,8 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 
 On iOS, Android and Mac apps, the network read tools only read. `view-network-logs`, `view-network-request-details` and `native-network-logs` never start capture. Call `network-capture-start` for the app before the action that sends the requests.
 
+`native-network-logs` does not stop the capture. A call with `stop` fails with the error `TOOL_INPUT_INVALID`, and the message tells you to call `network-capture-stop`. Remove `stop` from the call, also `stop: false`.
+
 To capture a request:
 
 1. Call `network-capture-start` with `udid` and `bundleId`.
@@ -322,7 +328,7 @@ On iOS, Argent cannot tell an app that does not run from an app that is not inst
 When two or more devices use one Metro server, Argent cannot find the JS runtime of a device from its `udid`. Then the `js` layer is unavailable. Its `reason` lists each device on the Metro server, with its `logicalDeviceId` in parentheses. The native layer is not affected. To capture on the `js` layer:
 
 1. Call `network-capture-start` with `udid`, `bundleId` and the `logicalDeviceId` of the device.
-2. Call `view-network-logs` and `view-network-request-details` with this `logicalDeviceId` as `device_id`.
+2. Call `view-network-logs` and `view-network-request-details` with this `logicalDeviceId` as `device_id`. Without `port`, the reads use the Metro port of the start. For a device of a device provider, this is the Metro port that the provider gives for the `udid`.
 3. Call `network-capture-stop` with the same `udid`, `bundleId` and `logicalDeviceId`.
 
 The `js` layer uses `logicalDeviceId`. The native layer always uses `udid`. A stop without `logicalDeviceId` does not stop the `js` layer that a start with `logicalDeviceId` started. `stop-all-simulator-servers` with `udid` in `devices` does not stop it either: also put the `logicalDeviceId` in `devices`. Alternatively, give each device its own Metro port.
@@ -358,9 +364,9 @@ If a layer has no started capture, the stop does not start it. A layer that Arge
 
 A stop can fail to reach the JS runtime of the app, for example when the app does not run. Then the `js` entry depends on the earlier start:
 
-- An earlier start installed the capture through this Metro port, no stop paused it since, and the app has a process on the device: `armed` is `true`. The capture can still record in the JS runtime of the app. The `reason` tells you to call `network-capture-stop` again when the app answers. When the device does not answer, `armed` is also `true`.
-- An earlier start installed the capture through this Metro port, no stop paused it since, and the app has no process on the device: `armed` is `false`. The capture ended with the process of the app.
-- A start stored the capture but installed none, or an earlier stop paused it: `armed` is `false`. Argent installs no capture in the JS runtime of the app while the capture is stopped.
+- An earlier start sent the capture to the JS runtime through this Metro port, no stop paused it since, and the app has a process on the device: `armed` is `true`. This is also true when the JS runtime did not answer the install, because the install can take effect without an answer. The capture can still record in the JS runtime of the app. The `reason` tells you to call `network-capture-stop` again when the app answers. When the device does not answer, `armed` is also `true`.
+- An earlier start sent the capture to the JS runtime through this Metro port, no stop paused it since, and the app has no process on the device: `armed` is `false`. The capture ended with the process of the app.
+- A start stored the capture but sent none to the JS runtime, or the JS runtime answered that it installed none, or an earlier stop paused it: `armed` is `false`. Argent installs no capture in the JS runtime of the app while the capture is stopped.
 - No start stored a capture for the app: `armed` is `false`, and the `reason` ends with `capture was not started for this app`. Argent stores nothing, and a later read says that the capture is not started.
 
 A stop changes nothing on the JS runtime layer when the Metro port has the capture of a different app. A stop of an Apple system app changes nothing on the JS runtime layer, because the app runs no React Native JS.

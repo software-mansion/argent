@@ -30,10 +30,11 @@ import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
-import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { metroPortField } from "../../utils/debugger/metro-port";
 import {
   isRedirect,
   jsCaptureDebuggerRef,
+  jsReadPort,
   jsCaptureForRead,
   jsNoLog,
   jsNotStarted,
@@ -265,7 +266,7 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
      * Chromium, above, still gets to answer for itself.
      */
     if (nativeIdPlatform(params.requestId)) return {};
-    const payload = jsCapturePayload(metroPort(params), canonicalDeviceId(params.device_id)!);
+    const payload = jsCapturePayload(jsReadPort(params), canonicalDeviceId(params.device_id)!);
     // Vega has no network-capture-start, so its read still installs the interceptor.
     if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
     // A read never starts capture: before a start it reaches nothing in the app.
@@ -364,7 +365,7 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
       await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
       cdp = api.cdp;
     } else {
-      const port = metroPort(params);
+      const port = jsReadPort(params);
       const deviceId = canonicalDeviceId(params.device_id)!;
       const dbg = services.debugger as JsRuntimeDebuggerApi | undefined;
       const capture = dbg && jsCaptureForRead(jsCapturePayload(port, deviceId), dbg.runtimeApp);
