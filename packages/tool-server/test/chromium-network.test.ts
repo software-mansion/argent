@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
 import { createNetworkManager, type NetworkManager } from "../src/chromium-server/network";
+import { toCdpNetworkConditions } from "../src/utils/network-conditions";
 
 // A fake CDP client: a real event bus (so the manager's `event` listener fires)
 // plus a `send` spy that records commands.
@@ -136,6 +137,18 @@ describe("NetworkManager (recording)", () => {
     // After dispose, further events are ignored.
     emitRequest(f.events, { id: "late", url: "https://x.test/late", status: 200 });
     expect(net.get("late")).toBeUndefined();
+  });
+
+  it("reports throttled only while the stored conditions shape traffic", async () => {
+    expect(net.throttled()).toBe(false);
+    await net.setConditions(toCdpNetworkConditions({ latencyMs: 300 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ offline: true }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ downloadKbps: 500 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions(null));
+    expect(net.throttled()).toBe(false);
   });
 });
 
