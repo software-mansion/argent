@@ -13,6 +13,7 @@ import {
   modify as modifyJsonc,
   parse as parseJsonc,
   type JSONPath,
+  type ParseError,
 } from "jsonc-parser";
 import { canonicalPath } from "@argent/configuration-core";
 import { resolvePackageRoot } from "./package-root.js";
@@ -435,6 +436,23 @@ export function readJsonc(filePath: string): Record<string, unknown> {
   const parsed = parseJsonc(raw, [], { allowTrailingComma: true }) as
     Record<string, unknown> | undefined;
   return parsed ?? {};
+}
+
+export function findJsoncSyntaxErrorLine(
+  filePath: string,
+  allowTrailingComma: boolean
+): number | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  const errors: ParseError[] = [];
+  parseJsonc(raw, errors, { allowTrailingComma });
+  const first = errors[0];
+  return first ? raw.slice(0, first.offset).split("\n").length : null;
 }
 
 /**

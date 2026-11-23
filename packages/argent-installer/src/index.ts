@@ -16,6 +16,7 @@ export {
   globalInstallCommand,
   projectInstallCommand,
   formatShellCommand,
+  findJsoncSyntaxErrorLine,
   RULES_DIR,
 } from "./utils.js";
 export {

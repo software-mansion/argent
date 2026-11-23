@@ -11,6 +11,7 @@ import {
   detectGlobalPackageManager,
   detectProjectPackageManager,
   findConfiguredAdapterScopes,
+  findJsoncSyntaxErrorLine,
   formatShellCommand,
   getGloballyInstalledVersion,
   getInstalledVersion,
@@ -36,6 +37,7 @@ const CHECK_DEPS_TIMEOUT_MS = 30_000;
 type ConfiguredAdapterScope = ReturnType<typeof findConfiguredAdapterScopes>[number];
 
 const PACKAGE_RUNNERS = new Set(["npx", "yarn", "pnpm", "bunx"]);
+const NO_TRAILING_COMMA_EDITORS = new Set(["Claude Code", "Gemini"]);
 
 type CheckStatus = "ok" | "warn" | "error" | "info";
 
@@ -59,7 +61,7 @@ interface DoctorReport {
 
 interface HostDepsReport {
   adb: string | null;
-  xcode: { developerDir: string | null; simctl: boolean } | null;
+  xcode: { developerDir: string | null; simctl: boolean; firstLaunch: string | null } | null;
 }
 
 interface DoctorContext {
@@ -200,15 +202,36 @@ function readEntry(adapter: (typeof ALL_ADAPTERS)[number], configPath: string): 
   }
 }
 
-function editorsSection(ctx: DoctorContext): DoctorSection {
+function syntaxCheck(adapterName: string, configPath: string): DoctorCheck | null {
+  if (!/\.jsonc?$/.test(configPath)) return null;
+  const line = findJsoncSyntaxErrorLine(configPath, !NO_TRAILING_COMMA_EDITORS.has(adapterName));
+  if (line === null) return null;
+  return check("error", `the config has a JSON syntax error on line ${line}`, {
+    fix: `Fix line ${line} of ${home(configPath)}. The editor loads no MCP servers from it until then`,
+  });
+}
+
+function globalScopeFix(fix: string | undefined, initFix: string): string | undefined {
+  return fix === initFix
+    ? `${initFix}, and choose Global at "Install MCP server globally or locally?"`
+    : fix;
+}
+
+export function editorsSection(
+  ctx: EntryContext & Pick<DoctorContext, "configured">
+): DoctorSection {
   const checks: DoctorCheck[] = [];
   const { configured } = ctx;
+  const initFix = `${ctx.argentCommand} init`;
 
   for (const { adapter, scope, configPath } of configured) {
-    const result = classifyMcpEntry(readEntry(adapter, configPath), ctx);
+    const result =
+      syntaxCheck(adapter.name, configPath) ??
+      classifyMcpEntry(readEntry(adapter, configPath), ctx);
     checks.push({
       ...result,
       label: `${adapter.name}: ${result.label}`,
+      fix: scope === "global" ? globalScopeFix(result.fix, initFix) : result.fix,
       detail: [`${home(configPath)} (${scope})`, result.detail].filter(Boolean).join(", "),
     });
   }
@@ -216,7 +239,7 @@ function editorsSection(ctx: DoctorContext): DoctorSection {
   if (configured.length === 0) {
     checks.push(
       check("error", "No editor has an argent MCP entry for this project", {
-        fix: `${ctx.argentCommand} init`,
+        fix: initFix,
       })
     );
   }
@@ -327,6 +350,12 @@ async function probeHostDeps(paths: ToolsServerPaths): Promise<HostDepsReport | 
 
 function iosCheck(xcode: HostDepsReport["xcode"]): DoctorCheck {
   if (!xcode) return check("info", "iOS simulators: need a macOS host");
+  if (xcode.simctl && xcode.firstLaunch) {
+    return check("warn", "iOS simulators: Xcode has not finished installing its components", {
+      detail: xcode.developerDir ?? undefined,
+      fix: xcode.firstLaunch.charAt(0).toUpperCase() + xcode.firstLaunch.slice(1),
+    });
+  }
   if (xcode.simctl)
     return check("ok", "iOS simulators", { detail: `Xcode at ${xcode.developerDir}` });
   if (!xcode.developerDir) {
@@ -402,6 +431,20 @@ export function resolveDoctorRoot(cwd: string, homeDir: string = homedir()): str
   );
 }
 
+function offPathBinDir(): string | null {
+  const bin = process.argv[1];
+  if (!bin || path.basename(bin) !== MCP_BINARY_NAME) return null;
+  const dir = path.dirname(bin);
+  if (path.basename(dir) === ".bin") return null;
+  return (process.env.PATH ?? "").split(path.delimiter).includes(dir) ? null : dir;
+}
+
+export function globalInstallFix(): string {
+  const binDir = offPathBinDir();
+  if (binDir) return `Add ${binDir} to PATH`;
+  return formatShellCommand(globalInstallCommand(detectGlobalPackageManager(), PACKAGE_NAME));
+}
+
 function buildContext(paths: ToolsServerPaths, cwd: string): DoctorContext {
   const projectRoot = resolveDoctorRoot(cwd);
   const globalOnPath = isGloballyInstalled();
@@ -415,9 +458,7 @@ function buildContext(paths: ToolsServerPaths, cwd: string): DoctorContext {
     localInstalled: local.installed,
     localPackageDir: resolveInstallMode(projectRoot) === "local" ? local.packageDir : null,
     argentCommand: globalOnPath ? MCP_BINARY_NAME : `npx ${PACKAGE_NAME}`,
-    globalInstallFix: formatShellCommand(
-      globalInstallCommand(detectGlobalPackageManager(), PACKAGE_NAME)
-    ),
+    globalInstallFix: globalInstallFix(),
     projectInstallFix: formatShellCommand(
       projectInstallCommand(detectProjectPackageManager(projectRoot))
     ),

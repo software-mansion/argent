@@ -72,7 +72,7 @@ The command checks these items:
 
 The command changes nothing. When all checks pass, it prints only the version line and one summary line. When a check fails, it prints a summary, then the failed checks with advice for each. Add `--verbose` to also list the passed checks.
 
-If `argent` is not on `PATH` (for example, with a local install), run `npx argent doctor`.
+With a local install, run `npx argent doctor` in the project. With a global install, run `argent doctor` directly: under `npx`, the `PATH` check also finds the copy that `npx` started, which your editors may not find.
 
 ## Manual install
 

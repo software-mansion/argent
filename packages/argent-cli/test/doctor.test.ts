@@ -5,7 +5,9 @@ import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import {
   classifyMcpEntry,
+  editorsSection,
   findConfigured,
+  globalInstallFix,
   managedTargets,
   renderDoctorReport,
   resolveDoctorRoot,
@@ -115,7 +117,11 @@ describe("toolchainChecks", () => {
   it("passes with Xcode selected and adb found", () => {
     const checks = toolchainChecks({
       adb,
-      xcode: { developerDir: "/Applications/Xcode.app/Contents/Developer", simctl: true },
+      xcode: {
+        developerDir: "/Applications/Xcode.app/Contents/Developer",
+        simctl: true,
+        firstLaunch: null,
+      },
     });
     expect(checks.map((c) => c.status)).toEqual(["ok", "ok"]);
   });
@@ -123,10 +129,27 @@ describe("toolchainChecks", () => {
   it("tells the user to select Xcode when only the Command Line Tools are active", () => {
     const [ios] = toolchainChecks({
       adb,
-      xcode: { developerDir: "/Library/Developer/CommandLineTools", simctl: false },
+      xcode: {
+        developerDir: "/Library/Developer/CommandLineTools",
+        simctl: false,
+        firstLaunch: null,
+      },
     });
     expect(ios!.status).toBe("warn");
     expect(ios!.fix).toContain("xcode-select -s");
+  });
+
+  it("warns while Xcode has not finished its first launch", () => {
+    const [ios] = toolchainChecks({
+      adb,
+      xcode: {
+        developerDir: "/Applications/Xcode.app/Contents/Developer",
+        simctl: true,
+        firstLaunch: "open the Xcode at /Applications/Xcode.app once",
+      },
+    });
+    expect(ios!.status).toBe("warn");
+    expect(ios!.fix).toBe("Open the Xcode at /Applications/Xcode.app once");
   });
 
   it("warns when adb is missing and skips iOS off macOS", () => {
@@ -187,6 +210,62 @@ describe("findConfigured", () => {
     writeArgentEntry(path.join(projectRoot, ".cursor", "mcp.json"));
     const cursor = findConfigured(projectRoot).filter((c) => c.adapter.name === "Cursor");
     expect(cursor.map((c) => c.scope)).toEqual(["global"]);
+  });
+});
+
+describe("editorsSection", () => {
+  const realHome = process.env.HOME;
+  afterEach(() => {
+    process.env.HOME = realHome;
+  });
+
+  function editorChecks(root: string) {
+    return editorsSection({ ...ctx({ projectRoot: root }), configured: findConfigured(root) })
+      .checks;
+  }
+
+  it("fails a config the editor rejects even when the entry itself reads fine", () => {
+    process.env.HOME = path.join(projectRoot, "home");
+    fs.writeFileSync(
+      path.join(projectRoot, ".mcp.json"),
+      '{"mcpServers":{"argent":{"command":"argent","args":["mcp"]},}}'
+    );
+    const [claude] = editorChecks(projectRoot);
+    expect(claude!.status).toBe("error");
+    expect(claude!.label).toBe("Claude Code: the config has a JSON syntax error on line 1");
+  });
+
+  it("tells the user to pick the global scope when a global entry is broken", () => {
+    const homeDir = path.join(projectRoot, "home");
+    process.env.HOME = homeDir;
+    const gone = path.join(projectRoot, "gone");
+    const cli = path.join(gone, "lib", "node_modules", "@swmansion", "argent", "dist", "cli.js");
+    const config = {
+      mcpServers: { argent: { command: path.join(gone, "bin", "node"), args: [cli, "mcp"] } },
+    };
+    fs.mkdirSync(path.join(homeDir, ".cursor"), { recursive: true });
+    fs.writeFileSync(path.join(homeDir, ".cursor", "mcp.json"), JSON.stringify(config));
+    const cursor = editorChecks(projectRoot).find((c) => c.label.startsWith("Cursor"));
+    expect(cursor!.status).toBe("error");
+    expect(cursor!.fix).toBe(
+      'argent init, and choose Global at "Install MCP server globally or locally?"'
+    );
+  });
+});
+
+describe("globalInstallFix", () => {
+  const realArgv = process.argv[1];
+  const realPath = process.env.PATH;
+  afterEach(() => {
+    process.argv[1] = realArgv!;
+    process.env.PATH = realPath;
+  });
+
+  it("asks to add the running argent's bin directory to PATH when it is missing there", () => {
+    const binDir = path.join(projectRoot, "prefix", "bin");
+    process.argv[1] = path.join(binDir, "argent");
+    process.env.PATH = "/usr/bin:/bin";
+    expect(globalInstallFix()).toBe(`Add ${binDir} to PATH`);
   });
 });
 
