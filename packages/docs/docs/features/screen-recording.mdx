@@ -57,17 +57,13 @@ During a recording, iOS shows a clean status bar with the time 9:41, as it does 
 
 ## Mac apps
 
-Argent also records [Mac apps](/docs/features/mac-apps), including Mac Catalyst apps. The Argent library in the app records the app window. Thus a recording needs no Screen Recording permission and no `ffmpeg`.
+Ask your agent to start your Mac app through Argent and record the interaction. Mac Catalyst apps also work. See [how to start a Mac app](/docs/features/mac-apps#start-your-app).
 
-Five details differ from a simulator recording:
+The video shows the app window, including any parts of menus, sheets, popovers, and alerts that overlap it. You can show the agent's pointer and clicks in the video. Mac app recording requires neither Screen Recording permission nor `ffmpeg`.
 
-- The video shows the app window, with its menus, sheets, popovers and alerts. The video does not show other apps or the desktop.
-- The video shows the pointer of the agent. A ring marks each click, and a dot shows a held mouse button.
-- Argent keeps recording while the Mac is locked. The video can be less sharp then.
-- Argent cannot record a minimized window or a window that is not fully on one display. When this occurs during a recording, the video holds the last frame, and the stop call returns a warning.
-- The recording runs in the app and uses some of its processor time. Do not record while the agent profiles the same app.
+Restore a minimized window and move it fully onto one display before you start. Argent keeps recording while the Mac is locked or the display sleeps, though the video can be less sharp.
 
-If the app quits or restarts during a recording, or another Argent tool-server connects to the app, Argent loses the recording. When the agent disconnects Argent from the app during a recording, Argent first asks the app to write the video, and the next stop call says where it is.
+Have the agent save the video before you quit or restart the app. Record the video and collect a native performance profile in separate runs because recording uses CPU time in the app. For warnings and recovery steps, see the [Mac app recording reference](/docs/reference/tools#screen-recording-on-a-mac-app).
 
 ## Where the video lands
 
@@ -87,7 +83,7 @@ The files stay in the working tree. Add the directory to `.gitignore` when you d
 - Argent records iOS simulators, remote simulators, physical iPhones, Android emulators, physical Android devices, and Mac apps. Argent does not record tvOS simulators, Chromium apps, Vega devices, or HarmonyOS devices.
 - Argent records a physical iPhone only when the iPhone is connected with a USB cable. Argent cannot record an iPhone that is connected over Wi-Fi.
 - One recording per device at a time. Different devices can record at the same time.
-- Argent uses `ffmpeg` to encode the video. Install `ffmpeg` before the first recording. On a remote simulator `ffmpeg` is optional: without it the video still comes back, with no watermark and with the still parts left in. A Mac app recording does not use `ffmpeg`.
+- Install `ffmpeg` to record a local simulator, an Android device or emulator, or a cabled iPhone. On remote simulators, Argent needs `ffmpeg` only to add the watermark and trim still sections.
 - On Android, a secure screen such as a password field or a DRM video comes out black.
 - A recording needs a stop call before the agent can give you the file. This is also the case when the time limit stopped the recording.
 

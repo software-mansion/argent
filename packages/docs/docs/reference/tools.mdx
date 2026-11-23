@@ -695,14 +695,14 @@ The result contains `platform: "macos"`, `id`, `kind`, `bundleId`, `pid`, `appPa
 
 A `note` reports conditions that need attention, such as no open window or arguments that differ from the request. Launch tools wait up to 10 seconds for a window. Use `force` to apply changed arguments to an already running app.
 
-| Tool                                                  | macOS behavior                                                                                                                                                                                                               |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                                                                                                                                              |
-| `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                                                                                                                                                    |
-| `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                                                                                                                                          |
-| `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                                                                                                                                                  |
-| `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                                                                                                                                                  |
-| `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent. The app keeps running; network capture stops and its recorded requests are lost. `network-capture-start` starts the capture again. A screen recording ends; Argent first asks the app to write the video. |
+| Tool                                                  | macOS behavior                                                                                                                                                                                                         |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                                                                                                                                        |
+| `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                                                                                                                                              |
+| `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                                                                                                                                    |
+| `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                                                                                                                                            |
+| `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                                                                                                                                            |
+| `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent. The app keeps running; network capture stops and its recorded requests are lost. `network-capture-start` starts the capture again. See [screen recording recovery](#screen-recording-on-a-mac-app). |
 
 For `launch-app` and `restart-app`, `bundleId` must match the device. Both accept `launchArgs` and otherwise reuse the previous arguments. Both report `appPath` and `args`.
 
@@ -974,19 +974,17 @@ If typing, paste, or scrolling reports success without changing the app, check t
 
 ### Screen recording on a Mac app
 
-`screen-recording-start` and `screen-recording-stop` take a Mac app ID. The Argent library in the app records the window that `screenshot` captures. The recording needs no permission and no `ffmpeg`.
+Pass the Mac app's ID as `udid` to `screen-recording-start` and `screen-recording-stop`. Call `screen-recording-stop` to retrieve the MP4 even after the time limit ends the recording.
 
-- **Content.** The video shows the window with the menus, sheets, popovers and alerts of the app over it. The video ends at the edge of the window, also where a menu extends past it.
-- **Size.** The video has the pixel size of the window at the start. Argent scales down a window larger than 3840 x 2160. When the window changes size, Argent keeps its proportions and adds black bars.
-- **Frames.** The video has a variable frame rate.
-- **Markers.** With `showTouches`, the video shows the pointer of the agent, a ring for each click (orange for a right-click), and a dot while the agent holds a mouse button. The pointer moves to each click before the click occurs. `screenshot` does not show the markers.
-- **Locked Mac.** The recording continues while the Mac is locked, also when the display sleeps. The video can be less sharp while the Mac is locked.
-- **Gaps.** If the window is minimized, protected from capture, not fully on one display, or closed, `screen-recording-start` fails. During a recording, the video holds its last frame, and `screen-recording-stop` returns a `warning`. A sheet or menu that the app protects from capture is missing from the video, and the `warning` says so.
-- **Output file.** The app writes the video to a file next to the output file, and `screen-recording-stop` copies it to the output file. A sandboxed app gets access to its own file only. The stop refuses a file that is a link or not a plain file.
-- **Old library.** On an app that a previous Argent version started, `screen-recording-start` returns `MACOS_APP_LIBRARY_OUTDATED`. Run `restart-app` and start the recording again.
-- **App restart.** If the app quits or restarts during a recording, or another tool-server connects to the app, `screen-recording-stop` fails and Argent loses the video.
-- **Disconnect.** `stop-simulator-server` and `stop-all-simulator-servers` end the recording. Argent first asks the app to write the video and waits up to 20 seconds for it, and the next `screen-recording-stop` says where the video is. An app that takes longer loses the video. A tool-server that shuts down also has the app write the video, but after a restart `screen-recording-stop` does not know about it.
-- **Cost.** The recording uses about 10% of one processor core in the app, and more for a large window. A native profile of the app counts this time. Do not record during a profile.
+The video uses a variable frame rate. Argent sets the video size from the window size at the start. The longer side can be up to 3840 pixels and the shorter side up to 2160 pixels. If the window changes size, Argent preserves its proportions and adds black bars as needed.
+
+With `showTouches` enabled, the video shows the agent's pointer, a ring for each click, and a dot while the agent holds a mouse button. Right-clicks use an orange ring.
+
+Before you start, open or restore a window and move it fully onto one display. The app must allow capture of that window. If Argent cannot capture it during recording, the video holds the last frame and `warning` gives the reason. Argent also warns when it omits a protected menu, sheet, or other overlay.
+
+- **`MACOS_APP_LIBRARY_OUTDATED`.** Run `restart-app` and try again. If the error persists, use an Argent build with native Mac recording support.
+- **Lost connection.** Quitting or restarting the app or connecting from another Argent tool-server can discard the recording. If stop reports a partial video path, check the file before recording again.
+- **Argent disconnects.** Stop the recording before you call `stop-simulator-server` or `stop-all-simulator-servers`. If you disconnect first, Argent gives the app up to 20 seconds to finish. Check the path in the next `screen-recording-stop` error on the tool-server host. After the tool-server restarts, check `outputFile` from the start result on that host.
 
 ### Profiling a Mac app
 

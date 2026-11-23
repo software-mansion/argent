@@ -52,7 +52,7 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS Simulator UDID, cabled iPhone UDID, <flag:macos-apps>Mac app id, </flag:macos-apps>or Android serial)."
+      "Target ID from `list-devices`.<flag:macos-apps> For a Mac app, use its device ID, such as `macos-app-com.example.notes`.</flag:macos-apps>"
     ),
 });
 
@@ -61,12 +61,9 @@ export const screenRecordingStopTool: ToolDefinition<
   ScreenRecordingStopResult
 > = {
   id: "screen-recording-stop",
-  description: `Stop the screen recording started by \`screen-recording-start\` and retrieve the mp4 video.
-Also retrieves the video when the recording already ended on its own (time limit reached, capture process died); call it even after the cap fired.
-On a remote (\`remote:\`) simulator it downloads the mp4.<flag:macos-apps> On a Mac app the app writes the mp4 out; it fails if the app quit or restarted during the recording, and warning says when the video held its last frame or left out a window the app protects from capture.</flag:macos-apps>
-Use when the interaction being captured is finished, or a tool-result note reminds you a recording is still running.
-Returns { video, durationMs, wallClockMs?, trimmedMs?, panelSwitches?, warning? }; video is a downloadable artifact materialized to a local path. When static-frame trimming removed dead air, durationMs is the trimmed video length and wallClockMs/trimmedMs report the real duration and how much was cut. On a foldable simulator the recording follows the panel that shows the UI: panelSwitches counts the panel changes, the video keeps the size of the first panel, and warning is set when argent could not find that panel during the recording.
-Fails if no recording (running or finished-but-unretrieved) exists for the given udid.`,
+  description: `Stop a screen recording and retrieve its MP4. Call this even after the time limit or an early capture exit. The tool downloads recordings from remote simulators.
+Returns the saved \`video\` and its \`durationMs\`. When trimming removes still sections, \`wallClockMs\` gives the original duration and \`trimmedMs\` gives the time removed. On a foldable simulator the video follows the active panel, keeps the first panel's size, and reports any \`panelSwitches\`.
+Check \`warning\` for capture problems, such as an undetected foldable panel.<flag:macos-apps> On a Mac app, a warning can report when the video held its last frame or omitted a protected window. Quitting or restarting the app or connecting to it from another Argent tool-server during capture can discard the recording. A stop error can include a path to a recoverable video.</flag:macos-apps>`,
   zodSchema,
   searchHint: "stop end finish screen recording video capture save retrieve",
   interaction: {
