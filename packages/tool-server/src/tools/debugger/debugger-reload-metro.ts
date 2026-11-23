@@ -12,7 +12,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial)."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
 });
 
@@ -29,7 +29,7 @@ export const debuggerReloadMetroTool: ToolDefinition<
 > = {
   id: "debugger-reload-metro",
   description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
-Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method (cdp or http), deviceName, appName, logicalDeviceId }. Fails if Metro is not running on the given port.<flag:macos-apps> On a Mac app it reloads only through the debugger connection, and fails when that reload fails.</flag:macos-apps>`,
+Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method (cdp or http), deviceName, appName, logicalDeviceId }. Fails if Metro is not running on the given port.<flag:macos-apps> A Mac app reload targets only that app. If it fails, restart the app. A shared Metro reload would also reload other apps.</flag:macos-apps>`,
   zodSchema,
   interaction: {
     startedMsg: () => "Reloading the app through Metro",

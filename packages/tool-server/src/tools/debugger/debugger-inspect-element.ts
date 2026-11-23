@@ -122,17 +122,17 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial)."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   x: z.coerce
     .number()
     .describe(
-      "X coordinate on device screen, in logical pixels (not normalized 0–1)<flag:macos-apps>. On a Mac app, points from the window's top-left corner, title bar included</flag:macos-apps>"
+      "Horizontal position in logical pixels from the left edge of the screen<flag:macos-apps>, or in points from the left edge of the Mac app window, title bar included</flag:macos-apps>."
     ),
   y: z.coerce
     .number()
     .describe(
-      "Y coordinate on device screen, in logical pixels (not normalized 0–1)<flag:macos-apps>. On a Mac app, points from the window's top-left corner, title bar included</flag:macos-apps>"
+      "Vertical position in logical pixels from the top edge of the screen<flag:macos-apps>, or in points from the top edge of the Mac app window, title bar included</flag:macos-apps>."
     ),
   contextLines: z.coerce
     .number()
@@ -180,7 +180,7 @@ Returns components from the tapped element upward through its parent hierarchy,
 each with its source file:line and a code fragment.
 The first items (lowest indices) are the most specific: the exact component under
 the tap point and its direct parents. Higher indices are broader context (page, navigator).
-Use when you need the source file and line for a component at a tap coordinate.<flag:macos-apps> A Mac app with React Native in several windows: it inspects the window with the most components, which can differ from the one describe reads. On the old architecture (Paper), react-native-macos window points assume the React Native root fills the window's content view: with native views around it, such as a footer, the point can land on another component, so check the result against describe.</flag:macos-apps> Fails if the app is not connected or the coordinate is outside the screen.`,
+Convert fractions from debugger-component-tree using the width and height in its Screen line. Fails if the app is disconnected or the point is outside the screen.<flag:macos-apps> On Mac apps with several React Native windows, the tool uses the root with the most components. With the old architecture (Paper), native views around the React root can shift the result. Check the returned component against the intended control.</flag:macos-apps>`,
   zodSchema,
   readOnly: true,
   interaction: {
