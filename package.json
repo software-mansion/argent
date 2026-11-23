@@ -8,8 +8,8 @@
   ],
   "scripts": {
     "build": "bun run --filter @swmansion/argent build:tool-args && tsc --build && node packages/tool-server/scripts/copy-build-assets.mjs",
-    "start": "bun run --filter @argent/registry build && bun run --filter @argent/tool-server dev",
-    "start:tool-server": "bun run --filter @argent/registry build && bun run --filter @argent/tool-server dev",
+    "start": "bun run --cwd packages/registry build && bun run --cwd packages/tool-server dev",
+    "start:tool-server": "bun run --cwd packages/registry build && bun run --cwd packages/tool-server dev",
     "download:simulator-server": "bash scripts/download-simulator-server.sh",
     "download:native-binaries": "bash scripts/download-native-binaries.sh",
     "download:trace-processor": "bash scripts/download-trace-processor.sh",
