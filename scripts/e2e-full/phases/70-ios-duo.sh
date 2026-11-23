@@ -111,8 +111,7 @@ PY
 }
 
 # Fold the hinge behind argent's back, then run a one-step flow that taps the
-# pad: flows read the app's own view hierarchy, not `describe`, and the tap must
-# still go to the panel the device now renders to. The tap count is read
+# pad: the tap must still go to the panel the device now renders to. The tap count is read
 # before the fold, since the `describe` that reads it would correct argent's
 # panel on its own.
 _flow_tap_after_external_fold() { # udid hinge-helper project-root to-angle from-angle case
