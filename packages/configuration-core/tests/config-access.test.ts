@@ -202,6 +202,16 @@ describe("listConfig", () => {
     expect(telemetry.manageCommand).toBe("argent telemetry");
     expect(telemetry.scopes).toEqual(["project", "global"]);
   });
+
+  it("lists a home-rooted project's values once, as global", () => {
+    setConfigValue("lens.agent", "codex", "global", opts());
+    const cwd = path.join(homeDir, "Downloads");
+    fs.mkdirSync(cwd);
+    const lens = listConfig({ homeDir, cwd }).find((e) => e.key === "lens.agent")!;
+    expect(lens.global).toBe("codex");
+    expect(lens.project).toBeUndefined();
+    expect(lens.effective).toBe("codex");
+  });
 });
 
 describe("telemetry.enabled — opt-out default", () => {
@@ -340,6 +350,21 @@ describe("ios.additionalDeviceSets — additive union across scopes", () => {
       homeDir,
     ]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "resolves a home-rooted project's relative entries once when HOME is a symlink",
+    () => {
+      const linkedHome = path.join(projectDir, "home");
+      fs.symlinkSync(homeDir, linkedHome);
+      setConfigValue("ios.additionalDeviceSets", ["sets"], "global", { homeDir: linkedHome });
+      // Physical, like process.cwd().
+      const cwd = path.join(homeDir, "Downloads");
+      fs.mkdirSync(cwd);
+      expect(getAdditionalIosDeviceSets({ homeDir: linkedHome, cwd })).toEqual([
+        path.join(linkedHome, "sets"),
+      ]);
+    }
+  );
 });
 
 describe("getConfigValue — direct definition + custom-typed default", () => {

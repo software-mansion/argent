@@ -8,6 +8,7 @@ import {
   E2E_DIRS,
   FAILURE_CODES,
   FLOW_NAME_PATTERN,
+  SELECTABLE_PLATFORMS,
   e2eShadowWarning,
   resolveE2eFile,
 } from "@argent/registry";
@@ -136,7 +137,8 @@ async function offersMacosPlatform(): Promise<boolean> {
 
 async function printHelp(toStderr = false): Promise<void> {
   const print = toStderr ? console.error : console.log;
-  const macos = (await offersMacosPlatform()) ? " macos |" : "";
+  const offersMacos = await offersMacosPlatform();
+  const platforms = SELECTABLE_PLATFORMS.filter((p) => p !== "macos" || offersMacos);
   print(`Usage: argent e2e <subcommand> [options]
 
 Run a YAML e2e test without an LLM in the loop. \`run\` takes any of these forms:
@@ -213,7 +215,7 @@ Subcommands:
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega |${macos} ios-remote — narrow
+  --platform <p>         ${platforms.join(" | ")} — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,
@@ -250,7 +252,9 @@ const RUN_OPTIONS = {
   "json-stream": { kind: "boolean" },
   "recursive": { kind: "boolean", alias: "r" },
   "device": { kind: "value" },
-  "platform": { kind: "value" },
+  // The tool-server's schema rejection carries no error_kind, so in a directory
+  // run it would stop the whole batch.
+  "platform": { kind: "value", choices: SELECTABLE_PLATFORMS },
   "output": { kind: "value" },
 } as const satisfies OptionSpecs;
 
@@ -299,7 +303,7 @@ export function parseRunArgs(argv: string[]): {
     jsonStream: options["json-stream"] === true,
   };
   // Their reads are truthy-guarded, so "" would be silently dropped.
-  for (const name of ["device", "platform", "output"] as const) {
+  for (const name of ["device", "output"] as const) {
     if (options[name] === "") throw new FlagParseException(`--${name} requires a value`);
   }
   if (positionals[0] !== undefined) out.flowRef = positionals[0];
@@ -478,20 +482,25 @@ interface FailedFlow {
 
 /**
  * Why a report failed: its first failing step, numbered as renderFailedSteps
- * numbers it so the recap, the per-flow block, and a single rerun agree. The
- * reason is wire data, so it is stringified the way renderStepLine's template
- * does rather than trusted to be a string.
+ * numbers it so the recap, the per-flow block, and a single rerun agree, else
+ * the baselines this client could not write. A failing step's detail names
+ * those baselines too. The reason is wire data, so it is stringified the way
+ * renderStepLine's template does rather than trusted to be a string.
  */
 export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline" | "detail"> {
+  const unwritten = unwrittenBaselines(report);
   let n = 0;
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
     if (s.status === "fail" || s.status === "error") {
-      const detail = s.reason ? String(s.reason) : undefined;
+      const lines = s.reason ? [String(s.reason)] : [];
+      for (const line of unwritten) lines.push(`baseline not written: ${line}`);
+      const detail = lines.length ? lines.join("\n") : undefined;
       return { headline: `step ${n} ${stepLabel(s, e2eTestOf(report))}`, detail };
     }
   }
+  if (unwritten.length) return { headline: "baselines not written", detail: unwritten.join("\n") };
   return { headline: "failed with no failing step" };
 }
 
@@ -1541,17 +1550,8 @@ async function runFlowDirectory(
       flowPath,
       baseUrl
     );
-    const unwritten = unwrittenBaselines(report);
-    results.push({ path: rel, status: report.ok && !unwritten.length ? "pass" : "fail", report });
+    results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
     if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });
-    else if (unwritten.length) {
-      failures.push({
-        path: rel,
-        headline: "baselines not written",
-        detail: unwritten.join("\n"),
-        rerun,
-      });
-    }
     if (!args.json) {
       for (const line of renderFailedSteps(report)) console.log(line);
       console.log(`  ${renderSummary(report, { withDevice: true })}`);
@@ -2087,11 +2087,5 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   } else {
     console.log(renderReport(report));
   }
-
-  const unwritten = unwrittenBaselines(report);
-  if (!args.json && !args.jsonStream) {
-    for (const line of unwritten)
-      console.log(`  ${STATUS_GLYPH.error} baseline not written: ${line}`);
-  }
-  return exitAfterFlush(report.ok && unwritten.length === 0 ? 0 : 1);
+  return exitAfterFlush(report.ok ? 0 : 1);
 }

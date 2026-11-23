@@ -5,7 +5,9 @@ import {
   isFoldableAvd,
   listAvds,
   consolePortFromAdbSerial,
+  readEmulatorConsoleAvdName,
   ADB_DEVICES_TIMEOUT_MS,
+  type AndroidDevice as AdbAndroidDevice,
 } from "../../utils/adb";
 import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
@@ -57,7 +59,7 @@ type IosPhysicalDevice = {
   kind: "device";
   udid: string;
   name: string;
-  // connected = wired transport. paired = listed but not reachable over USB.
+  // connected = reachable over USB or the network; the tunnel comes up on first use. paired = remembered but unreachable.
   state: "connected" | "paired";
   runtime: string;
   model: string | null;
@@ -212,7 +214,7 @@ function iosReachNote(
   }
   if (cloud !== "absent" || host.localIos) return null;
   return host.darwin
-    ? `iOS: no local simulators because Xcode is not installed; installing it adds them. ${ARGENT_CLOUD_OFFER}`
+    ? `iOS: no local simulators because \`simctl\` was not found in the active developer directory. Select your Xcode installation, or install Xcode if needed. ${ARGENT_CLOUD_OFFER}`
     : `iOS: this machine cannot run iOS simulators (they need macOS with Xcode). ${ARGENT_CLOUD_OFFER}`;
 }
 
@@ -338,6 +340,21 @@ async function canRunLocalIos(simulatorsFound: boolean): Promise<boolean> {
   return execFileAsync("xcrun", ["--find", "simctl"], { timeout: 5_000 }).then(
     () => true,
     () => false
+  );
+}
+
+/**
+ * adb lists an emulator as `offline` while it boots, before getprop can name its
+ * AVD. Its console answers from the start, so ask it: otherwise the AVD would
+ * also be listed as stopped and an agent could boot it a second time.
+ */
+async function nameBootingEmulators(devices: AdbAndroidDevice[]): Promise<AdbAndroidDevice[]> {
+  return Promise.all(
+    devices.map(async (d) => {
+      if (!d.isEmulator || d.avdName !== null) return d;
+      const answer = await readEmulatorConsoleAvdName(d.serial);
+      return answer.status === "ok" ? { ...d, avdName: answer.avdName } : d;
+    })
   );
 }
 
@@ -522,9 +539,9 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
         // list-devices is the one caller that surfaces TV vs mobile, so it pays for
         // runtimeKind's extra per-device probe. The explicit `adb devices` bound
         // (not runAdb's 30s default) keeps this branch under BRANCH_DEADLINE_MS.
-        listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS }).catch(
-          () => []
-        ),
+        listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS })
+          .then(nameBootingEmulators)
+          .catch(() => []),
         [],
         "android"
       ),
@@ -583,7 +600,10 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
         kind: "device",
         udid: d.udid,
         name: d.name,
-        state: d.transportType === "wired" ? "connected" : "paired",
+        state:
+          d.transportType === "wired" || d.transportType === "localNetwork"
+            ? "connected"
+            : "paired",
         runtime: d.osVersion ? `iOS ${d.osVersion} (physical device)` : "iOS (physical device)",
         model: d.model,
         developerModeEnabled: d.developerModeEnabled,
