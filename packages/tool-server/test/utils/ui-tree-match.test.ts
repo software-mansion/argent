@@ -1817,4 +1817,35 @@ describe("on-screen keyboard", () => {
     expect(keyboardDrawsAt(screen, { x: 0.16, y: 0.64 })).toBe(true);
     expect(underKeyboard(screen, search)).toBe(false);
   });
+
+  it("passes a point above the keys to the app when the input method draws its own navigation bar", () => {
+    // Gboard with gesture navigation, as the helper dumps it on a Pixel (API 35):
+    // the containers start under the status bar and end at the navigation bar
+    // that the input method's window draws below them.
+    const imeWindow = [
+      node({ identifier: "android:id/parentPanel", keyboard: true, frame: f(0, 0.057, 1, 0.891) }),
+      node({ identifier: "android:id/inputArea", keyboard: true, frame: f(0, 0.057, 1, 0.891) }),
+      key("q", f(0.005, 0.689, 0.099, 0.064)),
+      key("Search", f(0.846, 0.882, 0.149, 0.066)),
+      node({
+        identifier: "android:id/input_method_navigation_bar_view",
+        keyboard: true,
+        frame: f(0, 0.948, 1, 0.052),
+      }),
+      node({
+        identifier: "android:id/input_method_nav_back",
+        label: "Back",
+        keyboard: true,
+        frame: f(0.019, 0.948, 0.17, 0.052),
+      }),
+    ];
+    const back = node({ role: "Button", label: "Back", frame: f(0, 0.057, 0.117, 0.079) });
+    const list = node({ label: "Battery", frame: f(0.02, 0.7, 0.06, 0.04) });
+    const gesture = node({ frame: f(0, 0, 1, 1), children: [...imeWindow, back, list] });
+    expect(underKeyboard(gesture, back)).toBe(false);
+    expect(nodeAtPoint(gesture, { x: 0.05, y: 0.1 })).toBe(back);
+    expect(underKeyboard(gesture, list)).toBe(true);
+    // The navigation bar covers the app below the keys.
+    expect(keyboardDrawsAt(gesture, { x: 0.5, y: 0.97 })).toBe(true);
+  });
 });

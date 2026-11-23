@@ -715,7 +715,9 @@ export function nodeAtPoint(
  * The elements the on-screen keyboard draws: its visible ones, other than one
  * whose frame holds every other. The input method's window on Android has
  * containers as tall as the window (`android:id/parentPanel`), which pass a
- * tap above the keys to the app.
+ * tap above the keys to the app. With gesture navigation, the window also
+ * draws its own navigation bar below these containers, so the containers are
+ * found by the other elements only. The navigation bar stays in the keyboard.
  */
 function drawnKeyboard(root: DescribeNode): DescribeNode[] {
   const keyboard: DescribeNode[] = [];
@@ -724,8 +726,15 @@ function drawnKeyboard(root: DescribeNode): DescribeNode[] {
     for (const child of node.children) walk(child);
   };
   for (const child of root.children) walk(child);
-  const span = boundingFrame(keyboard.map((n) => n.frame));
+  const span =
+    boundingFrame(keyboard.filter((n) => !isImeNavigationBar(n)).map((n) => n.frame)) ??
+    boundingFrame(keyboard.map((n) => n.frame));
   return span === undefined ? [] : keyboard.filter((n) => !frameWithin(span, n.frame));
+}
+
+/** An element of the navigation bar that the input method's window draws on Android. */
+function isImeNavigationBar(node: DescribeNode): boolean {
+  return node.identifier?.startsWith("android:id/input_method_nav") === true;
 }
 
 /**
