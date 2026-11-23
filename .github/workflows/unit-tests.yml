@@ -17,14 +17,19 @@ concurrency:
 jobs:
   # Node 22 is the oldest line Argent supports.
   unit-tests:
-    name: Unit tests
+    name: Unit tests (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Set up Node.js
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -34,20 +39,41 @@ jobs:
         with:
           bun-version-file: package.json
 
+      - name: Restore node_modules
+        id: node-modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
+
       - name: Install dependencies
+        if: steps.node-modules.outputs.cache-hit != 'true'
         run: bun install --frozen-lockfile
 
       - name: Build workspace dependencies
         run: bun run build
 
-      # bun prefixes each line with its package, and the runner only reads
-      # vitest's `::error` annotations from the start of a line.
       - name: Run tests
-        shell: bash
-        run: bun run --workspaces --sequential --no-exit-on-error --if-present test 2>&1 | sed -uE 's/^[^ |]+ +\| ::/::/'
+        run: bun run test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Test root scripts
+        if: matrix.shard == 1
         run: bun run test:scripts
+
+  # Branch protection requires a check named "Unit tests"; this reports the
+  # shards' combined result under that name. `!cancelled()` keeps it from being
+  # skipped when a shard fails, since a skipped required check counts as passed.
+  unit-tests-result:
+    name: Unit tests
+    needs: unit-tests
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require every shard to pass
+        run: test "${{ needs.unit-tests.result }}" = success
 
   # Typechecking needs the same install and build as the tests but none of their
   # output, so running it alongside them takes its ~60s off the critical path
@@ -61,6 +87,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node.js
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -70,7 +97,17 @@ jobs:
         with:
           bun-version-file: package.json
 
+      - name: Restore node_modules
+        id: node-modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
+
       - name: Install dependencies
+        if: steps.node-modules.outputs.cache-hit != 'true'
         run: bun install --frozen-lockfile
 
       - name: Build workspace dependencies
