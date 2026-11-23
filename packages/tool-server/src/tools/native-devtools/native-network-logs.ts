@@ -61,6 +61,17 @@ const zodSchema = z.object({
     .describe(
       "Clear the log after reading. On iOS and Android, the IDs of cleared requests still work in view-network-request-details"
     ),
+  // Declared so this non-strict object refuses the old stop instead of stripping it: the read
+  // would succeed while capture records on.
+  stop: z
+    .never({
+      error:
+        "native-network-logs no longer stops capture: call network-capture-stop with this udid and bundleId, which keeps what was captured (stop-all-simulator-servers for the device also ends it). Drop `stop` from this call; `stop: false` was a plain read",
+    })
+    .optional()
+    .describe(
+      "Retired: native-network-logs only reads. Call network-capture-stop with the same udid and bundleId to stop capture; drop `stop: false`, which was a plain read."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
