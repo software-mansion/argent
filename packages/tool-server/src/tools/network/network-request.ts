@@ -213,7 +213,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial, the same id used with debugger-connect<flag:macos-apps>, or a Mac app id</flag:macos-apps>). A native ID needs no debugger connection."
+      "Device id used to list the request<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   requestId: z
     .string()
@@ -231,10 +231,11 @@ export const networkRequestTool: ToolDefinition<
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
-  description: `Get full details of a specific network request by its requestId: one from view-network-logs, or a native ID (ios-, android-<flag:macos-apps> or macos-</flag:macos-apps>) from native-network-logs, which needs no debugger connection.
+  description: `Read the details of one request after listing captured traffic. Native requests can be read without a debugger connection.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
 Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of a native ID. For a native ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app may still be sending the request body, call again once the request has ended. Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found; on iOS<flag:macos-apps>, a Mac app</flag:macos-apps> and Android it also says when network capture is not started, which network-capture-start does. IDs keep working after network-capture-stop. A view-network-logs ID holds until the app's JS runtime reloads: the new runtime numbers its requests from rn-net-1 again, so an old ID can name a new request. Native IDs are not affected.`,
+If the request is missing, list requests again. When the response says capture is off, start it and repeat the app action. On Vega<flag:macos-apps> and React Native Mac apps</flag:macos-apps>, a JS request lookup can start capture. Use view-network-logs to start capture before triggering a request.
+IDs from stopped capture still work. After a JavaScript reload, list requests again because an old JS ID may now refer to a different request.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -243,7 +244,6 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
-  // A Mac app has only native IDs, which need no debugger.
   capability: { ...DEBUGGER_TOOL_CAPABILITY, macos: { app: true, catalyst: true } },
   services: (params): Record<string, ServiceRef> => {
     /**
@@ -266,7 +266,7 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
      */
     if (nativeIdPlatform(params.requestId)) return {};
     const payload = jsCapturePayload(jsReadPort(params), canonicalDeviceId(params.device_id)!);
-    // Vega and Mac apps have no network-capture-start, so their read still installs the interceptor.
+    // JS capture starts on read for Vega and Mac apps.
     if (device.platform === "vega" || device.platform === "macos")
       return { inspector: `NetworkInspector:${payload}` };
     // A read never starts capture: before a start it reaches nothing in the app.

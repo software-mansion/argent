@@ -30,7 +30,7 @@ export const captureSchema = z.object({
     .enum(["js", "native"])
     .optional()
     .describe(
-      "The layer to act on: js (the app's JS runtime, read with view-network-logs) or native (NSURLProtocol on iOS, OkHttp on Android, read with native-network-logs). Omit it to act on both. The other layer stays as it is.<flag:macos-apps> On a Mac app, only native: view-network-logs starts the capture of its JS runtime when it reads.</flag:macos-apps>"
+      "Use js for the app's JavaScript requests or native for requests captured by the native layer. Omit to control all supported layers.<flag:macos-apps> On Mac apps, this parameter supports only native. Read view-network-logs to start JavaScript capture in a React Native Mac app.</flag:macos-apps>"
     ),
   logicalDeviceId: z
     .string()
