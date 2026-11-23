@@ -17,11 +17,11 @@
 
 buffers: {
   size_kb: 65536          # 64 MB — CPU samples + atrace slices
-  fill_policy: DISCARD    # ring-buffer once full; we want recency over completeness
+  fill_policy: RING_BUFFER  # overwrite the oldest data once full; we want recency over completeness
 }
 buffers: {
   size_kb: 16384          # 16 MB — frame timeline + ANRs (sparser, smaller buffer)
-  fill_policy: DISCARD
+  fill_policy: RING_BUFFER
 }
 
 # ----------------------------------------------------------------------------
