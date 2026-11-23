@@ -107,6 +107,31 @@ describe("the native profiler tools' Mac app text", () => {
   );
 });
 
+describe("the JS debugger and network tools' Mac app text", () => {
+  it.each([
+    "debugger-connect",
+    "debugger-status",
+    "debugger-evaluate",
+    "debugger-log-registry",
+    "debugger-component-tree",
+    "debugger-inspect-element",
+    "debugger-reload-metro",
+    "view-network-logs",
+    "view-network-request-details",
+  ])("%s names the Mac app ID only with the flag on", (id) => {
+    expect(advertised(id, true).properties.device_id!.description).toMatch(/Mac app id/);
+    expect(JSON.stringify(advertised(id, false))).not.toMatch(MAC_TEXT);
+  });
+
+  it("debugger-inspect-element says where a Mac app's points start only with the flag on", () => {
+    for (const axis of ["x", "y"]) {
+      expect(advertised("debugger-inspect-element", true).properties[axis]!.description).toMatch(
+        /title bar included/
+      );
+    }
+  });
+});
+
 describe("the React profiler tools' Mac app text", () => {
   it.each([
     "react-profiler-start",
