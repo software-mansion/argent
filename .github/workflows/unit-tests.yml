@@ -28,21 +28,23 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
 
       - name: Install dependencies
-        run: npm ci
-      - name: Fix rollup native bindings
-        run: npm install @rollup/rollup-linux-x64-gnu --no-save
+        run: bun install --frozen-lockfile
 
       - name: Build workspace dependencies
-        run: npm run build
+        run: bun run build
 
       - name: Run tests
-        run: npm test --workspaces --if-present
+        run: bun run --workspaces --sequential --no-exit-on-error --if-present test
 
       - name: Test root scripts
-        run: npm run test:scripts
+        run: bun run test:scripts
 
   # Typechecking needs the same install and build as the tests but none of their
   # output, so running it alongside them takes its ~60s off the critical path
@@ -59,16 +61,20 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Build workspace dependencies
-        run: npm run build
+        run: bun run build
 
       - name: Typecheck tests
-        run: npm run typecheck:tests --workspaces --if-present
+        run: bun run --workspaces --sequential --no-exit-on-error --if-present typecheck:tests
 
       - name: Typecheck scripts
-        run: npm run typecheck:scripts
+        run: bun run typecheck:scripts

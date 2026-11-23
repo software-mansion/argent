@@ -91,6 +91,12 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Set up Bun
+        if: needs.changes.outputs.relevant == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
       # Mounted into the container for the tool-server; the image's own Node 20
       # stays on PATH for the Vega SDK.
       - name: Locate Node for the container
@@ -114,9 +120,9 @@ jobs:
       - name: Build tool-server
         if: needs.changes.outputs.relevant == 'true'
         run: |
-          npm ci
-          npm run build
-          npm run build -w @swmansion/argent
+          bun install --frozen-lockfile
+          bun run build
+          bun run --filter @swmansion/argent build
 
       - name: Enable KVM
         if: needs.changes.outputs.relevant == 'true'
