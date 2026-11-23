@@ -22,6 +22,14 @@ vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
   ],
 }));
 
+// A name match is kept only once the runtime's device log confirms it. The
+// mock Metro writes no log, so the confirmation is stubbed; the confirmation
+// itself is covered in name-match-confirmation.test.ts.
+vi.mock("../../src/utils/debugger/device-name", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/debugger/device-name")>()),
+  runtimeRunsOn: async () => ({ verdict: "yes" as const }),
+}));
+
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
 // developer's real home.

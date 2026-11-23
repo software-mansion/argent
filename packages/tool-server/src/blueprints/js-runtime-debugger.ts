@@ -6,12 +6,19 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { discoverMetro } from "../utils/debugger/discovery";
+import { discoverMetro, type CDPTarget } from "../utils/debugger/discovery";
 import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/metro-port";
 import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
-import { selectTarget, simulatorNameOnSharedMetro } from "../utils/debugger/target-selection";
+import { selectTarget } from "../utils/debugger/target-selection";
+import {
+  deviceNameMatcher,
+  forgetNameMatch,
+  nameMatchedLogicalDeviceId,
+  rememberNameMatch,
+  runtimeRunsOn,
+} from "../utils/debugger/device-name";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
@@ -27,6 +34,45 @@ import { LogFileWriter, type RichLogEntry } from "../utils/debugger/log-file-wri
 import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
 
 export const JS_RUNTIME_DEBUGGER_NAMESPACE = "JsRuntimeDebugger";
+
+/**
+ * A target picked by the device's name, or by a pin from an earlier match,
+ * whose runtime's log did not show it runs on `deviceId`.
+ */
+function unconfirmedMatchError(
+  deviceId: string,
+  port: number,
+  deviceName: string,
+  where: { verdict: "elsewhere"; found: string[] } | { verdict: "unknown" },
+  targets: readonly CDPTarget[]
+): FailureError {
+  const listed = [
+    ...new Set(
+      targets
+        .filter((t) => t.reactNative?.logicalDeviceId)
+        .map((t) => `${t.deviceName ?? t.title ?? "unknown"} (${t.reactNative!.logicalDeviceId})`)
+    ),
+  ].join(", ");
+  const state =
+    where.verdict === "elsewhere"
+      ? `runs on ${where.found.join(", ")}, not on this device`
+      : `could not be confirmed to run on this device: no device log argent can read ` +
+        `holds the probe it wrote`;
+  return new FailureError(
+    `No debugger target matches device_id "${deviceId}". The app Metro on port ${port} lists ` +
+      `under this device's name, "${deviceName}", ${state}. A device on another adb server, ` +
+      `on the network or in another simulator device set can report the same name. ` +
+      `Metro lists: ${listed}. If this device's app does not run, start it (launch-app) and ` +
+      `retry. Otherwise re-target with the logicalDeviceId in parentheses — debugger-connect ` +
+      `returns it, and it is accepted by every debugger-* call.`,
+    {
+      error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
+      failure_stage: "debugger_select_target",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    }
+  );
+}
 
 function stringifyConsoleValue(value: unknown): string {
   if (typeof value === "object" && value !== null) {
@@ -170,11 +216,6 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
       throw error;
     });
-    const selected = selectTarget(metro.targets, port, {
-      ...options,
-      deviceId,
-      simulatorName: await simulatorNameOnSharedMetro(deviceId, metro.targets),
-    });
 
     /**
      * React Native's inspector-proxy keeps one debugger per device and
@@ -201,10 +242,61 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const onPublishedBundler = publishedMetroPort(physicalDeviceId, port) === undefined;
     const proxied = onPublishedBundler ? externalJsDebuggerUrl(physicalDeviceId) : undefined;
 
-    const cdp = new CDPClient(proxied ?? selected.webSocketUrl, {
-      awaitPromisesInApp: !selected.legacyInspector,
-    });
-    await cdp.connect();
+    // A udid or serial never matches a logicalDeviceId, so on a Metro shared by
+    // several devices it is resolved by the device's name. The lookup shells
+    // out, so it runs only when there is more than one device to choose from,
+    // or when this id was matched by name before and the device it led to has
+    // left (see device-name.ts), and never for an id Metro lists itself.
+    //
+    // A name or a pin only points at a target. Before the session is kept, the
+    // runtime's own log must show that it runs on this device (`runtimeRunsOn`).
+    // A pin that fails is forgotten and the name is tried once more, since its
+    // serial may now be another emulator.
+    const logicalIds = new Set(metro.targets.map((t) => t.reactNative?.logicalDeviceId));
+    let selected: ReturnType<typeof selectTarget>;
+    let cdp: CDPClient;
+    for (let attempt = 0; ; attempt++) {
+      const pinnedLogicalDeviceId = nameMatchedLogicalDeviceId(deviceId, port);
+      const needsName =
+        !logicalIds.has(deviceId) &&
+        (pinnedLogicalDeviceId !== undefined
+          ? !logicalIds.has(pinnedLogicalDeviceId)
+          : logicalIds.size > 1);
+      const deviceNameMatches = needsName ? await deviceNameMatcher(deviceId) : undefined;
+      selected = selectTarget(metro.targets, port, {
+        ...options,
+        deviceId,
+        deviceNameMatches,
+        pinnedLogicalDeviceId,
+      });
+      const selectedId = selected.target.reactNative?.logicalDeviceId;
+      const byPin =
+        pinnedLogicalDeviceId !== undefined &&
+        selectedId === pinnedLogicalDeviceId &&
+        selectedId !== deviceId;
+
+      cdp = new CDPClient(proxied ?? selected.webSocketUrl, {
+        awaitPromisesInApp: !selected.legacyInspector,
+      });
+      await cdp.connect();
+      if (!selected.matchedByName && !byPin) break;
+
+      const client = cdp;
+      const where = await client
+        .send("Runtime.enable")
+        .then(() => runtimeRunsOn(client, deviceId))
+        .catch(() => ({ verdict: "unknown" as const }));
+      if (where.verdict === "yes") {
+        rememberNameMatch(deviceId, port, selectedId);
+        break;
+      }
+      forgetNameMatch(deviceId, port);
+      // An open socket keeps the inspector's debugger session, and the next
+      // connect's Runtime.enable then goes unanswered.
+      await client.disconnect();
+      if (byPin && attempt === 0) continue;
+      throw unconfirmedMatchError(deviceId, port, selected.deviceName, where, metro.targets);
+    }
 
     const sourceMaps = new SourceMapsRegistry();
 
@@ -301,9 +393,11 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       // later tool that forwards the logicalDeviceId on this instance instead of
       // opening a second one. See utils/debugger/device-alias.ts.
       rememberDeviceAlias(api.logicalDeviceId, deviceId);
-      // Equal ids mean the caller connected with the logicalDeviceId itself.
-      // Nothing then joins the session to a udid or serial, so a `list-devices`-scoped
-      // `stop-all-simulator-servers` can only report it, never reach it.
+      // Equal ids mean the caller connected with the logicalDeviceId itself, as
+      // `selectTarget` demands when a shared Metro's devices cannot be told apart
+      // by name. Nothing then joins the session to a udid or serial, so a
+      // `list-devices`-scoped `stop-all-simulator-servers` can only report it,
+      // never reach it.
       rememberLogicalKeyedDevice(api.logicalDeviceId, deviceId);
 
       const events = new TypedEventEmitter<ServiceEvents>();
