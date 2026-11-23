@@ -13,8 +13,8 @@ import { useMacosAppsFlag } from "../helpers/macos-apps-flag";
 /**
  * react-profiler-status answers `no_react_runtime` when it cannot reach the
  * runtime. Its note said "Reconnect the debugger and retry", also for a Mac
- * app id, which debugger-connect refuses, and it dropped the reason, which
- * says to start the app.
+ * app that was not running, and it dropped the reason, which says to start
+ * the app.
  */
 
 useMacosAppsFlag();

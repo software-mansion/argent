@@ -1,5 +1,3 @@
-import * as os from "os";
-import * as path from "path";
 import { promises as fs } from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -29,6 +27,7 @@ import {
   statNonEmptyOutput,
   type StartRecordingResult,
   type StopRecordingFile,
+  recordingOutputPath,
 } from "./session-guards";
 import {
   EVEN_CROP,
@@ -85,13 +84,6 @@ const execFileAsync = promisify(execFile);
  */
 const TRIM_FILTERS = `fps=${OUTPUT_FPS},mpdecimate=hi=1:lo=1:frac=1,setpts=N/${OUTPUT_FPS}/TB,tpad=stop_mode=clone:stop_duration=1`;
 
-function outputPath(deviceId: string): string {
-  return path.join(
-    os.tmpdir(),
-    `argent-screen-recording-${deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
-  );
-}
-
 export async function startRemoteCapture(
   api: ScreenRecordingSessionApi,
   params: {
@@ -123,7 +115,7 @@ export async function startRemoteCapture(
     throw asStartFailure(err);
   }
 
-  const outputFile = outputPath(api.deviceId);
+  const outputFile = recordingOutputPath(api.deviceId);
 
   // The capture is live — this recording owns the session now. Stamped only on
   // success, so a failed start never burns a previous capture's pending

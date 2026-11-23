@@ -209,6 +209,25 @@ describe("sendCommand on an iOS simulator", () => {
     expect(ws.received[0]).toMatchObject({ x: native.x, y: native.y });
   });
 
+  it("turns the starting edge with the finger and keeps it through the release", async () => {
+    orientationMock.mockResolvedValue({ interfaceOrientation: "landscapeLeft" });
+    const api = apiFor(ws.port, SIM);
+    for (const [type, x, y] of [
+      ["Down", 0.5, 1],
+      ["Move", 0.5, 0.5],
+      ["Up", 0.125, 0.5],
+    ] as const) {
+      await sendCommand(api, { cmd: "edgeTouch", type, edge: "bottom", x, y });
+      forgetUiOrientation(SIM);
+    }
+    expect(ws.received).toMatchObject([
+      { type: "Down", edge: "right", x: 1, y: 0.5 },
+      { type: "Move", edge: "right", x: 0.5, y: 0.5 },
+      { type: "Up", edge: "right", x: 0.5, y: 0.875 },
+    ]);
+    expect(orientationMock).toHaveBeenCalledTimes(1);
+  });
+
   it("turns both fingers", async () => {
     orientationMock.mockResolvedValue({ interfaceOrientation: "portraitUpsideDown" });
     await sendCommand(apiFor(ws.port, SIM), {

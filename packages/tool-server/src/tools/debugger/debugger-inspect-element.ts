@@ -7,6 +7,7 @@ import { makeInspectScript } from "../../utils/debugger/scripts/inspect-at-point
 import { shouldSkip, isHardSkip } from "../../utils/debugger/skip-rules";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 
 export interface InspectItem {
   name: string;
@@ -121,14 +122,18 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   x: z.coerce
     .number()
-    .describe("X coordinate on device screen, in logical pixels (not normalized 0–1)"),
+    .describe(
+      "Horizontal position in logical pixels from the left edge of the screen<flag:macos-apps>, or in points from the left edge of the Mac app window, title bar included</flag:macos-apps>."
+    ),
   y: z.coerce
     .number()
-    .describe("Y coordinate on device screen, in logical pixels (not normalized 0–1)"),
+    .describe(
+      "Vertical position in logical pixels from the top edge of the screen<flag:macos-apps>, or in points from the top edge of the Mac app window, title bar included</flag:macos-apps>."
+    ),
   contextLines: z.coerce
     .number()
     .default(3)
@@ -175,7 +180,7 @@ Returns components from the tapped element upward through its parent hierarchy,
 each with its source file:line and a code fragment.
 The first items (lowest indices) are the most specific: the exact component under
 the tap point and its direct parents. Higher indices are broader context (page, navigator).
-Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
+Use when you need the source file and line for a component at a point. Convert fractions from debugger-component-tree using the width and height in its Screen line. Fails if the app is disconnected or the point is outside the screen.<flag:macos-apps> On Mac apps with several React Native windows, the tool uses the root with the most components. With the old architecture (Paper), native views around the React root can shift the result. Check the returned component against the intended control.</flag:macos-apps>`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -193,7 +198,9 @@ Use when you need the source file and line for a component at a tap coordinate. 
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const requestId = crypto.randomUUID();
-    const script = makeInspectScript(params.x, params.y, requestId);
+    const script = makeInspectScript(params.x, params.y, requestId, {
+      subtractRootOffset: !!canonicalDeviceId(params.device_id)?.startsWith(MACOS_APP_ID_PREFIX),
+    });
 
     const raw = await api.cdp.evaluateWithBinding(script, requestId, {
       timeout: 8000,
