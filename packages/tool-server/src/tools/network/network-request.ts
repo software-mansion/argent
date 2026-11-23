@@ -234,7 +234,7 @@ export const networkRequestTool: ToolDefinition<
   description: `Read the details of one request after listing captured traffic. Native requests can be read without a debugger connection.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
 Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of a native ID. For a native ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app may still be sending the request body, call again once the request has ended. Use when you need headers, body, or timing for a specific request after listing logs.
-If the request is missing, list requests again. When the response says capture is off, start it and repeat the app action. On Vega<flag:macos-apps> and React Native Mac apps</flag:macos-apps>, a JS request lookup can start capture. Use view-network-logs to start capture before triggering a request.
+Returns an error message if the request is missing: list requests again. When the response says capture is off, start it and repeat the app action. On Vega<flag:macos-apps> and React Native Mac apps</flag:macos-apps>, a JS request lookup can start capture. Use view-network-logs to start capture before triggering a request.
 IDs from stopped capture still work. After a JavaScript reload, list requests again because an old JS ID may now refer to a different request.`,
   zodSchema,
   readOnly: true,

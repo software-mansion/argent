@@ -180,7 +180,7 @@ Returns components from the tapped element upward through its parent hierarchy,
 each with its source file:line and a code fragment.
 The first items (lowest indices) are the most specific: the exact component under
 the tap point and its direct parents. Higher indices are broader context (page, navigator).
-Convert fractions from debugger-component-tree using the width and height in its Screen line. Fails if the app is disconnected or the point is outside the screen.<flag:macos-apps> On Mac apps with several React Native windows, the tool uses the root with the most components. With the old architecture (Paper), native views around the React root can shift the result. Check the returned component against the intended control.</flag:macos-apps>`,
+Use when you need the source file and line for a component at a point. Convert fractions from debugger-component-tree using the width and height in its Screen line. Fails if the app is disconnected or the point is outside the screen.<flag:macos-apps> On Mac apps with several React Native windows, the tool uses the root with the most components. With the old architecture (Paper), native views around the React root can shift the result. Check the returned component against the intended control.</flag:macos-apps>`,
   zodSchema,
   readOnly: true,
   interaction: {
