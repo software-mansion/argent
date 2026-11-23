@@ -95,8 +95,8 @@ export interface UiTree {
    */
   foregroundApp?: string;
   /**
-   * iOS: the interface orientation, as UIKit names it. Frames stay in the
-   * screen's portrait-native space, so on a landscape UI their axes are not the user's.
+   * iOS: the interface orientation, as UIKit names it. The frames and `screen`
+   * are in the UI's upright space, as the user sees it.
    */
   interfaceOrientation?: "portrait" | "portraitUpsideDown" | "landscapeLeft" | "landscapeRight";
   /**
