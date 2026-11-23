@@ -28,10 +28,14 @@ jobs:
         with:
           bun-version-file: package.json
 
-      - name: Verify bun.lock is in sync with package.json
+      - name: Verify each bun.lock is in sync with its package.json
         run: |
-          bun install --lockfile-only
-          if ! git diff --exit-code -- bun.lock; then
-            echo "::error::bun.lock is out of sync. Run 'bun install' locally and commit the updated bun.lock."
-            exit 1
-          fi
+          status=0
+          for dir in . packages/docs packages/tool-server/test/fixtures/electron-smoke-app; do
+            (cd "$dir" && bun install --lockfile-only)
+            if ! git diff --exit-code -- "$dir/bun.lock"; then
+              echo "::error::$dir/bun.lock is out of sync. Run 'bun install' in $dir and commit the updated bun.lock."
+              status=1
+            fi
+          done
+          exit "$status"
