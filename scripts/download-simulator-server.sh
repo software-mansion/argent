@@ -8,11 +8,15 @@ set -euo pipefail
 #
 # Usage: ./scripts/download-simulator-server.sh [release-tag]
 #
+#   release-tag  a simulator-server-releases tag. Defaults to the newest
+#                radon-main-<sha> release, the build of Radon's latest main
+#                (see scripts/resolve-sim-server-release-tag.sh).
+#
 # Requires an authenticated gh CLI: the release repo is public, but
-# `gh release download` still needs auth.
+# `gh release list` and `gh release download` still need auth.
 
 REPO="software-mansion-labs/simulator-server-releases"
-TAG="${1:-radon-main}"
+TAG="${1:-$(bash "$(dirname "$0")/resolve-sim-server-release-tag.sh" main)}"
 DEST_DIR="packages/native-devtools-ios/bin"
 
 # release-asset-name → host platform key; the keys mirror hostPlatformKey() in
@@ -25,6 +29,8 @@ declare -a TARGETS=(
 )
 
 mkdir -p "${DEST_DIR}"
+
+echo "Downloading simulator-server from ${REPO} (tag: ${TAG})..."
 
 for entry in "${TARGETS[@]}"; do
   ASSET_NAME="${entry%%:*}"
