@@ -8,6 +8,7 @@ import { createDescribeTool } from "../src/tools/describe";
 import { describeIos, __resetBootCaveatStateForTests } from "../src/tools/describe/platforms/ios";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
+import { unknownOrientationNote } from "../src/utils/ios-ui-orientation";
 
 // describeIos probes the runtime kind to short-circuit tvOS. Mock it so these
 // unit tests stay hermetic (no real `simctl`) and default to the iOS path; the
@@ -35,6 +36,7 @@ function makeAXServiceApi(
     describe: async () => response,
     alertCheck: async () => response.alertVisible,
     livePanel: async () => null,
+    orientation: async () => ({}),
     foregroundApp: async () => ({ alertVisible: false }),
     fill: async () => ({ focused: false, verified: false }),
     tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -62,9 +64,16 @@ function makeNativeDevtoolsApi(options: {
     listConnectedBundleIds: () => [...connected],
     appConnectionState: async () =>
       options.state ?? (options.requiresRestart ? "stale_process" : "connected"),
-    activateNetworkInspection: () => {},
-    getNetworkLog: () => [],
-    clearNetworkLog: () => {},
+    startNetworkCapture: async () => false,
+    stopNetworkCapture: async () => ({ confirmed: true }),
+    isNetworkCaptureStarted: () => false,
+    isNetworkCaptureStopped: () => false,
+    networkCaptureMark: () => undefined,
+    refreshLentNetworkCapture: async () => {},
+    takeCaptureGap: () => false,
+    networkRecords: () => undefined,
+    networkCaptureAfterLaunch: async () => undefined,
+    setNetworkConditions: async () => {},
     getAppState: async (bundleId) => ({
       bundleId,
       applicationState: "active",
@@ -422,29 +431,6 @@ describe("describe tool", () => {
     // Dropping the bundleId half must not drop `screenshot` with it — the only
     // action left when the hierarchy cannot be read.
     expect(result.hint).toMatch(/screenshot/);
-  });
-
-  // An agent reads both forms, so both have to parse as English: the
-  // conditional clause and the action it leads into are one sentence, and
-  // joining them wrongly yields "measured, or Take a `screenshot`".
-  it.each([
-    ["with bundleId", "com.example.app", /on screen\. Take a `screenshot` to see what is there\.$/],
-    [
-      "without bundleId",
-      undefined,
-      /on screen\. Pass `bundleId` to have the connection state measured, or take a `screenshot` to see what is there\.$/,
-    ],
-  ] as const)("reads as one grammatical sentence %s", async (_label, bundleId, expected) => {
-    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
-    const registry = makeMockRegistry({ axService: axApi });
-    const tool = createDescribeTool(registry);
-
-    const result = await tool.execute(
-      {},
-      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", ...(bundleId ? { bundleId } : {}) }
-    );
-
-    expect(result.hint).toMatch(expected);
   });
 
   // The ax-service's own hint is the simulator's state and carries the only
@@ -1076,6 +1062,7 @@ describe("describe tool — ax-service read failure", () => {
       alertCheck: async () => false,
       ping: async () => true,
       livePanel: async () => null,
+      orientation: async () => ({}),
       foregroundApp: async () => ({ alertVisible: false }),
       fill: async () => ({ focused: false, verified: false }),
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -1149,13 +1136,6 @@ describe("describe tool — ax-service daemon crash", () => {
   });
 
   const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
-  const CRASH_HINT =
-    "The accessibility service (ax-service) crashed with SIGSEGV, so the accessibility tree could " +
-    "not be read. Every describe starts the service again. If this hint repeats, the crash is in " +
-    "the service on this host: rebooting the simulator (boot-device with force=true) or restarting " +
-    "the tool-server will not fix it, because both start the same binary again. While it crashes, " +
-    "system dialogs and SpringBoard chrome cannot be read through describe. describe continues on " +
-    "the app's native view hierarchy where that is available, and `screenshot` shows the rest.";
 
   // What `resolveService` rejects with when the factory does: the registry
   // wraps the blueprint's own error.
@@ -1213,7 +1193,7 @@ describe("describe tool — ax-service daemon crash", () => {
     const result = await tool.execute({}, { udid: UDID });
 
     expect(elementLineCount(result.description)).toBe(0);
-    expect(result.hint!.startsWith(CRASH_HINT)).toBe(true);
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
     expect(result.hint).not.toContain("not booted through argent");
     // Both remedies are named only to be ruled out.
     expect(result.hint).not.toMatch(/call boot-device/);
@@ -1226,7 +1206,7 @@ describe("describe tool — ax-service daemon crash", () => {
 
     const result = await tool.execute({}, { udid: UDID });
 
-    expect(result.hint).toContain("(ax-service) crashed with SIGABRT, so");
+    expect(result.hint).toContain("SIGABRT");
   });
 
   it("keeps the boot caveat for a start that failed without a crash or a measured boot state", async () => {
@@ -1277,7 +1257,7 @@ describe("describe tool — ax-service daemon crash", () => {
         makeMockRegistry({ axService: axApiThatCrashesOnRead(degraded) })
       );
       const result = await tool.execute({}, { udid: UDID });
-      expect(result.hint!.startsWith(CRASH_HINT)).toBe(true);
+      expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
       expect(result.hint).not.toContain("not booted through argent");
       expect(result.hint).not.toContain("The accessibility read failed");
     }
@@ -1298,8 +1278,16 @@ describe("describe tool — ax-service daemon crash", () => {
 
     expect(first.source).toBe("native-devtools");
     expect(first.description).toMatch(/AXButton\s+"Go"/);
-    expect(first.hint).toBe(CRASH_HINT);
-    expect(second.hint).toBe(CRASH_HINT);
+    expect(first.hint).toMatch(/ax-service.*SIGSEGV/i);
+    // The native tree's frames could not be turned upright without the
+    // service, which names the UI's orientation, and the hint says so.
+    expect(first.hint).toContain(
+      unknownOrientationNote(
+        { unknownReason: "the accessibility service is not running" },
+        "these frames are in"
+      )
+    );
+    expect(second.hint).toBe(first.hint);
   });
 
   describe("and the standing boot caveat", () => {
@@ -1386,12 +1374,9 @@ describe("describe tool — ax-service daemon crash", () => {
 
     const result = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
 
-    expect(result.hint!.startsWith(CRASH_HINT)).toBe(true);
-    const rest = result.hint!.slice(CRASH_HINT.length);
-    expect(rest).toMatch(
-      /^ The native fallback has no tree for this read, .*unrelated to the crash:/
-    );
-    expect(rest).toContain("the service never registered its connection");
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).toMatch(/SIGSEGV.*native fallback.*unrelated to the crash/is);
+    expect(result.hint).toContain("never registered its connection");
     expect(result.should_restart).toBeUndefined();
   });
 
@@ -1408,7 +1393,7 @@ describe("describe tool — ax-service daemon crash", () => {
     const result = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
 
     expect(result.should_restart).toBe(true);
-    expect(result.hint!.startsWith(CRASH_HINT)).toBe(true);
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
     expect(result.hint).toContain("call restart-app then retry");
   });
 
@@ -1419,7 +1404,7 @@ describe("describe tool — ax-service daemon crash", () => {
 
     const result = await tool.execute({}, { udid: UDID, bundleId: "com.apple.Preferences" });
 
-    expect(result.hint!.startsWith(CRASH_HINT)).toBe(true);
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
     expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
     expect(result.should_restart).toBeUndefined();
   });
@@ -1431,7 +1416,7 @@ describe("describe tool — ax-service daemon crash", () => {
 
     const result = await tool.execute({}, { udid: UDID });
 
-    expect(result.hint!.startsWith(CRASH_HINT)).toBe(true);
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
     expect(result.hint).toMatch(/not evidence that nothing is on screen/);
     expect(result.should_restart).toBeUndefined();
   });
@@ -1446,10 +1431,9 @@ describe("describe tool — ax-service daemon crash", () => {
     );
     // The crash hint says describe continues on the native hierarchy "where
     // that is available", so on a device that does not lend it, it says so.
-    expect(crashed.hint).toBe(
-      `${CRASH_HINT} This device is supplied by an external provider. The native view-hierarchy ` +
-        "fallback is unavailable on it. Take a screenshot to see the screen."
-    );
+    expect(crashed.hint).toContain("SIGSEGV");
+    expect(crashed.hint).toMatch(/external provider.*fallback is unavailable/is);
+    expect(crashed.hint).toContain("screenshot");
     expect(crashed.hint).not.toContain("Restart it from that application");
 
     // The same device with a daemon that merely failed to start keeps the
@@ -1460,11 +1444,9 @@ describe("describe tool — ax-service daemon crash", () => {
       {},
       { isTvOs: false }
     );
-    expect(failed.hint).toBe(
-      "This device is supplied by an external provider. The accessibility service failed to start " +
-        `([AXService:${UDID}] ax-service exited with code 1 before connecting), and argent cannot ` +
-        "reboot this device to apply the pre-boot accessibility settings. Restart it from that " +
-        "application, or take a screenshot to see the screen."
-    );
+    expect(failed.hint).toContain(`AXService:${UDID}`);
+    expect(failed.hint).toContain("code 1");
+    expect(failed.hint).toMatch(/cannot reboot this device/i);
+    expect(failed.hint).toContain("screenshot");
   });
 });

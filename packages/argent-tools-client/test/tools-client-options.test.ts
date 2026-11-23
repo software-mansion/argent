@@ -3,7 +3,7 @@ import { createServer, type Server, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { existsSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // link-config.ts captures ~/.argent/link.json at module load; an isolated HOME
@@ -72,12 +72,25 @@ beforeEach(async () => {
             fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
           },
           {
+            name: "record",
+            description: "",
+            inputSchema: {},
+            fileInputs: [{ target: "project_root", path: "${project_root}", kind: "probe" }],
+          },
+          {
             name: "run-flow",
             description: "",
             inputSchema: {},
             fileInputs: [
               { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
             ],
+          },
+          {
+            // A tool-server older than the e2e_test_path rename.
+            name: "flow-execute",
+            description: "",
+            inputSchema: {},
+            fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
           },
         ],
       });
@@ -109,6 +122,8 @@ beforeEach(async () => {
       }
       return json(body);
     }
+    if (req.method === "POST" && req.url === "/tools/record")
+      return json({ data: { recorded: true } });
     if (req.method === "POST" && req.url === "/tools/proxy-page") {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<html>Sign in</html>");
@@ -145,7 +160,13 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: false }),
     });
     const tools = await withOverride.fetchTools();
-    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app", "run-flow"]);
+    expect(tools.map((t) => t.name)).toEqual([
+      "slow",
+      "reinstall-app",
+      "record",
+      "run-flow",
+      "flow-execute",
+    ]);
 
     const withoutOverride = createToolsClient();
     await expect(withoutOverride.fetchTools()).rejects.toThrow(
@@ -332,6 +353,7 @@ describe("createToolsClient options", () => {
       inside,
       { path: outside, error: `${outside} is not a baseline of this call (${dir}/<name>.png)` },
     ]);
+    expect((data as { ok: unknown }).ok).toBe(false);
     expect(failure).toBe(`Baselines not written on this client: ${outside}`);
     expect(existsSync(outside)).toBe(false);
   });
@@ -393,6 +415,64 @@ describe("createToolsClient options", () => {
       });
       expect(failure).toBe(runFlowFailure);
     }
+  });
+
+  it("fails the recorded run of an e2e-add-step result whose baseline it did not write", async () => {
+    const flowPath = join(TEST_HOME, "step.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const outside = join(realpathSync(TEST_HOME), "step__ios-30x60.png");
+    runFlowData = {
+      message: "Step added",
+      toolResult: { ok: true },
+      baselineWrites: [
+        {
+          __argentClientFile: true,
+          path: outside,
+          content: Buffer.from("png").toString("base64"),
+          encoding: "base64",
+        },
+      ],
+    };
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+
+    const { data } = await callTool("run-flow", {
+      e2e_test_path: flowPath,
+      project_root: TEST_HOME,
+      updateBaselines: true,
+    });
+
+    expect(data).toMatchObject({ message: "Step added", toolResult: { ok: false } });
+    expect(data).not.toHaveProperty("ok");
+  });
+
+  it("keeps ok: true when it writes every baseline the run returns", async () => {
+    const flowPath = join(TEST_HOME, "allwritten.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const inside = join(realpathSync(TEST_HOME), "__baselines__", "allwritten", "t__ios-30x60.png");
+    runFlowData = {
+      ok: true,
+      baselineWrites: [
+        {
+          __argentClientFile: true,
+          path: inside,
+          content: Buffer.from("png").toString("base64"),
+          encoding: "base64",
+        },
+      ],
+    };
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+
+    const { data } = await callTool("run-flow", {
+      e2e_test_path: flowPath,
+      project_root: TEST_HOME,
+      updateBaselines: true,
+    });
+
+    expect(data).toEqual({ ok: true, baselineWrites: [inside] });
   });
 
   it("logs each baseline it writes under the [e2e-files] tag", async () => {
@@ -463,5 +543,186 @@ describe("createToolsClient options", () => {
 
     expect(buffered.outputHint).toBe("image");
     expect(streamed).toEqual({ data: { ok: true }, outputHint: "image" });
+  });
+
+  // JSON.stringify would send each of these as null, which a coerced number reads as 0 (#2074).
+  it("refuses a number that JSON cannot write, before anything is sent", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+
+    // What JSON.parse makes of `{"x":1e999,"points":[1,-1e999],"opts":{"scale":1e999}}`.
+    const call = callTool("slow", { x: Infinity, points: [1, -Infinity], opts: { scale: NaN } });
+
+    await expect(call).rejects.toThrow(
+      "`x`: expected a number, got Infinity; `points.1`: expected a number, got -Infinity; " +
+        "`opts.scale`: expected a number, got NaN. You sent: `x`, `points`, `opts`."
+    );
+    const err = await call.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ToolInvocationError);
+    expect(err).toMatchObject({
+      errorKind: "validation",
+      issues: [
+        { code: "invalid_type", path: ["x"], message: "expected a number, got Infinity" },
+        { code: "invalid_type", path: ["points", 1], message: "expected a number, got -Infinity" },
+        { code: "invalid_type", path: ["opts", "scale"], message: "expected a number, got NaN" },
+      ],
+    });
+    expect(requests).toEqual([]);
+  });
+
+  it("names a bounded number of them, and leaves a cyclic value to JSON.stringify", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+
+    const flood = await callTool("slow", { nums: new Array(1000).fill(Infinity) }).catch(
+      (e: unknown) => e
+    );
+    expect((flood as { issues: unknown[] }).issues).toHaveLength(12);
+
+    const cyclic: Record<string, unknown> = { x: 1 };
+    cyclic.self = cyclic;
+    await expect(callTool("slow", cyclic)).rejects.toThrow(/circular structure/);
+  });
+
+  it("sends the largest finite number, null, and text that only names Infinity", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+    const args = { x: 1.7976931348623157e308, y: null, text: "Infinity", list: [0, -1e308, null] };
+
+    await callTool("slow", args);
+
+    expect(JSON.parse(requests.at(-1)!.body)).toEqual(args);
+  });
+});
+
+describe("refuseRelativeProjectPaths", () => {
+  const recordBodies = () =>
+    requests
+      .filter((r) => r.url === "/tools/record")
+      .map((r) => JSON.parse(r.body) as Record<string, unknown>);
+
+  it.each([".", "myapp"])(
+    "refuses a relative project_root %s without calling the tool",
+    async (root) => {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        refuseRelativeProjectPaths: true,
+      });
+
+      await expect(callTool("record", { project_root: root })).rejects.toThrow(
+        `project_root must be an absolute path (got "${root}")`
+      );
+      expect(recordBodies()).toEqual([]);
+    }
+  );
+
+  it.each([".argent/e2e/t.yaml", "tests/t.yaml"])(
+    "refuses a relative e2e_test_path %s without calling the tool",
+    async (file) => {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        refuseRelativeProjectPaths: true,
+      });
+
+      await expect(
+        callTool("run-flow", { e2e_test_path: file, project_root: TEST_HOME })
+      ).rejects.toThrow(
+        `e2e_test_path must be an absolute path (got "${file}"). Pass the absolute path to the e2e test file.`
+      );
+      expect(requests.map((r) => r.url)).not.toContain("/tools/run-flow");
+    }
+  );
+
+  it.each(["e2e_test_path", "flow_path"])(
+    "refuses a relative %s for a tool-server that names it flow_path",
+    async (param) => {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        refuseRelativeProjectPaths: true,
+      });
+
+      await expect(callTool("e2e-execute", { [param]: ".argent/flows/t.yaml" })).rejects.toThrow(
+        'e2e_test_path must be an absolute path (got ".argent/flows/t.yaml")'
+      );
+      expect(requests.map((r) => r.url)).not.toContain("/tools/flow-execute");
+    }
+  );
+
+  it("sends an absolute project_root", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      refuseRelativeProjectPaths: true,
+    });
+
+    await callTool("record", { project_root: TEST_HOME });
+
+    expect(recordBodies()).toEqual([
+      { project_root: { __argentFileInput: true, path: TEST_HOME } },
+    ]);
+  });
+
+  it.each(["~/app", "$HOME/app", "C:\\work\\app"])(
+    "sends %s as written, for the tool-server to refuse",
+    async (root) => {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        refuseRelativeProjectPaths: true,
+      });
+
+      await callTool("record", { project_root: root });
+
+      expect(recordBodies()).toEqual([{ project_root: { __argentFileInput: true, path: root } }]);
+    }
+  );
+
+  it.each(["\\team\\app", "\\team\\$archive"])(
+    "refuses Windows project_root %s on the current drive",
+    async (root) => {
+      vi.resetModules();
+      vi.doMock("node:path", () => ({ ...win32, default: win32 }));
+      vi.spyOn(process, "cwd").mockReturnValue("D:\\work");
+      try {
+        const { createToolsClient: createOnWindows } = await import("../src/tools-client.js");
+        const { callTool } = createOnWindows({
+          baseUrl: async () => ({ url, token: "t", remote: false }),
+          refuseRelativeProjectPaths: true,
+        });
+
+        await expect(callTool("record", { project_root: root })).rejects.toThrow(
+          `project_root must be an absolute path (got "${root}")`
+        );
+        expect(recordBodies()).toEqual([]);
+      } finally {
+        vi.doUnmock("node:path");
+        vi.restoreAllMocks();
+        vi.resetModules();
+      }
+    }
+  );
+
+  it("leaves project_root alone for a tool whose file inputs do not name it", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      refuseRelativeProjectPaths: true,
+    });
+
+    await expect(callTool("slow", { project_root: "." })).resolves.toMatchObject({
+      data: { ok: true },
+    });
+  });
+
+  it("resolves a relative project_root against the cwd without the option", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+
+    await callTool("record", { project_root: "." });
+
+    expect(recordBodies()).toEqual([
+      { project_root: { __argentFileInput: true, path: process.cwd() } },
+    ]);
   });
 });

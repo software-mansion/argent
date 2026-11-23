@@ -241,6 +241,23 @@ describe("sendCommand — command acknowledgement", () => {
     await server.close();
   });
 
+  it("waits for a cold edge Down while other commands on the socket complete", async () => {
+    const server = await startServer();
+    try {
+      await sendCommand(server.api, { ...TOUCH });
+      server.setReply((cmd) => (cmd === "edgeTouch" ? "withhold" : "ok"));
+      vi.useFakeTimers();
+      const down = sendCommand(server.api, { ...TOUCH, cmd: "edgeTouch", edge: "bottom" });
+      await sendCommand(server.api, { cmd: "button", button: "home", direction: "Up" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      server.flushWithheld();
+      await expect(down).resolves.toEqual({});
+    } finally {
+      vi.useRealTimers();
+      await server.close();
+    }
+  });
+
   it("never resolves a command that was refused — no phantom success", async () => {
     const server = await startServer();
     server.setReply("error");

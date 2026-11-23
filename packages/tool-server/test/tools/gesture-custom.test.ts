@@ -46,6 +46,26 @@ function runnerRig() {
   return { run, services: { iosDeviceRunner: { udid: DEVICE_UDID, run } } as never };
 }
 
+describe("system-edge gesture validation", () => {
+  const simulator = "792EB846-610B-4E55-8414-2A3DD868478E";
+  it.each([DEVICE_UDID, "emulator-5554", `remote:${simulator}`])(
+    "rejects %s before sending input",
+    async (udid) => {
+      await expect(
+        gestureCustomTool.execute({}, { udid, edge: "bottom", events: pressHold })
+      ).rejects.toThrow("local iOS simulator");
+    }
+  );
+  it.each([twoFinger, withWaypoints.slice(1), [...pressHold, ...pressHold]])(
+    "rejects a broken or multi-finger edge contact",
+    async (...events) => {
+      await expect(
+        gestureCustomTool.execute({}, { udid: simulator, edge: "bottom", events })
+      ).rejects.toThrow("one finger");
+    }
+  );
+});
+
 describe("gesture-custom on a physical iOS device", () => {
   it("maps a same-point Down/Up onto the runner's longPress", async () => {
     const { run, services } = runnerRig();

@@ -13,12 +13,13 @@ import {
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerRunDir } from "@argent/native-devtools-ios";
 import { getAndroidSdkRoot } from "@argent/configuration-core";
-import { ensureAutomationEnabled } from "./ax-service";
+import { clearAutomationEnabledOrWarn } from "../utils/ax-prefs";
 import { ensureDep } from "../utils/check-deps";
 import { isFoldableSimulator, isTvOsSimulator } from "../utils/ios-devices";
 import { deviceSetForUdid } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import { openMoqClient } from "../utils/moq-client";
+import { openMjpegStream } from "../tools/screen-recording/mjpeg-stream";
 import {
   createMoqTransport,
   fetchDisplayState,
@@ -201,6 +202,7 @@ async function buildRemoteInstance(
   const api: SimulatorServerApi = {
     apiUrl: stubUrl,
     streamUrl: stubUrl,
+    deviceId: device.id,
     // Through `sendCommand`, as the attached instance below does, so a key the
     // session refuses reports the same failure as a refused touch instead of a
     // bare SDK error the caller cannot classify.
@@ -306,6 +308,54 @@ function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_d
   return device.kind === "device" ? "android_device" : "android";
 }
 
+/**
+ * The emulator controller finds an AVD's gRPC bridge through the emulator's
+ * `avd/running/pid_*.ini` discovery file. An emulator started under another
+ * user or HOME, or with `-port`, has no such file where argent looks. The phone
+ * controller (screen-sharing agent over adb) needs only adb, so such an
+ * emulator is retried through it. A stale discovery file left by a dead
+ * emulator on the same serial makes the controller dial a closed gRPC port
+ * ("Connection refused" on Unix, "actively refused" on Windows), or a port that
+ * something else now holds and never answers on ("did not answer on gRPC port").
+ */
+const EMULATOR_NOT_DISCOVERED =
+  /not found among running emulators|did not answer on gRPC port|Failed to find any running emulator|transport error[\s\S]*tcp connect error: (?:Connection refused|[^\n]*actively refused)/;
+
+const FIRST_FRAME_TIMEOUT_MS = 5_000;
+
+/**
+ * The phone controller prints its readiness lines before the agent injects
+ * input: a touch sent before the first frame is acked but never lands.
+ */
+async function waitForFirstFrame(streamUrl: string): Promise<void> {
+  if (!streamUrl) return;
+  const stream = await openMjpegStream(streamUrl, FIRST_FRAME_TIMEOUT_MS).catch(() => null);
+  if (!stream) return;
+  await stream
+    .waitForFirstFrame(FIRST_FRAME_TIMEOUT_MS)
+    .catch(() => {})
+    .finally(() => stream.close());
+}
+
+async function spawnWithEmulatorFallback(
+  device: DeviceInfo
+): ReturnType<typeof spawnSimulatorServerProcess> {
+  const subcommand = subcommandForDevice(device);
+  try {
+    return await spawnSimulatorServerProcess(device.id, subcommand);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (subcommand !== "android" || !EMULATOR_NOT_DISCOVERED.test(message)) throw err;
+    process.stderr.write(
+      `[sim ${device.id}] emulator not found through gRPC discovery; ` +
+        `falling back to the adb screen-sharing controller\n`
+    );
+    const server = await spawnSimulatorServerProcess(device.id, "android_device");
+    await waitForFirstFrame(server.streamUrl);
+    return server;
+  }
+}
+
 async function spawnSimulatorServerProcess(
   udid: string,
   subcommand: "ios" | "android" | "android_device"
@@ -345,17 +395,35 @@ async function spawnSimulatorServerProcess(
     const STREAM_GRACE_MS = 500;
     let apiReadyTimer: NodeJS.Timeout | null = null;
 
-    const rl = readline.createInterface({ input: proc.stdout! });
-
     const settle = (fn: () => void, cleanup?: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (apiReadyTimer) clearTimeout(apiReadyTimer);
-      rl.close();
+      rl?.close();
       cleanup?.();
       fn();
     };
+
+    proc.on("error", (err) => {
+      settle(() =>
+        reject(
+          new FailureError(
+            err instanceof Error ? err.message : String(err),
+            {
+              error_code: FAILURE_CODES.SIMULATOR_SERVER_PROCESS_ERROR,
+              failure_stage: "simulator_server_spawn_process",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              ...subprocessFailureMetadata(err, "simulator_server"),
+            },
+            { cause: err instanceof Error ? err : new Error(String(err)) }
+          )
+        )
+      );
+    });
+
+    const rl = proc.stdout ? readline.createInterface({ input: proc.stdout }) : null;
 
     // Set on `exit`, before the rejection waits for stderr: stdout can still
     // deliver buffered readiness lines, and an exited process is never ready.
@@ -366,7 +434,7 @@ async function spawnSimulatorServerProcess(
       settle(() => resolve({ proc, apiUrl: apiUrl!, streamUrl }));
     };
 
-    rl.on("line", (rawLine: string) => {
+    rl?.on("line", (rawLine: string) => {
       const line = rawLine.trim();
       if (line.startsWith("stream_ready ")) {
         const match = line.match(/(http:\/\/[^ ]+)/);
@@ -442,24 +510,6 @@ async function spawnSimulatorServerProcess(
         clearTimeout(drainTimer);
         fail();
       });
-    });
-
-    proc.on("error", (err) => {
-      settle(() =>
-        reject(
-          new FailureError(
-            err instanceof Error ? err.message : String(err),
-            {
-              error_code: FAILURE_CODES.SIMULATOR_SERVER_PROCESS_ERROR,
-              failure_stage: "simulator_server_spawn_process",
-              failure_area: "tool_server",
-              error_kind: "subprocess",
-              ...subprocessFailureMetadata(err, "simulator_server"),
-            },
-            { cause: err instanceof Error ? err : new Error(String(err)) }
-          )
-        )
-      );
     });
 
     const timer = setTimeout(() => {
@@ -584,7 +634,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       }
       // Input could open an app from the home screen, which must not launch
       // before the watcher has armed native-devtools injection.
-      await Promise.all([ensureAutomationEnabled(device.id).catch(() => {}), firstSimulatorPoll()]);
+      await Promise.all([clearAutomationEnabledOrWarn(device.id), firstSimulatorPoll()]);
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
       // through adb (gRPC bridge / screen-sharing agent respectively).
@@ -598,10 +648,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
-    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
-      device.id,
-      subcommandForDevice(device)
-    );
+    const { proc, apiUrl, streamUrl } = await spawnWithEmulatorFallback(device);
 
     const events = new TypedEventEmitter<ServiceEvents>();
 

@@ -94,6 +94,20 @@ export default tseslint.config(
     },
   },
 
+  {
+    files: ["packages/tool-server/{src,test}/**/*.{ts,tsx,cts,mts}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.property.name='listen'][arguments.0.value=0]:not([arguments.1.value='127.0.0.1']):not([arguments.1.value='::1'])",
+          message: "Bind ephemeral-port listeners to 127.0.0.1 or ::1.",
+        },
+      ],
+    },
+  },
+
   // Mocks and partial fixtures trip these.
   {
     files: ["**/*.test.ts", "**/*.spec.ts", "**/test/**", "**/tests/**"],

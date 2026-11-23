@@ -164,6 +164,12 @@ describe("isArgentManagedEntry", () => {
       })
     ).toBe(true);
     expect(isArgentManagedEntry({ command: "yarn", args: ["argent", "mcp"] })).toBe(true);
+    expect(
+      isArgentManagedEntry({
+        command: "/opt/homebrew/bin/node",
+        args: ["/opt/homebrew/lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(true);
     // The shape argent itself wrote up to v0.9.x (env dropped in 0.10 by
     // #238): still argent-authored, still repairable.
     expect(
@@ -197,6 +203,25 @@ describe("isArgentManagedEntry", () => {
     expect(isArgentManagedEntry({ command: "", args: [] })).toBe(false);
     expect(isArgentManagedEntry(null)).toBe(false);
     expect(isArgentManagedEntry({ command: "docker", args: ["run", "argent", "mcp"] })).toBe(false);
+    // Near misses of the absolute-path global pin.
+    const absCli = "/usr/lib/node_modules/@swmansion/argent/dist/cli.js";
+    expect(isArgentManagedEntry({ command: "/usr/bin/node", args: [absCli, "mcp", "--x"] })).toBe(
+      false
+    );
+    expect(isArgentManagedEntry({ command: "/usr/bin/bun", args: [absCli, "mcp"] })).toBe(false);
+    expect(isArgentManagedEntry({ command: "node", args: [absCli, "mcp"] })).toBe(false);
+    expect(
+      isArgentManagedEntry({
+        command: "/usr/bin/node",
+        args: ["/Users/me/dev/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(false);
+    expect(
+      isArgentManagedEntry({
+        command: "/usr/bin/node",
+        args: ["../node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(false);
   });
 });
 
@@ -536,26 +561,6 @@ describe("resolveLocalCommandMode", () => {
     ]);
     expect(cfg.mcp.argent.type).toBe("local");
     expect(cfg.mcp.argent.enabled).toBe(true);
-  });
-});
-
-// ── Adapter registry ──────────────────────────────────────────────────────────
-
-describe("ALL_ADAPTERS", () => {
-  it("contains all ten adapters", () => {
-    const names = ALL_ADAPTERS.map((a) => a.name);
-    expect(names).toEqual([
-      "Cursor",
-      "Claude Code",
-      "VS Code",
-      "Devin Desktop",
-      "Zed",
-      "Gemini",
-      "Codex",
-      "Hermes",
-      "opencode",
-      "Kiro",
-    ]);
   });
 });
 
@@ -2125,6 +2130,75 @@ describe("copyRulesAndAgents", () => {
 
       expect(agentsLine).toContain(`.claude/agents -> ${path.join(".agents", "agents")}`);
     });
+
+    // homedir() is the link; project roots and realpath'd targets are physical.
+    describe("under a home reached through a symlink", () => {
+      let realHome: string;
+
+      beforeEach(() => {
+        realHome = path.join(fs.realpathSync(tmpDir), "realhome");
+        fs.mkdirSync(realHome);
+        fs.symlinkSync("realhome", path.join(tmpDir, "home"));
+        homedirOverride = path.join(tmpDir, "home");
+      });
+
+      it("labels a global write-through target and its destination with ~", () => {
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+        fs.mkdirSync(path.join(realHome, ".agents", "agents"), { recursive: true });
+        fs.mkdirSync(path.join(realHome, ".claude"));
+        fs.symlinkSync("../.agents/agents", path.join(realHome, ".claude", "agents"));
+
+        const results = copyRulesAndAgents([claudeAdapter], tmpDir, "global", rulesDir, agentsDir);
+
+        expect(results).toContain("  Copied agents to ~/.claude/agents -> ~/.agents/agents");
+      });
+
+      it("labels a global target with ~ when HOME ends in a separator", () => {
+        homedirOverride = `${homedirOverride}${path.sep}`;
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+
+        const results = copyRulesAndAgents([claudeAdapter], tmpDir, "global", rulesDir, agentsDir);
+
+        expect(results).toContain("  Copied agents to ~/.claude/agents");
+      });
+
+      it("labels a project under home with ~", () => {
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+        const projectRoot = path.join(realHome, "Dev", "app");
+        fs.mkdirSync(projectRoot, { recursive: true });
+
+        const results = copyRulesAndAgents(
+          [claudeAdapter],
+          projectRoot,
+          "local",
+          rulesDir,
+          agentsDir
+        );
+
+        expect(results).toContain("  Copied rules to ~/Dev/app/.claude/rules");
+      });
+    });
+
+    it.skipIf(!fs.existsSync(os.tmpdir().toUpperCase()))(
+      "labels a project under a home spelled in a different case with ~",
+      () => {
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+        const realHome = fs.realpathSync(tmpDir);
+        homedirOverride = realHome.toUpperCase();
+        const projectRoot = path.join(realHome, "Dev", "app");
+        fs.mkdirSync(projectRoot, { recursive: true });
+
+        const results = copyRulesAndAgents(
+          [claudeAdapter],
+          projectRoot,
+          "local",
+          rulesDir,
+          agentsDir
+        );
+
+        expect(results).toContain("  Copied rules to ~/Dev/app/.claude/rules");
+      }
+    );
 
     it("installs rules into a symlinked .claude/rules", () => {
       const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;

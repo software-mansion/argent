@@ -25,6 +25,10 @@ import {
   readMacosTree,
 } from "../src/tools/describe/platforms/macos";
 import { adaptMacosTreeForFlows } from "../src/tools/flows/flow-macos-tree";
+import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
+import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
+import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
+import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { fakeMacosLibrary, rect, webTree } from "./helpers/macos-tree-fixture";
 
@@ -54,8 +58,8 @@ function registry(): Registry {
     }),
     getTool: vi.fn((id: string) => ({
       inputSchema: { properties: { udid: {} } },
-      // Not on a Mac, as gesture-swipe and the debugger tools declare.
-      ...(id === "gesture-swipe" || id === "debugger-status"
+      // Not on a Mac, as gesture-swipe and the Chromium tools declare.
+      ...(id === "gesture-swipe" || id === "chromium-tabs"
         ? { capability: { apple: { simulator: true } } }
         : {}),
     })),
@@ -179,14 +183,53 @@ describe("a tap recorded on a Mac app", () => {
 
   it("refuses a device_id tool the same way: the runner binds device_id too", async () => {
     serve([], "macos-devtools");
-    await start("debugger");
+    await start("tabs");
     const reg = registry();
 
     const args = { udid: undefined, device_id: MAC };
-    const err = await record("debugger", "debugger-status", args, reg).catch((e: unknown) => e);
+    const err = await record("tabs", "chromium-tabs", args, reg).catch((e: unknown) => e);
 
     expect(String(err)).toMatch(/no macos support declared/);
     expect(reg.invokeTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("a native view tool recorded on a Mac Catalyst app", () => {
+  beforeEach(async () => {
+    // As boot-device records a Mac Catalyst app in ~/.argent/macos-apps.json.
+    const file = path.join(os.homedir(), ".argent", "macos-apps.json");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify([{ bundleId: BUNDLE, catalyst: true }]));
+  });
+
+  it.each([
+    nativeFindViewsTool,
+    nativeFullHierarchyTool,
+    nativeViewAtPointTool,
+    nativeUserInteractableViewAtPointTool,
+  ])("refuses $id before it runs, as the runner does", async (tool) => {
+    serve([], "macos-devtools");
+    await start("native");
+    // The tool's own capability, which leaves out Mac Catalyst apps.
+    const reg = {
+      ...registry(),
+      getTool: vi.fn(() => ({
+        inputSchema: { properties: { udid: {} } },
+        capability: tool.capability,
+      })),
+    } as unknown as Registry;
+
+    const err = await record("native", tool.id, { bundleId: BUNDLE }, reg).catch((e: unknown) => e);
+
+    expect(String(err)).toContain(
+      `Tool '${tool.id}' is not supported on macos catalyst (a Mac Catalyst app's UIKit views ` +
+        "are not in its AppKit view tree: use describe"
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION
+    );
+    expect(reg.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps("native")).toEqual([]);
   });
 });
 
@@ -376,6 +419,59 @@ describe("a right tap recorded on a Mac app", () => {
 
     expect(await recordedSteps("ctx")).toEqual([step]);
     if (extra.button === "right") expect(result.recorded).toMatch(/\(right button\)$/);
+  });
+});
+
+describe("a tap holding modifier keys recorded on a Mac app", () => {
+  const BOX = n({
+    identifier: "box.context",
+    label: "box.context",
+    frame: { x: 0.2, y: 0.4, width: 0.2, height: 0.1 },
+  });
+
+  it.each([
+    [
+      "keeps the keys on the captured selector, in canonical order without repeats",
+      [BOX],
+      { modifiers: ["command", "shift", "command"] },
+      { kind: "tap", selector: { identifier: "box.context" }, modifiers: ["shift", "command"] },
+      / holding shift\+command$/,
+    ],
+    [
+      "keeps the keys on a coordinate tap",
+      [],
+      { modifiers: ["option"] },
+      { kind: "tap", x: 0.3, y: 0.45, modifiers: ["option"] },
+      / holding option$/,
+    ],
+    [
+      "keeps the keys beside the right button and the click count",
+      [BOX],
+      { button: "right", clickCount: 2, modifiers: ["command", "control"] },
+      {
+        kind: "tap",
+        selector: { identifier: "box.context" },
+        times: 2,
+        button: "right",
+        modifiers: ["control", "command"],
+      },
+      / ×2 \(right button\) holding control\+command$/,
+    ],
+    [
+      "records an empty list as a plain tap",
+      [BOX],
+      { modifiers: [] },
+      { kind: "tap", selector: { identifier: "box.context" } },
+      /^(?!.*holding)/,
+    ],
+  ])("%s", async (_label, tree, extra, step, summary) => {
+    serve(tree, "macos-devtools");
+    await start("held");
+
+    const result = await record("held", "gesture-tap", { x: 0.3, y: 0.45, ...extra });
+
+    expect(await recordedSteps("held")).toEqual([step]);
+    expect(result.recorded).toMatch(summary);
   });
 });
 

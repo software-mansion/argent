@@ -16,7 +16,10 @@ vi.mock("node:child_process", () => ({
     if (spawnFailure.throws) throw Object.assign(new Error("spawn EBADF"), { code: "EBADF" });
     const child = new EventEmitter();
     const err = Object.assign(new Error("spawn tar EMFILE"), { code: "EMFILE" });
-    process.nextTick(() => child.emit("error", err));
+    process.nextTick(() => {
+      child.emit("error", err);
+      child.emit("close", -1);
+    });
     return child;
   },
 }));
