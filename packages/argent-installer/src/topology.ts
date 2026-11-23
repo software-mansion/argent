@@ -114,6 +114,18 @@ export function isGloballyInstalled(): boolean {
   return getRemainingGlobalBinaryPath() !== null;
 }
 
+// Null when a project copy is first on PATH: package-manager runs put the
+// project's bin there, which says nothing about the global install behind it.
+function getUnshadowedGlobalBinaryPath(): string | null {
+  const first = getPermanentBinaryPaths()[0];
+  return first !== undefined && !isProjectBinPath(first) ? getRemainingGlobalBinaryPath() : null;
+}
+
+/** True iff a live global install is on PATH with no project copy before it. */
+export function isGlobalInstallFirstOnPath(): boolean {
+  return getUnshadowedGlobalBinaryPath() !== null;
+}
+
 /**
  * Root directory of the globally-installed argent package, or null when argent
  * is not on PATH or the layout can't be resolved. Used to read the installed
@@ -165,6 +177,36 @@ export function packageRootOf(binaryPath: string): string | null {
       name?: string;
     };
     return pkg.name === PACKAGE_NAME ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+export function cliPathOf(packageRoot: string): string | null {
+  const binSub = argentBinSubpath(packageRoot);
+  if (!binSub) return null;
+  const cli = path.join(packageRoot, binSub);
+  return fs.existsSync(cli) ? cli : null;
+}
+
+/**
+ * Absolute `node` and CLI entrypoint that start the global install without
+ * PATH. Only a `node` beside the argent bin link counts, kept unresolved:
+ * `/opt/homebrew/bin/node` survives `brew upgrade`, its Cellar target does not.
+ * The bin dir itself is resolved so the entry never pins fnm's per-shell
+ * multishell link. Null on Windows, for shims such as Volta and pnpm, for
+ * prefixes without their own `node` and for a project's `node_modules/.bin`.
+ */
+export function getGloballyInstalledLaunchPaths(): { node: string; cli: string } | null {
+  if (process.platform === "win32") return null;
+  const binaryPath = getUnshadowedGlobalBinaryPath();
+  if (!binaryPath) return null;
+  const packageRoot = packageRootOf(binaryPath);
+  const cli = packageRoot ? cliPathOf(packageRoot) : null;
+  if (!cli) return null;
+  try {
+    const node = path.join(fs.realpathSync(path.dirname(binaryPath)), "node");
+    return fs.existsSync(node) ? { node, cli } : null;
   } catch {
     return null;
   }
@@ -299,7 +341,7 @@ export function readLocalPackageVersionUncached(projectRoot: string): string | n
  * read from the installed `package.json`'s `bin` rather than hard-coded, so a
  * rename can never leave a caller pointing at a file that isn't there.
  */
-export function argentBinSubpath(pkgDir: string): string | null {
+function argentBinSubpath(pkgDir: string): string | null {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as {
       bin?: string | Record<string, string>;

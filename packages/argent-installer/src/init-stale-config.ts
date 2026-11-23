@@ -1,7 +1,12 @@
 import pc from "picocolors";
 import { MCP_BINARY_NAME } from "./constants.js";
 import { isArgentOnPath } from "./utils.js";
-import { hasCustomizingEnv, type McpConfigAdapter, type McpServerEntry } from "./mcp-configs.js";
+import {
+  hasCustomizingEnv,
+  isPinnedGlobalEntry,
+  type McpConfigAdapter,
+  type McpServerEntry,
+} from "./mcp-configs.js";
 
 interface StaleConfigCleanupResult {
   /** One line per removed entry or warning. */
@@ -136,7 +141,7 @@ export async function cleanupStaleMcpConfigs(args: {
       } catch {
         continue;
       }
-      if (entry === null) continue;
+      if (entry === null || isPinnedGlobalEntry(entry)) continue;
       if (isProvablyDead(entry)) {
         pending.push({
           adapterName: adapter.name,
@@ -181,7 +186,7 @@ export async function cleanupStaleMcpConfigs(args: {
       }
       // A bare-command entry duplicates the global one harmlessly; a
       // local-mode `node …` command does not.
-      if (entry !== null && entry.command !== MCP_BINARY_NAME) {
+      if (entry !== null && entry.command !== MCP_BINARY_NAME && !isPinnedGlobalEntry(entry)) {
         warned(
           adapter.name,
           projectPath,
