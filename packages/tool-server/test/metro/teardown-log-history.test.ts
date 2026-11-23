@@ -273,6 +273,7 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
       expect(healthy.totalEntries).toBe(4);
       expect(healthy.note).toBeUndefined();
       expect(reaped.note).toContain("1 captured console entry");
+      expect(reaped.note).toContain(`for device ${LOGICAL_ID} `);
     } finally {
       await stopMockMetro(other);
     }

@@ -2,7 +2,7 @@ import type { ServiceRef, ToolCapability } from "@argent/registry";
 import { CHROMIUM_ID_PREFIX, resolveDevice } from "../../utils/device-info";
 import { chromiumJsRuntimeDebuggerRef } from "../../blueprints/chromium-js-runtime-debugger";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
-import { metroPort, metroScopedIds } from "../../utils/debugger/metro-port";
+import { metroPort } from "../../utils/debugger/metro-port";
 
 /**
  * For tools that work on every platform including Chromium: iOS / Android /
@@ -64,12 +64,11 @@ export function isChromiumDebuggerTarget(deviceId: string | undefined): boolean 
   return !!canonicalDeviceId(deviceId)?.startsWith(CHROMIUM_ID_PREFIX);
 }
 
-/** The ids a debugger blueprint files its reaped-session breadcrumb under. */
-export function reapedDebuggerIds(
-  params: { port?: number; device_id?: string },
-  ids: Array<string | undefined>
-) {
-  return isChromiumDebuggerTarget(params.device_id) ? ids : metroScopedIds(metroPort(params), ids);
+/** The kind a debugger blueprint files its reaped-session breadcrumb under, one per Metro port. */
+export function reapedDebuggerKind(params: { port?: number; device_id?: string }) {
+  return isChromiumDebuggerTarget(params.device_id)
+    ? "js-runtime-debugger"
+    : (`js-runtime-debugger:${metroPort(params)}` as const);
 }
 
 /**

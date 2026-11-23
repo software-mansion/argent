@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-writer";
-import { DEBUGGER_TOOL_CAPABILITY, reapedDebuggerIds } from "./debugger-service-ref";
+import { DEBUGGER_TOOL_CAPABILITY, reapedDebuggerKind } from "./debugger-service-ref";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { describeReapedSession, takeReapedSessionAnyId } from "../../utils/reaped-sessions";
@@ -81,14 +81,11 @@ When the debugger cannot be reached, it returns { status: "not_connected", reaso
         // under the connect id and the `logicalDeviceId` Metro echoed, and
         // `forgetDeviceAlias` ran in that same dispose, so only the freshly
         // resolved api still knows the logical id.
-        const reaped = takeReapedSessionAnyId(
-          "js-runtime-debugger",
-          reapedDebuggerIds(params, [
-            canonicalDeviceId(params.device_id),
-            params.device_id,
-            api.logicalDeviceId,
-          ])
-        );
+        const reaped = takeReapedSessionAnyId(reapedDebuggerKind(params), [
+          canonicalDeviceId(params.device_id),
+          params.device_id,
+          api.logicalDeviceId,
+        ]);
         if (reaped) response.note = describeReapedSession(reaped, "JS-runtime debugger session");
         const inFile = api.logWriter.getFileEntryCount();
         const fileNote = !api.logWriter.hasFile()
@@ -109,10 +106,10 @@ When the debugger cannot be reached, it returns { status: "not_connected", reaso
           err,
           params
         );
-        const reaped = takeReapedSessionAnyId(
-          "js-runtime-debugger",
-          reapedDebuggerIds(params, [canonicalDeviceId(params.device_id), params.device_id])
-        );
+        const reaped = takeReapedSessionAnyId(reapedDebuggerKind(params), [
+          canonicalDeviceId(params.device_id),
+          params.device_id,
+        ]);
         if (reaped) result.note = describeReapedSession(reaped, "JS-runtime debugger session");
         return result;
       }
