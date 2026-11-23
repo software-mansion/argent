@@ -257,7 +257,10 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
   it.each([
     'Error: emulator "emulator-5570" not found among running emulators\n',
+    'Error: emulator "emulator-5570" did not answer on gRPC port 8570 within 20s\n',
     "Error: Failed to find any running emulator\n",
+    "Error: transport error\nCaused by:\n    0: tcp connect error: Connection refused (os error 61)\n",
+    "Error: transport error\nCaused by:\n    0: tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)\n",
   ])("falls back to `android_device` on %j", async (discoveryError) => {
     const serial = "emulator-5570";
     await startAdbFallback(serial, 55570, discoveryError);
@@ -265,6 +268,23 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(spawnMock.mock.calls[0]![1]).toEqual(["android", "--id", serial]);
     expect(spawnMock.mock.calls[1]![1]).toEqual(["android_device", "--id", serial]);
+  });
+
+  it("does not fall back on a transport error that is not a refused connection", async () => {
+    const grpcLess = makeFakeProc();
+    spawnMock.mockReturnValueOnce(grpcLess);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const device = androidDevice("emulator-5590");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    const assertion = expect(factoryPromise).rejects.toThrow(/transport error/);
+    setImmediate(() => {
+      grpcLess.stderr.push(
+        "Error: transport error\nCaused by:\n    0: tcp connect error: Connection reset by peer\n"
+      );
+      setTimeout(() => grpcLess.emit("exit", 1), 20);
+    });
+    await assertion;
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("hands out the fallback only after its first frame and then closes the stream", async () => {

@@ -1,5 +1,11 @@
+import { EventEmitter } from "node:events";
 import { describe, it, expect } from "vitest";
-import { Registry } from "@argent/registry";
+import { Registry, TypedEventEmitter } from "@argent/registry";
+import { jsCapturesOn, networkInspectorBlueprint } from "../../src/blueprints/network-inspector";
+import {
+  NETWORK_INTERCEPTOR_SCRIPT,
+  makeNetworkCaptureControlScript,
+} from "../../src/utils/debugger/scripts/network-interceptor";
 import { createRegistry } from "../../src/utils/setup-registry";
 import { assertSupported, UnsupportedOperationError } from "../../src/utils/capability";
 import { resolveDevice } from "../../src/utils/device-info";
@@ -155,5 +161,106 @@ describe("Vega (RN 0.72) debugger capability", () => {
         expect(() => assertSupported(tool.id, tool.capability, device)).not.toThrow();
       }
     }
+  });
+});
+
+/**
+ * network-capture-start does not cover Vega, so its network reads install the interceptor
+ * themselves, at every call, as before the start and stop tools.
+ */
+describe("Vega network reads", () => {
+  /** A registry whose JS runtime answers the interceptor and the read scripts. */
+  function vegaRegistry(options: { log: boolean }) {
+    const scripts: string[] = [];
+    const cdp = {
+      events: new EventEmitter(),
+      evaluate: async (script: string) => {
+        scripts.push(script);
+        if (script === NETWORK_INTERCEPTOR_SCRIPT) return JSON.stringify({ installed: true });
+        if (script.includes("__argent_network_by_id")) {
+          return JSON.stringify(
+            options.log
+              ? { error: "Request not found" }
+              : { error: "Network interceptor not installed", installed: false }
+          );
+        }
+        return JSON.stringify({ entries: [], total: 0, interceptorInstalled: options.log });
+      },
+    };
+    const registry = new Registry();
+    registry.registerBlueprint({
+      namespace: "JsRuntimeDebugger",
+      getURN: (payload: string) => `JsRuntimeDebugger:${payload}`,
+      async factory() {
+        return {
+          api: { port: 8081, cdp },
+          dispose: async () => {},
+          events: new TypedEventEmitter(),
+        };
+      },
+    });
+    registry.registerBlueprint(networkInspectorBlueprint);
+    registry.registerTool(networkLogsTool);
+    registry.registerTool(networkRequestTool);
+    const installs = () => scripts.filter((script) => script === NETWORK_INTERCEPTOR_SCRIPT).length;
+    return { registry, scripts, installs };
+  }
+
+  it("view-network-logs names the NetworkInspector service", () => {
+    expect(networkLogsTool.services({ device_id: VEGA_VVD_ID, pageIndex: "latest" })).toEqual({
+      inspector: `NetworkInspector:8081:${VEGA_VVD_ID}`,
+    });
+  });
+
+  it("view-network-request-details names the NetworkInspector service", () => {
+    expect(
+      networkRequestTool.services({
+        device_id: VEGA_VVD_ID,
+        requestId: "rn-net-1",
+        includeBody: false,
+      })
+    ).toEqual({
+      inspector: `NetworkInspector:8081:${VEGA_VVD_ID}`,
+    });
+  });
+
+  it("view-network-logs installs the interceptor at each read, with no capture started", async () => {
+    const { registry, scripts, installs } = vegaRegistry({ log: true });
+
+    const first = await registry.invokeTool("view-network-logs", { device_id: VEGA_VVD_ID });
+    // The service's factory installs, then the read.
+    expect(installs()).toBe(2);
+    await registry.invokeTool("view-network-logs", { device_id: VEGA_VVD_ID });
+    expect(installs()).toBe(3);
+
+    expect(first).toBe(
+      "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active: it records XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module, but not requests sent before capture started (at the first network-tool call)."
+    );
+    // Vega has no pause to clear, and no capture entry.
+    expect(scripts).not.toContain(makeNetworkCaptureControlScript(false));
+    expect(jsCapturesOn(VEGA_VVD_ID)).toEqual([]);
+    await registry.dispose();
+  });
+
+  it("view-network-logs says a reload removed the interceptor and the next read installs it", async () => {
+    const { registry } = vegaRegistry({ log: false });
+
+    expect(await registry.invokeTool("view-network-logs", { device_id: VEGA_VVD_ID })).toBe(
+      "Network interceptor not installed: the app's JS runtime reloaded, which clears captured requests. Call view-network-logs again to reinstall it, then repeat the action that sends the requests."
+    );
+    await registry.dispose();
+  });
+
+  it("view-network-request-details installs the interceptor at the read", async () => {
+    const { registry, installs } = vegaRegistry({ log: true });
+
+    expect(
+      await registry.invokeTool("view-network-request-details", {
+        device_id: VEGA_VVD_ID,
+        requestId: "rn-net-9",
+      })
+    ).toBe("Request not found. Use view-network-logs to list available requests.");
+    expect(installs()).toBe(2);
+    await registry.dispose();
   });
 });

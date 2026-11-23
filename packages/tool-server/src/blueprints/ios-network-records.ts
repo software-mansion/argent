@@ -32,9 +32,18 @@ import {
 const RUN_TAG = randomBytes(2).toString("hex");
 
 export const IOS_NATIVE_REQUEST_ID = /^ios-[0-9a-f]{4}-\d+$/;
+export const MACOS_NATIVE_REQUEST_ID = /^macos-[0-9a-f]{4}-\d+$/;
+
+/** The layers of the in-app NSURLProtocol agent: on an iOS simulator, and in a Mac app. */
+export type AppleNativeLayer = "ios-native" | "macos-native";
 
 /** Shared by every store of the tool-server, so ids never repeat across apps or devices. */
 let nextRecordNumber = 1;
+
+/** The number of the last record issued: a record numbered higher came after this call. */
+export function lastIosRecordNumber(): number {
+  return nextRecordNumber - 1;
+}
 
 /** A request body read answers within this, with the body or with why it did not come. */
 const POST_DATA_WAIT_MS = 5_000;
@@ -60,8 +69,16 @@ const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; 
 /** A response body read that waited behind a read the app did not answer in time. */
 const NO_EARLIER_ANSWER = `the app did not answer an earlier body read within ${RESPONSE_BODY_TIMEOUT_MS / 1000} s; read it again later`;
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
+/** argent can connect to a Mac app's process again, and then read the body. */
+const MACOS_CONNECTION_CLOSED = `${CONNECTION_CLOSED}; read it again after argent reconnects to the app, as network-capture-start does`;
 const REQUEST_BODY_GONE = "the agent holds no body for this request";
 const BODY_NO_LONGER_HELD = "the agent no longer holds this body";
+/**
+ * A Mac app's connection can come back for the same process, and a request
+ * that still runs then completes, so this is true before and after a reconnect.
+ */
+export const MACOS_CONNECTION_DROPPED =
+  "argent's connection to the app dropped while this request ran, so argent can have missed its end; the request completes if its end comes later";
 const NO_RESPONSE_BODY = "the response has no body";
 
 export interface IosNetworkCaptureState {
@@ -93,7 +110,7 @@ export interface IosNetworkRecords {
   requestPostData(id: string): Promise<NativeNetworkBody>;
 }
 
-/** The app's side of the body reads, owned by the native-devtools service. */
+/** The app's side of the body reads, owned by the native-devtools service or a Mac app's service. */
 export interface IosAgentLink {
   /** The index of the app's live connection, if it has one. */
   liveConnection(): number | undefined;
@@ -104,6 +121,12 @@ export interface IosAgentLink {
     params: Record<string, unknown>,
     timeoutMs: number
   ): Promise<unknown>;
+  /**
+   * argent can still connect again to the process of the closed `connection`,
+   * as to a Mac app's process while it runs. Absent on iOS, where a
+   * connection does not come back for the same process.
+   */
+  canReconnect?(connection: number): boolean;
 }
 
 /** What the host learned about the app after one of its connections closed. */
@@ -124,9 +147,11 @@ export interface IosNetworkRecordStore extends IosNetworkRecords {
   /** The store still holds a record that came in on `connection`. */
   holdsRecordsOf(connection: number): boolean;
   /**
-   * Fails the open records of a connection that closed. A connection does not
-   * come back for the same process, so its open records never settle. The
-   * check also decides why a body of the connection can no longer be read.
+   * Fails the open records of a connection that closed. An iOS connection does
+   * not come back for the same process, so its open records never settle. A
+   * Mac app's connection is its process, which argent can reconnect to: a
+   * request that still runs then completes when its end comes. The check also
+   * decides why a body of the connection can no longer be read.
    */
   connectionClosed(connection: number, check: ClosedConnectionCheck): void;
 }
@@ -134,12 +159,17 @@ export interface IosNetworkRecordStore extends IosNetworkRecords {
 /**
  * One app's records. They belong to the app, not to a connection, so a
  * reconnect and a relaunch keep the history. `state` reads the app's live
- * connection, which the native-devtools service owns.
+ * connection, which the native-devtools service owns, or a Mac app's service.
+ * While `recording` is false, a new request gets no record; the events of a
+ * recorded one still fold. `layer` names the records and starts their ids.
  */
 export function createIosNetworkRecords(
   state: () => IosNetworkCaptureState,
-  link: IosAgentLink
+  link: IosAgentLink,
+  recording: () => boolean = () => true,
+  layer: AppleNativeLayer = "ios-native"
 ): IosNetworkRecordStore {
+  const idPrefix = layer === "macos-native" ? "macos" : "ios";
   const records: NativeNetworkRecord[] = [];
   let recordChars = 0;
   const recordSizes = new WeakMap<NativeNetworkRecord, number>();
@@ -185,8 +215,8 @@ export function createIosNetworkRecords(
           : Date.now();
     const postData = typeof req.postData === "string" ? req.postData : "";
     const record: NativeNetworkRecord = {
-      id: `ios-${RUN_TAG}-${nextRecordNumber++}`,
-      layer: "ios-native",
+      id: `${idPrefix}-${RUN_TAG}-${nextRecordNumber++}`,
+      layer,
       layerId,
       connection,
       state: "pending",
@@ -253,13 +283,13 @@ export function createIosNetworkRecords(
 
   /** Why a body of a connection that is no longer live cannot be read. */
   function closedReason(connection: number): string {
-    // A connection does not come back for the same process, so a newer one,
-    // even one that closed since, is a new process.
+    // A newer connection, even one that closed since, is a new process: an iOS
+    // connection does not come back for the same process, and a Mac app's
+    // records number its processes. A Mac app's process can connect again.
     const live = link.liveConnection();
     if (live !== undefined) sawConnection(live);
-    return endedConnections.has(connection) || newestConnection > connection
-      ? PROCESS_GONE
-      : CONNECTION_CLOSED;
+    if (endedConnections.has(connection) || newestConnection > connection) return PROCESS_GONE;
+    return link.canReconnect?.(connection) ? MACOS_CONNECTION_CLOSED : CONNECTION_CLOSED;
   }
 
   function readBody(id: string, kind: "response" | "post"): Promise<NativeNetworkBody> {
@@ -471,7 +501,7 @@ export function createIosNetworkRecords(
       if (method === "Network.requestWillBeSent") {
         // A redirect hop of a request already recorded, not a new request.
         if (p.redirectResponse !== undefined && p.redirectResponse !== null) return;
-        startRecord(connection, layerId, p);
+        if (recording()) startRecord(connection, layerId, p);
         return;
       }
       const record = byLayerId.get(keyOf(connection, layerId));
@@ -481,6 +511,8 @@ export function createIosNetworkRecords(
         case "Network.responseReceived": {
           const r = asObject(p.response);
           const status = typeof r.status === "number" ? r.status : 0;
+          // A Mac app's request failed at a reconnect can still finish.
+          delete record.errorText;
           record.state = "headers";
           record.response = {
             // The URL of the final response, after any redirects.
@@ -497,6 +529,7 @@ export function createIosNetworkRecords(
           // A request in flight at a clear lists again once it settles, so
           // polling with clear sees it finish.
           cleared.delete(record);
+          delete record.errorText;
           record.state = "complete";
           if (typeof p.encodedDataLength === "number")
             record.encodedDataLength = p.encodedDataLength;
@@ -528,11 +561,20 @@ export function createIosNetworkRecords(
           check.runningPid !== check.connectionPid);
       if (ended) endedConnections.add(connection);
       // Collected first: re-measuring a record can evict the oldest, which
-      // would shift the array under a loop over it and skip a record.
-      const open = records.filter((r) => r.connection === connection && isOpen(r));
+      // would shift the array under a loop over it and skip a record. A Mac
+      // request cut off by a drop can complete only while its process runs.
+      const open = records.filter(
+        (r) =>
+          r.connection === connection &&
+          (isOpen(r) || (ended && r.errorText === MACOS_CONNECTION_DROPPED))
+      );
       for (const record of open) {
         record.state = "failed";
-        record.errorText = ended ? PROCESS_ENDED : NOT_RECONNECTED;
+        record.errorText = ended
+          ? PROCESS_ENDED
+          : layer === "macos-native"
+            ? MACOS_CONNECTION_DROPPED
+            : NOT_RECONNECTED;
         cleared.delete(record);
       }
       for (const record of open) resize(record);
@@ -641,6 +683,18 @@ function withinWait(
 interface IosNetworkCaptures {
   readonly udid: string;
   readonly bundleIds: ReadonlySet<string>;
+  /**
+   * The apps network-capture-start started, also on a device whose provider
+   * lent its agent. When absent, `bundleIds`.
+   */
+  readonly startedBundleIds?: ReadonlySet<string>;
+  /** The apps whose capture network-capture-stop stopped. */
+  readonly stoppedBundleIds: ReadonlySet<string>;
+  /**
+   * The stopped apps whose connected process did not acknowledge
+   * Network.disable, so it can still intercept requests.
+   */
+  readonly unconfirmedStopBundleIds?: ReadonlySet<string>;
   readonly stores: ReadonlyMap<string, IosNetworkRecords>;
 }
 
@@ -671,13 +725,27 @@ export function findIosNativeRecord(
   return undefined;
 }
 
+/** Some app on some simulator has capture started or stopped, so its ids can be listed. */
+export function hasIosNetworkCapture(): boolean {
+  return [...liveCaptures].some(
+    (captures) =>
+      (captures.startedBundleIds ?? captures.bundleIds).size > 0 ||
+      captures.stoppedBundleIds.size > 0
+  );
+}
+
 /**
  * Capture is on for the app and the app connected at least once. An app that
  * never connected, such as a mistyped or uninstalled bundle id, has no process
- * that capture runs in.
+ * that capture runs in. A stop that the connected process did not acknowledge
+ * counts as on, because that process can still intercept.
  */
 function capturing(captures: IosNetworkCaptures, bundleId: string): boolean {
-  return captures.bundleIds.has(bundleId) && captures.stores.has(bundleId);
+  return (
+    (captures.bundleIds.has(bundleId) ||
+      captures.unconfirmedStopBundleIds?.has(bundleId) === true) &&
+    captures.stores.has(bundleId)
+  );
 }
 
 /**
@@ -689,7 +757,7 @@ export function liveIosNetworkCaptures(deviceId: string): string[] {
   const bundleIds = new Set<string>();
   for (const captures of liveCaptures) {
     if (deviceKeyOf(captures.udid) !== key) continue;
-    for (const bundleId of captures.bundleIds) {
+    for (const bundleId of [...captures.bundleIds, ...(captures.unconfirmedStopBundleIds ?? [])]) {
       if (capturing(captures, bundleId)) bundleIds.add(bundleId);
     }
   }

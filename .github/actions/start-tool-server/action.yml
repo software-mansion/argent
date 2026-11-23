@@ -26,15 +26,6 @@ runs:
       shell: bash
       run: |
         npm ci
-        # Rollup's native binary ships as an optional dep that npm can skip
-        # (npm/cli#4828); install the one matching this runner explicitly so the
-        # tsc bundling step doesn't fail with "Cannot find module @rollup/rollup-*".
-        # RUNNER_OS is provided by GitHub Actions (Linux / macOS / Windows).
-        case "$RUNNER_OS" in
-          macOS) npm install @rollup/rollup-darwin-arm64 --no-save ;;
-          Linux) npm install @rollup/rollup-linux-x64-gnu --no-save ;;
-          *) echo "::error::start-tool-server: unsupported runner OS '$RUNNER_OS'"; exit 1 ;;
-        esac
         npm run build
 
     - name: Start tool-server

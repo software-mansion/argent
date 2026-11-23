@@ -7,7 +7,7 @@
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-2?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-2&n=1)
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-3?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-3&n=1)
 
-**[Argent](https://argent.swmansion.com)** は、AI アシスタントが iOS シミュレーター、Android エミュレーターと実機、TV（Apple TV、Android TV、Fire TV）、Electron/Chromium アプリを直接操作できるようにします。ボタンのタップ、画面のプロファイリング、バグの再現まで、CLI から離れずに行えます。
+**[Argent](https://argent.swmansion.com)** は、AI コーディングエージェント（Claude Code、Codex、Cursor など）が iOS シミュレーター、Android エミュレーターと実機、TV（Apple TV、Android TV、Fire TV）、Electron/Chromium アプリ、ネイティブ Mac アプリを操作できるようにする MCP サーバー、CLI、エージェントスキルです。ボタンのタップ、画面のプロファイリング、バグの再現まで、CLI から離れずに行えます。
 
 ```bash
 npx @swmansion/argent@latest init  # pnpm: pnpm dlx @swmansion/argent@latest init
