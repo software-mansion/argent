@@ -362,6 +362,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         .then(() => runtimeRunsOn(client, deviceId))
         .catch(() => ({ verdict: "unknown" as const }));
       if (where.verdict === "yes") {
+        // Hermes replays its console buffer only on the first enable after a disable.
+        await client.send("Runtime.disable").catch(() => undefined);
         rememberNameMatch(deviceId, port, selectedId);
         break;
       }
@@ -425,7 +427,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           "entries may be missing.";
         const salvage = keepFile
           ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}. ` +
-            "If the app kept running, the next session's registry starts with the same entries, replayed by the runtime."
+            "If the app kept running, the current registry may repeat these entries, replayed by the runtime."
           : stored
             ? `The ${entries} went with it: the log file is deleted on teardown. ${since}`
             : `The ${entries} went with it: no log file held them. ${since}`;
