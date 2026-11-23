@@ -2,6 +2,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { withKeyedLock } from "../../../utils/keyed-lock";
 import { toCdpNetworkConditions } from "../../../utils/network-conditions";
+import { deviceKeyOf } from "../../../utils/native-network-record";
 import { metroPort } from "../../../utils/debugger/metro-port";
 import {
   isInjectableBundleId,
@@ -80,7 +81,7 @@ export const iosImpl: PlatformImpl<IosServices, NetworkConditionsParams, Result>
     const { bundleId } = params;
     if (!bundleId) throw missingBundleId();
     if (!isInjectableBundleId(bundleId)) throw appleApp(bundleId);
-    return withKeyedLock(appCalls, `${params.udid}\n${bundleId}`, () =>
+    return withKeyedLock(appCalls, `${deviceKeyOf(params.udid)}\n${bundleId}`, () =>
       setAppConditions(services.nativeDevtools, params, bundleId)
     );
   },

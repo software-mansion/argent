@@ -982,6 +982,25 @@ describe("a provider that lends its native-devtools agent", () => {
       await agent.close();
     });
 
+    it("clears a leftover throttle when the next tool-server addresses the device by its udid", async () => {
+      const agent = await startLentAgent();
+      publishDescriptor({ socketPath: agent.socketPath });
+      await leaveThrottle(agent);
+      const instance = await instantiate(IOS_UDID);
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent)).toEqual([
+        "NativeDevtoolsIos.getConditions",
+        "NativeDevtoolsIos.configure",
+        "Network.enable",
+      ]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
     it("keeps the provider's conditions when they replaced the throttle an earlier tool-server left", async () => {
       const agent = await startLentAgent();
       publishDescriptor({ socketPath: agent.socketPath });
@@ -994,6 +1013,39 @@ describe("a provider that lends its native-devtools agent", () => {
       await instance.api.setNetworkConditions(BUNDLE_ID, null);
 
       expect(cdpMethods(agent)).toEqual(["NativeDevtoolsIos.getConditions"]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("clears the throttle an earlier tool-server applied when the provider left during its next change", async () => {
+      const agent = await startLentAgent();
+      publishDescriptor({ socketPath: agent.socketPath });
+      const earlier = await instantiate();
+      await waitForConnectedBundle(earlier.api);
+      await earlier.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      const terminated = new Promise<void>((resolve) =>
+        earlier.events.on("terminated", () => resolve())
+      );
+      const change = earlier.api.setNetworkConditions(BUNDLE_ID, {
+        ...THROTTLE,
+        conditions: { ...UNTHROTTLED, latency: 400 },
+      });
+      agent.hangUp();
+      await expect(change).rejects.toThrow();
+      await terminated;
+      await earlier.dispose();
+      agent.received.length = 0;
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent)).toEqual([
+        "NativeDevtoolsIos.getConditions",
+        "NativeDevtoolsIos.configure",
+        "Network.enable",
+      ]);
 
       await instance.dispose();
       await agent.close();

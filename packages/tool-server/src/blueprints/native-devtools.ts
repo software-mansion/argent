@@ -1140,7 +1140,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const ownedThrottlePath = (bundleId: string): string =>
       path.join(
         os.tmpdir(),
-        `argent-throttle-${encodeURIComponent(udid)}-${encodeURIComponent(bundleId)}`
+        `argent-throttle-${encodeURIComponent(deviceKeyOf(udid))}-${encodeURIComponent(bundleId)}`
       );
 
     /** The conditions as the agent reports them back: offline drops the rest, throughput is whole bytes/s. */
@@ -1154,15 +1154,25 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       ]);
     };
 
+    /** Until the agent confirms a change, either the earlier or the new conditions may be live. */
+    const readOwnedKeys = (bundleId: string): string[] =>
+      fs.existsSync(ownedThrottlePath(bundleId))
+        ? fs.readFileSync(ownedThrottlePath(bundleId), "utf8").split("\n")
+        : [];
+
+    const recordOwnedKeys = (bundleId: string, keys: string[]): void => {
+      if (lentSocketPath) fs.writeFileSync(ownedThrottlePath(bundleId), keys.join("\n"));
+    };
+
     const applyThrottle = async (bundleId: string, throttle: NetworkThrottle): Promise<void> => {
       await noteProviderCapture(bundleId);
-      if (lentSocketPath) {
-        fs.writeFileSync(ownedThrottlePath(bundleId), conditionsKey(throttle.conditions));
-      }
+      const key = conditionsKey(throttle.conditions);
+      recordOwnedKeys(bundleId, [...readOwnedKeys(bundleId), key]);
       await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", {
         bypassPorts: [throttle.metroPort],
       });
       await sendCdpRpc(bundleId, "Network.emulateNetworkConditions", { ...throttle.conditions });
+      recordOwnedKeys(bundleId, [key]);
     };
 
     const clearThrottle = async (bundleId: string): Promise<void> => {
@@ -1185,8 +1195,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           return null;
         throw err;
       })) as Record<string, unknown> | null;
-      const owned = fs.readFileSync(ownedThrottlePath(bundleId), "utf8");
-      if (!isEmulating(state) || conditionsKey(state) !== owned) {
+      if (!isEmulating(state) || !readOwnedKeys(bundleId).includes(conditionsKey(state))) {
         fs.rmSync(ownedThrottlePath(bundleId), { force: true });
         return;
       }
