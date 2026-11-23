@@ -1,78 +1,30 @@
 import { z } from "zod";
-import { FAILURE_CODES, type ToolDefinition } from "@argent/registry";
-import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
-import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
+import type { ToolDefinition } from "@argent/registry";
+import { nativeAppServices } from "./macos-view-hierarchy";
+import {
+  queryViewAtPoint,
+  viewAtPointParams,
+  type ViewAtPointResult,
+} from "./native-view-at-point";
 
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; view: unknown | null };
-
-const zodSchema = z.object({
-  ...nativeAppTarget,
-  x: z
-    .number()
-    .describe(
-      "Raw X coordinate in points, on the portrait axes of the screen<flag:macos-apps>; on a Mac app, points from the top-left of the area describe reports</flag:macos-apps>. NOT normalized [0,1] tap space."
-    ),
-  y: z
-    .number()
-    .describe("Raw Y coordinate in points, on the same axes as x. NOT normalized [0,1] tap space."),
-  includeAncestors: z
-    .boolean()
-    .optional()
-    .describe("Include ancestor chain for the matched view (default true)"),
-  includeChildren: z
-    .boolean()
-    .optional()
-    .describe("Include child views for the matched view (default false)"),
-  fields: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "View fields to include. Defaults: pointer, className, tag, frame, " +
-        "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
-        "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
-        "Additional: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder"
-    ),
-  skipClasses: z
-    .array(z.string())
-    .optional()
-    .describe("Exact UIView class names whose entire subtree should be pruned"),
-  skipClassPrefixes: z
-    .array(z.string())
-    .optional()
-    .describe("Class name prefixes to prune entire subtrees"),
-  maxDepth: z
-    .number()
-    .int()
-    .positive()
-    .optional()
-    .describe("Maximum depth for returned child/ancestor serialization (default 150)"),
-});
+const zodSchema = z.object(viewAtPointParams);
 
 type Params = z.infer<typeof zodSchema>;
 
-export const nativeUserInteractableViewAtPointTool: ToolDefinition<Params, Result> = {
+/**
+ * The hit-test query under its own id, for the SDK, `argent run` and saved e2e
+ * steps. Agents get it as `native-view-at-point` with `hitTest: true`.
+ */
+export const nativeUserInteractableViewAtPointTool: ToolDefinition<Params, ViewAtPointResult> = {
   id: "native-user-interactable-view-at-point",
   description: `Inspect the deepest UIView at a raw native window point that would actually receive touch input.
 
-Unlike native-view-at-point, this respects userInteractionEnabled and is closer to
-UIKit hit-testing semantics.
-
-Use when a tap lands somewhere unexpected or does nothing, to see which control
-UIKit would hand the touch to: a transparent overlay swallowing it, a parent
-recognizer, a disabled button.
-
-Returns { status: "ok", view }: the hit-test winner with its class name, frames,
-identifier, label and layer name, plus its ancestors and subviews as requested.
-view is null when no touchable view sits under that point.
-
-To get x and y from a normalized describe frame, multiply its values by the
-screen size in points, also when the UI is landscape.
-native-full-hierarchy returns that size as screen (pass maxDepth: 1 and fields: ["className"] to keep it small).<flag:macos-apps> On a Mac app,
-multiply them by the size of the area describe reports instead.</flag:macos-apps>
+It respects userInteractionEnabled and is close to UIKit hit-testing. The same query as native-view-at-point with hitTest: true, which documents the coordinates and the result.
 
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
+  hideFromMcp: true,
   readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Finding interactive view at (${params.x}, ${params.y})`,
@@ -83,16 +35,9 @@ An Apple system app is rejected outright (terminal: never retry it).`,
   capability: {
     apple: { simulator: true },
     appleRemote: { simulator: true },
-    macos: { app: true },
+    macos: { app: true, catalyst: false },
   },
   services: nativeAppServices,
   execute: (services, params) =>
-    queryViewHierarchyFor(
-      services,
-      params,
-      "native-user-interactable-view-at-point",
-      "ViewHierarchy.userInteractableViewAtPoint",
-      FAILURE_CODES.NATIVE_DEVTOOLS_USER_INTERACTABLE_VIEW_AT_POINT_ERROR,
-      (result: { view?: unknown }) => ({ status: "ok" as const, view: result.view ?? null })
-    ),
+    queryViewAtPoint(services, params, "native-user-interactable-view-at-point", true),
 };

@@ -87,6 +87,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * The text the runner hands the YAML parser for a flow file: whitespace around
+ * the content is dropped, but the line breaks before it are kept, so a parse
+ * error names the file's own line.
+ */
+export function flowYamlSource(content: string): string {
+  return content.replace(/^\s+/, (lead) => lead.replace(/[^\n]/g, "")).trimEnd();
+}
+
+/**
  * The project files a parsed flow document makes the runner read: the `run:`
  * targets of its steps and of the steps of its block directives (`when:`),
  * taken or not, spelled as the runner keeps them (extension completed), the
@@ -196,14 +205,14 @@ export type OnDiskSpelling =
 /**
  * Classify the supplied basename against `dir`'s listing. One classifier serves
  * every route that turns a caller's spelling into a file it will open — a flow,
- * or since the `script:` step a plain `.mjs` — so they can never drift apart in
- * which spellings they accept.
+ * or since the `script:` step a plain script file — so they can never drift
+ * apart in which spellings they accept.
  *
  * readdir, not realpath: realpath rewrites a symlinked flow to its target's
  * name, and a flow deliberately runs — and composes — under the link's own
  * name. Every call site hands a pure-ASCII basename (the flow-name charset,
- * plus ".yaml" or ".mjs"), so Unicode-normalizing filesystems cannot make the
- * comparison lie.
+ * plus ".yaml" or a script extension), so Unicode-normalizing filesystems
+ * cannot make the comparison lie.
  *
  * What an `absent` verdict means is the caller's to decide, and they differ:
  * `e2e_test_path` arrives with the boundary's stat already vouching for the file,

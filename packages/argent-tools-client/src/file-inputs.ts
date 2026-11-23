@@ -31,11 +31,17 @@ import {
 import { constants, tmpdir } from "node:os";
 import * as path from "node:path";
 
-import { createTarGzFile } from "@argent/archive";
+import {
+  ARCHIVE_CONTENT_TYPES,
+  createArchiveFile,
+  pickArchiveFormat,
+  type ArchiveFormat,
+} from "@argent/archive";
 import {
   FAILURE_CODES,
   FLOW_FILE_NAME_PATTERN,
   e2eDirProject,
+  isUnexpandedPath,
   pickE2eFile,
   type FileInputMember,
   type OnDiskSpelling,
@@ -115,10 +121,11 @@ export interface PrepareFileInputsOptions {
   includeContent: boolean;
   /**
    * Set only when routed to a remote tool-server: `kind: "tar-upload"` inputs
-   * are tarballed and streamed to `POST <url>/upload` before the tool call.
-   * Absent for co-located sessions (the server reads the path in place).
+   * are archived and streamed to `POST <url>/upload` before the tool call, in
+   * the best of `formats` (the server's `GET /tools` `uploadFormats`). Absent
+   * for co-located sessions (the server reads the path in place).
    */
-  uploadEndpoint?: { url: string; token: string };
+  uploadEndpoint?: { url: string; token: string; formats?: readonly string[] };
   /**
    * Receives the `[e2e-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on,
    * one for each member a `collect` spec sends. Defaults to stderr.
@@ -175,6 +182,34 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
     return v;
   });
   return missing ? null : out;
+}
+
+/**
+ * `p` as an absolute path on this machine. The tool-server works in the
+ * directory of whichever client spawned it, so it cannot resolve a relative
+ * path. A path with a `..` segment is prefixed with the directory it is
+ * relative to (on Windows, that of its drive for `D:dir` and of the current
+ * drive for `\dir`), not normalized: collapsing `..` ignores symlinks, so it
+ * can name another file than the kernel opens. A trailing separator or `.`
+ * segment is kept, so `f.yaml/` and `f.yaml/.` still name no file. A Windows
+ * path on another OS, and a spelling nothing expanded
+ * ({@link isUnexpandedPath}), are left for the tool-server to refuse.
+ */
+export function callerPath(p: string): string {
+  const onCurrentDrive = path.sep === "\\" && /^[\\/](?![\\/])/.test(p);
+  if (!onCurrentDrive && (path.isAbsolute(p) || path.win32.isAbsolute(p) || isUnexpandedPath(p))) {
+    return p;
+  }
+  const { root } = path.parse(p);
+  const rest = p.slice(root.length);
+  if (!rest.split(/[\\/]/).includes("..")) {
+    const resolved = path.resolve(p);
+    const last = p.split(path.sep === "\\" ? /[\\/]/ : "/").at(-1);
+    const dirOnly = p !== last && (last === "" || last === ".") && !resolved.endsWith(path.sep);
+    return dirOnly ? `${resolved}${path.sep}` : resolved;
+  }
+  const base = path.resolve(root);
+  return base.endsWith(path.sep) ? `${base}${rest}` : `${base}${path.sep}${rest}`;
 }
 
 /**
@@ -242,10 +277,10 @@ function untrackArchive(archive: string): void {
   process.removeListener("exit", removePendingArchives);
 }
 
-function sha256File(filePath: string): Promise<string> {
+function sha256File(filePath: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash("sha256");
-    createReadStream(filePath)
+    createReadStream(filePath, { signal })
       .on("data", (chunk) => hash.update(chunk))
       .on("end", () => resolve(hash.digest("hex")))
       .on("error", reject);
@@ -298,23 +333,33 @@ function uploadFailure(
 
 async function uploadTar(
   tarPath: string,
+  format: ArchiveFormat,
   endpoint: { url: string; token: string },
   signal?: AbortSignal
 ): Promise<string> {
   const { size } = await stat(tarPath);
+  const stream = createReadStream(tarPath);
   // `duplex: "half"` is required to stream a Node Readable request body via
   // undici's fetch, but it isn't in the DOM RequestInit type.
   const init: RequestInit & { duplex: "half" } = {
     method: "POST",
     headers: {
-      "content-type": "application/gzip",
+      "content-type": ARCHIVE_CONTENT_TYPES[format],
       ...(endpoint.token ? { Authorization: `Bearer ${endpoint.token}` } : {}),
     },
-    body: createReadStream(tarPath) as unknown as BodyInit,
+    body: stream as unknown as BodyInit,
     duplex: "half",
     signal,
   };
-  const res = await fetch(`${endpoint.url}/upload`, init);
+  let res: Response;
+  try {
+    res = await fetch(`${endpoint.url}/upload`, init);
+  } catch (err) {
+    // A refused connection never reads the body; release its fd before the
+    // caller deletes the archive.
+    stream.destroy();
+    throw err;
+  }
   if (!res.ok) {
     let text = "";
     try {
@@ -331,15 +376,16 @@ async function uploadTar(
 /** Tar `sourcePath`, stream it to `POST /upload`, and return what the wire names it by. */
 export async function uploadFile(
   sourcePath: string,
-  endpoint: { url: string; token: string },
+  endpoint: { url: string; token: string; formats?: readonly string[] },
   signal?: AbortSignal
 ): Promise<{ uploadId: string; contentHash: string }> {
+  const format = pickArchiveFormat(endpoint.formats);
   const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
   trackArchive(tarPath);
   try {
-    await createTarGzFile(await realpath(sourcePath), tarPath);
-    const contentHash = await sha256File(tarPath);
-    return { uploadId: await uploadTar(tarPath, endpoint, signal), contentHash };
+    await createArchiveFile(await realpath(sourcePath), tarPath, format, signal);
+    const contentHash = await sha256File(tarPath, signal);
+    return { uploadId: await uploadTar(tarPath, format, endpoint, signal), contentHash };
   } finally {
     untrackArchive(tarPath);
     await rm(tarPath, { force: true }).catch(() => {});
@@ -399,7 +445,10 @@ export async function prepareFileInputs(
     return args;
   }
   const record = args as Record<string, unknown>;
-  let out: Record<string, unknown> | null = null;
+  const planned: { spec: FileInputSpec; filePath: string }[] = [];
+  // The collectors read every target the call sets as the wire names it,
+  // whichever spec they run for.
+  const callArgs: Record<string, unknown> = { ...record };
 
   for (const spec of specs) {
     // Deriving this target too would have the boundary vouch for a file the
@@ -409,12 +458,19 @@ export async function prepareFileInputs(
     // still diagnosed by the tool, not by the boundary.
     if (spec.skipWhenSet && record[spec.skipWhenSet] !== undefined) continue;
     if (spec.target in record && typeof record[spec.target] !== "string") continue;
-    const filePath = await specPath(spec, record);
-    if (filePath === null) continue;
+    const spelled = await specPath(spec, record);
+    if (spelled === null) continue;
     // When the target IS a source param the interpolated path equals its
     // value; a derived target (e2e_test_file) is wrapped only when unset.
-    if (spec.target in record && record[spec.target] !== filePath) continue;
+    if (spec.target in record && record[spec.target] !== spelled) continue;
+    const filePath = callerPath(spelled);
+    planned.push({ spec, filePath });
+    if (spec.target in record) callArgs[spec.target] = filePath;
+  }
+  if (planned.length === 0) return args;
 
+  const out: Record<string, unknown> = { ...record };
+  for (const { spec, filePath } of planned) {
     const wire: FileInputWire = { [FILE_INPUT_MARKER]: true, path: filePath };
     if (spec.kind === "file") {
       // Unreadable here (null) keeps the path-only wrapper, which still
@@ -431,7 +487,7 @@ export async function prepareFileInputs(
       ) {
         Object.assign(
           wire,
-          await opts.collectMembers(filePath, Buffer.from(wire.content, "base64"), record, opts)
+          await opts.collectMembers(filePath, Buffer.from(wire.content, "base64"), callArgs, opts)
         );
       }
     }
@@ -442,7 +498,7 @@ export async function prepareFileInputs(
       opts.includeContent &&
       opts.collectStepMembers
     ) {
-      wire.members = await opts.collectStepMembers(record, opts);
+      wire.members = await opts.collectStepMembers(callArgs, opts);
     }
 
     if (spec.kind === "tar-upload") {
@@ -459,11 +515,10 @@ export async function prepareFileInputs(
       }
     }
 
-    out = out ?? { ...record };
     out[spec.target] = wire;
   }
 
-  return out ?? args;
+  return out;
 }
 
 export interface AppliedClientFiles {

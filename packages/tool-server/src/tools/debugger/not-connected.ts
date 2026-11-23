@@ -71,6 +71,7 @@ const NOT_CONNECTED_CODE_MAP: Record<string, DebuggerNotConnectedReason> = {
   [FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH]: "device_mismatch",
   [FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_SOCKET_CLOSED_BEFORE_OPEN]: "cdp_unreachable",
+  [FAILURE_CODES.DEBUGGER_CDP_ORIGIN_REJECTED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED]: "cdp_unreachable",
   // Raised by the connect pipeline's enable/binding sends when the target
@@ -160,15 +161,17 @@ export function trackDebuggerOutcome(
 /**
  * Resolve the shared debugger service for a status-style tool, preserving the
  * connect-on-first-call contract. Passes ref.options through — the Chromium
- * factory hard-fails without the resolved DeviceInfo.
+ * factory hard-fails without the resolved DeviceInfo. `options` reach a Metro
+ * debugger's factory on its first connect.
  */
 export async function resolveDebuggerService(
   registry: Registry,
-  params: { port?: number; device_id?: string }
+  params: { port?: number; device_id?: string },
+  options?: Record<string, unknown>
 ): Promise<JsRuntimeDebuggerApi> {
   const ref = debuggerServiceRef(params);
   return typeof ref === "string"
-    ? registry.resolveService<JsRuntimeDebuggerApi>(ref)
+    ? registry.resolveService<JsRuntimeDebuggerApi>(ref, options)
     : registry.resolveService<JsRuntimeDebuggerApi>(ref.urn, ref.options);
 }
 

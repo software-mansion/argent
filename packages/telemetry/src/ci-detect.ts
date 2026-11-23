@@ -50,5 +50,3 @@ export function isCi(env: NodeJS.ProcessEnv = process.env): boolean {
   if (GENERIC_CI_ENV_VARS.some((name) => Boolean(env[name]))) return true;
   return isKnownVendorCi(env);
 }
-
-export const _CI_VENDOR_COUNT_FOR_TEST: number = (vendors as VendorDefinition[]).length;

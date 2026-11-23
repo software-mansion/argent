@@ -47,6 +47,12 @@ Each hang has a `startNs` and `durationNs`. The correlator filters CPU samples w
 
 Top 5 suspected functions and top 3 call chains (ranked by sample frequency within the window) are attached to each hang.
 
+The correlator sets `hangThreadRanMs` when the hang thread ran for less than 10% of the hang after subtracting suspended time and the trace contains samples from that thread. When a report shows this wait alongside activity from Argent or Instruments, it presents that activity as context for the wait.
+
+### Mac app suspensions
+
+At stop, Argent aligns suspension intervals to the trace using the trace's start date. In `app-suspensions.ts`, overlaps under 20 ms are ignored because the watcher polls every 10 ms. Each hang keeps its recorded duration, label, and severity. The report uses `suspendedMs` to show the overlap because a pause can delay work in the app, while an external wait can continue through it.
+
 ### Call chain extraction
 
 App call chains are the non-system, non-hex-address frames from a stack, preserved in stack order. They form readable paths like `MyComponent > render > measureText`. Chains are aggregated by frequency within each CPU hotspot group so the report shows the most common execution path, not a random sample.

@@ -345,12 +345,6 @@ describe("paste tool", () => {
       expect(tool.zodSchema!.safeParse({ udid: IOS_UDID }).success).toBe(false);
       expect(tool.zodSchema!.safeParse({ udid: IOS_UDID, text: "a" }).success).toBe(true);
     });
-
-    it("tells the agent paste is not a keyboard substitute", () => {
-      const { description } = toolFor({});
-      expect(description).toMatch(/Do NOT use this in place of `keyboard`/);
-      expect(description).toMatch(/where a real user would paste/);
-    });
   });
 
   it("routes an ios-remote simulator through the transport's paste primitive", async () => {

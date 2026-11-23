@@ -55,6 +55,13 @@ describe("parseCommandArgs", () => {
     );
   });
 
+  it.each(["--toString=x", "--hasOwnProperty", "--constructor"])(
+    "rejects %s, an Object.prototype name, as an unknown flag",
+    (tok) => {
+      expect(() => parseCommandArgs([tok], SPECS)).toThrow(`Unknown flag: ${tok}`);
+    }
+  );
+
   it("rejects a value outside the declared choices, listing them", () => {
     expect(() => parseCommandArgs(["--scope", "team"], SPECS)).toThrow(
       '--scope must be "global" or "project", got "team"'

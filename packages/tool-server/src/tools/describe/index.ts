@@ -41,7 +41,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 interface ChromiumServices {
@@ -162,9 +162,9 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
     // Android's device probes plus the tree dump can outlast the 30s MCP fetch timeout.
     longRunning: true,
     description: `Get the accessibility / DOM element tree for the current screen.
-Use when you need element frames or labels and have no fresh tree: most interaction tools (not tv-remote or shake) already return one after each action.
-On iOS it reads the AXRuntime accessibility service, so it sees whatever is visible, including system dialogs and permission prompts. While a system dialog is visible it returns the dialog's elements (buttons, text); otherwise the foreground app's. On a physical iOS device it covers only the app started with launch-app; to read system dialogs there, launch-app \`com.apple.springboard\` first.
-On Android it reads the tree through Argent's UiAutomation helper, falling back to \`uiautomator dump\`. On Chromium it walks the DOM over the Chrome DevTools Protocol: every visible element with its ARIA role, accessible name and bounding rect.
+Use when you need element frames or labels and have no fresh tree: most interaction tools (not tv-remote or shake) already return one after each action, or name an identical earlier one by its tree id.
+On iOS it reads the AXRuntime accessibility service, so it sees whatever is visible, including system dialogs and permission prompts. While a system dialog is visible it returns the dialog's elements (buttons, text); otherwise the foreground app's. On a physical iOS device it covers only the app started with launch-app; to read system dialogs there, launch-app \`com.apple.springboard\` first. On a local iOS simulator a text field shows its placeholder as its value, with no label, so an empty field reads like one holding that text. A text field with no accessibility label or identifier (e.g. the Settings search field) can also be missing from the tree, even with text typed in it. Check a screenshot in both cases.
+On Android it reads the tree through Argent's UiAutomation helper, falling back to \`uiautomator dump\`. On Chromium it walks the DOM over the Chrome DevTools Protocol: every visible element with its ARIA role, accessible name and the visible part of its bounding rect; content scrolled or clipped out of view, or skipped by a closed \`<details>\` or \`content-visibility: hidden\`, has a zero-area frame.
 On Vega (Fire TV) it reads the on-device automation toolkit; \`[focused]\`/\`[selected]\` mark the D-pad cursor, which you move with \`tv-remote\` (Vega has no touch).<flag:harmonyos>
 On HarmonyOS it runs the device's \`uitest dumpLayout\` (\`source: "harmony-uitest"\`); each top-level child is a window whose \`identifier\` (not its label) is the owning bundle, so an app plus the status bar reads as two windows. A suspended display still dumps its last frame, so the result then carries a \`hint\`, as it does for an empty dump.</flag:harmonyos><flag:macos-apps>
 On a Mac app it reads the app's accessibility tree with web view content and React Native testIDs merged in; frames are fractions of the app window, grown to include sheets and menus past it.</flag:macos-apps>

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { parse as parseDotenv } from "dotenv";
 import { findProjectRoot } from "./flags.js";
-import { resolveHomeDir, type ConfigPathOptions } from "./paths.js";
+import { isHomeDir, resolveHomeDir, type ConfigPathOptions } from "./paths.js";
 
 /**
  * Where `{{secret:NAME}}` values come from. The placeholder mechanism itself
@@ -164,7 +164,10 @@ function fileSource(filePath: string, exposure: FileExposure): SecretSource {
 export function secretSources(options: SecretSourceOptions = {}): SecretSource[] {
   const sources: SecretSource[] = [envSource(options.env ?? process.env)];
 
-  const projectRoot = findProjectRoot(options.cwd ?? process.cwd());
+  const home = resolveHomeDir(options);
+  const found = findProjectRoot(options.cwd ?? process.cwd());
+  // HOME's spelling, so the dedupe below matches the global file.
+  const projectRoot = found && isHomeDir(found, options) ? home : found;
   const filePaths: Array<{ path: string; exposure: FileExposure }> = [];
   if (projectRoot) {
     filePaths.push({
@@ -176,7 +179,7 @@ export function secretSources(options: SecretSourceOptions = {}): SecretSource[]
     }
   }
   filePaths.push({
-    path: path.join(resolveHomeDir(options), ".argent", SECRETS_FILE_NAME),
+    path: path.join(home, ".argent", SECRETS_FILE_NAME),
     exposure: "dedicated",
   });
 
