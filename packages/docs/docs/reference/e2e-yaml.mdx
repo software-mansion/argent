@@ -166,7 +166,7 @@ When several elements match:
 
 | Directive type                                                                | Chosen element                                                                                                                                             |
 | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: exact text or id, then an app element before a key of the on-screen keyboard, then the smallest frame, then reading order |
+| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: an app element before a key of the on-screen keyboard, then exact text or id, then the smallest frame, then reading order |
 | Condition (`await`, `assert`)                                                 | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match                         |
 
 ### Relational scopes
@@ -221,9 +221,8 @@ When the on-screen keyboard shows, its elements are in the runner tree and in th
 
 The runner applies these rules to the elements of the keyboard:
 
-- An action takes an app element before a key that matches as exactly. Thus `tap: { text: Done }` taps the `Done` button of the app, not the return key `done`.
-- An exact match wins over a substring match, also when the exact match is a key. Thus `tap: { text: Go }` taps the return key `go`, not a link `Google`.
-- An action targets a key when no app element matches.
+- An action takes an app element before a key, also when the key is an exact match and the app element is a substring match. Thus `tap: { text: Done }` taps the `Done` button of the app, not the return key `done`. And `tap: { text: Go }` taps a link `Google`, not the return key `go`.
+- An action targets a key only when no app element matches.
 - A bare string tries `text` when its `id` finds only keys. Thus on iOS, `tap: Delete` taps the `Delete` button of the app, not the delete key with the id `delete`.
 - A condition (`await`, `assert`, `when:`) does not see the keyboard. Thus `assert: { hidden: { text: Done } }` passes when only the return key shows `done`.
 - An action does not press an app element under the keyboard. An element is under the keyboard when its center is in the area of the keys, gaps included.

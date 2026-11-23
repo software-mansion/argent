@@ -1789,10 +1789,11 @@ describe("on-screen keyboard", () => {
     children: [...keys, key("space", f(0.2, 0.86, 0.6, 0.12)), ...app],
   });
 
-  it("selectorToNode takes an app element over an as-exact key, but an exact key over a substring", () => {
+  it("selectorToNode takes an app element over any key, and a key when no app element matches", () => {
     // The key "done" has the smaller frame, which used to win the tie.
     expect(selectorToNode(screen, { text: "Done" })).toBe(done);
-    expect(selectorToNode(screen, { text: "Go" })).toBe(keyGo);
+    // The key "go" matches exactly, the row "Google" only as a substring.
+    expect(selectorToNode(screen, { text: "Go" })).toBe(google);
     expect(selectorToNode(screen, { text: "shift" })).toBe(keyShift);
   });
 

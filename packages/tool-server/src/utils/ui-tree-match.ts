@@ -847,13 +847,13 @@ const TARGET_TIE_BREAKS: readonly TieBreak[] = [
   // A Mac app's front layer: a match in an open menu, sheet or alert beats a
   // same-named control behind it.
   (a, b) => (b.node.layer ?? 0) - (a.node.layer ?? 0),
-  // The most fields matched exactly, not as a substring: the leaf carrying the
-  // text beats the container whose aggregated label contains it, and the
-  // return key "Go" beats a row "Google".
-  (a, b) => b.exact - a.exact,
-  // An app element before a key of the on-screen keyboard that matches as
-  // exactly: the app's "Done" button, not the return key "done".
+  // An app element before a key of the on-screen keyboard, also when the key
+  // matches more exactly: the app's "Done" button, not the return key "done",
+  // and a row "Google", not the return key "go". A test selects a key by its id.
   (a, b) => Number(a.node.keyboard === true) - Number(b.node.keyboard === true),
+  // The most fields matched exactly, not as a substring: the leaf carrying the
+  // text beats the container whose aggregated label contains it.
+  (a, b) => b.exact - a.exact,
   // The smallest frame: a labelled container and the leaf inside it match the
   // same text, and the leaf is the one meant. Not for a field-less selector,
   // where it would degenerate to a hairline spacer.
@@ -983,8 +983,7 @@ function ownSelectors(node: DescribeNode): Selector[] {
  * and the leaf inside it rendering the same text), not the same label on
  * another row, which a slightly different screen at replay could rank first.
  * A key elsewhere does not count against an app element: the node matches its
- * own field exactly, and replay takes an app element before a key that matches
- * no more exactly.
+ * own field exactly, and replay takes an app element before any key.
  */
 function resolvesAt(
   root: DescribeNode,

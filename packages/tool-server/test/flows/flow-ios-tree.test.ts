@@ -528,9 +528,13 @@ describe("iOS simulator flow tree projection", () => {
       )
     );
     // Dropping the keys' text sent `text: e` to "Typing Predictions" by substring.
-    expect(selectorToFrame(tree, { text: "e" })).toEqual(frame(0.21, 0.7, 0.1, 0.05));
-    // The exact-text ranking picks the return key over a button containing the word.
-    expect(selectorToFrame(tree, { text: "next" })).toEqual(frame(0.75, 0.9, 0.24, 0.05));
+    expect(findAll(tree, { text: "e" }).map((n) => n.frame)).toContainEqual(
+      frame(0.21, 0.7, 0.1, 0.05)
+    );
+    // An app button containing the word ranks before the return key that matches
+    // it exactly; the key's id reaches the key.
+    expect(selectorToFrame(tree, { text: "next" })).toEqual(frame(0.05, 0.5, 0.9, 0.06));
+    expect(selectorToFrame(tree, { identifier: "Next:" })).toEqual(frame(0.75, 0.9, 0.24, 0.05));
     expect(selectorToFrame(tree, { text: "Continue to next step" })).toEqual(
       frame(0.05, 0.5, 0.9, 0.06)
     );

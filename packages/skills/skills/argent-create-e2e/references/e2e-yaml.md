@@ -99,16 +99,15 @@ On an iOS simulator, each tree read after a `launch:` expects the launched app i
 
 With the on-screen keyboard up, its keys, prediction bar and other buttons are in the runner tree. On iOS the input accessory toolbar above the keys belongs to the app.
 
-- An action takes an app element over a key that matches as exactly: `{ text: Done }` taps the app's `Done` button, not the return key `done`.
-- An exact match still beats a substring, also on a key: `{ text: Go }` taps the return key `go`, not a `Google` link. Use the button's full text or id.
-- A key is the target when no app element matches as exactly. A bare string tries `text` when its `id` finds only keys, so on iOS `tap: Delete` means the app's `Delete`, not the delete key (id `delete`).
+- An action takes an app element over any key, also when only the key matches exactly: `{ text: Done }` taps the app's `Done` button, not the return key `done`, and `{ text: Go }` taps a `Google` link, not the return key `go`.
+- A key is the target only when no app element matches. Select a key by its id. A bare string tries `text` when its `id` finds only keys, so on iOS `tap: Delete` means the app's `Delete`, not the delete key (id `delete`).
 - Conditions (`await`, `assert`, `when:`) do not see the keyboard, and `scroll-to` does not stop on a key: `assert: { hidden: { text: Done } }` passes while the return key shows `done`. To wait for the keyboard itself, use a `tool: await-ui-element` step: it reads the `describe` tree, which has the keys.
 - An action never presses an app element whose centre is under the keyboard (gaps between keys included): `tap`, `long-press`, `type`, `pinch`, `rotate` and a swipe's `from` wait for the keyboard to uncover the element, fail when it still covers it at the end of the wait, and never fall back to another match. Close the keyboard in an earlier step, or `scroll-to` the element; `scroll-to` fails when its swipe point is under the keyboard, or when the scroll ends with the element still under it.
 - To target a key, select it by id: on iOS `Done`, `Go` or the letter keyboard's `delete` (English in every keyboard language), on Android Gboard's `key_pos_ime_action` or `key_pos_del`. A key without an id, such as a number pad's delete key, needs a scope; recording the tap adds one. Enter text with `type`, not with taps on letter keys.
 
 When several nodes match, the directive decides:
 
-- **Actions** (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) take the most specific visible match: exact text/id beats substring, then an app element beats a keyboard key, then the smallest frame, then reading order.
+- **Actions** (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) take the most specific visible match: an app element beats a keyboard key, then exact text/id beats substring, then the smallest frame, then reading order.
 - **Conditions** (`await`, `assert`, `when:`) do not rank, and do not see the keyboard. `exists`/`visible` hold if any match qualifies and `hidden` only if none does; `text` reads the first visible match in reading order.
 
 A container that aggregates a child's text therefore splits them: `tap` hits the leaf while `text.in` reads the container, so `equals` fails against correct UI. Use an `id` or a [relational scope](#relational-scopes) when an action and a check must agree, and a stricter selector when ranking can still choose the wrong element.

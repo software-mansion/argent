@@ -65,8 +65,8 @@ export interface DescribeNode {
   // selector's matches, the frontmost layer wins.
   layer?: number;
   // An element of the on-screen keyboard: a key, the prediction bar, a button
-  // or field of the keyboard. An app element wins a tie with it, and the e2e
-  // conditions do not see it. Set by the e2e runner's tree adapters only; the
+  // or field of the keyboard. An e2e action takes an app element before it, and
+  // the e2e conditions do not see it. Set by the e2e runner's tree adapters only; the
   // describe tool leaves it unset.
   keyboard?: boolean;
 }
