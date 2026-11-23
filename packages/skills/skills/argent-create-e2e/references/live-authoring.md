@@ -146,7 +146,7 @@ A warning does not reject the step. If `e2e-finish-recording` reports dropped wa
 
 ### Network capture
 
-On iOS and Android, `view-network-logs` and `native-network-logs` only read. Before `network-capture-start`, they say that capture is not started. A `tool:` step passes whatever text it returns, so a read before a start replays green and proves nothing.
+On iOS and Android, `view-network-logs` and `native-network-logs` only read. On a Mac app, `native-network-logs` only reads. Before `network-capture-start`, they say that capture is not started. A `tool:` step passes whatever text it returns, so a read before a start replays green and proves nothing.
 
 1. Record `network-capture-start` through `e2e-add-step` after the launch and its first-screen wait, before the action whose requests the test reads. A launch ends the capture of the JS layer. A start before `launch:` makes the test a fragment.
 2. Before a recorded `network-capture-stop`, record a wait for the screen that shows the result of the request. Argent records no request that the app sends after the stop.

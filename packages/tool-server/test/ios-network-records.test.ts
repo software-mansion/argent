@@ -6,6 +6,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   IOS_NATIVE_REQUEST_ID,
   KEPT_BODY_CHARS_BUDGET,
+  MACOS_CONNECTION_DROPPED,
   createIosNetworkRecords,
   findIosNativeRecord,
   hasIosNetworkCapture,
@@ -942,6 +943,43 @@ describe("iOS native network records: connection closed", () => {
 
     expect(store.holdsRecordsOf(CONN)).toBe(false);
     expect(store.holdsRecordsOf(OTHER_CONN)).toBe(true);
+  });
+});
+
+describe("Mac app native network records: a request still running after a reconnect", () => {
+  /** A Mac app's connection comes back for the same process, so its number does too. */
+  function macStore() {
+    const store = createIosNetworkRecords(
+      () => ({ armed: true }),
+      fakeApp().link,
+      () => true,
+      "macos-native"
+    );
+    return { store, agent: agentOn(store, CONN) };
+  }
+  const recordOf = (store: IosNetworkRecordStore) => store.records(8081)[0]!;
+
+  it("takes the response of a request that failed at the drop, without the drop's error", () => {
+    const { store, agent } = macStore();
+    agent.requestWillBeSent("long", "https://example.com/download");
+    store.connectionClosed(CONN, { superseded: false, running: true });
+    expect(recordOf(store)).toMatchObject({ state: "failed", errorText: MACOS_CONNECTION_DROPPED });
+
+    agent.responseReceived("long", "https://example.com/download");
+    expect(recordOf(store)).toMatchObject({ state: "headers", response: { status: 200 } });
+    expect(recordOf(store)).not.toHaveProperty("errorText");
+  });
+
+  it("completes a request whose headers came before the drop, without the drop's error", () => {
+    const { store, agent } = macStore();
+    agent.requestWillBeSent("long", "https://example.com/download");
+    agent.responseReceived("long", "https://example.com/download");
+    store.connectionClosed(CONN, { superseded: false, running: true });
+    expect(recordOf(store)).toMatchObject({ state: "failed", errorText: MACOS_CONNECTION_DROPPED });
+
+    agent.loadingFinished("long", 2);
+    expect(recordOf(store)).toMatchObject({ state: "complete", response: { status: 200 } });
+    expect(recordOf(store)).not.toHaveProperty("errorText");
   });
 });
 

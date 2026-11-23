@@ -152,7 +152,7 @@ export function createPreviewRouter(registry: Registry): Router {
           | { platform: "ios"; udid: string; name: string; state: string; runtime: string }
           | {
               platform: "android";
-              serial: string;
+              serial?: string;
               state: string;
               avdName?: string;
               model?: string;
@@ -186,7 +186,8 @@ export function createPreviewRouter(registry: Registry): Router {
             },
           ];
         }
-        if (d.platform === "android") {
+        // An AVD that is not running has no serial to stream or boot by.
+        if (d.platform === "android" && d.serial !== undefined) {
           return [
             {
               udid: d.serial,
