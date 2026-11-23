@@ -7,6 +7,7 @@ import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   countStepsOnDisk,
   serializeFlow,
+  flowFormatVersion,
   parseFlow,
   describeSelector,
   assertValidProjectRoot,
@@ -166,6 +167,10 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([]);
   });
 
+  it("returns empty steps for content of only whitespace", async () => {
+    expect(parseFlow(" \n\t\n")).toEqual({ executionPrerequisite: "", steps: [] });
+  });
+
   it("defaults executionPrerequisite to empty string when missing", async () => {
     const content = "steps:\n  - echo: Hello\n";
     const flow = parseFlow(content);
@@ -224,6 +229,19 @@ describe("parseFlow", () => {
     // locate the syntax error.
     expect((thrown as Error).message).toContain("Invalid e2e test file:");
     expect((thrown as Error).message).toContain("line 1");
+  });
+
+  it("reports a syntax error at its line in the file when the file starts with blank lines", () => {
+    expect(() => parseFlow("\n\n\nsteps:\n  - echo: start\n  - echo: [unclosed\n")).toThrow(
+      "at line 6, column 20"
+    );
+  });
+
+  it.each([
+    ["spaces", "  executionPrerequisite: x\nsteps:\n  - echo: hi\n"],
+    ["a tab after blank lines", "\n\n\tsteps:\n  - echo: hi\n"],
+  ])("parses a file whose first content line is indented with %s", (_, content) => {
+    expect(parseFlow(content).steps).toEqual([{ kind: "echo", message: "hi" }]);
   });
 
   // `step must be an object` is spelled twice — here for a top-level entry, and
@@ -847,6 +865,10 @@ describe("parseFlow", () => {
       "\t\n",
       "  hi  ",
       "plain single line",
+      // Long enough to be written over several lines: a line of one space must
+      // still come back as a space, not a backslash.
+      "x".repeat(78) + "\n \nb",
+      "x".repeat(30) + " " + "y".repeat(60) + "\n \n z",
     ];
     for (const value of values) {
       const flow: FlowFile = {
@@ -899,6 +921,17 @@ describe("parseFlow", () => {
     it("reads a file without version, and one with version 1, the same", async () => {
       const body = "steps:\n  - echo: hi\n";
       expect(parseFlow(`version: 1\n${body}`)).toEqual(parseFlow(body));
+    });
+
+    it("reads a version 1 file as version 1, and a version 2 one, or one built in memory, as 2", () => {
+      const body = "steps:\n  - tap: { x: 0.2, y: 0.3 }\n";
+      expect(flowFormatVersion(parseFlow(body))).toBe(1);
+      expect(flowFormatVersion(parseFlow(`version: 1\n${body}`))).toBe(1);
+      expect(flowFormatVersion(parseFlow(`version: 2\n${body}`))).toBe(2);
+      expect(flowFormatVersion({ executionPrerequisite: "", steps: [] })).toBe(2);
+      // Re-serialized, a version 1 flow is written as version 2: only the
+      // runner turns its points, so a recording never appends to one.
+      expect(serializeFlow(parseFlow(body))).toMatch(/^version: 2\n/);
     });
 
     it.each([[3], [4]])("refuses a version %i file and says to update", async (v) => {
@@ -1293,6 +1326,9 @@ describe("output references", () => {
       "`tap.on.id`"
     );
     expect(
+      locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, modifiers: [command] }\n')
+    ).toBe("`tap.on.id`");
+    expect(
       locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
     ).toBe("`long-press.on.id`");
     expect(locatorNamed('steps:\n  - pinch: { on: { id: "{{output:map}}" }, scale: 2 }\n')).toBe(
@@ -1326,6 +1362,9 @@ describe("output references", () => {
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, button: left }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, modifiers: [] }\n')).toBe(
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n')).toBe(

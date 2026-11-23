@@ -69,7 +69,10 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
         }
       }
     } else {
-      const podfile = await readFileSafe(join(projectRoot, "ios", "Podfile"));
+      // react-native-macos keeps the Mac app's pods in macos/.
+      const podfile = await readFileSafe(
+        join(projectRoot, platform === "macos" ? "macos" : "ios", "Podfile")
+      );
       if (podfile) {
         if (
           newArchDefault &&

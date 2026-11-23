@@ -2,18 +2,23 @@
 
 One HTTP POST per command. The request body is a JSON object; the reply is a
 JSON **envelope**. Connections close after each exchange (`Connection:
-close`). The server listens on loopback on a system-assigned port and logs
+close`). The server listens on a system-assigned port and logs
 it once the listener is ready as `ARGENT_RUNNER_LISTENING port=N`; the
 tool-server reads that line from the xcodebuild launch log before it sends
 the first command, since nothing on the Mac can tell which device ports are
 free. Setting `ARGENT_RUNNER_PORT` in the runner's environment (xcodebuild
 forwards it from `TEST_RUNNER_ARGENT_RUNNER_PORT` on the launching process)
 pins the port instead; absent or `0` means system-assigned, which is also how
-a session run straight from Xcode comes up. The listener is reachable through
-usbmux (USB cable only); the forwarded stream terminates on the device's
-loopback, so a loopback bind covers the whole transport.
+a session run straight from Xcode comes up.
 
-The envelope is authoritative; the HTTP status is informational (200 for ok
+USB sessions bind to loopback and use usbmux. Network sessions bind only to the
+CoreDevice tunnel IPv6 address passed in `ARGENT_RUNNER_ADDRESS` (forwarded by
+Xcode from `TEST_RUNNER_ARGENT_RUNNER_ADDRESS`). The address must be in `fc00::/7`.
+Both transports use the same HTTP protocol without application-level authentication.
+Any process that can reach the runner endpoint can issue commands. Network access
+uses the private CoreDevice tunnel rather than a public device address.
+
+For dispatched commands, the envelope is authoritative; HTTP status is informational (200 for ok
 envelopes, 500 for error envelopes). Two rejections come from the framing
 layer, before command dispatch, still shaped as `INVALID_REQUEST` envelopes:
 400 when a finished header block lacks a usable Content-Length, and 413 when
@@ -214,11 +219,24 @@ Flat list in emission order; `parentIndex` links reconstruct the tree.
   stops at depth 100 and emission at depth 60; unlike the node cap,
   depth-dropped content does not mark the snapshot `degraded`.
 - `keyboard`: `true` on every node of the window that holds the on-screen
-  keyboard (a window with an element of type `Keyboard` within the raw depth
-  cap): the keys, the prediction bar, the globe and dictation keys. Absent
-  elsewhere, including the input accessory view above the keys. The window
-  itself has no label and is not emitted, so the mark is the only trace of
-  that boundary. The e2e runner reads it; `describe` drops it.
+  keyboard (a window, of the app or of a hosted view service, with an element
+  of type `Keyboard` within the raw depth cap): the keys, the prediction bar,
+  the globe and dictation keys. Absent elsewhere, including the input
+  accessory view above the keys. The window itself has no label and is not
+  emitted, so the mark is the only trace of that boundary. The e2e runner
+  reads it; `describe` drops it.
+- Hosted view services: when `com.apple.SafariViewService` is in the
+  foreground (an `ASWebAuthenticationSession` or `SFSafariViewController`
+  sheet is up), its tree is added under the root as an `Application` node,
+  emitted before the app's own nodes and capped at 1000 of the 1500 nodes. On
+  iOS 26 the app's own tree no longer contains the sheet. The service is read
+  without activating it, so the screen and the registered target stay as they
+  are, and its frames are in the same viewport points. It is skipped when the
+  service is suspended or in the background (a suspended service blocks the
+  capture past the watchdog), when its tree is not the app's size (a sheet
+  still animating), and when the app's tree already holds the sheet's
+  `BrowserView` (iOS 18 and earlier). A failed hosted capture never fails the
+  snapshot.
 - `quality`: `{state: healthy|degraded, backend: "xctest", reason?,
 reasonCode?}`.
 

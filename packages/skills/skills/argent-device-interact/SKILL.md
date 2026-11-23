@@ -16,37 +16,38 @@ Each tool's own description carries its parameters, defaults, return shape and e
 
 ## 2. Choosing the Right Tool
 
-| Action                         | Tool                | Notes                                                          |
-| ------------------------------ | ------------------- | -------------------------------------------------------------- |
-| Several known steps            | `run-sequence`      | One call, one screenshot at the end (§5)                       |
-| Open an app                    | `launch-app`        | **Never tap home-screen icons**                                |
-| Restart an app                 | `restart-app`       | Clean in-memory state                                          |
-| Open URL / deep link           | `open-url`          | Web pages, deep links, URL schemes                             |
-| Tap                            | `gesture-tap`       | Buttons, links, checkboxes                                     |
-| Scroll / swipe                 | `gesture-swipe`     | Touch targets; not Chromium                                    |
-| Scroll (Chromium)              | `gesture-scroll`    | Mouse wheel                                                    |
-| Drag (Chromium)                | `gesture-drag`      | Sliders, drag-and-drop, text selection                         |
-| Long press, drag & drop        | `gesture-custom`    | Also any other non-linear touch sequence                       |
-| Pinch / zoom                   | `gesture-pinch`     |                                                                |
-| Two-finger rotation            | `gesture-rotate`    |                                                                |
-| Hardware key                   | `button`            | Home, back, power, volume, appSwitch, actionButton             |
-| Type text or press a named key | `keyboard`          | Every platform; text or one key per call (§6)                  |
-| Paste text                     | `paste`             | Only where a user would paste (§6). Sim/emu, Mac app           |
-| Rotate device                  | `rotate`            | Orientation changes                                            |
-| Fold device                    | `fold`              | Foldables only: `references/foldables.md`                      |
-| Shake device                   | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu |
-| Wait for UI                    | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text  |
-| Wait for idle                  | `await-screen-idle` | Block until a non-empty screen tree stops changing (§4)        |
+| Action                         | Tool                 | Notes                                                                    |
+| ------------------------------ | -------------------- | ------------------------------------------------------------------------ |
+| Several known steps            | `run-sequence`       | One call, one screenshot at the end (§5)                                 |
+| Open an app                    | `launch-app`         | **Never tap home-screen icons**                                          |
+| Restart an app                 | `restart-app`        | Clean in-memory state                                                    |
+| Open URL / deep link           | `open-url`           | Web pages, deep links, URL schemes                                       |
+| Tap                            | `gesture-tap`        | Buttons, links, checkboxes                                               |
+| Scroll / swipe                 | `gesture-swipe`      | Touch targets; not Chromium                                              |
+| Scroll (Chromium)              | `gesture-scroll`     | Mouse wheel                                                              |
+| Drag (Chromium)                | `gesture-drag`       | Sliders, drag-and-drop, text selection                                   |
+| Long press, drag & drop        | `gesture-custom`     | Also any other non-linear touch sequence                                 |
+| Pinch / zoom                   | `gesture-pinch`      |                                                                          |
+| Two-finger rotation            | `gesture-rotate`     |                                                                          |
+| Hardware key                   | `button`             | Home, back, power, volume, appSwitch, actionButton                       |
+| Type text or press a named key | `keyboard`           | Every platform; text or one key per call (§6)                            |
+| Paste text                     | `paste`              | Only where a user would paste (§6). Sim/emu, Mac app                     |
+| Rotate device                  | `rotate`             | Orientation changes                                                      |
+| Fold device                    | `fold`               | Foldables only: `references/foldables.md`                                |
+| Shake device                   | `shake`              | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu           |
+| Slow or offline network        | `network-conditions` | Latency, bandwidth, offline. iOS sim app, Chromium tab; Android: offline |
+| Wait for UI                    | `await-ui-element`   | Block until an element is visible/hidden/exists/contains text            |
+| Wait for idle                  | `await-screen-idle`  | Block until a non-empty tree holds for `minStableMs` (§4)                |
 
 ## 3. Finding Tap Targets
 
-After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`): use it, and call a discovery tool only when no fresh tree covers the current screen.
+After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`): use it, and call a discovery tool only when no fresh tree covers the current screen. Each tree has a `Tree id`. When the tree is identical to an earlier one, the result names that id in place of the tree: use that tree, and call `describe` if it is not in your context. An identical tree does not mean the action did nothing.
 
 | Need                                           | Tool                                                                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Any screen: app, system dialog, Home screen    | `describe`                                                                                                                     |
 | UIKit properties of a view (iOS simulator)     | `native-find-views` (needs `bundleId` and a class, id, label, tag or `nativeID` to match)                                      |
-| What sits at a known raw point (iOS simulator) | `native-user-interactable-view-at-point` (the view that receives touch) or `native-view-at-point` (the visually deepest view)  |
+| What sits at a known raw point (iOS simulator) | `native-view-at-point` (the visually deepest view; `hitTest: true` for the view that receives touch)                           |
 | Final visual fallback                          | `screenshot`, only when the tools above cannot expose the control. Do not derive routine in-app navigation targets from pixels |
 
 If `describe` returns an empty tree, follow its `hint`; with no hint, the screen is blank, loading or unlabeled: check the attached screenshot and retry once content has loaded.

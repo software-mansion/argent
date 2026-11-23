@@ -47,6 +47,14 @@ export interface FlatNode<T> {
    */
   ownText: string;
   /**
+   * The texts `ownText` joins with a space, for a node whose own text is more
+   * than one (a text field's label and the text it holds). Each is compared
+   * with the descendant text on its own, so a view under the node that draws
+   * one of them does not leave that one in the hoisted text twice. Omit when
+   * `ownText` is one text.
+   */
+  ownTextParts?: readonly string[];
+  /**
    * The leaf to emit for this node WITHOUT `subtreeText`, or null to emit none.
    * The traversal stamps `subtreeText` on it before pushing.
    */
@@ -93,10 +101,10 @@ function includesWordsCI(haystack: string, needle: string): boolean {
 /**
  * Flatten `node`'s subtree into `out`, hoisting descendant text onto container
  * leaves. Post-order: a node's children contribute their text first, then the
- * node's own text plus that child text becomes its `subtreeText` — the own text
- * is dropped when the child text already contains it as whole words, and the
- * result is stamped only when it adds something over the node's own text (so a
- * plain leaf gets none).
+ * node's own text plus that child text becomes its `subtreeText` — each own
+ * text (see `ownTextParts`) is dropped when the child text already contains it
+ * as whole words, and the result is stamped only when it adds something over
+ * the node's own text (so a plain leaf gets none).
  * Returns the text this node contributes to its parent: `""` when it shields.
  *
  * `scrollClip` is the viewport of the node's nearest scrollable ancestor (in
@@ -129,7 +137,19 @@ export function flattenHoisting<T>(
   //     an inner scroller whose rect extends past the outer viewport — a
   //     content-sized embedded RecyclerView / UICollectionView straddling the
   //     outer fold would report rows below the fold as visible.
-  if (scrollClip && view.rect && rectFullyOutside(view.rect, scrollClip)) return "";
+  //
+  // A view with no area has nothing to scroll out of the window: a 0x0 wrapper
+  // whose children overflow it sits on the window's left or top edge whenever
+  // its child does, and the edge-inclusive test would drop that visible child
+  // with it. Its children are tested on their own.
+  if (
+    scrollClip &&
+    view.rect &&
+    view.rect.w > 0 &&
+    view.rect.h > 0 &&
+    rectFullyOutside(view.rect, scrollClip)
+  )
+    return "";
   const childClip = view.scrolls && view.rect ? intersectClip(view.rect, scrollClip) : scrollClip;
 
   const childText: string[] = [];
@@ -145,11 +165,19 @@ export function flattenHoisting<T>(
   // bare substring: a label that only appears inside a descendant word ("Save"
   // over "Saved successfully") is information the child does not render and
   // must be kept, like the plainly additive label ("Volume" over "50%").
+  //
+  // Each own text on its own: an empty iOS text field labelled "Email" reads
+  // "Email Required", and the view under it that draws the placeholder hoists
+  // "Required". The child text never contains the joined own text, so comparing
+  // that would hoist "Email Required Required".
   const descendantText = childText.join(" ");
-  const subtree =
-    view.ownText && !includesWordsCI(descendantText, view.ownText)
-      ? [view.ownText, descendantText].filter(Boolean).join(" ")
-      : descendantText || view.ownText;
+  const ownParts = view.ownTextParts ?? [view.ownText];
+  const subtree = [
+    ...ownParts.filter((part) => part && !includesWordsCI(descendantText, part)),
+    descendantText,
+  ]
+    .filter(Boolean)
+    .join(" ");
   if (view.leaf) {
     // Against the leaf's own text, not `ownText`: a projection may leave part
     // of it out (a toggle's 0/1), and the text check must then read the rest.

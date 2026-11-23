@@ -707,6 +707,26 @@ describe("when: execution", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("reports an echo in a skipped block on one line", async () => {
+    await writeFlow("narrated-skip", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "echo", message: "a\nb\u001b[31m" }],
+        },
+      ],
+    });
+
+    const result = await run("narrated-skip"); // DEVICE is an iOS UDID
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.message}`)).toEqual([
+      "when:skip:undefined",
+      "echo:skip:a\\nb\\u001b[31m",
+    ]);
+  });
+
   it("matches a platform guard positively on an android device and skips the ios block", async () => {
     // The inverse orientation of the iOS-udid test above: an android serial
     // (any id that is not a UUID / remote: / chromium-cdp- / amazon- shape

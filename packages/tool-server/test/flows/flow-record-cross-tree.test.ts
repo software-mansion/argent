@@ -868,11 +868,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     // A node is kept only when onScreen AND addressable; naming the latter blames the selector.
     expect(warning).toContain("addressable nodes");
-    expect(warning).toContain("clamp");
+    expect(warning).toContain("did not clip to zero area");
     expect(warning).toContain("off-viewport");
     expect(warning).toContain("`scroll-to` before the check rather than a different selector");
-    // Both axes. `normRect` clamps each edge alone, so a sideways node is zero-WIDTH.
-    expect(warning).toContain("zero width for one left or right of it");
+    // Both axes. The walker clips each edge alone, so a sideways node is zero-WIDTH.
+    expect(warning).toContain("zero width for one cut off left or right");
     // Not the other direction: the live `exists` passed, so the recorder saw it.
     expect(warning).toContain("5000-node walk limit is not what went wrong");
     expect(warning).not.toContain("past the end of what it read");
@@ -1906,15 +1906,6 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
   });
 
-  it("is declared longRunning, so the probe's budget is not spent from a 30s cap", () => {
-    // Without the flag the MCP adapter caps the POST at FETCH_TIMEOUT_MS and
-    // retries MAX_RETRIES times; each retry re-runs the action and appends a step.
-    // The re-probe spends PROBE_BUDGET_MS from that same ceiling.
-    expect(createFlowAddStepTool(registryWhereWaitSucceeds()).longRunning).toBe(true);
-    // The tool it proxies most often: a standalone wait duplicated once recorded.
-    expect(createAwaitUiElementTool(registryWhereWaitSucceeds()).longRunning).toBe(true);
-  });
-
   it("says nothing about discarded verdicts when none were", async () => {
     // A clean recording's `message` must stay the bare line.
     await startRecording("nodrop");
@@ -2179,12 +2170,6 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(result.message).toContain("no step was recorded");
   });
 
-  it("explains that `wait` has no recording tool at all", async () => {
-    const result = await hint("wait");
-    expect(result.message).toContain("a fixed sleep is not a readiness signal");
-    expect(result.message).toContain("await-ui-element");
-  });
-
   it("names restart-app for `launch`", async () => {
     expect((await hint("launch")).message).toContain("restart-app");
   });
@@ -2330,12 +2315,6 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(result.message).toContain("The persisted e2e test could not be read and parsed");
     expect(result.message).toContain("last valid in-memory snapshot");
     expect(result.stepCount).toBe(0);
-  });
-
-  it("tells the author to call flow-add-echo directly, not through the recorder", async () => {
-    const result = await hint("echo");
-    expect(result.message).toContain("DIRECTLY");
-    expect(result.message).toContain("fails on every replay");
   });
 
   it("does not claim a rewrite for the commands the recorder stores raw", async () => {

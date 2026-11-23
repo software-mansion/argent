@@ -3,9 +3,7 @@ import {
   getDescribeTapPoint,
   type DescribeFrame,
   type DescribeNode,
-  type UiOrientation,
 } from "../tools/describe/contract";
-import { nativeFrameToUi } from "../tools/flows/flow-orientation";
 
 /**
  * Shared tree matching: `await-ui-element`, the flow directives (`tap`, `type`,
@@ -13,14 +11,9 @@ import { nativeFrameToUi } from "../tools/flows/flow-orientation";
  *
  * Reading order — what `after` and `next` mean by "follows", the match a
  * `text` condition reads first, the pick of an `any: true` selector — is the
- * user's. A tree's frames are in the space touches are sent in, and on an iOS
- * simulator whose UI is landscape (a rotated device, an unfolded foldable) that
- * is the screen's portrait-native space, on which the UI lies turned: a frame
- * "below" another there is beside it to the user. So the callers that know how
- * the UI lies on the frame space (`DescribeTreeData.uiOrientation`) pass it,
- * and every comparison that goes by reading order reads the frames through
- * {@link nativeFrameToUi}. Containment (`within`), area, and the frame handed
- * back to act on are not turned: a rotation keeps them.
+ * user's, and so is every tree's frame space: an iOS simulator's trees are
+ * turned into the UI's upright space before they get here, also on a landscape
+ * UI (`utils/ios-ui-orientation.ts`).
  */
 
 /**
@@ -360,27 +353,6 @@ function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
 }
 
 /**
- * A node's frame as reading order sees it: the frame itself, or, on a UI that
- * lies turned on the frame space, its image in the UI's own space (see the
- * module comment). Built once per resolution and memoized per node, since the
- * relations compare every candidate with every anchor.
- */
-type ReadingFrame = (node: DescribeNode) => DescribeFrame;
-
-function readingFrames(orientation: UiOrientation | undefined): ReadingFrame {
-  if (orientation === undefined || orientation === "portrait") return (node) => node.frame;
-  const turned = new Map<DescribeNode, DescribeFrame>();
-  return (node) => {
-    let frame = turned.get(node);
-    if (frame === undefined) {
-      frame = nativeFrameToUi(node.frame, orientation);
-      turned.set(node, frame);
-    }
-    return frame;
-  };
-}
-
-/**
  * Build a predicate `follows(node)` — true when the node follows a DISTINCT
  * anchor in reading order (the CSS `~` an `after` scope needs).
  *
@@ -388,11 +360,8 @@ function readingFrames(orientation: UiOrientation | undefined): ReadingFrame {
  * index buys nothing here — the pruning it could offer is already subsumed by
  * the `some` short-circuit on the first matching anchor.
  */
-function afterTester(
-  anchors: DescribeNode[],
-  reading: ReadingFrame
-): (node: DescribeNode) => boolean {
-  return (node) => anchors.some((a) => a !== node && frameAfter(reading(node), reading(a)));
+function afterTester(anchors: DescribeNode[]): (node: DescribeNode) => boolean {
+  return (node) => anchors.some((a) => a !== node && frameAfter(node.frame, a.frame));
 }
 
 // Ranking among an anchor's followers. Position first, then frame AREA so that
@@ -434,25 +403,21 @@ function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
  * wins the pick and a `visible` check on it fails — scope by
  * {@link Selector.after} or {@link Selector.within} there instead.
  */
-function nearestAfter(
-  candidates: DescribeNode[],
-  anchors: DescribeNode[],
-  reading: ReadingFrame
-): DescribeNode[] {
+function nearestAfter(candidates: DescribeNode[], anchors: DescribeNode[]): DescribeNode[] {
   if (candidates.length === 0 || anchors.length === 0) return [];
   const picked = new Set<DescribeNode>();
   for (const anchor of anchors) {
-    const af = reading(anchor);
+    const af = anchor.frame;
     let band: DescribeNode | undefined;
     let below: DescribeNode | undefined;
     for (const c of candidates) {
       if (c === anchor) continue;
-      const f = reading(c);
+      const f = c.frame;
       const kind = followKind(f, af);
       if (kind === "band") {
-        if (band === undefined || compareBandPick(f, reading(band)) < 0) band = c;
+        if (band === undefined || compareBandPick(f, band.frame) < 0) band = c;
       } else if (kind === "below") {
-        if (below === undefined || compareBelowPick(f, reading(below)) < 0) below = c;
+        if (below === undefined || compareBelowPick(f, below.frame) < 0) below = c;
       }
     }
     const best = band ?? below;
@@ -470,14 +435,11 @@ function nearestAfter(
 // elements), and each nests: `within: { id: b, within: c }` resolves c's
 // containers first, then keeps only the b's sitting inside one of them.
 //
-// `orientation` is how the UI lies on the frame space, for the relations that
-// go by reading order (see the module comment); the tree's own space when
-// absent. `matchFieldValues` is for a `type` step's `into` only (see
+// `matchFieldValues` is for a `type` step's `into` only (see
 // {@link resolveSelector}).
 export function findAll(
   root: DescribeNode,
   selector: Selector,
-  orientation?: UiOrientation,
   matchFieldValues = false
 ): DescribeNode[] {
   const all: DescribeNode[] = [];
@@ -486,7 +448,7 @@ export function findAll(
     for (const child of node.children) collect(child);
   };
   for (const child of root.children) collect(child);
-  return resolveSelector(all, selector, readingFrames(orientation), matchFieldValues);
+  return resolveSelector(all, selector, matchFieldValues);
 }
 
 /**
@@ -510,11 +472,11 @@ export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
  */
 const RELATION_RESOLVERS: Record<
   SelectorRelation,
-  (matches: DescribeNode[], scope: DescribeNode[], reading: ReadingFrame) => DescribeNode[]
+  (matches: DescribeNode[], scope: DescribeNode[]) => DescribeNode[]
 > = {
   within: (matches, scope) => matches.filter(containmentTester(scope)),
-  after: (matches, scope, reading) => matches.filter(afterTester(scope, reading)),
-  next: (matches, scope, reading) => nearestAfter(matches, scope, reading),
+  after: (matches, scope) => matches.filter(afterTester(scope)),
+  next: (matches, scope) => nearestAfter(matches, scope),
 };
 
 /**
@@ -529,7 +491,6 @@ const RELATION_RESOLVERS: Record<
 function resolveSelector(
   all: DescribeNode[],
   selector: Selector,
-  reading: ReadingFrame,
   matchFieldValues = false
 ): DescribeNode[] {
   const regex = selectorTextRegex(selector);
@@ -543,7 +504,7 @@ function resolveSelector(
   for (const relation of SELECTOR_RELATIONS) {
     const scope = selector[relation];
     if (scope === undefined) continue;
-    matches = RELATION_RESOLVERS[relation](matches, resolveSelector(all, scope, reading), reading);
+    matches = RELATION_RESOLVERS[relation](matches, resolveSelector(all, scope));
   }
   return matches;
 }
@@ -563,18 +524,12 @@ function frontmost(nodes: DescribeNode[]): DescribeNode[] {
 }
 
 // The element a reader "sees first": in the frontmost layer, smallest (y, then
-// x), matching the order format-tree renders flat iOS leaves in, in the UI's
-// space when the caller says how the UI lies on the frame space (see the
-// module comment).
-export function firstInReadingOrder(
-  matches: DescribeNode[],
-  orientation?: UiOrientation
-): DescribeNode | undefined {
-  const reading = readingFrames(orientation);
+// x), matching the order format-tree renders flat iOS leaves in.
+export function firstInReadingOrder(matches: DescribeNode[]): DescribeNode | undefined {
   let best: DescribeNode | undefined;
   let bestFrame: DescribeFrame | undefined;
   for (const n of frontmost(matches)) {
-    const f = reading(n);
+    const f = n.frame;
     if (
       bestFrame === undefined ||
       f.y < bestFrame.y ||
@@ -608,11 +563,7 @@ const MAC_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading"
 // first overall if none is visible). On a Mac app, not a text area around a
 // matching text: a web editor's value is the text of the paragraphs inside it,
 // so a selector for a paragraph's text reads that paragraph.
-export function textCheckTarget(
-  matches: DescribeNode[],
-  orientation: UiOrientation | undefined,
-  macos: boolean
-): DescribeNode | undefined {
+export function textCheckTarget(matches: DescribeNode[], macos: boolean): DescribeNode | undefined {
   const read = macos
     ? matches.filter(
         (n) =>
@@ -622,10 +573,7 @@ export function textCheckTarget(
           )
       )
     : matches;
-  return (
-    firstInReadingOrder(read.filter(isVisible), orientation) ??
-    firstInReadingOrder(read, orientation)
-  );
+  return firstInReadingOrder(read.filter(isVisible)) ?? firstInReadingOrder(read);
 }
 
 // Evaluated over ALL elements matching a selector. `visible` holds if ANY match
@@ -639,7 +587,6 @@ export function evaluateCondition(
   expectedText: string | undefined,
   matches: DescribeNode[],
   textMatch: TextMatchMode = "contains",
-  orientation?: UiOrientation,
   textFieldsShowText = false
 ): boolean {
   switch (condition) {
@@ -650,7 +597,7 @@ export function evaluateCondition(
     case "hidden":
       return !matches.some(isVisible);
     case "text": {
-      const first = textCheckTarget(matches, orientation, textFieldsShowText);
+      const first = textCheckTarget(matches, textFieldsShowText);
       if (first === undefined || expectedText === undefined) return false;
       const field = macFieldText(first, textFieldsShowText);
       if (field !== undefined) {
@@ -739,8 +686,7 @@ function frameArea(frame: DescribeFrame): number {
  */
 export function nodeAtPoint(
   root: DescribeNode,
-  point: { x: number; y: number },
-  orientation?: UiOrientation
+  point: { x: number; y: number }
 ): DescribeNode | undefined {
   const hits: DescribeNode[] = [];
   const walk = (node: DescribeNode): void => {
@@ -749,7 +695,7 @@ export function nodeAtPoint(
   };
   for (const child of root.children) walk(child);
   const drawn = drawnKeyboard(root);
-  const onKeyboard = drawsAt(drawn, point, orientation);
+  const onKeyboard = drawsAt(drawn, point);
   let best: DescribeNode | undefined;
   for (const node of hits) {
     if (onKeyboard && !drawn.includes(node)) continue;
@@ -790,33 +736,22 @@ function drawnKeyboard(root: DescribeNode): DescribeNode[] {
  * touch to the app either. So a point counts when it lies in the smallest
  * frame holding the elements, below the top of one of them in its column. A
  * tip that pops up above the keys covers its own column, not the strip beside
- * it. The test runs in the UI's orientation, where the keyboard's top is up.
+ * it. Frames are in the UI's upright space (see the module comment), where the
+ * keyboard's top is up.
  */
-function drawsAt(
-  drawn: readonly DescribeNode[],
-  point: { x: number; y: number },
-  orientation: UiOrientation | undefined
-): boolean {
-  const frames = drawn.map((n) => nativeFrameToUi(n.frame, orientation));
+function drawsAt(drawn: readonly DescribeNode[], point: { x: number; y: number }): boolean {
+  const frames = drawn.map((n) => n.frame);
   const area = boundingFrame(frames);
   if (area === undefined) return false;
-  const p = nativeFrameToUi({ ...point, width: 0, height: 0 }, orientation);
   return (
-    frameContains(area, p.x, p.y) &&
-    frames.some((f) => f.x <= p.x && p.x <= f.x + f.width && f.y <= p.y)
+    frameContains(area, point.x, point.y) &&
+    frames.some((f) => f.x <= point.x && point.x <= f.x + f.width && f.y <= point.y)
   );
 }
 
-/**
- * Whether the on-screen keyboard draws at `point` (see {@link drawsAt}).
- * `orientation` is the UI's, as the tree was read.
- */
-export function keyboardDrawsAt(
-  root: DescribeNode,
-  point: { x: number; y: number },
-  orientation?: UiOrientation
-): boolean {
-  return drawsAt(drawnKeyboard(root), point, orientation);
+/** Whether the on-screen keyboard draws at `point` (see {@link drawsAt}). */
+export function keyboardDrawsAt(root: DescribeNode, point: { x: number; y: number }): boolean {
+  return drawsAt(drawnKeyboard(root), point);
 }
 
 /**
@@ -824,14 +759,8 @@ export function keyboardDrawsAt(
  * it, the centre of its frame: a tap there presses a key, not the element. An
  * element of the keyboard is never covered.
  */
-export function underKeyboard(
-  root: DescribeNode,
-  node: DescribeNode,
-  orientation?: UiOrientation
-): boolean {
-  return (
-    node.keyboard !== true && keyboardDrawsAt(root, getDescribeTapPoint(node.frame), orientation)
-  );
+export function underKeyboard(root: DescribeNode, node: DescribeNode): boolean {
+  return node.keyboard !== true && keyboardDrawsAt(root, getDescribeTapPoint(node.frame));
 }
 
 /** The smallest frame holding every given frame; undefined for none. */
@@ -891,8 +820,6 @@ interface TargetCandidate {
   node: DescribeNode;
   /** How many of the selector's fields it matches exactly (see {@link exactFieldCount}). */
   exact: number;
-  /** Its frame as reading order sees it (see the module comment). */
-  reading: DescribeFrame;
 }
 
 /**
@@ -927,8 +854,8 @@ const TARGET_TIE_BREAKS: readonly TieBreak[] = [
   // centres), not to adapter emission order.
   (a, b, byFields) =>
     byFields
-      ? a.reading.y - b.reading.y || a.reading.x - b.reading.x
-      : compareBelowPick(a.reading, b.reading),
+      ? a.node.frame.y - b.node.frame.y || a.node.frame.x - b.node.frame.x
+      : compareBelowPick(a.node.frame, b.node.frame),
 ];
 
 function compareTargets(a: TargetCandidate, b: TargetCandidate, byFields: boolean): number {
@@ -956,44 +883,34 @@ function compareTargets(a: TargetCandidate, b: TargetCandidate, byFields: boolea
  * quote. It still takes an app element before a key of the on-screen keyboard:
  * a region that reaches under the keyboard names the app's elements there.
  *
- * Reading order, here and in the relations `findAll` resolves, is the UI's
- * when `orientation` says how the UI lies on the frame space (see the module
- * comment). `matchFieldValues` is as in {@link findAll}.
+ * `matchFieldValues` is as in {@link findAll}.
  */
 export function selectorToNode(
   root: DescribeNode,
   selector: Selector,
-  orientation?: UiOrientation,
   matchFieldValues = false
 ): DescribeNode | undefined {
-  const reading = readingFrames(orientation);
   const byFields = hasOwnConstraint(selector);
-  const matches = findAll(root, selector, orientation, matchFieldValues);
   const fullTextRegex = fullConsumptionRegex(selector);
   let best: TargetCandidate | undefined;
-  for (const node of matches) {
+  for (const node of findAll(root, selector, matchFieldValues)) {
     if (!isVisible(node)) continue;
     const candidate = {
       node,
       exact: byFields ? exactFieldCount(node, selector, fullTextRegex) : 0,
-      reading: reading(node),
     };
     if (best === undefined || compareTargets(candidate, best, byFields) < 0) best = candidate;
   }
   return best?.node;
 }
 
-/**
- * The frame of {@link selectorToNode}'s pick: the node's own, in the frame
- * space, the one to act on.
- */
+/** The frame of {@link selectorToNode}'s match. `matchFieldValues` is as in {@link findAll}. */
 export function selectorToFrame(
   root: DescribeNode,
   selector: Selector,
-  orientation?: UiOrientation,
   matchFieldValues = false
 ): DescribeFrame | undefined {
-  return selectorToNode(root, selector, orientation, matchFieldValues)?.frame;
+  return selectorToNode(root, selector, matchFieldValues)?.frame;
 }
 
 const GENERIC_ROLES = new Set([
@@ -1064,11 +981,10 @@ function resolvesAt(
   root: DescribeNode,
   selector: Selector,
   node: DescribeNode,
-  point: { x: number; y: number },
-  orientation: UiOrientation | undefined
+  point: { x: number; y: number }
 ): boolean {
-  if (selectorToNode(root, selector, orientation) !== node) return false;
-  return findAll(root, selector, orientation).every(
+  if (selectorToNode(root, selector) !== node) return false;
+  return findAll(root, selector).every(
     (n) =>
       !isVisible(n) ||
       frameContains(n.frame, point.x, point.y) ||
@@ -1103,12 +1019,11 @@ const MAX_ANCHORS = 12;
 export function deriveUniqueSelector(
   root: DescribeNode,
   node: DescribeNode,
-  point: { x: number; y: number },
-  orientation?: UiOrientation
+  point: { x: number; y: number }
 ): Selector | null {
   const own = ownSelectors(node);
   if (own.length === 0) return null;
-  const unique = (s: Selector): boolean => resolvesAt(root, s, node, point, orientation);
+  const unique = (s: Selector): boolean => resolvesAt(root, s, node, point);
   for (const s of own) if (unique(s)) return s;
 
   const others: DescribeNode[] = [];
@@ -1143,18 +1058,17 @@ export function deriveUniqueSelector(
   // own name resolves to exactly one place on screen. Labelled elements come
   // before id-only containers: a reader finds the anchor in `describe`, which
   // prints the first and not the second.
-  const reading = readingFrames(orientation);
-  const nf = reading(node);
+  const nf = node.frame;
   const unlabelled = (n: DescribeNode): number => (ownSelectors(n).some((s) => s.text) ? 0 : 1);
   const anchors = others
-    .filter((a) => followKind(nf, reading(a)) !== "no")
-    .map((a) => ({ a, d: distance(nf, reading(a)), u: unlabelled(a) }))
+    .filter((a) => followKind(nf, a.frame) !== "no")
+    .map((a) => ({ a, d: distance(nf, a.frame), u: unlabelled(a) }))
     .sort((p, q) => p.u - q.u || p.d - q.d)
     .slice(0, MAX_ANCHORS)
     .map(({ a }) => a);
   for (const a of anchors) {
     const next = nameOf(a);
-    if (!next || !uniqueOnScreen(root, next, a, orientation)) continue;
+    if (!next || !uniqueOnScreen(root, next, a)) continue;
     for (const s of own) {
       const scoped = { ...s, next };
       if (unique(scoped)) return scoped;
@@ -1180,12 +1094,7 @@ function distance(a: DescribeFrame, b: DescribeFrame): number {
 }
 
 // Does `selector` match `node` and nothing else visible on screen?
-function uniqueOnScreen(
-  root: DescribeNode,
-  selector: Selector,
-  node: DescribeNode,
-  orientation: UiOrientation | undefined
-): boolean {
-  const visible = findAll(root, selector, orientation).filter(isVisible);
+function uniqueOnScreen(root: DescribeNode, selector: Selector, node: DescribeNode): boolean {
+  const visible = findAll(root, selector).filter(isVisible);
   return visible.length === 1 && visible[0] === node;
 }

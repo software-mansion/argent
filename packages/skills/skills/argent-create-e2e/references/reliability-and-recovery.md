@@ -68,7 +68,7 @@ When an overlay intersects the next target:
 3. Record the same selector as `hidden`.
 4. Only then touch the covered region.
 
-Do not rely on auto-dismiss timers. Prefer an app e2e affordance that disables transient overlays. On iOS, use `native-user-interactable-view-at-point` for hit-test diagnosis. Other platforms rely on the recorded visibility trio.
+Do not rely on auto-dismiss timers. Prefer an app e2e affordance that disables transient overlays. On iOS, use `native-view-at-point` with `hitTest: true` for hit-test diagnosis. Other platforms rely on the recorded visibility trio.
 
 Keep a dismissal swipe only when the UI supports it. Pass it through the coordinate gate and hard-check that the overlay disappeared.
 

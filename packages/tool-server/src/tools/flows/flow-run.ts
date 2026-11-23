@@ -11,6 +11,7 @@ import {
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
+  SELECTABLE_PLATFORMS,
   flowMemberKey,
   isLiveServiceState,
   MAX_RUN_DEPTH,
@@ -38,17 +39,19 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
+  PROJECT_ROOT_INPUT,
+  escapeInline,
   flowNameCasingError,
   isBlockStep,
   isVersion1,
   parseFlow,
+  flowFormatVersion,
   precedesLeadingLaunch,
   runTargetName,
   type BlockStep,
   type FlowFile,
   type FlowStep,
   type Launch,
-  SELECTABLE_PLATFORMS,
   windowsPathRefusal,
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
@@ -87,6 +90,8 @@ import {
   type FlowPlatform,
 } from "./flow-device";
 import { isNestedOrchestratorTool } from "./flow-nested-outcome";
+import { uprightLegacyPoints } from "./flow-legacy-points";
+import { inCoordinateSpace } from "../../utils/ios-ui-orientation";
 import { toolResultVerdict } from "../../utils/tool-result-verdict";
 import {
   runDirective,
@@ -149,6 +154,7 @@ const fileInputs: FileInputSpec[] = [
     skipWhenSet: "e2e_test_path",
     collect: "flow",
   },
+  ...PROJECT_ROOT_INPUT,
 ];
 
 export type StepStatus = "pass" | "fail" | "skip" | "error";
@@ -173,7 +179,7 @@ export interface StepReport {
    * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited. Also raised by a launch whose Android native network
+   * from one that waited. Also raised by a launch whose native network
    * capture note differs from the last one reported for that app
    * ({@link networkCaptureWarning}).
    */
@@ -186,16 +192,16 @@ export interface StepReport {
   outputHint?: string;
   /** The args the tool ran with (device id injected). */
   args?: unknown;
-  /** Echo message. */
+  /** Echo message, control characters escaped. */
   message?: string;
   /**
    * The e2e test a step belongs to: the run's own name, or for a fragment (a
    * `run` step and the steps it expands) the target's basename stem; when that
    * stem collides with the top-level test's name, the as-written path minus
-   * `.yaml` (`./<stem>` for a bare spelling). Renderers distinguish fragment
-   * steps by this differing from the report's `e2eTest`, which the collision
-   * fallback guarantees: both disambiguated shapes contain a `/`, which
-   * FLOW_NAME_PATTERN forbids.
+   * `.yaml`, control characters escaped (`./<stem>` for a bare spelling).
+   * Renderers distinguish fragment steps by this differing from the report's
+   * `e2eTest`, which the collision fallback guarantees: both disambiguated
+   * shapes contain a `/`, which FLOW_NAME_PATTERN forbids.
    */
   e2eTest?: string;
   /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
@@ -410,18 +416,25 @@ async function waitForForegroundApp(
  * it does; gating the launch keeps that window from eating the first directive's
  * auto-wait (or silently confirming a `hidden` assert against a blind read).
  */
-async function waitForVegaAutomation(device: DeviceInfo, signal?: AbortSignal): Promise<boolean> {
+async function waitForVegaAutomation(
+  device: DeviceInfo,
+  signal?: AbortSignal
+): Promise<{ ready: boolean; reason?: string }> {
   const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
+  let reason: string | undefined;
   for (;;) {
-    if (signal?.aborted) return false;
+    if (signal?.aborted) return { ready: false };
     try {
       const data = await describeVega(device.id);
-      if (!data.hint) return true;
-    } catch {
-      // transient adb/forward failure mid-boot — retry until the deadline
+      if (!data.hint) return { ready: true };
+      reason = undefined;
+    } catch (err) {
+      // Discovery fails transiently too (a VVD still registering with adb, a `ps`
+      // probe timing out), so keep polling and report what still fails at the deadline.
+      reason = err instanceof Error ? err.message : String(err);
     }
-    if (Date.now() >= deadline) return false;
-    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return false;
+    if (Date.now() >= deadline) return { ready: false, reason };
+    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return { ready: false };
   }
 }
 
@@ -500,8 +513,9 @@ async function treeSourceGate(
     }
   }
   if (device.platform === "vega" && !signal?.aborted) {
-    const ready = await waitForVegaAutomation(device, signal);
+    const { ready, reason } = await waitForVegaAutomation(device, signal);
     if (!ready && !signal?.aborted) {
+      if (reason) return `Vega device discovery failed: ${reason}`;
       return (
         `the Vega automation toolkit never served a page source for ${bundleId} (the runner tree source). ` +
         `The toolkit attaches at app launch — re-run to relaunch; if it keeps failing, confirm the app was built with automation support and the VVD is reachable over adb.`
@@ -513,7 +527,7 @@ async function treeSourceGate(
 }
 
 /**
- * The `networkCapture` note an Android launch-app or restart-app result carries
+ * The `networkCapture` note a launch-app or restart-app result carries
  * while native network capture, started earlier by `native-network-logs`, is on
  * for the app: whether the capture followed the app into the new process.
  * Reported as a step warning: the step passed, but the app may run
@@ -536,6 +550,15 @@ function networkCaptureWarning(
   if (state.networkCaptureNoted.get(bundleId) === key) return undefined;
   state.networkCaptureNoted.set(bundleId, key);
   return note;
+}
+
+/**
+ * Re-resolve a Mac app device after a start of the app. Its kind, AppKit or Mac
+ * Catalyst, is the one that start recorded: the run resolved the device before
+ * it, possibly before the app's first start.
+ */
+function refreshMacosDeviceKind(state: ExecState): void {
+  if (state.device?.platform === "macos") state.device = resolveDevice(state.device.id);
 }
 
 /**
@@ -599,6 +622,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   if (isNativeDevtoolsBlockResult("restart-app", restart)) {
     return { ok: false, reason: `restart-app did not start ${bundleId}: ${restart.message}` };
   }
+  refreshMacosDeviceKind(state);
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
   // The gate returns null (ready) on abort — check the signal before trusting
@@ -975,10 +999,12 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   snapshotApps: Map<string, string>;
   /**
-   * True once a step carrying a `{{secret:…}}` placeholder ran. The value may
-   * still be on screen, so a later failure takes no screenshot.
+   * `typed` is set once a step carrying a `{{secret:…}}` placeholder ran. The
+   * value may still be on screen, so a later failure takes no screenshot. A
+   * run that a `tool:` step starts shares the holder of the run that started
+   * it, so a secret typed on either side counts on both.
    */
-  secretTyped?: boolean;
+  secret: { typed?: boolean };
   /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as a single-instance lock
@@ -1229,9 +1255,10 @@ async function fragmentLoadRefusal(
   target: string
 ): Promise<string | undefined> {
   const retiredArg = findRetiredToolArg(registry, fragment.steps);
-  if (retiredArg) return `fragment "${target}" ${retiredArgReason(retiredArg)}`;
+  const shown = escapeInline(target);
+  if (retiredArg) return `fragment "${shown}" ${retiredArgReason(retiredArg)}`;
   const unrunnableScript = await findUnrunnableScript(fragment.steps);
-  return unrunnableScript ? `fragment "${target}" cannot run. ${unrunnableScript}` : undefined;
+  return unrunnableScript ? `fragment "${shown}" cannot run. ${unrunnableScript}` : undefined;
 }
 
 /**
@@ -1320,7 +1347,10 @@ function assertUploadSelfContained(
         ? closure.project.runMember(anchorDir, target)
         : closure.project.savedTestMember(entry.paths);
     if (member?.state === "refused") {
-      offending.push({ kind: entry.kind, line: `${entry.line} (${member.error})` });
+      offending.push({
+        kind: entry.kind,
+        line: `${entry.line} (${escapeInline(String(member.error))})`,
+      });
     } else if (
       member?.state === "present" &&
       member.canonical !== undefined &&
@@ -1335,7 +1365,7 @@ function assertUploadSelfContained(
       queue.push({
         flow: next,
         canonical: member.canonical,
-        within: ` in ${member.canonical}`,
+        within: ` in ${escapeInline(member.canonical)}`,
         hop: file.hop + 1,
       });
     }
@@ -1343,11 +1373,14 @@ function assertUploadSelfContained(
   for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
     for (const { step, where } of walkSteps(file.flow.steps, file.within)) {
       if (step.kind === "run") {
-        const line = `${where}: run: ${step.flow}`;
+        const line = `${where}: run: ${escapeInline(step.flow)}`;
         if (!closure) offending.push({ kind: "run", line });
         else follow(file, path.dirname(file.canonical), step.flow, { kind: "run", line });
       } else if (step.kind === "script") {
-        offending.push({ kind: "script", line: `${where}: script: { path: ${step.path} }` });
+        offending.push({
+          kind: "script",
+          line: `${where}: script: { path: ${escapeInline(step.path)} }`,
+        });
       } else if (step.kind === "snapshot") {
         if (closure) continue;
         offending.push({ kind: "snapshot", line: `${where}: snapshot: ${step.name}` });
@@ -1741,8 +1774,8 @@ Without a link, every step kind runs.`,
         // its own, which is why that step spends this verdict rather than
         // inheriting whatever the sub-run proved.
         treeOutage: {},
-        // Same shape and sharing as `treeOutage`: what the last read said about
-        // the UI's orientation, for the directives that turn a direction.
+        // Same shape and sharing as `treeOutage`: the tree of the last read,
+        // for a miss reason that reads it instead of the device.
         lastRead: {},
         flowsDir,
         viaUpload,
@@ -1764,6 +1797,7 @@ Without a link, every step kind runs.`,
         ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
+        secret: ctx?.flowSecret ?? {},
         projectRoot: params.project_root,
         scriptLogBudget: createScriptLogBudget(),
         networkCaptureNoted: new Map(),
@@ -1779,6 +1813,7 @@ Without a link, every step kind runs.`,
           runStack: seed,
           rootDisplay: rootEntry.display,
           depth: 0,
+          legacyPoints: flowFormatVersion(flow) < 2,
         });
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
@@ -2304,6 +2339,12 @@ interface StepScope {
   runStack: RunStackEntry[];
   rootDisplay: string;
   depth: number;
+  /**
+   * The steps are from a version 1 file, whose raw points and raw tool steps
+   * are in an iOS simulator's portrait-native space (flow-legacy-points.ts).
+   * Set per file: a fragment of either version can run from the other.
+   */
+  legacyPoints: boolean;
 }
 
 /** The e2e test steps in this scope are attributed to (StepReport.e2eTest). */
@@ -2314,7 +2355,8 @@ function scopeFlow(scope: StepScope): string {
 /**
  * The report attribution for a `run:` target: its basename stem
  * ({@link runTargetName}), except when that stem equals the ROOT flow's name —
- * then the as-written path with the `.yaml` extension stripped, or `./<stem>`
+ * then the as-written path with the `.yaml` extension stripped (control
+ * characters escaped, as only the basename is pattern-checked), or `./<stem>`
  * when the spelling is bare (stripping would reproduce the stem). Two
  * different files may legitimately share a stem (root `login.yaml` composing
  * `helpers/login.yaml`), and a bare-stem attribution there would make
@@ -2343,7 +2385,7 @@ function runDisplayFor(target: string, rootDisplay: string): string {
   // Parse guarantees the target ends in lowercase ".yaml", so slicing the
   // extension off never truncates a real path segment.
   const spelled = target.slice(0, -".yaml".length);
-  return spelled === stem ? `./${stem}` : spelled;
+  return spelled === stem ? `./${stem}` : escapeInline(spelled);
 }
 
 /**
@@ -2406,7 +2448,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         ...(stopReason ? { reason: stopReason } : {}),
         // Carry the echo's message so a skipped narration renders as a skip
         // line rather than vanishing — matching reportBlockSkipped.
-        ...(step.kind === "echo" ? { message: step.message } : {}),
+        ...(step.kind === "echo" ? { message: escapeInline(step.message) } : {}),
       });
       // A block directive's literal steps are known — expand them so the report
       // keeps one line per authored step no matter where the stop landed.
@@ -2445,7 +2487,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         e2eTest: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
-        ...(step.kind === "echo" ? { message: step.message } : {}),
+        ...(step.kind === "echo" ? { message: escapeInline(step.message) } : {}),
       });
       const inner = blockSteps(step);
       if (inner) reportBlockSkipped(state, inner, childScope(scope), "run aborted");
@@ -2466,8 +2508,14 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       startedAt -= state.hoistedBootMs;
       state.hoistedBootMs = undefined;
     }
-    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
-    const report = await execLeafStep(state, step, index, scope);
+    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secret.typed = true;
+    // A version 1 file's raw tool step runs in the native coordinates it was
+    // recorded in; everything else, also a nested run such a step starts, in
+    // the upright ones.
+    const report = await inCoordinateSpace(
+      scope.legacyPoints && step.kind === "tool" ? "native" : "upright",
+      () => execLeafStep(state, step, index, scope)
+    );
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
       const screen = await captureFailureScreen(state);
@@ -2485,7 +2533,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
  * step keeps its own failure either way.
  */
 async function captureFailureScreen(state: ExecState): Promise<ArtifactHandle | undefined> {
-  if (!state.device || state.signal?.aborted || state.secretTyped) return undefined;
+  if (!state.device || state.signal?.aborted || state.secret.typed) return undefined;
   try {
     // Full resolution: the image is a file in the report, never in an agent's
     // context (the MCP client prints only its path).
@@ -2524,7 +2572,7 @@ function reportBlockSkipped(
       e2eTest: stepFlow(step, scope),
       target: stepTarget(step),
       ...depthOf(scope),
-      ...(step.kind === "echo" ? { message: step.message } : {}),
+      ...(step.kind === "echo" ? { message: escapeInline(step.message) } : {}),
     });
     const inner = blockSteps(step);
     if (inner) reportBlockSkipped(state, inner, childScope(scope), reason);
@@ -2638,6 +2686,9 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
+  // Reasons quote the target escaped. A YAML error stays raw (its code frame
+  // is multi-line); a file system error quotes the path, so it is escaped.
+  const shown = escapeInline(target);
   // Shared with stepFlow so the marker/error reports here and every skip path
   // there attribute the same `run:` step identically; the fragment's expanded
   // steps inherit it through the runStack entry pushed below.
@@ -2650,7 +2701,7 @@ async function execRunStep(
       kind: "run",
       status: "error",
       e2eTest: display,
-      target,
+      target: stepTarget(step),
       reason,
       ...depthOf(scope),
       durationMs: Date.now() - startedAt,
@@ -2666,7 +2717,7 @@ async function execRunStep(
   try {
     hop = await resolveRunTarget(state.project, scopeFlowDir(scope), target);
   } catch (err) {
-    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${shown}": ${escapeInline(errMsg(err))}`);
   }
   const { canonical, spelling } = hop;
 
@@ -2702,11 +2753,11 @@ async function execRunStep(
     // can paste. An on-disk ".YAML" is reachable by no run: target at all, so
     // that fork asks for the rename it really needs.
     const recovery = spelling.addressable
-      ? `reference it as "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}"`
+      ? `reference it as "${escapeInline(target.slice(0, target.length - suppliedBase.length))}${spelling.actual}"`
       : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — e2e test files must be ` +
         `lowercase .yaml`;
     return fail(
-      `mis-cased fragment reference "${target}": no directory entry is named "${suppliedBase}" ` +
+      `mis-cased fragment reference "${shown}": no directory entry is named "${suppliedBase}" ` +
         `(this filesystem matched it case-insensitively to "${spelling.actual}"), so the fragment ` +
         `name keying its step reports is one nothing on disk carries and a case-sensitive ` +
         `checkout could not find the file at all — ${recovery}`
@@ -2731,17 +2782,22 @@ async function execRunStep(
   //
   // A missing file reports the same ENOENT shape on both sides, so a reason
   // reads the same whichever machine lacked the fragment.
+  let text: string | null;
+  try {
+    text = await hop.read();
+  } catch (err) {
+    return fail(`could not load fragment "${shown}": ${escapeInline(errMsg(err))}`);
+  }
+  if (text === null) {
+    return fail(
+      `could not load fragment "${shown}": ENOENT: no such file or directory, open '${escapeInline(canonical)}'`
+    );
+  }
   let fragment: FlowFile;
   try {
-    const text = await hop.read();
-    if (text === null) {
-      return fail(
-        `could not load fragment "${target}": ENOENT: no such file or directory, open '${canonical}'`
-      );
-    }
     fragment = parseFlow(text);
   } catch (err) {
-    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
   }
 
   // Charged to the run: step, so the fragment is refused whole rather than
@@ -2752,7 +2808,7 @@ async function execRunStep(
   // A failure, not a skip: a fragment that silently did not run would leave a green report.
   if (state.device) {
     try {
-      await assertDeviceMeetsRequires(state.device, fragment.requires, `Fragment "${target}"`);
+      await assertDeviceMeetsRequires(state.device, fragment.requires, `Fragment "${shown}"`);
     } catch (err) {
       return fail(errMsg(err));
     }
@@ -2768,14 +2824,17 @@ async function execRunStep(
     kind: "run",
     status: "pass",
     e2eTest: display,
-    target,
+    target: stepTarget(step),
     ...depthOf(scope),
     durationMs: Date.now() - startedAt,
   });
   await execSteps(
     state,
     fragment.steps,
-    childScope(scope, { runStack: [...scope.runStack, { canonical, display }] })
+    childScope(scope, {
+      runStack: [...scope.runStack, { canonical, display }],
+      legacyPoints: flowFormatVersion(fragment) < 2,
+    })
   );
 }
 
@@ -2829,18 +2888,13 @@ async function runScriptStep(
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
 
-/** Raw tool steps that can change how the UI lies on the screen. */
-const UI_TURNING_TOOLS = new Set(["rotate", "fold"]);
-
 /**
  * A `fold:` step runs the `fold` tool on the run device. The app survives a
  * fold, so the pinned tree target stays; what changes is the panel and its
  * coordinate space, and the runner caches no screen geometry — every gesture
  * that needs the screen aspect reads it afresh (`fetchScreenAspect`). A proven
  * tree outage is retired the way a relaunch retires it: the screen the verdict
- * was proven on is gone. So is the UI orientation the last read reported: a
- * fold can turn the UI, and until a read reports the new one, a direction must
- * not be turned by the old one.
+ * was proven on is gone.
  */
 async function runFold(
   state: ExecState,
@@ -2850,7 +2904,6 @@ async function runFold(
   const device = deviceEnv(state).device;
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (state.treeOutage) state.treeOutage.proven = undefined;
-  if (state.lastRead) state.lastRead.uiOrientation = undefined;
   const args = bindDeviceArgs(registry, "fold", device.id, {
     ...(step.posture !== undefined ? { posture: step.posture } : {}),
     ...(step.angle !== undefined ? { angle: step.angle } : {}),
@@ -2908,7 +2961,7 @@ async function execLeafStep(
 
   switch (step.kind) {
     case "echo":
-      return { ...base, status: "pass", message: step.message };
+      return { ...base, status: "pass", message: escapeInline(step.message) };
 
     case "launch": {
       const r = await runLaunch(state, step.app);
@@ -2937,7 +2990,12 @@ async function execLeafStep(
       // land in the structured report rather than abort the whole run
       // unreported.
       try {
-        const r = await runDirective(deviceEnv(state), step);
+        const env = deviceEnv(state);
+        const legacy = scope.legacyPoints
+          ? await uprightLegacyPoints(env.device, step)
+          : { step, warning: undefined };
+        const r = await runDirective(env, legacy.step);
+        const warning = [legacy.warning, r.warning].filter((w) => w !== undefined).join(" ");
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
         if (r.aborted) return { ...base, status: "skip", reason: r.reason };
@@ -2961,7 +3019,7 @@ async function execLeafStep(
           ...base,
           status: r.ok ? "pass" : "fail",
           reason: r.reason,
-          ...(r.warning !== undefined ? { warning: r.warning } : {}),
+          ...(warning ? { warning } : {}),
         };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
@@ -3053,11 +3111,6 @@ async function execLeafStep(
       if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
         state.treeOutage.proven = undefined;
       }
-      // A raw `rotate` or `fold` can turn the UI, like the `fold:` directive
-      // (see runFold): the orientation the last read reported no longer holds.
-      if (UI_TURNING_TOOLS.has(step.name) && state.lastRead) {
-        state.lastRead.uiOrientation = undefined;
-      }
       // A file argument the client sent becomes a file on this host for the
       // invoke only; the report keeps the client path the flow names. So does
       // the flow a nested `flow-execute` names, which gets the files the client
@@ -3067,9 +3120,15 @@ async function execLeafStep(
         // `Registry.invokeTool` does not assert capabilities (only the HTTP edge
         // does), and most tools pick their backend by elimination: on a Mac app
         // a raw `tool: gesture-pinch` would reach the simulator-server. Refuse it
-        // here with the tool's own capability message instead.
+        // here with the tool's own capability message instead. The kind is read
+        // again: any raw step can start the app (`tool: boot-device` does its
+        // first start), and the start records the kind.
         if (device?.platform === "macos") {
-          assertSupported(step.name, registry.getTool(step.name)?.capability, device);
+          assertSupported(
+            step.name,
+            registry.getTool(step.name)?.capability,
+            resolveDevice(device.id)
+          );
         }
         prepared = await prepareToolStepInputs(
           registry,
@@ -3082,7 +3141,7 @@ async function execLeafStep(
           // The two tools that can start a nested run continue this run's
           // stack, so a flow that runs itself stops at the cycle guard.
           ...(FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))
-            ? { flowStack: scope.runStack }
+            ? { flowStack: scope.runStack, flowSecret: state.secret }
             : {}),
         });
         // A tool that reports its failure in a result it returns instead of
@@ -3110,6 +3169,10 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: true };
           }
           warning = networkCaptureWarning(state, launched, result);
+          refreshMacosDeviceKind(state);
+        } else if (FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))) {
+          // A launch in the nested run updates the record, not this run's device.
+          refreshMacosDeviceKind(state);
         }
         return {
           ...base,
@@ -3168,15 +3231,15 @@ function errMsg(err: unknown): string {
  * reached us, so they are reported apart from the boundary gate — a caller
  * that did use the boundary must not be told to use the boundary. A host path
  * is checked as the string execute() will open; an upload's client spelling is
- * checked as the path the caller wrote, the one every message quotes.
+ * checked as the path the client sent, the one every message quotes.
  */
 function assertFlowPathShape(flowPath: string): void {
   // Reject a relative path: this string seeds canonicalFlowPath in execute(),
   // which requires an absolute input — its realpath, the read, and every root
   // anchor derived from the one canonical result would otherwise resolve
   // against the tool server's working directory, which is not the caller's.
-  // `argent flow list` prints relative paths, so this is the spelling an agent
-  // is most likely to pass back.
+  // The argent client resolves a relative e2e_test_path before sending it; a direct
+  // HTTP caller, an older client and a `tool:` step run without a link do not.
   const windows = windowsPathRefusal("e2e_test_path", flowPath);
   if (windows) {
     throw new FailureError(windows, {
@@ -3208,15 +3271,12 @@ function assertFlowPathShape(flowPath: string): void {
   // different files — or, when the directory chain is broken, slip through
   // canonicalFlowPath's verbatim fallback to fail later as a raw readFile
   // ENOENT on the unresolved spelling. Rejecting up front means every admitted
-  // e2e_test_path has exactly one reading. The argent client rejects ".." segments
-  // before sending; only a direct MCP/HTTP caller can pass an unresolved
-  // e2e_test_path.
+  // e2e_test_path has exactly one reading.
   if (flowPath.split(/[\\/]+/).includes("..")) {
     throw new FailureError(
       `Invalid e2e_test_path "${flowPath}": e2e test paths must not contain ".." segments — ` +
         `a ".." after a symlinked directory can name a different file than the spelling ` +
-        `suggests, and the argent client always sends fully resolved paths. Pass the fully ` +
-        `resolved absolute path to the e2e test's YAML.`,
+        `suggests. Pass the fully resolved absolute path to the e2e test's YAML.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_path_dotdot",

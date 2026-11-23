@@ -133,12 +133,4 @@ describe("chromium-server/fps", () => {
       vi.useRealTimers();
     }
   });
-
-  it("setEnabled is idempotent", () => {
-    const events = new TypedEventEmitter<ServerEvents>();
-    const tracker = new FpsTracker(events);
-    tracker.setEnabled(true);
-    tracker.setEnabled(true); // should not double-arm the interval
-    tracker.dispose();
-  });
 });

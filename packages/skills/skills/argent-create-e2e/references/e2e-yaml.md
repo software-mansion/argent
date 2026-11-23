@@ -39,7 +39,7 @@ executionPrerequisite: User is signed in and viewing Settings
 steps: []
 ```
 
-The recorder also writes `version: 2`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused.
+The recorder also writes `version: 2`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused. Do not change the version of an existing file only to replay it: Argent runs each version as it was recorded (see [Old e2e tests](#old-e2e-tests)).
 
 E2E tests never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
@@ -49,13 +49,13 @@ A top-level `requires:` block limits the targets a test runs on: `platform` (`io
 
 ### Old e2e tests
 
-A file without `version`, or with `version: 1`, is an old e2e test. On an iOS simulator, an old e2e test resolves its selectors on the view hierarchy of the app, not on the `describe` tree. A selector that you record or copy from `describe` can miss there.
+A file without `version`, or with `version: 1`, is an old e2e test. On an iOS simulator, an old e2e test resolves its selectors on the view hierarchy of the app, not on the `describe` tree. A selector that you record or copy from `describe` can miss there. With a landscape or upside-down UI, its `tap`, `swipe` and `tool:` coordinates also use the portrait axes of the screen, not the UI as the user sees it.
 
 To replay an old e2e test, do not change it. To change an old e2e test, edit the YAML manually:
 
 1. Add `version: 2` as the first line.
 2. Replay the e2e test.
-3. Replace each selector that fails with a selector from `describe`. Then replay again.
+3. Replace each selector that fails with a selector from `describe`. If the test ran in a landscape or upside-down UI, also replace its `tap`, `swipe` and `tool:` coordinates with ones from `describe`. Then replay again.
 
 Do not add recorded steps to an old e2e test that does not have `version: 2`.
 
@@ -139,7 +139,7 @@ Directives stop the test on failure and skip later steps. The available directiv
 
 - The coordinates change with the panel. Selectors resolve against a new tree.
 - A `snapshot` baseline is valid only for the posture that made it.
-- iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
+- iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions, the reading order and coordinates stay as the user sees the UI, the space of `describe` frames and screenshots.
 - iOS: a fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
 Use the launch map for cross-platform tests. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, `macos:`, and `chromium:`. `native:` is one id shared by iOS, Android, Vega, and macOS, and a per-platform key overrides it for that platform. `macos:` takes a Mac app's bundle id. `chromium:` accepts a relative or absolute app path. `ios:` and `macos:` also accept `{ app, args }`; Argent passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no test needs a key for a remote run. On an iOS simulator, `launch:` waits up to 15 s until the app is in the foreground. A permission prompt at launch does not fail it. On timeout, the step fails and names the app that was in front. See [The runner tree and `describe`](#the-runner-tree-and-describe).

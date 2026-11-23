@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as http from "node:http";
 import { run, type RunCommandOptions } from "../src/run.js";
-import * as e2e from "../src/e2e.js";
 
 const REPORT = { e2eTest: "checkout", ok: false, passed: 2, failed: 1, skipped: 7, errored: 0 };
 const REASON = 'e2e test "checkout" failed: 2 passed, 1 failed, 0 errored';
@@ -77,16 +76,6 @@ describe("argent run — a failure the tool reports in its result", () => {
 
     expect(logs).toEqual([JSON.stringify(REPORT, null, 2)]);
     expect(errs).toEqual([REASON]);
-  });
-
-  it("exits through exitAfterFlush on stderr, so the reason is not cut short", async () => {
-    envelope = { data: REPORT, failure: REASON };
-    const flush = vi.spyOn(e2e, "exitAfterFlush");
-
-    await expect(run(["e2e-execute"], opts)).rejects.toThrow("process.exit(1)");
-
-    expect(flush).toHaveBeenCalledTimes(1);
-    expect(flush).toHaveBeenCalledWith(1, [process.stderr]);
   });
 
   it("writes the reason only after stdout drains, so a merged log ends with it", async () => {

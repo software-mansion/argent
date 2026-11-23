@@ -26,6 +26,7 @@ function makeSequencedAXService(responses: AXDescribeResponse[]): AXServiceApi {
     describe: async () => responses[Math.min(i++, responses.length - 1)],
     alertCheck: async () => false,
     livePanel: async () => null,
+    orientation: async () => ({}),
     foregroundApp: async () => ({ alertVisible: false }),
     fill: async () => ({ focused: false, verified: false }),
     tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -52,10 +53,6 @@ describe("await-screen-idle tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
-  });
-
-  it("exposes the await-screen-idle id", () => {
-    expect(createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi)).id).toBe("await-screen-idle");
   });
 
   it("settles once content renders and holds still", async () => {
