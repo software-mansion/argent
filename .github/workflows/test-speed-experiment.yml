@@ -6,14 +6,13 @@ on:
       - ci/test-speedup
 
 jobs:
-  sharded:
-    name: shard ${{ matrix.shard }}/4 w=${{ matrix.workers }}
+  stress:
+    name: auto-clock stress ${{ matrix.n }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
-        workers: ["default", "8"]
+        n: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - id: node
@@ -31,15 +30,19 @@ jobs:
       - if: steps.node-modules.outputs.cache-hit != 'true'
         run: npm ci
       - run: npm run build
-      - name: Tests
+      - name: Stress the auto-clock files
         shell: bash
+        working-directory: packages/tool-server
         run: |
-          set -o pipefail
-          extra=""
-          [ "${{ matrix.workers }}" != default ] && extra="--maxWorkers=${{ matrix.workers }}"
-          /usr/bin/time -v npm test -- --shard=${{ matrix.shard }}/4 $extra --reporter=default --reporter=json --outputFile.json=report.json
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: report-${{ matrix.shard }}-${{ matrix.workers }}
-          path: report.json
+          files=$(grep -rl "useAutoAdvancingClock()" test)
+          echo "$files" | wc -l
+          fails=0
+          for i in $(seq 1 20); do
+            for j in a b; do
+              (timeout 300 npx vitest run $files --reporter=dot > "out-$i$j.txt" 2>&1; echo "$i$j $?" >> results.txt) &
+            done
+            wait
+          done
+          sort results.txt | awk '{print $2}' | sort | uniq -c
+          for f in out-*.txt; do grep -q "failed" "$f" && { echo "== $f"; grep -E "FAIL|Error" "$f" | head -20; }; done
+          ! grep -qv " 0$" results.txt

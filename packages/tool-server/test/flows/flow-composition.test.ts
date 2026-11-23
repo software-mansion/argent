@@ -24,9 +24,6 @@ import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-devi
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
 import { reinstallAppTool } from "../../src/tools/reinstall-app";
 import { screenshotDiffTool } from "../../src/tools/screenshot-diff";
-import { useAutoAdvancingClock } from "../helpers/auto-clock";
-
-useAutoAdvancingClock();
 
 // Stub the snapshot differ: the baseline-anchoring test asserts only WHERE the
 // runner points it (root flowsDir + root flow name), not the diffing itself.
