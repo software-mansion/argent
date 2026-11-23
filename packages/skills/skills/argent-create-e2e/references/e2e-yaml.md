@@ -38,7 +38,7 @@ executionPrerequisite: User is signed in and viewing Settings
 steps: []
 ```
 
-The recorder also writes `version: 1`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused.
+The recorder also writes `version: 2`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused. Do not change the version of an existing file: on an iOS simulator with a landscape UI, version 1 coordinates use the portrait axes of the screen and version 2 coordinates the UI as the user sees it, and Argent runs each as it was recorded.
 
 E2E tests never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
@@ -119,7 +119,7 @@ Directives stop the test on failure and skip later steps. The available directiv
 
 - The coordinates change with the panel. Selectors resolve against a new tree.
 - A `snapshot` baseline is valid only for the posture that made it.
-- iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
+- iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions, the reading order and coordinates stay as the user sees the UI, the space of `describe` frames and screenshots.
 - iOS: a fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
 Use the launch map for cross-platform tests. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, `macos:`, and `chromium:`. `native:` is one id shared by iOS, Android, Vega, and macOS, and a per-platform key overrides it for that platform. `macos:` takes a Mac app's bundle id. `chromium:` accepts a relative or absolute app path. `ios:` and `macos:` also accept `{ app, args }`; Argent passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no test needs a key for a remote run. On an iOS simulator, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
@@ -252,7 +252,17 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-`path` is relative to the test file that contains the step. Include `.mjs` and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
+`path` is relative to the test file that contains the step. Use an `.mjs` or `.js` file, or an `.mts` or `.ts` file for TypeScript, and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
+
+`.mjs` and `.mts` are always ES modules. `.js` and `.ts` take their module type from the project's `package.json` `type` field; with no `type`, Node reads a file with `import`, `export` or top-level `await` as an ES module, and each other file as CommonJS. So prefer `.mjs` or `.mts` for a new script and use `.js` or `.ts` for a script the project already has. `.cjs` and `.cts` are invalid: under `"type": "module"`, use `import` in the script, not `require`.
+
+Node runs `.mts` and `.ts` by removing the types, and it does not read `tsconfig.json`. In an `.mts` or `.ts` script:
+
+- Use no `enum`, runtime `namespace`, parameter property or `paths` alias.
+- Write the extension in each relative import (`./helpers.mts`), and import shared code only from `.mts` or `.mjs` files.
+- Import a type with `import type`.
+
+If the reason says that the Node.js of the tool-server cannot run TypeScript, use `.mjs` or `.js` files.
 
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
 

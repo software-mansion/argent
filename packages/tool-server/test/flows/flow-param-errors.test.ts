@@ -3,7 +3,13 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Registry, getFailureSignal, FAILURE_CODES, zodObjectToJsonSchema } from "@argent/registry";
+import {
+  Registry,
+  getFailureSignal,
+  FAILURE_CODES,
+  SELECTABLE_PLATFORMS,
+  zodObjectToJsonSchema,
+} from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import { InvalidToolInputError } from "../../src/utils/capability";
@@ -38,6 +44,23 @@ describe("flow-execute parameter handling", () => {
     }
     expect(message).toContain("`platform`");
     expect(message).not.toContain('"code"');
+  });
+
+  it("accepts every platform `argent e2e run --platform` accepts, macos and ios-remote included", async () => {
+    expect(SELECTABLE_PLATFORMS).toEqual(
+      expect.arrayContaining(["ios", "android", "chromium", "vega", "macos", "ios-remote"])
+    );
+    for (const platform of SELECTABLE_PLATFORMS) {
+      let caught: unknown;
+      try {
+        await registry().invokeTool("flow-execute", { project_root: tmpDir, name: "x", platform });
+      } catch (err) {
+        caught = err;
+      }
+      // Past the schema: the run fails on the missing e2e test.
+      expect(getFailureSignal(caught)?.error_code).not.toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+      expect((caught as Error).message).toContain("x.yaml");
+    }
   });
 
   it("says which parameter it needs when no flow source is present", async () => {

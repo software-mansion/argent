@@ -276,6 +276,7 @@ export function fakeMacosLibrary(
     },
     isConnected: () => true,
     handshake: () => ({ bundleId: MACOS_BUNDLE_ID, pid: 4242, platform: "macos", protocol: 1 }),
+    watchSuspensions: async () => null,
     activateNetworkInspection: async () => {},
     networkLog: () => [],
     clearNetworkLog: () => {},

@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import pc from "picocolors";
 import { PACKAGE_NAME } from "./constants.js";
-import type { PackageManager } from "./package-manager.js";
+import { globalCommandOptions, type PackageManager } from "./package-manager.js";
 
 // npm derives its global prefix from the node binary's location, so under Nix
 // it lands inside the read-only store and `npm install -g` dies with EACCES.
@@ -21,6 +21,8 @@ function queryGlobalInstallDir(pm: PackageManager): string | null {
   let stdout: string;
   try {
     stdout = execFileSync(pm, [...GLOBAL_DIR_QUERY[pm]], {
+      // Where the install runs: in a project, yarnPath or a corepack pin can swap the manager.
+      ...globalCommandOptions(pm),
       encoding: "utf8",
       timeout: QUERY_TIMEOUT_MS,
       killSignal: "SIGKILL",

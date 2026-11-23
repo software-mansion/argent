@@ -7,7 +7,13 @@ import * as p from "@clack/prompts";
 import { track } from "@argent/telemetry";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
-import { isGloballyInstalled, isLocallyInstalled, resolveProjectRoot } from "../src/utils.js";
+import {
+  detectProjectPackageManager,
+  getLatestVersion,
+  isGloballyInstalled,
+  isLocallyInstalled,
+  resolveProjectRoot,
+} from "../src/utils.js";
 import { probeGlobalInstallTarget } from "../src/global-prefix.js";
 import { PACKAGE_NAME } from "../src/constants.js";
 import type { InitTelemetry } from "../src/init-telemetry.js";
@@ -35,10 +41,9 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     isYarnPnp: vi.fn(() => false),
     getLocallyInstalledVersion: vi.fn(() => "1.0.0"),
     detectProjectPackageManager: vi.fn(() => "pnpm" as const),
-    detectPackageManager: vi.fn(() => "npm" as const),
     isGloballyInstalled: vi.fn(() => false),
     getGloballyInstalledVersion: vi.fn(() => "1.0.0"),
-    getLatestVersion: vi.fn(() => "2.0.0"),
+    getLatestVersion: vi.fn(() => "1.0.0"),
   };
 });
 
@@ -53,12 +58,13 @@ vi.mock("@clack/prompts", async (importOriginal) => {
   return {
     ...actual,
     spinner: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), message: vi.fn() })),
-    select: vi.fn(),
     log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    select: vi.fn(),
   };
 });
 
 vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
+// A successful global update re-syncs the real skills store via `npx skills`.
 vi.mock("../src/skills.js", () => ({ reportSkillRefresh: vi.fn() }));
 
 class ExitCalled extends Error {
@@ -330,6 +336,7 @@ describe("global install preflight", () => {
 
   it("warns instead of offering an update it cannot install", async () => {
     vi.mocked(isGloballyInstalled).mockReturnValue(true);
+    vi.mocked(getLatestVersion).mockReturnValueOnce("2.0.0");
 
     await expect(globalInstall(null, false)).resolves.toBe("1.0.0");
 
@@ -341,6 +348,194 @@ describe("global install preflight", () => {
       to_major: 2,
       decision: "skip",
     });
+  });
+});
+
+describe("install under Yarn 2+", () => {
+  const savedAgent = process.env.npm_config_user_agent;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.mocked(runShellCommand).mockReset();
+    vi.mocked(p.log.info).mockClear();
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new ExitCalled(code);
+    }) as never);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    if (savedAgent === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = savedAgent;
+  });
+
+  describe.skipIf(process.platform === "win32")("over a Yarn classic global", () => {
+    const savedPath = process.env.PATH;
+    let dir: string;
+
+    beforeEach(() => {
+      dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-yarn-classic-")));
+      const pkg = path.join(
+        dir,
+        ".config",
+        "yarn",
+        "global",
+        "node_modules",
+        "@swmansion",
+        "argent"
+      );
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+      fs.mkdirSync(path.join(dir, "bin"));
+      fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(dir, "bin", "argent"));
+      process.env.PATH = [path.join(dir, "bin"), "/usr/bin", "/bin"].join(path.delimiter);
+      vi.mocked(isGloballyInstalled).mockReturnValueOnce(true);
+      vi.mocked(runShellCommand).mockRejectedValue(new ShellCommandError("Usage Error", 1, null));
+    });
+
+    afterEach(() => {
+      process.env.PATH = savedPath;
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    function advice(prefix: string): string | undefined {
+      const esc = String.fromCharCode(27);
+      return vi
+        .mocked(p.log.info)
+        .mock.calls.map((c) =>
+          String(c[0])
+            .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+            .join("")
+        )
+        .find((line) => line.startsWith(prefix));
+    }
+
+    it("says the manual --from install needs Yarn classic", async () => {
+      await expect(
+        runInstall({
+          installMode: "global",
+          fromTar: "/tmp/argent.tgz",
+          nonInteractive: true,
+          version: "0.0.0",
+          tel: makeTel(),
+        })
+      ).rejects.toThrow(ExitCalled);
+
+      expect(runShellCommand).toHaveBeenCalledWith(
+        { bin: "yarn", args: ["global", "add", "/tmp/argent.tgz"] },
+        { cwd: os.homedir() }
+      );
+      expect(advice("Install manually with: ")).toBe(
+        "Install manually with: yarn global add /tmp/argent.tgz (with Yarn classic, outside this Yarn 2+ project)"
+      );
+    });
+
+    it("says the manual update needs Yarn classic", async () => {
+      vi.mocked(getLatestVersion).mockReturnValueOnce("99.0.0");
+      vi.mocked(p.select).mockResolvedValueOnce("update");
+
+      await runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        tel: makeTel(),
+      });
+
+      expect(runShellCommand).toHaveBeenCalledWith(
+        { bin: "yarn", args: ["global", "add", "@swmansion/argent@99.0.0"] },
+        { cwd: os.homedir() }
+      );
+      expect(advice("You can update manually later: ")).toBe(
+        "You can update manually later: yarn global add @swmansion/argent@99.0.0 (with Yarn classic, outside this Yarn 2+ project)"
+      );
+    });
+  });
+
+  it("installs with npm and advises the npm command on failure", async () => {
+    vi.mocked(runShellCommand).mockRejectedValue(new ShellCommandError("registry down", 1, null));
+
+    await expect(
+      runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: true,
+        version: "0.0.0",
+        tel: makeTel(),
+      })
+    ).rejects.toThrow(ExitCalled);
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", "@swmansion/argent"] },
+      {}
+    );
+    expect(probeGlobalInstallTarget).toHaveBeenLastCalledWith("npm");
+    const esc = String.fromCharCode(27);
+    const advice = vi
+      .mocked(p.log.info)
+      .mock.calls.map((c) =>
+        String(c[0])
+          .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+          .join("")
+      )
+      .find((line) => line.startsWith("Install Argent manually with: "));
+    expect(advice).toBe("Install Argent manually with: npm install -g @swmansion/argent");
+  });
+
+  it("reinstalls from a tarball with npm", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValueOnce(true);
+    vi.mocked(runShellCommand).mockResolvedValue(undefined);
+
+    await runInstall({
+      installMode: "global",
+      fromTar: "/tmp/argent.tgz",
+      nonInteractive: true,
+      version: "0.0.0",
+      tel: makeTel(),
+    });
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", "/tmp/argent.tgz"] },
+      {}
+    );
+  });
+
+  it("updates an outdated global install with npm", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValueOnce(true);
+    vi.mocked(getLatestVersion).mockReturnValueOnce("99.0.0");
+    vi.mocked(p.select).mockResolvedValueOnce("update");
+    vi.mocked(runShellCommand).mockResolvedValue(undefined);
+
+    await runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: false,
+      version: "0.0.0",
+      tel: makeTel(),
+    });
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", "@swmansion/argent@99.0.0"] },
+      {}
+    );
+  });
+
+  it("adds a local devDependency with the project's yarn", async () => {
+    vi.mocked(detectProjectPackageManager).mockReturnValueOnce("yarn");
+    vi.mocked(isLocallyInstalled).mockReturnValue(false);
+    vi.mocked(runShellCommand).mockImplementationOnce(async () => {
+      vi.mocked(isLocallyInstalled).mockReturnValue(true);
+    });
+
+    await localInstall(makeTel());
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "yarn", args: ["add", "--dev", "@swmansion/argent"] },
+      { cwd: "/fake/project" }
+    );
   });
 });
 
@@ -391,5 +586,86 @@ describe("global install PATH check", () => {
 
     expect(runShellCommand).toHaveBeenCalledTimes(1);
     expect(p.log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("--from values", () => {
+  const savedAgent = process.env.npm_config_user_agent;
+  const originalCwd = process.cwd();
+  let dir: string;
+
+  beforeEach(() => {
+    delete process.env.npm_config_user_agent;
+    vi.mocked(runShellCommand).mockReset();
+    vi.mocked(runShellCommand).mockResolvedValue(undefined);
+    vi.mocked(isGloballyInstalled).mockReset();
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-from-")));
+    fs.writeFileSync(path.join(dir, "argent.tgz"), "");
+    fs.mkdirSync(path.join(dir, "sub"));
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    if (savedAgent === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = savedAgent;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function install(installMode: "global" | "local", fromTar: string): Promise<string> {
+    return runInstall({
+      installMode,
+      fromTar,
+      nonInteractive: true,
+      version: "0.0.0",
+      tel: makeTel(),
+    });
+  }
+
+  it.each([
+    ["a fresh", false],
+    ["a re-", true],
+  ])("passes a package spec through to %sinstall", async (_kind, installed) => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(installed);
+
+    await install("global", "@swmansion/argent@0.0.2");
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", "@swmansion/argent@0.0.2"] },
+      {}
+    );
+  });
+
+  it.each([
+    ["a fresh", false],
+    ["a re-", true],
+  ])("makes a relative tarball path absolute for %sinstall", async (_kind, installed) => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(installed);
+    process.chdir(path.join(dir, "sub"));
+
+    await install("global", "../argent.tgz");
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "npm", args: ["install", "-g", path.join(dir, "argent.tgz")] },
+      {}
+    );
+  });
+
+  it("makes a relative tarball path absolute for a local install, which runs in the project root", async () => {
+    vi.mocked(isLocallyInstalled).mockReset();
+    vi.mocked(isLocallyInstalled).mockReturnValue(false);
+    vi.mocked(runShellCommand).mockImplementationOnce(async () => {
+      vi.mocked(isLocallyInstalled).mockReturnValue(true);
+    });
+    process.chdir(path.join(dir, "sub"));
+
+    await install("local", "../argent.tgz");
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      {
+        bin: "pnpm",
+        args: ["add", "-D", "--ignore-workspace-root-check", path.join(dir, "argent.tgz")],
+      },
+      { cwd: "/fake/project" }
+    );
   });
 });

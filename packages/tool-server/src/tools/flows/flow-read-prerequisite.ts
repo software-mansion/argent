@@ -6,7 +6,7 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from "@argent/registry";
-import { E2E_FILE_TEMPLATES, parseFlow } from "./flow-utils";
+import { E2E_FILE_TEMPLATES, PROJECT_ROOT_INPUT, parseFlow } from "./flow-utils";
 import { resolveFlowSource } from "./flow-run";
 
 // Must stay field-for-field identical to flow-execute's specs, or the same
@@ -28,6 +28,7 @@ const fileInputs: FileInputSpec[] = [
     kind: "file",
     skipWhenSet: "e2e_test_path",
   },
+  ...PROJECT_ROOT_INPUT,
 ];
 
 const zodSchema = z

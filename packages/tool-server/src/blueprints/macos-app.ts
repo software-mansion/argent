@@ -19,6 +19,8 @@ import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-
 import { macosAppIdFromBundleId, parseMacosAppBundleId } from "../utils/device-info";
 import { pidIsAlive, pollPidsUntilGone, signalGroupThenPid } from "../utils/process-kill";
 import { settleWithin, sleep } from "../utils/timing";
+import { startSuspensionWatch, type SuspensionWatch } from "../utils/macos-suspension-watch";
+import type { AppSuspensionWindow } from "../utils/ios-profiler/app-suspensions";
 import {
   chromiumRefusal,
   findMacosAppByBundleId,
@@ -35,12 +37,19 @@ import {
   recordTrackedMacosApp,
   runningTrackedApp,
   stageLibraryFor,
+  trackedAppKind,
 } from "../utils/macos-apps";
-import {
-  isInjectableBundleId,
-  NATIVE_NETWORK_LOG_LIMIT,
-  type NetworkEvent,
-} from "./native-devtools";
+import type { MacosAppKind } from "../utils/macos-app-kind";
+import { isInjectableBundleId } from "./native-devtools";
+
+export interface NetworkEvent {
+  method: string;
+  params: unknown;
+  timestamp: number;
+}
+
+/** How many network events a Mac app's log keeps; the oldest go first. */
+const NATIVE_NETWORK_LOG_LIMIT = 1000;
 
 /**
  * The in-app library of one native Mac app (device id `macos-app-<bundle id>`):
@@ -53,7 +62,8 @@ import {
  * started.
  *
  * Wire format: newline-delimited JSON. The first message on each connection is
- * the handshake `{"type":"Control","payload":{"bundleId","pid","platform":"macos","protocol","libraryVersion"}}`.
+ * the handshake `{"type":"Control","payload":{"bundleId","pid","platform":"macos","protocol","libraryVersion"}}`,
+ * with `identifierForVendor` too in a Mac Catalyst app.
  * A request is `{"type":"ViewInspector","payload":{"id","method","params","deadline"}}`;
  * its reply carries the same id with `result` or `error: {message}`. `deadline`
  * (ms since 1970) is when argent stops waiting: a request that has not run by
@@ -75,7 +85,16 @@ interface MacosLibraryHandshake {
   platform: "macos";
   protocol: number;
   libraryVersion?: string;
+  /**
+   * A Mac Catalyst app's `UIDevice.identifierForVendor`, which React Native
+   * hashes into the app's id in Metro's inspector. Absent in an AppKit app and
+   * from a library that predates it.
+   */
+  identifierForVendor?: string;
 }
+
+/** `NSUUID.UUIDString`: uppercase hex in the 8-4-4-4-12 groups. */
+const VENDOR_ID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/;
 
 interface MacosLaunchOptions {
   /**
@@ -92,6 +111,12 @@ interface MacosLaunchOptions {
   args?: string[];
   /** Omitted `args` start the app with no arguments. */
   noLastArgs?: boolean;
+  /**
+   * Extra environment variables for this start only, such as
+   * `MallocStackLogging` for a profile. A later start does not repeat them,
+   * and they cannot replace the variables of the argent library.
+   */
+  env?: Readonly<Record<string, string>>;
   /** How long the library gets to answer after the spawn. Default 20 s. */
   handshakeTimeoutMs?: number;
   /** How long a new process gets to show its first window. Default 10 s. */
@@ -112,6 +137,8 @@ interface MacosLaunchOptions {
 }
 
 export interface MacosLaunchResult extends MacosLibraryHandshake {
+  /** The device kind of the running build: an AppKit app or a Mac Catalyst app. */
+  kind: MacosAppKind;
   /** The arguments the running app was started with. */
   args: string[];
   appPath: string;
@@ -141,6 +168,14 @@ export interface MacosAppApi {
   launch(opts?: MacosLaunchOptions): Promise<MacosLaunchResult>;
   isConnected(): boolean;
   handshake(): MacosLibraryHandshake | null;
+  /**
+   * Watches when macOS holds the app (process `pid`) suspended, which
+   * Instruments does while it checks the app for leaks during a native
+   * profile. While it watches, a call waits until the app runs again before it
+   * is sent, and its timeout leaves out the time the app was suspended. `end()`
+   * stops the watch and returns what it saw. Null when the helper cannot watch.
+   */
+  watchSuspensions(pid: number): Promise<{ end(): AppSuspensionWindow[] } | null>;
   /**
    * Turns on the library's network capture, as the first `native-network-logs`
    * call does on iOS. It stays on: each later connection, also the one to a
@@ -174,6 +209,18 @@ const PROMPT_KINDS = ["alert", "sheet", "file-panel"];
 const SIGNAL_GRACE_MS = 2_000;
 const POLL_MS = 100;
 const WINDOW_TIMEOUT_MS = 10_000;
+/**
+ * The longest a call waits for a suspended app before it is sent. Instruments'
+ * leak checks suspended an app that argent drove for up to about 25 s (most for
+ * 1 to 10 s).
+ */
+const MAX_SUSPENDED_WAIT_MS = 25_000;
+/**
+ * The suspension watch of each app, by bundle id: module-wide, as a
+ * stop-simulator-server disposes the service instance while the native profile
+ * that started the watch keeps it until its stop.
+ */
+const suspensionWatches = new Map<string, SuspensionWatch>();
 
 /** Replaces the library's bare "No window", which leaves the agent without a way back. */
 export const MACOS_NO_WINDOW_MESSAGE =
@@ -321,6 +368,9 @@ function parseHandshake(
     platform: "macos",
     protocol: p.protocol,
     ...(typeof p.libraryVersion === "string" ? { libraryVersion: p.libraryVersion } : {}),
+    ...(typeof p.identifierForVendor === "string" && VENDOR_ID_PATTERN.test(p.identifierForVendor)
+      ? { identifierForVendor: p.identifierForVendor }
+      : {}),
   };
 }
 
@@ -356,8 +406,8 @@ interface PendingCall {
 /**
  * One NDJSON connection to the library: the inherited socket of a launch, or a
  * reconnect through the listening socket. The reader is attached at
- * construction, before the first await, so a handshake that arrives early is
- * never dropped.
+ * construction so a handshake that arrives before the helper reports the app's
+ * pid is never dropped.
  */
 class LibraryChannel {
   private readonly pending = new Map<number, PendingCall>();
@@ -414,21 +464,34 @@ class LibraryChannel {
     );
   }
 
+  /**
+   * @param suspensions when set, a timeout says how long the app was suspended
+   *   while it waited. The library drops a request that is past its deadline
+   *   when the app runs again, with no answer, so waiting longer would not help.
+   */
   request(
     method: string,
     params: Record<string, unknown>,
     timeoutMs: number,
-    runLate = false
+    runLate = false,
+    suspensions?: SuspensionWatch
   ): Promise<unknown> {
     if (this.closeError) return Promise.reject(this.closeError);
     const id = this.nextId++;
-    const deadline = runLate ? undefined : Date.now() + timeoutMs;
+    const sentAt = Date.now();
+    const deadline = runLate ? undefined : sentAt + timeoutMs;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (!this.pending.delete(id)) return;
+        const suspendedMs = suspensions?.suspendedMsBetween(sentAt, Date.now()) ?? 0;
         reject(
           macosFailure(
-            `${this.bundleId} did not answer ${method} within ${timeoutMs} ms.`,
+            suspendedMs > 0
+              ? `${this.bundleId} did not answer ${method} within ${timeoutMs} ms: macOS held it ` +
+                  `suspended for ${Math.round(suspendedMs)} ms of that time, as Instruments does ` +
+                  `while it checks an app for leaks. The ${method} may or may not have happened: ` +
+                  `look at the app (describe) before you repeat it.`
+              : `${this.bundleId} did not answer ${method} within ${timeoutMs} ms.`,
             FAILURE_CODES.MACOS_APP_RPC_TIMEOUT,
             "macos_app_rpc",
             "timeout"
@@ -553,27 +616,34 @@ const FINDER_ENV_KEYS = [
  * the app, even a sandboxed one, drive the tool-server. The bootstrap travels
  * as `--insert-library`.
  */
-function macosLaunchEnv(bundleId: string, listenSocketEnv: string | undefined): NodeJS.ProcessEnv {
+function macosLaunchEnv(
+  bundleId: string,
+  listenSocketEnv: string | undefined,
+  extra: Readonly<Record<string, string>> = {}
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of FINDER_ENV_KEYS) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
+  Object.assign(env, extra);
   env.ARGENT_INJECT_BUNDLE_ID = bundleId;
   env.NATIVE_DEVTOOLS_FD = "3";
   if (listenSocketEnv) env.NATIVE_DEVTOOLS_LISTEN_SOCKET = listenSocketEnv;
   return env;
 }
 
+function helperLaunchFailure(executable: string, detail: string, cause?: unknown): FailureError {
+  return macosFailure(
+    `argent-macos-helper could not start ${executable}: ${detail}`,
+    FAILURE_CODES.MACOS_APP_SPAWN_FAILED,
+    "macos_app_helper_launch",
+    "subprocess",
+    cause
+  );
+}
+
 /** Waits for the `{"pid":N}` of `argent-macos-helper launch`, which exits once the app is spawned. */
 async function helperPid(child: ReturnType<typeof spawn>, executable: string): Promise<number> {
-  const failed = (detail: string, cause?: unknown) =>
-    macosFailure(
-      `argent-macos-helper could not start ${executable}: ${detail}`,
-      FAILURE_CODES.MACOS_APP_SPAWN_FAILED,
-      "macos_app_helper_launch",
-      "subprocess",
-      cause
-    );
   let stdout = "";
   let stderr = "";
   child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
@@ -594,12 +664,16 @@ async function helperPid(child: ReturnType<typeof spawn>, executable: string): P
       once(child.stderr!, "close"),
     ]);
   } catch (err) {
-    throw failed(errorMessage(err), err);
+    throw helperLaunchFailure(executable, errorMessage(err), err);
   } finally {
     clearTimeout(timer);
   }
-  if (timedOut) throw failed(`no answer within ${HELPER_TIMEOUT_MS} ms`);
-  if (code !== 0) throw failed(stderr.trim() || (signal ? `killed by ${signal}` : `exit ${code}`));
+  if (timedOut) throw helperLaunchFailure(executable, `no answer within ${HELPER_TIMEOUT_MS} ms`);
+  if (code !== 0)
+    throw helperLaunchFailure(
+      executable,
+      stderr.trim() || (signal ? `killed by ${signal}` : `exit ${code}`)
+    );
   const line = stdout.split("\n").find((l) => l.trim().startsWith("{"));
   let pid: unknown;
   try {
@@ -608,7 +682,7 @@ async function helperPid(child: ReturnType<typeof spawn>, executable: string): P
     // Reported below.
   }
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
-    throw failed(`unexpected output ${JSON.stringify(stdout.trim())}`);
+    throw helperLaunchFailure(executable, `unexpected output ${JSON.stringify(stdout.trim())}`);
   }
   return pid;
 }
@@ -631,6 +705,27 @@ const lifecycles = new Map<
  * as a stop-simulator-server between the two calls disposes the service instance.
  */
 const heldQuits = new Map<string, { pid: number; openBefore: Set<unknown> }>();
+
+/**
+ * Sending a request to a suspended app starts its deadline while nothing in the
+ * app can run: a suspension longer than the deadline drops the request. So the
+ * request waits until the app runs again, as an iOS simulator app gets its touch
+ * after the suspension.
+ */
+async function waitWhileSuspended(watch: SuspensionWatch, method: string): Promise<void> {
+  const since = watch.suspendedSince();
+  if (since === null) return;
+  if (await watch.waitUntilRunning(MAX_SUSPENDED_WAIT_MS)) return;
+  throw macosFailure(
+    `macOS has held the app suspended for ${Math.round((Date.now() - since) / 1000)} s, so argent ` +
+      `did not send ${method}: Instruments suspends an app while it checks it for leaks (up ` +
+      `to about 25 s), and a debugger while it stops it. Try again; if the app stays ` +
+      `suspended, continue it in the debugger or stop the native profile.`,
+    FAILURE_CODES.MACOS_APP_RPC_TIMEOUT,
+    "macos_app_rpc",
+    "timeout"
+  );
+}
 
 function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () => void } {
   let channel: LibraryChannel | null = null;
@@ -907,6 +1002,21 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
             err
           );
         }
+        // The start's write of the vendor id is missing when that tool-server
+        // died before the handshake, or the write failed. This handshake has it.
+        const vendorId = ch.handshake?.identifierForVendor;
+        if (
+          own.catalyst &&
+          vendorId &&
+          ch.handshake?.pid === own.pid &&
+          own.identifierForVendor !== vendorId
+        ) {
+          try {
+            recordTrackedMacosApp({ ...own, identifierForVendor: vendorId });
+          } catch {
+            // Only the React profiler's lookup needs it; the next reconnect tries again.
+          }
+        }
         const { appPath, sandboxed, logPath, args } = own;
         const asked = opts.args && JSON.stringify(opts.args);
         const note = [
@@ -920,6 +1030,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           .join(" ");
         return {
           ...ch.handshake!,
+          kind: trackedAppKind(own),
           args,
           appPath,
           sandboxed,
@@ -964,10 +1075,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     const unsupported = !isInjectableBundleId(bundleId)
       ? `${bundleId} is an Apple app. argent drives only apps it can load its library into, ` +
         `such as your own builds.`
-      : info.catalyst
-        ? `${bundleId} is a Mac Catalyst (UIKit) app, which argent does not drive: typing, ` +
-          `paste and scrolling do not reach its views. Test its UI on an iOS simulator instead.`
-        : chromiumRefusal(info);
+      : chromiumRefusal(info);
     if (unsupported) {
       throw macosFailure(
         unsupported,
@@ -1077,11 +1185,17 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       // The app inherits the working directory, which a Finder launch sets to /.
       {
         stdio: ["ignore", "pipe", "pipe", "pipe"],
-        env: macosLaunchEnv(bundleId, listen?.env),
+        env: macosLaunchEnv(bundleId, listen?.env, opts.env),
         cwd: "/",
       }
     );
-    // Attached before the first await: the handshake may come before the helper's answer.
+    // A failed spawn may have no stdio at all. On success, attach the reader
+    // as soon as the pipes exist: the handshake can precede the helper's pid.
+    try {
+      await once(helper, "spawn");
+    } catch (err) {
+      throw helperLaunchFailure(info.executable, errorMessage(err), err);
+    }
     const ch = new LibraryChannel(
       helper.stdio[3] as net.Socket,
       bundleId,
@@ -1098,20 +1212,22 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
     // Recorded before the handshake: if this tool-server dies now, the next
     // one still knows which process to stop.
+    const record = {
+      bundleId,
+      appPath: info.appPath,
+      executable: info.executable,
+      name: info.name,
+      pid,
+      sandboxed: info.sandboxed,
+      userSelectedReadOnly: info.userSelectedReadOnly,
+      listenSocket: listen?.path ?? null,
+      logPath,
+      args,
+      startedAt: Date.now(),
+      catalyst: info.catalyst,
+    };
     try {
-      recordTrackedMacosApp({
-        bundleId,
-        appPath: info.appPath,
-        executable: info.executable,
-        name: info.name,
-        pid,
-        sandboxed: info.sandboxed,
-        userSelectedReadOnly: info.userSelectedReadOnly,
-        listenSocket: listen?.path ?? null,
-        logPath,
-        args,
-        startedAt: Date.now(),
-      });
+      recordTrackedMacosApp(record);
     } catch (err) {
       // A copy that no record names is one that argent never lists or stops.
       ch.close();
@@ -1154,8 +1270,19 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         err
       );
     }
+    if (hello.identifierForVendor) {
+      // For the React profiler, which finds a Mac Catalyst app's JS runtime in
+      // Metro by it, also after a tool-server restart. Without it only that
+      // lookup fails, so a failed write does not fail the launch.
+      try {
+        recordTrackedMacosApp({ ...record, identifierForVendor: hello.identifierForVendor });
+      } catch {
+        // The record of the first write stays.
+      }
+    }
     const result: MacosLaunchResult = {
       ...hello,
+      kind: info.catalyst ? "catalyst" : "app",
       args,
       appPath: info.appPath,
       sandboxed: info.sandboxed,
@@ -1195,7 +1322,9 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       try {
         const ch = await ensureChannel();
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return (await ch.request(method, params, timeoutMs, opts.runLate)) as T;
+        const suspensions = suspensionWatches.get(bundleId);
+        if (suspensions) await waitWhileSuspended(suspensions, method);
+        return (await ch.request(method, params, timeoutMs, opts.runLate, suspensions)) as T;
       } catch (err) {
         if (errorCode(err) === FAILURE_CODES.MACOS_APP_CONNECTION_CLOSED) {
           throw closedByArgentError(bundleId, method);
@@ -1223,6 +1352,25 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       void entry.settled.then(() => (entry.pending = false));
       lifecycles.set(bundleId, entry);
       return run;
+    },
+    async watchSuspensions(pid) {
+      suspensionWatches.get(bundleId)?.end();
+      suspensionWatches.delete(bundleId);
+      let helper: string;
+      try {
+        helper = macosArtifacts().helper;
+      } catch {
+        return null;
+      }
+      const watch = await startSuspensionWatch(helper, pid);
+      if (!watch) return null;
+      suspensionWatches.set(bundleId, watch);
+      return {
+        end: () => {
+          if (suspensionWatches.get(bundleId) === watch) suspensionWatches.delete(bundleId);
+          return watch.end();
+        },
+      };
     },
     isConnected: () => Boolean(channel?.isOpen && channel.handshake),
     handshake: () => (channel?.isOpen ? channel.handshake : null),
