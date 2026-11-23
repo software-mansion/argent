@@ -211,6 +211,29 @@ describe("listDevicesText", () => {
     expect(text).toContain('"hint":"Prefix adb."');
   });
 
+  it("formats the flat result: kinded simulators, AVD entries and notes", () => {
+    const avd = { platform: "android", kind: "avd", avdName: "Pixel_7_API_34", state: "stopped" };
+    const text = listDevicesText({
+      devices: [
+        { ...booted, kind: "simulator" },
+        emulator,
+        avd,
+        { ...stoppedDuo, kind: "simulator" },
+      ],
+      notes: ["iOS: example note."],
+    })!;
+    expect(text).toBe(
+      '{"devices":[\n' +
+        '{"platform":"ios","udid":"88332DCB-6B9C-4C88-B1BB-D476D0B0D5E2","name":"iPhone 17","state":"Booted","runtime":"iOS 27.0","kind":"simulator"},\n' +
+        '{"platform":"android","serial":"emulator-5554","state":"device","kind":"emulator","model":"sdk_gphone64_arm64","avdName":"Medium_Phone_API_37.0","sdkLevel":37},\n' +
+        '{"platform":"android","kind":"avd","avdName":"Pixel_7_API_34","state":"stopped"}\n' +
+        "],\n" +
+        '"notes":["iOS: example note."]}\n' +
+        `${STOPPED_SIMULATORS_HEADER}\n` +
+        'ios B7A9BA8A-0CE7-453D-9011-9E241846427A "iPhone Duo" iOS 27.1 Shutdown foldable'
+    );
+  });
+
   it("returns an empty device list as []", () => {
     expect(listDevicesText({ devices: [], avds: [] })).toBe('{"devices":[],\n"avds":[]}');
   });

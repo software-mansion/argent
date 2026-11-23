@@ -309,10 +309,11 @@ function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_d
  * controller (screen-sharing agent over adb) needs only adb, so such an
  * emulator is retried through it. A stale discovery file left by a dead
  * emulator on the same serial makes the controller dial a closed gRPC port
- * ("Connection refused" on Unix, "actively refused" on Windows).
+ * ("Connection refused" on Unix, "actively refused" on Windows), or a port that
+ * something else now holds and never answers on ("did not answer on gRPC port").
  */
 const EMULATOR_NOT_DISCOVERED =
-  /not found among running emulators|Failed to find any running emulator|transport error[\s\S]*tcp connect error: (?:Connection refused|[^\n]*actively refused)/;
+  /not found among running emulators|did not answer on gRPC port|Failed to find any running emulator|transport error[\s\S]*tcp connect error: (?:Connection refused|[^\n]*actively refused)/;
 
 const FIRST_FRAME_TIMEOUT_MS = 5_000;
 
