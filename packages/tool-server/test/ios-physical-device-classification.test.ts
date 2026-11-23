@@ -78,6 +78,10 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   "open-url",
   // The keyboard backend's XCTest typeText: Delete presses, then the text.
   "fill",
+  // A host-side CoreMediaIO helper captures a cabled phone's screen into the
+  // same MJPEG pipeline simulator-server feeds; nothing runs on the phone.
+  "screen-recording-start",
+  "screen-recording-stop",
   // Build and launch through xcodebuild / xctrace --device, which target hardware directly.
   "native-profiler-launch-analysis",
   // Host-side readers of the xctrace session native-profiler-launch-analysis

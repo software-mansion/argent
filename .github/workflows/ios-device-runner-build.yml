@@ -11,29 +11,46 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - "packages/ios-device-runner/**"
-      - ".github/workflows/ios-device-runner-build.yml"
 
 concurrency:
   group: ios-device-runner-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Select iOS device runner build paths
+    uses: ./.github/workflows/pr-check-paths.yml
+    with:
+      paths: |-
+        packages/ios-device-runner/**
+        .github/workflows/ios-device-runner-build.yml
+
   build-runner:
     name: Compile the XCUITest runner
+    needs: changes
+    if: ${{ !cancelled() }}
     # Argent's self-hosted tart VMs. Fork PRs get a GitHub-hosted runner so
     # untrusted code stays off them.
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","sand"]') }}
+    runs-on: ${{ needs.changes.outputs.relevant != 'true' && 'ubuntu-latest' || github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","sand"]') }}
     timeout-minutes: 20
     permissions:
       contents: read
 
     steps:
+      - name: Check path selection
+        if: needs.changes.result != 'success' || needs.changes.outputs.relevant != 'true'
+        shell: bash
+        run: |
+          test '${{ needs.changes.result }}:${{ needs.changes.outputs.relevant }}' = 'success:false'
+          echo "No matching files changed."
+
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.relevant == 'true'
 
       - name: Show the selected Xcode
+        if: needs.changes.outputs.relevant == 'true'
         run: xcodebuild -version
 
       - name: Build for testing (generic iOS, unsigned)
+        if: needs.changes.outputs.relevant == 'true'
         run: xcodebuild build-for-testing -project packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj -scheme ArgentRunner -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY= -derivedDataPath "$RUNNER_TEMP/argent-runner-dd" -quiet

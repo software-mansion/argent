@@ -101,8 +101,8 @@ export default tseslint.config(
         "error",
         {
           selector:
-            "CallExpression[callee.property.name='listen'][arguments.0.value=0]:not([arguments.1.value='127.0.0.1'])",
-          message: "Bind ephemeral-port listeners to 127.0.0.1.",
+            "CallExpression[callee.property.name='listen'][arguments.0.value=0]:not([arguments.1.value='127.0.0.1']):not([arguments.1.value='::1'])",
+          message: "Bind ephemeral-port listeners to 127.0.0.1 or ::1.",
         },
       ],
     },
