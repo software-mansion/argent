@@ -120,7 +120,7 @@ async function uiautomatorDump(serial: string): Promise<string> {
   const trimmed = raw.trim();
   const killed = trimmed.includes("<hierarchy")
     ? undefined
-    : uiautomatorKilledMessage(trimmed.slice(0, 200));
+    : uiautomatorKilledMessage(trimmed.slice(0, 200), serial);
   if (killed) {
     throw new FailureError(killed, {
       error_code: FAILURE_CODES.ANDROID_UIAUTOMATOR_CAPTURE_FAILED,

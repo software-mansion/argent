@@ -78,7 +78,7 @@ describe("a dump the system killed", () => {
   });
 
   const remedy =
-    /Killed\. Another UiAutomation client .*am force-stop com\.argent\.androiddevtools/;
+    /Killed\. Another UiAutomation client .*adb -s emulator-5554 shell am force-stop com\.argent\.androiddevtools/;
 
   it("names the UiAutomation holder on a phone describe", async () => {
     const err = await describeAndroid(undefined, "emulator-5554", undefined, false).catch(

@@ -249,7 +249,7 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       ).toString("utf-8");
       if (!raw.includes("<hierarchy")) {
         const output = raw.trim().slice(0, 200);
-        const killed = uiautomatorKilledMessage(output);
+        const killed = uiautomatorKilledMessage(output, serial);
         if (killed) throw new Error(killed);
         throw new Error(
           `uiautomator could not capture the screen: ${output}. ` +

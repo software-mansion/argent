@@ -14,13 +14,13 @@ export function withUiautomatorLock<T>(serial: string, fn: () => Promise<T>): Pr
  * one. `uiautomator` can't register its UiAutomation connection while another
  * client holds one, and the system kills it.
  */
-export function uiautomatorKilledMessage(output: string): string | undefined {
+export function uiautomatorKilledMessage(output: string, serial: string): string | undefined {
   if (!/\bKilled\b/.test(output)) return undefined;
   return (
     `uiautomator could not capture the screen: ${output}. Another UiAutomation client ` +
     `(the argent devtools helper, or a test runner such as Espresso or Appium) holds ` +
     `the accessibility connection. Stop it, for the helper with ` +
-    `\`${adbCommandPrefix(process.env)}adb shell am force-stop com.argent.androiddevtools\`, ` +
+    `\`${adbCommandPrefix(process.env)}adb -s ${serial} shell am force-stop com.argent.androiddevtools\`, ` +
     `and try again.`
   );
 }
