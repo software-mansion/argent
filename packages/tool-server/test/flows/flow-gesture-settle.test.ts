@@ -492,8 +492,7 @@ describe("a tree-source outage never fails a selector-less gesture", () => {
       // And the budget was spent whole: no two reads ever match, so the tap
       // waited the full 3000ms window at the 250ms poll - at most 13 reads (12
       // intervals plus the first), and never the 2 a converging settle returns
-      // on. Only the ceiling is fixed; slower polls on a loaded machine cost
-      // reads, not window, which is what the elapsed time pins instead.
+      // on.
       expect(readsBeforeFirstGesture()).toBeGreaterThan(2);
       expect(readsBeforeFirstGesture()).toBeLessThanOrEqual(13);
       expect(elapsed).toBeGreaterThanOrEqual(3_000);
@@ -872,9 +871,8 @@ describe("a proven outage is spent only on the device that proved it", () => {
 // precisely so an iOS cold-start stall is ridden out instead of failed. The
 // abort in the block below is the one thing that does cut such a read short.
 describe("the settle window bounds its retries, not the read in flight", () => {
-  // One whole window (3000ms) plus the least margin that still tells "waited it
-  // out" from "cut it off at the deadline". The window cannot be made cheaper,
-  // so the margin is the only part of this test's cost there is to keep down.
+  // One whole window (3000ms) plus a margin that tells "waited it out" from
+  // "cut it off at the deadline".
   const SLOW_READ_MS = 3_500;
 
   it("waits out every read slower than the whole window", async () => {
