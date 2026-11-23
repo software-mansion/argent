@@ -60,12 +60,12 @@ jobs:
         run: npm run test:scripts
 
   # Branch protection requires a check named "Unit tests"; this reports the
-  # shards' combined result under that name. `always()` keeps it from being
+  # shards' combined result under that name. `!cancelled()` keeps it from being
   # skipped when a shard fails, since a skipped required check counts as passed.
   unit-tests-result:
     name: Unit tests
     needs: unit-tests
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
 
     steps:

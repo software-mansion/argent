@@ -90,12 +90,6 @@ jobs:
         if: needs.changes.outputs.relevant == 'true'
         run: npm ci
 
-      - name: Fix rollup native bindings (win32)
-        if: needs.changes.outputs.relevant == 'true'
-        # vitest 4 transforms via rollup, whose platform binary is an optional
-        # dep npm ci sometimes skips; install the win32 one explicitly.
-        run: npm install @rollup/rollup-win32-x64-msvc --no-save
-
       - name: Build workspace
         if: needs.changes.outputs.relevant == 'true'
         run: npm run build
