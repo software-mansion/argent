@@ -138,7 +138,7 @@ describe("JsRuntimeDebugger startup log capture", () => {
     await expect(connect()).rejects.toThrow();
     await vi.waitFor(() => expect(wss.clients.size).toBe(0));
     expect(logFiles()).toEqual([]);
-    expect(takeReapedSession("js-runtime-debugger", DEVICE)).toBeUndefined();
+    expect(takeReapedSession("js-runtime-debugger", `${mockPort}:${DEVICE}`)).toBeUndefined();
   });
 
   it("keeps the replayed logs and names the file when the app dies during the setup", async () => {
@@ -148,9 +148,10 @@ describe("JsRuntimeDebugger startup log capture", () => {
     expect(files).toHaveLength(1);
     const file = path.join(process.env.HOME!, ".argent", "tmp", files[0]!);
     expect(fs.readFileSync(file, "utf-8")).toContain("printed at startup");
-    const reaped = takeReapedSession("js-runtime-debugger", DEVICE);
+    const reaped = takeReapedSession("js-runtime-debugger", `${mockPort}:${DEVICE}`);
     expect(reaped?.connectionLost).toBe(true);
     expect(reaped?.salvage).toContain(`kept at ${file}`);
+    expect(reaped?.salvage).toContain("replayed by the runtime");
   });
 
   it("keeps the replayed logs when the app dies before answering Runtime.enable", async () => {
@@ -159,7 +160,7 @@ describe("JsRuntimeDebugger startup log capture", () => {
     const files = logFiles();
     expect(files).toHaveLength(1);
     const file = path.join(process.env.HOME!, ".argent", "tmp", files[0]!);
-    const reaped = takeReapedSession("js-runtime-debugger", DEVICE);
+    const reaped = takeReapedSession("js-runtime-debugger", `${mockPort}:${DEVICE}`);
     expect(reaped?.connectionLost).toBe(true);
     expect(reaped?.salvage).toContain(`kept at ${file}`);
   });

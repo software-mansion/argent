@@ -7,7 +7,11 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { discoverMetro, type CDPTarget } from "../utils/debugger/discovery";
-import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/metro-port";
+import {
+  externalJsDebuggerUrl,
+  metroScopedIds,
+  publishedMetroPort,
+} from "../utils/debugger/metro-port";
 import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
@@ -424,13 +428,14 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           "This registry holds only what the runtime replayed or logged since, so earlier " +
           "entries may be missing.";
         const salvage = keepFile
-          ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}.`
+          ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}. ` +
+            "If the app kept running, this registry starts with the same entries, replayed by the runtime."
           : stored
             ? `The ${entries} went with it: the log file is deleted on teardown. ${since}`
             : `The ${entries} went with it: no log file held them. ${since}`;
         recordReapedSession(
           "js-runtime-debugger",
-          [deviceId, logicalDeviceId],
+          metroScopedIds(port, [deviceId, logicalDeviceId]),
           salvage,
           connectionLost
         );

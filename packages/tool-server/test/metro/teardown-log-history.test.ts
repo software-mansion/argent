@@ -52,9 +52,16 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
   ws.send(JSON.stringify({ id, result: {} }));
 }
 
-beforeAll(async () => {
-  await new Promise<void>((resolve) => {
-    mockServer = http.createServer((req, res) => {
+interface MockMetro {
+  server: http.Server;
+  wss: WebSocketServer;
+  port: number;
+}
+
+function startMockMetro(): Promise<MockMetro> {
+  return new Promise((resolve) => {
+    let port = 0;
+    const server = http.createServer((req, res) => {
       if (req.url === "/status") {
         res.setHeader("X-React-Native-Project-Root", "/mock/project");
         res.end("packager-status:running");
@@ -70,7 +77,7 @@ beforeAll(async () => {
                     id: "page-0",
                     title: "app (Test Device)",
                     description: "[C++ connection]",
-                    webSocketDebuggerUrl: `ws://localhost:${mockPort}/inspector/debug?device=${LOGICAL_ID}&page=1`,
+                    webSocketDebuggerUrl: `ws://localhost:${port}/inspector/debug?device=${LOGICAL_ID}&page=1`,
                     deviceName: "Test Device",
                     reactNative: {
                       logicalDeviceId: LOGICAL_ID,
@@ -87,14 +94,22 @@ beforeAll(async () => {
       res.end("Not found");
     });
 
-    wss = new WebSocketServer({ server: mockServer });
+    const wss = new WebSocketServer({ server });
     wss.on("connection", (ws) => ws.on("message", (raw) => handleCDPMessage(ws, raw.toString())));
 
-    mockServer.listen(0, "127.0.0.1", () => {
-      mockPort = (mockServer.address() as { port: number }).port;
-      resolve();
+    server.listen(0, "127.0.0.1", () => {
+      port = (server.address() as { port: number }).port;
+      resolve({ server, wss, port });
     });
   });
+}
+
+function stopMockMetro(metro: MockMetro): Promise<void> {
+  return new Promise((resolve) => metro.wss.close(() => metro.server.close(() => resolve())));
+}
+
+beforeAll(async () => {
+  ({ server: mockServer, wss, port: mockPort } = await startMockMetro());
 
   registry = new Registry();
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
@@ -104,7 +119,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await registry.dispose();
-  await new Promise<void>((resolve) => wss.close(() => mockServer.close(() => resolve())));
+  await stopMockMetro({ server: mockServer, wss, port: mockPort });
 });
 
 beforeEach(async () => {
@@ -228,6 +243,39 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
     expect(connect.note).toBeUndefined();
     expect(result.totalEntries).toBe(0);
     expect(result.note).toBeUndefined();
+  });
+
+  it("keeps the note with its own Metro when two apps on one device use two ports", async () => {
+    const other = await startMockMetro();
+    try {
+      await connectAndCapture(LOGICAL_ID, 4);
+      await registry.invokeTool("debugger-connect", { port: other.port, device_id: LOGICAL_ID });
+      const otherUrn = `JsRuntimeDebugger:${other.port}:${LOGICAL_ID}`;
+      const otherApi = await registry.resolveService<JsRuntimeDebuggerApi>(otherUrn);
+      otherApi.logWriter.write({
+        id: 0,
+        timestamp: new Date().toISOString(),
+        level: "log",
+        message: "b",
+      });
+      await registry.disposeService(otherUrn);
+
+      const healthy = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: LOGICAL_ID,
+      })) as { totalEntries: number; note?: string };
+      const reaped = (await registry.invokeTool("debugger-log-registry", {
+        port: other.port,
+        device_id: LOGICAL_ID,
+      })) as { note?: string };
+      await registry.disposeService(otherUrn);
+
+      expect(healthy.totalEntries).toBe(4);
+      expect(healthy.note).toBeUndefined();
+      expect(reaped.note).toContain("1 captured console entry");
+    } finally {
+      await stopMockMetro(other);
+    }
   });
 
   describe("when the connect id and the logicalDeviceId differ", () => {

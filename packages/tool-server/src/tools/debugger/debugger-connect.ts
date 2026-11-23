@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
-import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
+import {
+  DEBUGGER_TOOL_CAPABILITY,
+  debuggerServiceRef,
+  reapedDebuggerIds,
+} from "./debugger-service-ref";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { describeReapedSession, takeReapedSessionAnyId } from "../../utils/reaped-sessions";
 
@@ -51,10 +55,10 @@ Returns connection details and, after a crash, a note with the previous log path
     // Not in the blueprint's factory: that also runs for the implicit resolve
     // `debugger-log-registry` reconnects through, which would consume the
     // breadcrumb just before the read that exists to report it.
-    const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
-      params.device_id,
-      api.logicalDeviceId,
-    ]);
+    const reaped = takeReapedSessionAnyId(
+      "js-runtime-debugger",
+      reapedDebuggerIds(params, [params.device_id, api.logicalDeviceId])
+    );
     return {
       port: api.port,
       projectRoot: api.projectRoot,

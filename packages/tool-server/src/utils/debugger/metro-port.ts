@@ -60,6 +60,11 @@ export function metroPort(params: { device_id?: string; port?: number }): number
   return DEFAULT_METRO_PORT;
 }
 
+/** Two apps on one device can each have a Metro session, one per port. */
+export function metroScopedIds(port: number, ids: Array<string | undefined>) {
+  return ids.map((id) => id && `${port}:${id}`);
+}
+
 /**
  * The CDP socket a provider wants Argent to attach to, in place of the target
  * Metro advertises. Only the socket comes from the provider: Metro still
