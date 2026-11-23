@@ -38,16 +38,27 @@ jobs:
       # setup-node caches only the downloads; npm ci still takes 35-75s here.
       - name: Restore node_modules
         id: node-modules
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             node_modules
             packages/*/node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+          key: npm-ci-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
 
       - name: Install dependencies
         if: steps.node-modules.outputs.cache-hit != 'true'
         run: npm ci
+
+      # Saved before the tests run: Vitest writes its transform cache into
+      # node_modules, and that cache misses tsconfig changes.
+      - name: Save node_modules
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: ${{ steps.node-modules.outputs.cache-primary-key }}
 
       - name: Build workspace dependencies
         run: npm run build
@@ -92,16 +103,25 @@ jobs:
 
       - name: Restore node_modules
         id: node-modules
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             node_modules
             packages/*/node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+          key: npm-ci-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
 
       - name: Install dependencies
         if: steps.node-modules.outputs.cache-hit != 'true'
         run: npm ci
+
+      - name: Save node_modules
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: ${{ steps.node-modules.outputs.cache-primary-key }}
 
       - name: Build workspace dependencies
         run: npm run build
