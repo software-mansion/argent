@@ -380,7 +380,7 @@ For example:
 ```
 
 - The step reads only the requests that the app sends after the last `network-capture-start` step. A request that starts before the start step does not match.
-- When no request matches before the timeout, the step fails. The reason gives the cause and the number of requests since the start.
+- When no request matches before the timeout, the step fails. The reason gives the cause, the number of requests since the start and the nearest requests.
 - Without a start step, the step reports `error`. The reason says that network capture is not started.
 - `await-network-request` has no directive form. Keep the `tool:` step.
 - Do not put a `{{secret:NAME}}` placeholder in `url`. Match on a different part of the URL.

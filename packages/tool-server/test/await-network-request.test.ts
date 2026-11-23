@@ -48,6 +48,7 @@ interface WaitResult {
   match?: WaitRecord;
   note?: string;
   cause?: string;
+  nearMisses?: Array<WaitRecord & { mismatch: string[] }>;
   layers?: Array<{ layer: string; armed: boolean; readable: boolean; stopped?: true }>;
 }
 
@@ -233,9 +234,11 @@ async function startJs(
   const payload = jsCapturePayload(PORT, udid);
   metro.set(payload, runtime);
   setJsCapture(payload, { bundleId: APP, intent, mark, installed: true });
-  // A start leaves the debugger connected, which the wait reads through; a stop pauses the interceptor.
-  await registry.resolveService(`JsRuntimeDebugger:${payload}`);
-  if (intent === "stopped") runInContext("__argent_network_paused = true", runtime.context);
+  // A stop pauses the interceptor; a stopped capture is read only while its debugger runs.
+  if (intent === "stopped") {
+    runInContext("__argent_network_paused = true", runtime.context);
+    await registry.resolveService(`JsRuntimeDebugger:${payload}`);
+  }
 }
 
 function wait(params: Record<string, unknown> & { url: string }, udid = IOS) {
@@ -514,5 +517,42 @@ describe("await-network-request", () => {
     expect(result.note).toBe(
       "js: the app's JS runtime reloaded after the start, so its requests between the reload and the interceptor's reinstall are missing"
     );
+  });
+});
+
+describe("diagnostics: near misses and JS reinstall", () => {
+  it("lists the closest requests and the criteria each missed, also in the note", async () => {
+    await startIos();
+    ios.add(11, { url: "/v1/login", status: 500 });
+    ios.add(12, { url: "/v1/other", status: 200 });
+    ios.add(13, { url: "/v1/stop", state: "failed", errorText: STOPPED_BEFORE_FINISH });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    // A matching URL first, then the fewest misses; a lost request shows as lost.
+    expect(result.nearMisses?.map(({ id, state, mismatch }) => ({ id, state, mismatch }))).toEqual([
+      { id: "ios-t7-11", state: "complete", mismatch: ["status"] },
+      { id: "ios-t7-12", state: "complete", mismatch: ["url"] },
+      { id: "ios-t7-13", state: "lost", mismatch: ["url", "status", "outcome"] },
+    ]);
+    expect(result.note).toContain(
+      `Nearest: GET ${API}/v1/login 500 complete [ios-native ios-t7-11] (mismatch: status); `
+    );
+  });
+
+  it("installs the interceptor in a context that reloaded without it, and reads it next poll", async () => {
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    // A reload that kept the CDP connection: a new context, whose bundle ran.
+    runtime.context = createContext({});
+    runInContext(XHR_BUNDLE, runtime.context);
+    runtime.afterInstall = () => runtime.push(1, "/v1/login");
+
+    const result = await wait({ url: "/v1/login", timeoutMs: 2000 });
+
+    expect(result.match?.id).toBe("rn-net-1");
+    expect(
+      typeof (runtime.context as { __argent_network_mark?: unknown }).__argent_network_mark
+    ).toBe("function");
   });
 });

@@ -224,6 +224,12 @@ export function forgetNativeUnavailableOf(devices?: readonly string[]): void {
   }
 }
 
+/** A stop-all-simulator-servers teardown that covers the device is under way. */
+export function captureSweepUnderWay(udid: string): boolean {
+  const device = lockDevice(udid);
+  return [...captureSweeps].some((sweep) => !sweep.devices || sweep.devices.has(device));
+}
+
 export function withCaptureLock<T>(
   udid: string,
   bundleId: string,

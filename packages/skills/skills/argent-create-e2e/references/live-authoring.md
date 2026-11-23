@@ -157,7 +157,7 @@ On iOS, Android, and Mac apps, `view-network-logs` and `native-network-logs` onl
 
 ### Network checks
 
-Record a network check in 3 steps: `network-capture-start` after the launch, then the action, then `await-network-request` with the method, the URL, and the status. A request that starts before the start step never matches. A wait without a start step errors and records nothing. Read `cause` as for `await-ui-element`: only `unmet` disproves the check, and its `note` counts the requests since the start on each layer. `await-network-request` has no directive form, so keep the `tool:` step. Do not put a secret in `url`.
+Record a network check in 3 steps: `network-capture-start` after the launch, then the action, then `await-network-request` with the method, the URL, and the status. A request that starts before the start step never matches. A wait without a start step errors and records nothing. Read `cause` as for `await-ui-element`: only `unmet` disproves the check, and `nearMisses` shows the closest requests and the criteria each one missed. `await-network-request` has no directive form, so keep the `tool:` step. Do not put a secret in `url`.
 
 ```yaml
 - launch: com.example.app

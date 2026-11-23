@@ -22,7 +22,10 @@ import { markedLayers, type LayerRead, type MarkedLayer } from "./layers";
 import {
   STATUS_CLASSES,
   describeCriteria,
+  describeRecord,
   firstMatch,
+  nearMisses,
+  type NearMiss,
   type RequestCriteria,
   type WaitLayer,
   type WaitRecord,
@@ -137,6 +140,8 @@ interface WaitResult {
   note?: string;
   /** Why a wait that did not hold came back success: false; only `unmet` is a verdict. */
   cause?: UnmetWaitCause;
+  /** The closest requests since the start, on a wait that did not hold. */
+  nearMisses?: NearMiss[];
   /** Each layer the start marked, on a wait that did not hold. */
   layers?: LayerSummary[];
 }
@@ -182,7 +187,7 @@ export function createAwaitNetworkRequestTool(
     id: "await-network-request",
     description: `Check that the app sent a request that matches a URL, and optionally a method and a status: blocks until such a request, sent after the last network-capture-start for the app, finishes, or the timeout elapses. Reads the native layer and, when that start named it, the JS runtime (on Chromium, the tab), and returns the first match.
 Use when you need to confirm that an action sent a request and how it ended: call network-capture-start, then the action, then this tool, also as a tool: step of an e2e test, where an unmet wait fails the step. Prefer it over polling view-network-logs or native-network-logs.
-Returns { success, elapsed, match?, note?, cause?, layers? }. On a match, match is { id, layer, method, url, status?, state, durationMs?, errorText? }; pass match.id to view-network-request-details for headers and bodies. If nothing matches by the timeout, success is false and cause says why: unmet (an armed layer was read and no request matched; note counts the requests since the start per layer), unreadable (no armed layer was read near the deadline, so the end of the wait was not judged; layers says why) or cancelled. Only unmet licenses changing the matcher. When every marked layer is stopped and holds no request in flight, the wait returns at once.
+Returns { success, elapsed, match?, note?, cause?, nearMisses?, layers? }. On a match, match is { id, layer, method, url, status?, state, durationMs?, errorText? }; pass match.id to view-network-request-details for headers and bodies. If nothing matches by the timeout, success is false and cause says why: unmet (an armed layer was read and no request matched; nearMisses lists up to 3 closest requests and the criteria each missed), unreadable (no armed layer was read near the deadline, so the end of the wait was not judged; layers says why) or cancelled. Only unmet licenses changing the matcher. When every marked layer is stopped and holds no request in flight, the wait returns at once.
 Fails with NETWORK_CAPTURE_NOT_STARTED when no network-capture-start marked a layer for the device and the app.`,
     zodSchema,
     searchHint:
@@ -360,6 +365,8 @@ Fails with NETWORK_CAPTURE_NOT_STARTED when no network-capture-start marked a la
             ...(last?.note ? { note: last.note } : {}),
           };
         });
+        const seen = [...latestReadable.values()].flatMap((read) => read.records);
+        const misses = nearMisses(criteria, seen);
         const counts = summaries
           .map(
             (s) =>
@@ -373,7 +380,12 @@ Fails with NETWORK_CAPTURE_NOT_STARTED when no network-capture-start marked a la
           .filter((s) => s.note)
           .map((s) => `${s.layer}: ${s.note}`)
           .join("; ");
-        const note = [head, `Requests since the start: ${counts}.`, notes ? `${notes}.` : undefined]
+        const note = [
+          head,
+          `Requests since the start: ${counts}.`,
+          notes ? `${notes}.` : undefined,
+          misses.length > 0 ? `Nearest: ${misses.map(describeRecord).join("; ")}.` : undefined,
+        ]
           .filter(Boolean)
           .join(" ");
         return {
@@ -381,6 +393,7 @@ Fails with NETWORK_CAPTURE_NOT_STARTED when no network-capture-start marked a la
           elapsed: elapsed(),
           cause,
           note,
+          nearMisses: misses,
           layers: summaries,
         };
       }

@@ -39,7 +39,12 @@ export interface RequestCriteria {
   outcome: Outcome;
 }
 
-type Criterion = "url" | "method" | "status" | "outcome";
+export type Criterion = "url" | "method" | "status" | "outcome";
+
+export interface NearMiss extends WaitRecord {
+  /** The criteria the request does not meet. */
+  mismatch: Criterion[];
+}
 
 export const STATUS_CLASSES: readonly StatusClass[] = ["1xx", "2xx", "3xx", "4xx", "5xx"];
 
@@ -92,6 +97,31 @@ export function firstMatch(
   return records.find((record) => mismatches(criteria, record).length === 0);
 }
 
+const MAX_NEAR_MISSES = 3;
+
+/**
+ * The requests that come closest: a matching URL first, then the fewest failed
+ * criteria, then the newest. `records` is each layer's list, oldest first.
+ */
+export function nearMisses(criteria: RequestCriteria, records: readonly WaitRecord[]): NearMiss[] {
+  return records
+    .map((record, index) => ({
+      miss: { ...record, mismatch: mismatches(criteria, record) },
+      index,
+    }))
+    .sort((a, b) => {
+      const urlA = a.miss.mismatch.includes("url") ? 1 : 0;
+      const urlB = b.miss.mismatch.includes("url") ? 1 : 0;
+      if (urlA !== urlB) return urlA - urlB;
+      if (a.miss.mismatch.length !== b.miss.mismatch.length) {
+        return a.miss.mismatch.length - b.miss.mismatch.length;
+      }
+      return b.index - a.index;
+    })
+    .slice(0, MAX_NEAR_MISSES)
+    .map(({ miss }) => miss);
+}
+
 /** URLs in the note are cut to this many characters. */
 const NOTE_URL_CHARS = 120;
 
@@ -113,4 +143,17 @@ export function describeCriteria(criteria: RequestCriteria): string {
   ]
     .filter(Boolean)
     .join(", ");
+}
+
+/** One request in short form: `GET http://.../json 500 complete (mismatch: status)`. */
+export function describeRecord(record: WaitRecord | NearMiss): string {
+  const parts = [
+    `${record.method || "?"} ${shortUrl(record.url)}`,
+    record.status !== undefined ? String(record.status) : undefined,
+    record.state,
+    record.errorText ? `"${shortUrl(record.errorText)}"` : undefined,
+    `[${record.layer} ${record.id}]`,
+  ];
+  const mismatch = "mismatch" in record ? ` (mismatch: ${record.mismatch.join(", ")})` : "";
+  return `${parts.filter(Boolean).join(" ")}${mismatch}`;
 }

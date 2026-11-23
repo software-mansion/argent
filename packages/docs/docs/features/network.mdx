@@ -56,7 +56,7 @@ For these layers, the agent starts capture before the action that sends the requ
 
 On a Mac app, the JS runtime layer reaches the app through Metro. Thus the JS runtime layer also captures a React Native app that Argent did not start, for example a build that you start from Xcode. The native layer cannot capture this app.
 
-The native layer follows the app until the agent stops capture. When the agent launches or restarts the app, the native layer captures requests from the new process. On iOS simulators that use a device provider's socket, the agent must start native capture again after a relaunch. On iOS, Android and Mac apps, a reload or restart removes JS capture from the app, so the agent starts JS capture again.
+The native layer follows the app until the agent stops capture. When the agent launches or restarts the app, the native layer captures requests from the new process. On iOS simulators that use a device provider's socket, the agent must start native capture again after a relaunch. On iOS, Android and Mac apps, a reload or restart removes JS capture from the app, so the agent starts JS capture again. After a reload, a wait for a request can also start JS capture again. The requests before this start are missing.
 
 The agent stops these layers when it has the requests it needs or before a profile. Capture for other apps continues. If Argent cannot reach the JS runtime to stop capture, the result tells the agent to retry later. Argent keeps the captured requests after a stop. A reload or restart clears the JS log. After the next start, an old JS request ID can name a new request. Stopped layers stay off until the agent starts them again.
 
@@ -70,7 +70,7 @@ On Chromium and Electron, Argent records from the first Chromium tool call until
 
 After the agent starts capture, the agent can wait for one request of the app. The agent gives the URL of the request, and optionally the method and the status. Argent waits until the app sends a matching request and the request ends. Then Argent gives the agent the first matching request, and the agent can read its details.
 
-If no request matches before the timeout, Argent tells the agent how many requests each layer recorded since the start. Argent also tells the agent when it could not read a layer, for example after a reload. Thus the agent does not change a correct matcher when Argent could not judge the requests.
+If no request matches before the timeout, Argent gives the agent the requests that are nearest to a match. For each of these requests, Argent tells which criteria the request does not meet. Thus the agent can tell a wrong status from a request that the app did not send.
 
 An [e2e test](/docs/features/e2e) can also check a request. The check fails when no request matches.
 
