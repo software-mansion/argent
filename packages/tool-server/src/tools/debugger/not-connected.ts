@@ -178,15 +178,17 @@ export function trackDebuggerOutcome(
 /**
  * Resolve the shared debugger service for a status-style tool, preserving the
  * connect-on-first-call contract. Passes ref.options through — the Chromium
- * factory hard-fails without the resolved DeviceInfo.
+ * factory hard-fails without the resolved DeviceInfo. `options` reach a Metro
+ * debugger's factory on its first connect.
  */
 export async function resolveDebuggerService(
   registry: Registry,
-  params: { port?: number; device_id?: string }
+  params: { port?: number; device_id?: string },
+  options?: Record<string, unknown>
 ): Promise<JsRuntimeDebuggerApi> {
   const ref = debuggerServiceRef(params);
   return typeof ref === "string"
-    ? registry.resolveService<JsRuntimeDebuggerApi>(ref)
+    ? registry.resolveService<JsRuntimeDebuggerApi>(ref, options)
     : registry.resolveService<JsRuntimeDebuggerApi>(ref.urn, ref.options);
 }
 
