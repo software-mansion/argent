@@ -17,12 +17,12 @@ concurrency:
 jobs:
   # Node 22 is the oldest line Argent supports.
   unit-tests:
-    name: Unit tests (${{ matrix.shard }}/4)
+    name: Unit tests (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - name: Checkout
@@ -53,7 +53,7 @@ jobs:
         run: npm run build
 
       - name: Run tests
-        run: npm test -- --shard=${{ matrix.shard }}/4
+        run: npm test -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Test root scripts
         if: matrix.shard == 1
