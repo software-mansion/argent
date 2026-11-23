@@ -185,6 +185,8 @@ class FakeRuntime {
   frozen = false;
   /** Scripts that run in the app, but whose answer never reaches argent, as when Metro drops it. */
   readonly lostAnswers = new Set<ScriptName>();
+  /** Scripts that CDPClient refuses to send, as when its socket closed: they never reach the app. */
+  readonly refused = new Set<ScriptName>();
 
   constructor(
     readonly appId: string | undefined,
@@ -207,6 +209,16 @@ class FakeRuntime {
   }
 
   evaluate(expr: string, timeout = CDP_TIMEOUT_MS): unknown {
+    if (this.refused.has(scriptName(expr))) {
+      return Promise.reject(
+        new FailureError("CDP not connected", {
+          error_code: FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED,
+          failure_stage: "debugger_cdp_send",
+          failure_area: "tool_server",
+          error_kind: "network",
+        })
+      );
+    }
     this.evaluated.push(scriptName(expr));
     if (this.frozen) {
       // CDPClient rejects a request that gets no answer within its timeout.
@@ -1851,6 +1863,31 @@ describe("network-capture-stop", () => {
       armed: false,
       reason: expect.stringContaining(`${APP} is not running, so nothing records`),
     });
+  });
+
+  it.each(["resume", "install"] as const)(
+    "after a start whose %s CDP refused to send, a stop that cannot reach the runtime says nothing records only if nothing was sent",
+    async (script) => {
+      const runtime = new FakeRuntime(APP);
+      runtime.refused.add(script);
+      serve(PORT, SERIAL, runtime);
+      expect(layer(await start(SERIAL, APP), "js")).toMatchObject({ armed: false });
+      await reconnect(PORT, SERIAL, undefined);
+
+      // A refused resume sent nothing. After a resume that the app answered, the
+      // install may find an interceptor that the resume turned on.
+      expect(layer(await stop(SERIAL, APP), "js")).toMatchObject({ armed: script === "install" });
+    }
+  );
+
+  it("treats a resume whose answer was lost as possibly recording", async () => {
+    const runtime = new FakeRuntime(APP);
+    runtime.lostAnswers.add("resume");
+    serve(PORT, SERIAL, runtime);
+    await start(SERIAL, APP);
+    await reconnect(PORT, SERIAL, undefined);
+
+    expect(layer(await stop(SERIAL, APP), "js")).toMatchObject({ armed: true });
   });
 
   it("confirms a stop that cannot reach the runtime when the runtime answered that the interceptor did not install", async () => {
