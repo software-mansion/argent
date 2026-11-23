@@ -93,8 +93,7 @@ jobs:
       - name: Build workspace dependencies
         run: npm run build
 
-      # tsc is single-threaded, so one workspace at a time leaves three of the
-      # runner's four cores idle.
+      # tsc is single-threaded; the runner has four cores.
       - name: Typecheck tests
         shell: bash
         run: npm query .workspace | jq -r '.[].location' | xargs -P 4 -I{} npm run typecheck:tests --if-present -w {}
