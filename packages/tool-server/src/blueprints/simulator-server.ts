@@ -307,10 +307,12 @@ function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_d
  * `avd/running/pid_*.ini` discovery file. An emulator started under another
  * user or HOME, or with `-port`, has no such file where argent looks. The phone
  * controller (screen-sharing agent over adb) needs only adb, so such an
- * emulator is retried through it.
+ * emulator is retried through it. A stale discovery file left by a dead
+ * emulator on the same serial makes the controller dial a closed gRPC port
+ * ("Connection refused" on Unix, "actively refused" on Windows).
  */
 const EMULATOR_NOT_DISCOVERED =
-  /not found among running emulators|Failed to find any running emulator/;
+  /not found among running emulators|Failed to find any running emulator|transport error[\s\S]*tcp connect error: (?:Connection refused|[^\n]*actively refused)/;
 
 const FIRST_FRAME_TIMEOUT_MS = 5_000;
 

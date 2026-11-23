@@ -4,26 +4,40 @@
 // `--mode=<m>` picks a misbehaviour: crash, silent, bad-protocol,
 // ignore-terminate, ask-save (answers quit with an alert; asked to quit again
 // while it shows it, it quits without saving, as AppKit does; `Prompt.cancel`
-// answers it), windowless, minimized, panel-only. `--alert` shows an alert of
-// the app's own from the start. Its one window appears
+// answers it), windowless, minimized, panel-only, network-silent (answers no
+// CDP request), disable-silent (answers no Network.disable and keeps capturing). `--alert` shows an alert of
+// the app's own from the start. `--handshake-delay=<ms>` sends the handshake
+// that much later, as a slow launch does. `--cdp-delay=<ms>` handles each CDP
+// request that much after the one before it, in order, as a busy app does. Its one window appears
 // 200 ms after the handshake, as a real app's first window comes after its launch.
 //
 // `--identifier-for-vendor=<id>` puts that identifierForVendor in the handshake,
 // as the library does in a Mac Catalyst app.
 //
 // Network capture: like the real library, it reports requests as CDP events
-// only after a `Control` activateNetworkInspection. `Net.request` sends one
-// request, and `--launch-request` sends one 150 ms after the start.
+// only after a CDP Network.enable, which it answers, until Network.disable or
+// until the client's connection closes. `Net.request` sends one request (with
+// `headers`, and `hold: true` to send only its first event, until
+// `Net.finish`), and `--launch-request` sends one 150 ms after the start. A
+// body read answers as the real Mac library does: it keeps no bodies.
 "use strict";
 const fs = require("node:fs");
 const net = require("node:net");
 
 const mode = (process.argv.find((a) => a.startsWith("--mode=")) ?? "--mode=ok").slice(7);
+const handshakeDelayMs = Number(
+  (process.argv.find((a) => a.startsWith("--handshake-delay=")) ?? "=0").split("=")[1]
+);
+const cdpDelayMs = Number(
+  (process.argv.find((a) => a.startsWith("--cdp-delay=")) ?? "=0").split("=")[1]
+);
 const identifierForVendor = process.argv
   .find((a) => a.startsWith("--identifier-for-vendor="))
   ?.slice("--identifier-for-vendor=".length);
 const startedAt = Date.now();
 const network = { active: false, activations: 0 };
+/** Requests whose last events wait for `Net.finish`. */
+const held = [];
 const clients = new Set();
 let nextRequestId = 1;
 let askingToSave = false;
@@ -40,22 +54,30 @@ if (mode === "silent") return;
 function serve(socket) {
   socket.on("error", () => {});
   clients.add(socket);
-  socket.on("close", () => clients.delete(socket));
-  socket.write(
-    JSON.stringify({
-      type: "Control",
-      payload: {
-        bundleId,
-        pid: process.pid,
-        platform: "macos",
-        protocol: mode === "bad-protocol" ? 2 : 1,
-        libraryVersion: "fake",
-        // A Mac Catalyst library reports the app's UIDevice.identifierForVendor.
-        ...(identifierForVendor ? { identifierForVendor } : {}),
-      },
-    }) + "\n"
-  );
+  socket.on("close", () => {
+    clients.delete(socket);
+    // The real library turns capture off when its client goes.
+    network.active = false;
+  });
+  const hello = () =>
+    socket.write(
+      JSON.stringify({
+        type: "Control",
+        payload: {
+          bundleId,
+          pid: process.pid,
+          platform: "macos",
+          protocol: mode === "bad-protocol" ? 2 : 1,
+          libraryVersion: "fake",
+          // A Mac Catalyst library reports the app's UIDevice.identifierForVendor.
+          ...(identifierForVendor ? { identifierForVendor } : {}),
+        },
+      }) + "\n"
+    );
+  if (handshakeDelayMs > 0) setTimeout(hello, handshakeDelayMs);
+  else hello();
   let buf = "";
+  let cdpQueue = Promise.resolve();
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
     buf += chunk;
@@ -64,32 +86,63 @@ function serve(socket) {
       const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
       const msg = JSON.parse(line);
-      if (msg.type === "Control") control(msg.payload);
-      else handle(socket, msg);
+      if (msg.type === "CDP" && cdpDelayMs > 0) {
+        cdpQueue = cdpQueue
+          .then(() => new Promise((r) => setTimeout(r, cdpDelayMs)))
+          .then(() => cdp(socket, msg.payload));
+      } else if (msg.type === "CDP") cdp(socket, msg.payload);
+      else if (msg.type === "ViewInspector") handle(socket, msg);
     }
   });
 }
 
-function control(payload) {
-  if (payload.command !== "activateNetworkInspection") return;
-  network.active = true;
-  network.activations++;
+function cdp(socket, { id, method }) {
+  if (mode === "network-silent") return;
+  const answer = (body) =>
+    socket.write(JSON.stringify({ type: "CDP", payload: { id, ...body } }) + "\n");
+  switch (method) {
+    case "Network.enable":
+      network.active = true;
+      network.activations++;
+      return answer({ result: {} });
+    case "Network.disable":
+      if (mode === "disable-silent") return;
+      network.active = false;
+      return answer({ result: {} });
+    case "Network.getResponseBody":
+      return answer({ error: { message: "No response body stored for requestId" } });
+    case "Network.getRequestPostData":
+      return answer({ error: { message: "No request stored for requestId" } });
+    default:
+      return answer({ error: { message: `Unsupported method: ${method}` } });
+  }
 }
 
-/** One request's events, to the connected client, as the real library sends them. */
-function sendRequest(url, method) {
-  if (!network.active) return;
-  const requestId = `fake-${nextRequestId++}`;
-  const events = [
-    ["Network.requestWillBeSent", { requestId, request: { url, method, headers: {} } }],
-    ["Network.responseReceived", { requestId, response: { url, status: 200 } }],
-    ["Network.loadingFinished", { requestId, encodedDataLength: 12 }],
-  ];
+function sendEvents(events) {
   for (const socket of clients) {
     for (const [name, params] of events) {
       socket.write(JSON.stringify({ type: "CDP", payload: { method: name, params } }) + "\n");
     }
   }
+}
+
+/** One request's events, to the connected client, as the real library sends them. */
+function sendRequest(url, method, headers = {}, hold = false) {
+  if (!network.active) return;
+  const requestId = `fake-${nextRequestId++}`;
+  const last = [
+    [
+      "Network.responseReceived",
+      {
+        requestId,
+        response: { url, status: 200, headers: { "Set-Cookie": "session=fake-secret" } },
+      },
+    ],
+    ["Network.loadingFinished", { requestId, encodedDataLength: 12 }],
+  ];
+  sendEvents([["Network.requestWillBeSent", { requestId, request: { url, method, headers } }]]);
+  if (hold) held.push(last);
+  else sendEvents(last);
 }
 
 if (process.argv.includes("--launch-request")) {
@@ -104,10 +157,17 @@ function handle(socket, msg) {
     case "Echo":
       return reply({ result: { params, pid: process.pid, argv: process.argv.slice(2), deadline } });
     case "Net.request":
-      for (let i = 0; i < (params.count ?? 1); i++) sendRequest(params.url, params.method);
+      for (let i = 0; i < (params.count ?? 1); i++) {
+        sendRequest(params.url, params.method, params.headers, params.hold === true);
+      }
       // A CDP reply: its id must neither answer the call nor enter the log.
       socket.write(JSON.stringify({ type: "CDP", payload: { id, result: {} } }) + "\n");
       return reply({ result: { network } });
+    case "Net.finish":
+      // The held requests end, to whichever client is connected now, also
+      // after Network.disable: only a new request waits for capture to be on.
+      for (const events of held.splice(0)) sendEvents(events);
+      return reply({ result: {} });
     case "Net.drop":
       // The fake answers, then closes this client's connection.
       reply({ result: {} });
