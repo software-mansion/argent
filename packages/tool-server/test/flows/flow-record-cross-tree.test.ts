@@ -2166,6 +2166,43 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 });
 
+// `await-network-request` reads the capture layers, not a UI tree, and has no
+// `await:` form to convert to, so an unmet one is never re-probed.
+describe("a recorded network wait", () => {
+  it("keeps an unmet await-network-request as a wait step, with the wait warning and no re-probe", async () => {
+    const args = { bundleId: "com.acme.app", method: "POST", url: "/v1/auth/login" };
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "await-network-request") {
+          return { success: false, elapsed: 10_000, cause: "unmet", note: "No request matched." };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    await startRecording("netunmet");
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "netunmet",
+        project_root: tmpDir,
+        command: "await-network-request",
+        args: JSON.stringify({ udid: IOS, ...args }),
+      }
+    );
+
+    const warning = warningOf(result, "netunmet");
+    expect(warning).toContain("the wait never held");
+    expect(warning).toContain("at replay an unmet wait FAILS the step");
+    expect(warning).not.toMatch(/re-probe|UI tree/);
+    expect(fetchCount).toBe(0);
+    expect(await recordedSteps("netunmet")).toEqual([
+      { kind: "tool", name: "await-network-request", args, delayMs: undefined },
+    ]);
+  });
+});
+
 describe("a flow-directive name points at the tool that records it", () => {
   beforeEach(async () => {
     await flowStartRecordingTool.execute(

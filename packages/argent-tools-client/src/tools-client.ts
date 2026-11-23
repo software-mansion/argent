@@ -69,7 +69,7 @@ export interface ToolInvocationResult {
   /**
    * Why the call did not do what it was asked, when it returned anyway: the
    * result reports a failure (an e2e test that did not pass, an unmet
-   * `await-ui-element`), or a baseline it returned was not written on this
+   * `await-ui-element` or `await-network-request`), or a baseline it returned was not written on this
    * client.
    */
   failure?: string;

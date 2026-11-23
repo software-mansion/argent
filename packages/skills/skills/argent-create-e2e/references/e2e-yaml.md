@@ -275,6 +275,17 @@ A screenshot is human evidence. A `snapshot:` is executable visual verification.
 
 Do not use a snapshot as the only proof of navigation, persistence, data, accessibility state, logs, or network behavior. Avoid unstable timestamps, live data, ads, animation, and device drift. First establish deterministic state, identity, and readiness.
 
+Prove that the app sends a request with a network check: start the capture after the launch, do the action, then wait for the request. The wait fails the step when no request matches by its timeout (10000 ms by default), and errors without a start step. It has no directive form and takes no `{{secret:...}}` in `url`. See [Network checks](live-authoring.md#network-checks).
+
+```yaml
+- launch: com.example.app
+- tool: network-capture-start
+  args: { bundleId: com.example.app }
+- tap: { id: login-button }
+- tool: await-network-request
+  args: { bundleId: com.example.app, method: POST, url: /v1/auth/login, status: 200 }
+```
+
 Baselines live beside the test, under `.argent/e2e/__baselines__/<name>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A test that a `tool: e2e-execute` step runs keeps its own baselines, and `--update-baselines` updates them too unless the step sets `updateBaselines` itself. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
 
 Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. For a Mac app, pass `--platform macos` and omit `--device`; the key holds the window size in points, so a new window size needs new baselines. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed snapshots' images and failed steps' screenshots under `<dir>/<name>/` for CI artifact upload.

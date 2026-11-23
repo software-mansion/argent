@@ -29,7 +29,7 @@ run_phase() {
   # Blanket-skipped with one reason whenever the tier is gated.
   local RN_TOOLS="debugger-connect debugger-status debugger-evaluate debugger-log-registry \
     debugger-component-tree debugger-inspect-element debugger-reload-metro \
-    network-capture-start network-capture-stop view-network-logs view-network-request-details \
+    network-capture-start network-capture-stop await-network-request view-network-logs view-network-request-details \
     react-profiler-start react-profiler-stop react-profiler-status react-profiler-analyze \
     react-profiler-renders react-profiler-fiber-tree react-profiler-cpu-summary react-profiler-component-source \
     profiler-load profiler-cpu-query profiler-commit-query profiler-stack-query profiler-combined-report \
@@ -117,6 +117,9 @@ run_phase() {
   local CAP="\"udid\":\"$DEV\",\"bundleId\":\"$PKG\",\"port\":$MPORT"
   assert_true "$P" network-capture-start capture-start "{$CAP}" 'any(.layers[]; .layer == "js" and .armed == true)'
   run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
+  # A miss is success:false with rc=0, so check the verdict, not only the reply.
+  assert_true "$P" await-network-request await-net \
+    "{\"udid\":\"$DEV\",\"bundleId\":\"$PKG\",\"url\":\"example.com\",\"outcome\":\"any\",\"timeoutMs\":15000}" '.success == true'
   sleep 2
   assert_ok "$P" view-network-logs netlogs "{$D,\"pageIndex\":\"latest\"}"
   local RID; RID="$(printf '%s' "$RT_JSON" | jq -r '(.requests // .entries // [])[0].requestId // empty' 2>/dev/null)"

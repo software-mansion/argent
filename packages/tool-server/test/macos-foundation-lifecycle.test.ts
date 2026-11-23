@@ -121,7 +121,10 @@ import { resolveDevice } from "../src/utils/device-info";
 import { createHttpApp } from "../src/http";
 import { pollPidsUntilGone } from "../src/utils/process-kill";
 import { PROCESS_ENDED } from "../src/utils/native-network-record";
-import { MACOS_CONNECTION_DROPPED } from "../src/blueprints/ios-network-records";
+import {
+  MACOS_CONNECTION_DROPPED,
+  lastIosRecordNumber,
+} from "../src/blueprints/ios-network-records";
 import { forgetNativeUnavailableOf } from "../src/tools/network/network-capture";
 import { forgetJsCapturesOf, jsCapturesOn } from "../src/blueprints/network-inspector";
 import {
@@ -2342,6 +2345,30 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       // The bundle id is checked before any layer runs, so no layer stored or armed a capture.
       expect(jsCapturesOn(DEVICE_ID)).toEqual([]);
       expect((await macosApp()).isNetworkCaptureStarted()).toBe(false);
+    });
+
+    it("marks where a native start begins, with the call's Metro port; a stop keeps the mark and the next start moves it", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      const app = await macosApp();
+      expect(app.networkCaptureMark()).toBeUndefined();
+
+      const before = lastIosRecordNumber();
+      await run("network-capture-start", {
+        udid: DEVICE_ID,
+        bundleId: BUNDLE_ID,
+        layer: "native",
+        port: 8095,
+      });
+      expect(app.networkCaptureMark()).toEqual({ lastRecord: before, metroPort: 8095 });
+      await request("https://example.com/a");
+      await stop();
+      expect(app.networkCaptureMark()).toEqual({ lastRecord: before, metroPort: 8095 });
+
+      // The next start marks again, after the requests recorded so far.
+      const next = lastIosRecordNumber();
+      expect(next).toBeGreaterThan(before);
+      await start();
+      expect(app.networkCaptureMark()).toEqual({ lastRecord: next, metroPort: 8081 });
     });
   });
 

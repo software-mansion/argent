@@ -1294,7 +1294,7 @@ describe("network-capture-start", () => {
       );
     });
 
-    it("stores a started capture with an empty mark when Metro has no app connected yet", async () => {
+    it("stores a started capture with no mark when Metro has no app connected yet", async () => {
       serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
       ios.connected.add(APP);
 
@@ -1308,7 +1308,6 @@ describe("network-capture-start", () => {
       expect(findJsCapture(IOS_UDID, APP)).toEqual({
         bundleId: APP,
         intent: "started",
-        mark: { install: null },
         installed: false,
         physicalDeviceId: IOS_UDID,
         port: PORT,
@@ -1376,7 +1375,8 @@ describe("network-capture-start", () => {
         const result = await start(IOS_UDID, APP);
 
         expect(layer(result, "js")).toEqual({ layer: "js", armed: false, reason: kept });
-        expect(findJsCapture(IOS_UDID, APP)).toEqual(capture);
+        // The mark was the earlier start's: this start did not move it, so it drops it.
+        expect(findJsCapture(IOS_UDID, APP)).toEqual({ ...capture, mark: undefined });
 
         // The app's interceptor still records, so a stop that does not reach it is not confirmed.
         const stopped = await stop(IOS_UDID, APP);
@@ -3788,6 +3788,7 @@ describe("a Chromium app", () => {
       status: "ok",
       layers: [{ layer: "chromium", armed: true }],
     });
+    expect(tab!.network.captureMark()).toEqual({ lastSeq: 0 });
     for (const requestId of ["a", "b"]) {
       tab!.events.emit("event", "Network.requestWillBeSent", {
         requestId,
@@ -3804,10 +3805,11 @@ describe("a Chromium app", () => {
           armed: false,
           total: 2,
           reason:
-            "view-network-logs keeps listing the tab's requests while argent is attached; the stop marks where the capture window ends",
+            "view-network-logs keeps listing the tab's requests while argent is attached; await-network-request reads only the requests up to this stop",
         },
       ],
     });
+    expect(tab!.network.captureMark()).toEqual({ lastSeq: 0, stoppedSeq: 2 });
     // No Metro and no JS interceptor: the tab's CDP log is the layer.
     expect(rt.evaluated).toEqual([]);
     expect(jsCapturesOn(CHROMIUM)).toEqual([]);
@@ -3831,6 +3833,7 @@ describe("a Mac app", () => {
     | "isNetworkCaptureStarted"
     | "isNetworkCaptureStopped"
     | "isNetworkCaptureStopUnconfirmed"
+    | "networkCaptureMark"
     | "networkRecords"
     | "takeCaptureGap"
   > {
@@ -3838,6 +3841,7 @@ describe("a Mac app", () => {
     readonly calls: string[] = [];
     private started = false;
     private stopped = false;
+    private mark: CaptureMark | undefined;
     private held = 0;
 
     constructor(readonly bundleId: string) {}
@@ -3852,10 +3856,11 @@ describe("a Mac app", () => {
     isConnected(): boolean {
       return true;
     }
-    async startNetworkCapture(): Promise<{ armed: boolean; reason?: string }> {
-      this.calls.push("start");
+    async startNetworkCapture(metroPort: number): Promise<{ armed: boolean; reason?: string }> {
+      this.calls.push(`start ${metroPort}`);
       this.stopped = false;
       this.started = true;
+      this.mark = { lastRecord, metroPort };
       return { armed: true };
     }
     async stopNetworkCapture(): Promise<{ confirmed: boolean; reason?: string }> {
@@ -3872,6 +3877,9 @@ describe("a Mac app", () => {
     }
     isNetworkCaptureStopUnconfirmed(): boolean {
       return false;
+    }
+    networkCaptureMark(): CaptureMark | undefined {
+      return this.mark;
     }
     takeCaptureGap(): boolean {
       return false;
@@ -3932,7 +3940,7 @@ describe("a Mac app", () => {
       ],
     });
     expect(rt.paused).toBe(true);
-    expect(mac.calls).toEqual(["start", "stop"]);
+    expect(mac.calls).toEqual([`start ${PORT}`, "stop"]);
     expect(jsCapture(MAC_PAYLOAD)).toMatchObject({ intent: "stopped", paused: true });
   });
 

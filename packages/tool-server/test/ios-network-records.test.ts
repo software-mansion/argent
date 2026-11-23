@@ -747,6 +747,41 @@ describe("iOS native network records: clear", () => {
     ]);
     expect(store.records(8081).some((r) => r.layerId === "done")).toBe(false);
   });
+
+  it("lists the records a clear hid, an open one included, with includeHidden, still without Metro's traffic", () => {
+    const store = newStore();
+    const agent = agentOn(store);
+
+    agent.complete("done", "https://api.example.com/done");
+    agent.requestWillBeSent("open", "https://api.example.com/open");
+    agent.complete("metro", "http://localhost:8081/index.bundle?platform=ios");
+
+    store.clear();
+
+    expect(store.records(8081)).toEqual([]);
+    expect(
+      store.records(8081, { includeHidden: true }).map((r) => [r.request.url, r.state])
+    ).toEqual([
+      ["https://api.example.com/done", "complete"],
+      ["https://api.example.com/open", "pending"],
+    ]);
+    // The Metro request is held and hidden too; only the port filter leaves it out.
+    expect(store.records(9000, { includeHidden: true }).map((r) => r.layerId)).toEqual([
+      "done",
+      "open",
+      "metro",
+    ]);
+
+    agent.complete("after", "https://api.example.com/after");
+    expect(store.records(8081).map((r) => r.request.url)).toEqual([
+      "https://api.example.com/after",
+    ]);
+    expect(store.records(8081, { includeHidden: true }).map((r) => r.request.url)).toEqual([
+      "https://api.example.com/done",
+      "https://api.example.com/open",
+      "https://api.example.com/after",
+    ]);
+  });
 });
 
 describe("iOS native network records: Metro filter", () => {

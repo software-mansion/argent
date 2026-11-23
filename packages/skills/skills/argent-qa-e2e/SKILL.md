@@ -19,7 +19,7 @@ A QA e2e test is complete only when:
 
 1. The first step that is not `echo:` or `script:` is `launch:`. In-test setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
 2. The first walkthrough recorded every action and live structural check. Only the three documented polish insertions are unrecorded.
-3. Every requirement maps to a hard `await:`, `assert:`, or reviewed `snapshot:`. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
+3. Every requirement maps to a hard `await:`, `assert:`, reviewed `snapshot:`, or a `tool: await-network-request` network check. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
 4. Every screen change has destination identity followed by `idle` readiness.
 5. Targets satisfy the stable-selector and coordinate-fallback rules. QA keeps coordinates only for genuinely unlabeled targets. Vacuous on Vega, which has no coordinate targets.
 6. The unchanged YAML passes twice with the same runner. Pass 1 starts with fresh mobile Argent services, and pass 2 follows immediately.
@@ -34,7 +34,7 @@ Before touching the app, write a compact table. Restate it in the final report. 
 - Stable executable evidence for each row.
 - Required data and side effects.
 
-Use structural checks for semantic state, snapshots for pixels, and both for mixed requirements. One behavioral scenario becomes one `qa-<area>-<behavior>` e2e test. Do not make it depend on the state that another test leaves. A suite does not change this rule.
+Use structural checks for semantic state, snapshots for pixels, and both for mixed requirements. For a request the app must send, a network check is executable evidence: `network-capture-start`, the action, then `await-network-request` with the method, URL, and status (see [Network checks](../argent-create-e2e/references/live-authoring.md#network-checks)). One behavioral scenario becomes one `qa-<area>-<behavior>` e2e test. Do not make it depend on the state that another test leaves. A suite does not change this rule.
 
 Do not invent a material value or weaken ambiguity. Choose the strongest UI-verifiable reading and report it. Ask when the choice changes test meaning.
 
@@ -83,6 +83,7 @@ A snapshot has no recorder form. Inspect its stable state during the walkthrough
 - **Repeated controls:** prefer an id. Otherwise use YAML-only `within` with a stable container. Use `text.in` to prove rendered membership inside that container.
 - **Dynamic content:** assert controlled state or stable app chrome. Use anchored structure for unavoidable dynamic values and disclose the dependency.
 - **Visual state:** snapshot only a correct, settled, deterministic screen. Use full screen for global changes and `cropOn` for one component.
+- **Network requests:** put the `network-capture-start` step inside the test, after `launch:`. The teardown before pass 1 ends every capture and its marks, so a start made outside the test leaves the wait with nothing to read, and the step errors. A wait cannot prove that a request was not sent: an unmet wait fails the step, so never map an absence claim to it.
 
 Never put acceptance evidence inside `when:`. Use `when:` only for optional setup that reconverges to the required path.
 

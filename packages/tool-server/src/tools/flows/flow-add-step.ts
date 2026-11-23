@@ -35,11 +35,12 @@ import {
   type RecordingSession,
 } from "./flow-utils";
 import {
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
   AWAIT_UI_ELEMENT_TOOL_ID,
-  isUnmetUiWaitResult,
-  unmetUiWaitCause,
-  type UnmetUiWaitCause,
-} from "../await-ui-element";
+  isUnmetWaitResult,
+  type UnmetWaitCause,
+} from "../../utils/wait-result";
+import { unmetWaitCause } from "../../utils/tool-result-verdict";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import {
   UPLOAD_STAGE_BY_KIND,
@@ -442,7 +443,7 @@ const UNMET_WAIT_WARNING =
 
 /**
  * The same `success: false`, reached without a trustworthy read of the tree —
- * see {@link unmetUiWaitCause}. It must not reuse the unmet text, which asserts
+ * see `unmetUiWaitCause` in await-ui-element. It must not reuse the unmet text, which asserts
  * that the wait never held: nothing judged the condition here, so the step may
  * be perfectly good.
  */
@@ -463,10 +464,36 @@ const CANCELLED_WAIT_WARNING =
   "the e2e test anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
   "The cross-tree re-probe was skipped for the same reason";
 
-function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
+function unmetWaitWarningFor(cause: UnmetWaitCause): string {
   if (cause === "unreadable") return UNREADABLE_WAIT_WARNING;
   if (cause === "cancelled") return CANCELLED_WAIT_WARNING;
   return UNMET_WAIT_WARNING;
+}
+
+/**
+ * The same three warnings for `await-network-request`, which reads the capture
+ * layers rather than the UI tree, and has no `await:` form to re-probe.
+ */
+const UNMET_NETWORK_WAIT_WARNING =
+  "recorded, but the wait never held: `await-network-request` returned success:false, and at " +
+  "replay an unmet wait FAILS the step. `toolResult.note` counts the requests since the start " +
+  "per layer: fix the matcher, or record the action that sends the request, then " +
+  "record the wait again. Delete the failed step after `e2e-finish-recording`, not mid-recording";
+
+const UNREADABLE_NETWORK_WAIT_WARNING =
+  "recorded, but no armed capture layer was read near the deadline, so the request was never " +
+  "judged and whether it is sent is UNKNOWN: `toolResult.layers` says why. Get the layer back (for " +
+  "example call network-capture-start again once the app's JavaScript has loaded) and record the " +
+  "wait again. Do not delete the step on this warning alone";
+
+const CANCELLED_NETWORK_WAIT_WARNING =
+  "recorded, but this wait was cancelled before its deadline, so whether the request is sent is " +
+  "UNKNOWN: record the step again to find out";
+
+function unmetNetworkWaitWarningFor(cause: UnmetWaitCause): string {
+  if (cause === "unreadable") return UNREADABLE_NETWORK_WAIT_WARNING;
+  if (cause === "cancelled") return CANCELLED_NETWORK_WAIT_WARNING;
+  return UNMET_NETWORK_WAIT_WARNING;
 }
 
 // The indeterminate reason is quoted verbatim, and it carries whatever recovery
@@ -1730,16 +1757,18 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // The two are filed under different kinds because only the probe's answer
       // is about converting the step, and the finish counts them separately.
       let waitWarning: { warning: string; kind: "conversion" | "wait" } | undefined;
-      if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
-        if (isUnmetUiWaitResult(params.command, toolResult)) {
-          waitWarning = {
-            warning: unmetWaitWarningFor(unmetUiWaitCause(toolResult)),
-            kind: "wait",
-          };
-        } else {
-          const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
-          if (probed) waitWarning = { warning: probed, kind: "conversion" };
-        }
+      if (isUnmetWaitResult(command, toolResult)) {
+        const cause = unmetWaitCause(command, toolResult);
+        waitWarning = {
+          warning:
+            command === AWAIT_NETWORK_REQUEST_TOOL_ID
+              ? unmetNetworkWaitWarningFor(cause)
+              : unmetWaitWarningFor(cause),
+          kind: "wait",
+        };
+      } else if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
+        const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
+        if (probed) waitWarning = { warning: probed, kind: "conversion" };
       }
 
       // Running a fragment via flow-execute mid-recording is recorded as a
