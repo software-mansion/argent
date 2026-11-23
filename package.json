@@ -18,7 +18,7 @@
     "build:android-binaries": "bash packages/native-devtools-android/scripts/build.sh",
     "pack": "node scripts/pack-mcp.cjs",
     "pack:mcp": "node scripts/pack-mcp.cjs",
-    "pack:mcp:local": "bun run download:simulator-server && bun run build:ios-binaries && bun run build:ios-binaries:tcp && bun run build:android-binaries && bun run download:trace-processor && bun run build && bun run --filter @swmansion/argent build && bun pm pack --cwd packages/argent --destination .",
+    "pack:mcp:local": "bun run download:simulator-server && bun run build:ios-binaries && bun run build:ios-binaries:tcp && bun run build:android-binaries && bun run download:trace-processor && bun run build && bun run --filter @swmansion/argent build && bun pm pack --cwd packages/argent --destination \"$PWD\"",
     "dev": "node scripts/dev.cjs",
     "format": "prettier --write .",
     "lint": "eslint . --max-warnings 0",
