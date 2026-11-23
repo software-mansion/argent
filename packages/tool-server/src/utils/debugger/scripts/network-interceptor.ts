@@ -12,9 +12,19 @@
  *   development build: requests an XHR does not send there are recorded.
  * - Records stay in `__argent_network_log` / `__argent_network_by_id`, which the read scripts
  *   below serve.
+ * - While `__argent_network_paused` is set, a new request gets no record; one sent before keeps
+ *   its record and completes it. The patches stay in place, since nothing can take them out.
+ * - `__argent_network_mark()` says where the log stands: the install's token, which a new JS
+ *   context changes, and the last id it gave.
+ * - `__argent_network_clear()` empties the log. The ids go on, so an id from before it names no
+ *   later request.
  *
  * The script never modifies a request. Idempotent per JS context.
  */
+
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
+import { isProcessAlive } from "@argent/device-providers";
 
 /** A body of one of these MIME types is not text. The iOS native layer reads the same list. */
 export const BINARY_BODY_TYPES =
@@ -22,11 +32,16 @@ export const BINARY_BODY_TYPES =
 
 export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   var g = globalThis;
-  if (g.__argent_network_v2) return JSON.stringify({ installed: false, reason: 'already installed' });
+  if (g.__argent_network_v3) return JSON.stringify({ installed: false, reason: 'already installed' });
+  // A runtime can be reached before its bundle runs, and the bundle sets up XMLHttpRequest. An
+  // install then would patch nothing yet keep its guard, so this context would never record.
+  if (typeof g.XMLHttpRequest !== 'function') return JSON.stringify({ installed: false, reason: 'no XMLHttpRequest yet' });
+  g.__argent_network_v3 = true;
+  // An older tool-server installs only where this flag is unset, so it never replaces this script.
   g.__argent_network_v2 = true;
-  // The previous fetch-only script, injected by an older tool-server before an upgrade, stays
-  // installed until the app reloads. Its fetch wrapper keeps the buffers below in a closure, so
-  // empty them and stop them from growing: it then still reads each response, but keeps nothing.
+  // An older script, injected by an older tool-server before an upgrade, stays installed until
+  // the app reloads. Its wrappers keep the buffers below in a closure, so empty them and stop
+  // them from growing: they then still read each response, but keep nothing.
   if (g.__argent_network_installed && Array.isArray(g.__argent_network_log)) {
     var oldLog = g.__argent_network_log;
     oldLog.length = 0;
@@ -51,6 +66,15 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   g.__argent_network_log = log;
   g.__argent_network_by_id = byId;
   var nextId = 1;
+  // Only an identity: a new JS context gets another one, and its ids start at 1 again.
+  var installToken = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  g.__argent_network_install = installToken;
+  g.__argent_network_mark = function() {
+    return JSON.stringify({ install: installToken, lastId: nextId - 1 });
+  };
+  function paused() {
+    return g.__argent_network_paused === true;
+  }
   var bufferedChars = 0;
   // Above zero while an XHR is sent: the request React Native's network module gets then is the
   // XHR's, which has its record.
@@ -70,6 +94,13 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       delete byId[removed.requestId];
     }
   }
+
+  // A request in flight keeps its record object, but adds to the buffer only while byId has it.
+  g.__argent_network_clear = function() {
+    log.length = 0;
+    for (var key in byId) delete byId[key];
+    bufferedChars = 0;
+  };
 
   // Runs on the app's JS thread for every text response. The loop costs about 200 ms per MiB in
   // Hermes with a debugger attached, so the native checks go first.
@@ -564,6 +595,10 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         xhrSending--;
       }
       if (!slot || !slot.headers) return result;
+      if (paused()) {
+        slot.headers = null;
+        return result;
+      }
       var rec = createRecord(isFetchXhr(this, slot) ? 'Fetch' : 'XHR', slot.method, slot.url, slot.headers, body, startedAt);
       slot.headers = null;
       listen(this, rec);
@@ -788,7 +823,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         var startedAt = Date.now();
         var promise = origStart.apply(this, arguments);
         var response = responses.get(this);
-        if (!response || !promise || typeof promise.then !== 'function') return promise;
+        if (!response || !promise || typeof promise.then !== 'function' || paused()) return promise;
         try {
           var rec = createRecord('Fetch', String((init && init.method) || 'GET').toUpperCase(), String(url),
             lowerCaseHeaders(init && init.headers), body, startedAt);
@@ -1029,7 +1064,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     var origSendRequest = networking.sendRequest;
     var origAbortRequest = networking.abortRequest;
     networking.sendRequest = function(method, trackingName, url, headers, data, responseType, incrementalUpdates, timeout, callback) {
-      if (xhrSending || typeof callback !== 'function') return origSendRequest.apply(this, arguments);
+      if (xhrSending || typeof callback !== 'function' || paused()) return origSendRequest.apply(this, arguments);
       var watcher = null;
       try { watcher = watchRequest(networking, method, url, headers, data, responseType); } catch (e) {}
       if (!watcher) return origSendRequest.apply(this, arguments);
@@ -1057,7 +1092,109 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   return JSON.stringify({ installed: true });
 })()`;
 
-/** Reads a page of captured network logs, minus Metro's own traffic on `metroPort`. */
+/**
+ * The mark of the interceptor installed in the app's JS context: `{ install, lastId }`, or
+ * `{ install: null }` where this script has not installed.
+ */
+export const NETWORK_CAPTURE_MARK_SCRIPT = `(function() {
+  var g = globalThis;
+  return typeof g.__argent_network_mark === 'function' ? g.__argent_network_mark() : JSON.stringify({ install: null });
+})()`;
+
+/**
+ * This tool-server's key in `__argent_network_holders` of an app's JS context. Every tool-server
+ * attached to the app shares that context, so a start sets the key's `capturing` to `true`, and a
+ * stop sets it to `false`: that tool-server still reads the log, but no longer captures. The
+ * tool-server's exit ends the capture there only when no other tool-server captures, and empties
+ * the log only when no other tool-server's key is left. The key's `pid` and `host` let the exit of
+ * another tool-server on this host remove the key of a tool-server that exited without its own.
+ */
+const HOLDER = JSON.stringify(randomUUID());
+
+function holderRecord(capturing: boolean): string {
+  return JSON.stringify({ capturing, pid: process.pid, host: hostname() });
+}
+
+/**
+ * Pauses or resumes recording in the app's JS context. Says whether this script is installed
+ * there: the flag stays in the context either way, and a later install reads it. A resume adds
+ * this tool-server to the context's holders, and a pause keeps it there as a reader only.
+ */
+export function makeNetworkCaptureControlScript(paused: boolean): string {
+  return `(function() {
+  var g = globalThis;
+  g.__argent_network_paused = ${paused ? "true" : "false"};${
+    paused
+      ? `
+  var holders = g.__argent_network_holders;
+  if (holders && Object.prototype.hasOwnProperty.call(holders, ${HOLDER})) holders[${HOLDER}] = ${holderRecord(false)};`
+      : `
+  (g.__argent_network_holders = g.__argent_network_holders || {})[${HOLDER}] = ${holderRecord(true)};`
+  }
+  return JSON.stringify({ installed: typeof g.__argent_network_mark === 'function' });
+})()`;
+}
+
+/**
+ * Pauses recording in the app's JS context and empties its log: stop-all-simulator-servers ends
+ * the capture and its requests, as it does on the native layers. A stop keeps the log. This
+ * tool-server no longer holds the context's capture.
+ */
+export const NETWORK_CAPTURE_END_SCRIPT = `(function() {
+  var g = globalThis;
+  g.__argent_network_paused = true;
+  if (g.__argent_network_holders) delete g.__argent_network_holders[${HOLDER}];
+  if (typeof g.__argent_network_clear === 'function') g.__argent_network_clear();
+})()`;
+
+/**
+ * The tool-server's exit: as {@link NETWORK_CAPTURE_END_SCRIPT}, but a capture that another
+ * tool-server still captures stays as it is, with its log, and the log of a capture that another
+ * tool-server only stopped stays for it to read. It first removes the holders keyed `exited`.
+ * Returns the holders left, for {@link exitedHolders}.
+ */
+export function makeNetworkCaptureReleaseScript(exited: readonly string[]): string {
+  return `(function() {
+  var g = globalThis;
+  var holders = g.__argent_network_holders;
+  var readers = false;
+  if (holders) {
+    delete holders[${HOLDER}];
+    var exited = ${JSON.stringify(exited)};
+    for (var i = 0; i < exited.length; i++) delete holders[exited[i]];
+    for (var key in holders) {
+      if (!Object.prototype.hasOwnProperty.call(holders, key)) continue;
+      if (holders[key].capturing) return JSON.stringify({ holders: holders });
+      readers = true;
+    }
+  }
+  g.__argent_network_paused = true;
+  if (!readers && typeof g.__argent_network_clear === 'function') g.__argent_network_clear();
+  return JSON.stringify({ holders: holders || {} });
+})()`;
+}
+
+/**
+ * The keys of the holders in an answer of {@link makeNetworkCaptureReleaseScript} whose
+ * tool-server ran on this host in a process that has exited, so no exit of its own released them.
+ */
+export function exitedHolders(answer: unknown): string[] {
+  let holders: Record<string, { pid?: unknown; host?: unknown }>;
+  try {
+    holders = (JSON.parse(String(answer)) as { holders: typeof holders }).holders;
+  } catch {
+    return [];
+  }
+  return Object.keys(holders).filter((key) => {
+    const { pid, host } = holders[key]!;
+    return host === hostname() && typeof pid === "number" && !isProcessAlive(pid);
+  });
+}
+
+/**
+ * Reads a page of captured network logs, minus Metro's own traffic on `metroPort`, and whether a
+ * stop paused recording in the app's JS context.
+ */
 export function makeNetworkLogReadScript(start: number, limit: number, metroPort: number): string {
   return `(function() {
   var log = globalThis.__argent_network_log;
@@ -1100,7 +1237,12 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
     });
   }
 
-  return JSON.stringify({ entries: entries, total: total, interceptorInstalled: true });
+  return JSON.stringify({
+    entries: entries,
+    total: total,
+    interceptorInstalled: true,
+    paused: globalThis.__argent_network_paused === true
+  });
 })()`;
 }
 
@@ -1108,7 +1250,7 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
 export function makeNetworkDetailReadScript(requestId: string): string {
   return `(function() {
   var byId = globalThis.__argent_network_by_id;
-  if (!byId) return JSON.stringify({ error: 'Network interceptor not installed' });
+  if (!byId) return JSON.stringify({ error: 'Network interceptor not installed', installed: false });
   var entry = byId[${JSON.stringify(requestId)}];
   if (!entry) return JSON.stringify({ error: 'Request not found' });
   if (typeof globalThis.__argent_network_decode === 'function') globalThis.__argent_network_decode(entry);

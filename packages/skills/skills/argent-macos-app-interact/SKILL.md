@@ -55,4 +55,4 @@ Read `references/e2e.md` before recording or writing a test for a Mac app.
 
 ## React Native
 
-For React Native Debug builds on macOS, including Mac Catalyst, start Metro before `boot-device` (see `argent-react-native-app-workflow`). Inspect the UI with `describe`. The JavaScript debugger tools are unavailable for Mac apps.
+For React Native Debug builds on macOS, including Mac Catalyst, start Metro before `boot-device` (see `argent-react-native-app-workflow`). Use `describe` for UI targets. For JavaScript debugging and network capture, follow the Mac app workflow in `argent-metro-debugger`.

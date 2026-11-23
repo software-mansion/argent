@@ -12,6 +12,9 @@ vi.mock("../../src/utils/status-bar", () => ({
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { createNetworkCaptureStartTool } from "../../src/tools/network/network-capture-start";
+import { createNetworkCaptureStopTool } from "../../src/tools/network/network-capture-stop";
+import { advertisedSchema } from "../helpers/catalog";
 
 // Each launch waits out the runner's real post-launch settle (1.5 s).
 vi.setConfig({ testTimeout: 30_000 });
@@ -110,9 +113,9 @@ describe("flow-execute reports native network capture on Android launches", () =
 
   it("warns again when a later launch's note differs, and not when only the pid changes", async () => {
     const notes = [
-      `native network capture is on for ${APP}, but no process of it appeared within 3 s; the next native-network-logs call attaches the agent`,
-      `native network capture is attached to ${APP} (pid 4101); native-network-logs with stop: true ends it`,
-      `native network capture is attached to ${APP} (pid 4188); native-network-logs with stop: true ends it`,
+      `native network capture is on for ${APP}, but no process of it appeared within 3 s; restart-app attaches the agent to its next process, or call network-capture-start once it runs`,
+      `native network capture is attached to ${APP} (pid 4101); network-capture-stop ends it`,
+      `native network capture is attached to ${APP} (pid 4188); network-capture-stop ends it`,
       `native network capture could not follow this launch: the attach failed`,
     ];
     let launches = 0;
@@ -153,7 +156,7 @@ describe("flow-execute reports native network capture on Android launches", () =
           return {
             restarted: true,
             bundleId: args.bundleId,
-            networkCapture: `native network capture could not follow this launch: attach-agent failed for pid ${pid} (Unknown process: ${pid}); the next native-network-logs call or launch tries again`,
+            networkCapture: `native network capture could not follow this launch: attach-agent failed for pid ${pid} (Unknown process: ${pid}); the next launch or network-capture-start tries again`,
           };
         }
         return { ok: true };
@@ -187,7 +190,7 @@ describe("flow-execute reports native network capture on Android launches", () =
           return {
             restarted: true,
             bundleId: args.bundleId,
-            networkCapture: `native network capture is attached to ${APP} (pid ${4100 + launches}); native-network-logs with stop: true ends it`,
+            networkCapture: `native network capture is attached to ${APP} (pid ${4100 + launches}); network-capture-stop ends it`,
           };
         }
         return { ok: true };
@@ -239,7 +242,7 @@ function iosRegistry(notes?: string[]): { registry: Registry; launches: () => nu
     const n = launches++;
     return (
       notes?.[n] ??
-      `native network capture is armed for ${APP} (pid ${4101 + 87 * n}); stop-all-simulator-servers for this device, then restart-app, ends it`
+      `native network capture is armed for ${APP} (pid ${4101 + 87 * n}); network-capture-stop ends it`
     );
   };
   const registry = {
@@ -279,7 +282,7 @@ describe("flow-execute reports native network capture on iOS simulator launches"
     expect(launches()).toBe(3);
     expect(outline(result)).toEqual(["launch:pass!", "launch:pass", "tool:pass"]);
     expect(result.steps[0]!.warning).toBe(
-      `native network capture is armed for ${APP} (pid 4101); stop-all-simulator-servers for this device, then restart-app, ends it`
+      `native network capture is armed for ${APP} (pid 4101); network-capture-stop ends it`
     );
     expect(result.ok).toBe(true);
   });
@@ -307,7 +310,7 @@ describe("flow-execute reports native network capture on iOS simulator launches"
     const pending = (pid: number) =>
       `native network capture is on for ${APP}, and its new process (pid ${pid}) has not acknowledged Network.enable yet; native-network-logs shows when it is armed`;
     const armed = (pid: number) =>
-      `native network capture is armed for ${APP} (pid ${pid}); stop-all-simulator-servers for this device, then restart-app, ends it`;
+      `native network capture is armed for ${APP} (pid ${pid}); network-capture-stop ends it`;
     const notes = [pending(4101), armed(4188), armed(4275), pending(4362)];
     await writeFlow("ios-notes-change", {
       executionPrerequisite: "",
@@ -325,5 +328,124 @@ describe("flow-execute reports native network capture on iOS simulator launches"
       "launch:pass!",
     ]);
     expect(result.steps.map((s) => s.warning)).toEqual([notes[0], notes[1], undefined, notes[3]]);
+  });
+});
+
+const STOPPED_NOTE = `native network capture is stopped for ${APP} (network-capture-stop); this process runs without it until network-capture-start`;
+
+/** The schemas the two capture tools advertise, which a flow binds its device into. */
+const CAPTURE_SCHEMAS: Record<string, Record<string, unknown> | null> = {
+  "network-capture-start": advertisedSchema(createNetworkCaptureStartTool({} as Registry)),
+  "network-capture-stop": advertisedSchema(createNetworkCaptureStopTool({} as Registry)),
+};
+
+/**
+ * The capture tools and the launch tools of a device whose app has native
+ * network capture started: a launch is armed, with a new pid each time, until a
+ * network-capture-stop step, then stopped until a network-capture-start step.
+ * The device's tree source is ready on either platform.
+ */
+function captureRegistry(): Registry {
+  let stopped = false;
+  let launches = 0;
+  const note = () =>
+    stopped
+      ? STOPPED_NOTE
+      : `native network capture is attached to ${APP} (pid ${4101 + 87 * launches++}); network-capture-stop ends it`;
+  return {
+    invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
+      if (id === "list-devices") return { devices: [] };
+      if (id === "network-capture-stop") {
+        stopped = true;
+        return { status: "ok", layers: [] };
+      }
+      if (id === "network-capture-start") {
+        stopped = false;
+        return { status: "ok", layers: [] };
+      }
+      if (id === "restart-app") {
+        return { restarted: true, bundleId: args.bundleId, networkCapture: note() };
+      }
+      if (id === "launch-app") {
+        return { launched: true, bundleId: args.bundleId, networkCapture: note() };
+      }
+      return { ok: true };
+    }),
+    getTool: vi.fn((id: string) => ({
+      inputSchema: CAPTURE_SCHEMAS[id] ?? { properties: { udid: {} } },
+    })),
+    resolveService: vi.fn(async () => ({
+      isReady: () => true,
+      isConnected: () => true,
+      listConnectedBundleIds: () => [APP],
+    })),
+  } as unknown as Registry;
+}
+
+/** The args each call of `tool` got. */
+function argsOf(registry: Registry, tool: string): unknown[] {
+  return vi
+    .mocked(registry.invokeTool)
+    .mock.calls.filter(([id]) => id === tool)
+    .map(([, args]) => args);
+}
+
+describe.each([
+  { platform: "Android", device: SERIAL, recorded: "emulator-5556" },
+  {
+    platform: "an iOS simulator",
+    device: IOS_UDID,
+    recorded: "00000000-0000-0000-0000-0000000000ef",
+  },
+])("flow-execute with network-capture steps on $platform", ({ device, recorded }) => {
+  it("reports the stopped note once, on the first launch after a network-capture-stop step", async () => {
+    await writeFlow("capture-stop", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "tool", name: "network-capture-stop", args: { bundleId: APP } },
+        { kind: "launch", app: APP },
+        { kind: "launch", app: APP },
+        { kind: "tool", name: "network-capture-start", args: { bundleId: APP } },
+        { kind: "launch", app: APP },
+      ],
+    });
+
+    const result = await run("capture-stop", captureRegistry(), device);
+
+    expect(outline(result)).toEqual([
+      "launch:pass!",
+      "tool:pass",
+      "launch:pass!",
+      "launch:pass",
+      "tool:pass",
+      "launch:pass!",
+    ]);
+    expect(result.steps.map((s) => s.warning)).toEqual([
+      `native network capture is attached to ${APP} (pid 4101); network-capture-stop ends it`,
+      undefined,
+      STOPPED_NOTE,
+      undefined,
+      undefined,
+      `native network capture is attached to ${APP} (pid 4188); network-capture-stop ends it`,
+    ]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("replays a recorded network-capture-start step on the run's device", async () => {
+    await writeFlow("capture-start", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "network-capture-start", args: { udid: recorded, bundleId: APP } },
+        { kind: "tool", name: "network-capture-stop", args: { bundleId: APP } },
+      ],
+    });
+    const registry = captureRegistry();
+
+    const result = await run("capture-start", registry, device);
+
+    expect(outline(result)).toEqual(["tool:pass", "tool:pass"]);
+    expect(argsOf(registry, "network-capture-start")).toEqual([{ udid: device, bundleId: APP }]);
+    expect(argsOf(registry, "network-capture-stop")).toEqual([{ udid: device, bundleId: APP }]);
   });
 });
