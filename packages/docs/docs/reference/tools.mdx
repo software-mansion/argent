@@ -322,7 +322,7 @@ On iOS, Argent cannot tell an app that does not run from an app that is not inst
 When two or more devices use one Metro server, Argent cannot find the JS runtime of a device from its `udid`. Then the `js` layer is unavailable. Its `reason` lists each device on the Metro server, with its `logicalDeviceId` in parentheses. The native layer is not affected. To capture on the `js` layer:
 
 1. Call `network-capture-start` with `udid`, `bundleId` and the `logicalDeviceId` of the device.
-2. Call `view-network-logs` and `view-network-request-details` with this `logicalDeviceId` as `device_id`. Without `port`, the reads use the Metro port of the start. For a device of a device provider, this is the Metro port that the provider gives for the `udid`.
+2. Call `view-network-logs` and `view-network-request-details` with this `logicalDeviceId` as `device_id`. Without `port`, a read finds the capture of a device of a device provider on the Metro port that the provider gives for the `udid` of the start. Otherwise, a read without `port` uses the default port of the device. If the start used a different port, give that `port` to the reads.
 3. Call `network-capture-stop` with the same `udid`, `bundleId` and `logicalDeviceId`.
 
 The `js` layer uses `logicalDeviceId`. The native layer always uses `udid`. A stop without `logicalDeviceId` does not stop the `js` layer that a start with `logicalDeviceId` started. `stop-all-simulator-servers` with `udid` in `devices` does not stop it either: also put the `logicalDeviceId` in `devices`. Alternatively, give each device its own Metro port.
