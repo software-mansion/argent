@@ -257,6 +257,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
   it.each([
     'Error: emulator "emulator-5570" not found among running emulators\n',
+    'Error: emulator "emulator-5570" did not answer on gRPC port 8570 within 20s\n',
     "Error: Failed to find any running emulator\n",
     "Error: transport error\nCaused by:\n    0: tcp connect error: Connection refused (os error 61)\n",
     "Error: transport error\nCaused by:\n    0: tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)\n",

@@ -6,6 +6,7 @@ import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { makeComponentTreeScript } from "../../utils/debugger/scripts/component-tree";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 
 export interface RawEntry {
   id: number;
@@ -465,7 +466,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   onScreenOnly: z
     .boolean()
@@ -500,7 +501,7 @@ export function createDebuggerComponentTreeTool(): ToolDefinition<
     id: "debugger-component-tree",
     description: `Fetch the current screen of a running React Native app as a compact tree of React components.
 Each on-screen component is listed with its name, its text (or accessibilityLabel when it has no
-text), [testID=…] and normalized (tap: x,y) centre in [0,1] (fractions of the screen, not pixels).
+text), [testID=…] and its center as (tap: x,y) fractions of the screen<flag:macos-apps> or Mac app window, including the title bar</flag:macos-apps>.
 Full-screen transparent wrappers and implementation-detail components are pruned. Wrappers the size
 of their parent are pruned too, so a missing name proves nothing: check with debugger-inspect-element.
 
@@ -508,7 +509,7 @@ Use when you need what describe does not show: a testID for a selector (on Andro
 the testID of a view that has no label and is not tappable), or the component names and nesting
 behind the screen before editing code. To find what to tap, use describe.
 
-Returns a compact text tree; call again after navigation. Fails if the Metro debugger is not connected.`,
+Returns a compact text tree; call again after navigation. Fails if the Metro debugger is disconnected.<flag:macos-apps> On Mac apps with several React Native windows, the tool uses the root with the most components. With the old architecture (Paper), native views around the React root can shift tap points. Use describe for tap targets.</flag:macos-apps>`,
     zodSchema,
     searchHint: "react native component tree testID testIDs selector component names hierarchy",
     readOnly: true,
@@ -530,6 +531,7 @@ Returns a compact text tree; call again after navigation. Fails if the Metro deb
       const script = makeComponentTreeScript({
         includeSkipped: params.includeSkipped,
         requestId,
+        addRootOffset: !!canonicalDeviceId(params.device_id)?.startsWith(MACOS_APP_ID_PREFIX),
       });
       const response = await api.cdp.evaluateWithBinding(script, requestId, {
         timeout: 15_000,

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { promises as fsPromises } from "fs";
 import { relative, isAbsolute } from "path";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { MACOS_APPS_FLAG } from "../../../utils/capability";
 import { FLAG_ENUM_META_KEY } from "../../../utils/flag-gated-text";
 import {
@@ -130,7 +130,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
   },
   // RN-only: reads commit data captured via the React DevTools backend, which
   // Chromium does not have.
-  capability: REACT_PROFILER_TOOL_CAPABILITY,
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params, ctx) {
     const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(

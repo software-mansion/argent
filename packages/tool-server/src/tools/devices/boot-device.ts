@@ -2231,7 +2231,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`)."
+      "Android: AVD to start, the `avdName` of a `list-devices` entry with kind 'avd'. An emulator already running from it is reused."
     ),
   vvdImage: z
     .string()

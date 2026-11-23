@@ -544,6 +544,58 @@ describe("createToolsClient options", () => {
     expect(buffered.outputHint).toBe("image");
     expect(streamed).toEqual({ data: { ok: true }, outputHint: "image" });
   });
+
+  // JSON.stringify would send each of these as null, which a coerced number reads as 0 (#2074).
+  it("refuses a number that JSON cannot write, before anything is sent", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+
+    // What JSON.parse makes of `{"x":1e999,"points":[1,-1e999],"opts":{"scale":1e999}}`.
+    const call = callTool("slow", { x: Infinity, points: [1, -Infinity], opts: { scale: NaN } });
+
+    await expect(call).rejects.toThrow(
+      "`x`: expected a number, got Infinity; `points.1`: expected a number, got -Infinity; " +
+        "`opts.scale`: expected a number, got NaN. You sent: `x`, `points`, `opts`."
+    );
+    const err = await call.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ToolInvocationError);
+    expect(err).toMatchObject({
+      errorKind: "validation",
+      issues: [
+        { code: "invalid_type", path: ["x"], message: "expected a number, got Infinity" },
+        { code: "invalid_type", path: ["points", 1], message: "expected a number, got -Infinity" },
+        { code: "invalid_type", path: ["opts", "scale"], message: "expected a number, got NaN" },
+      ],
+    });
+    expect(requests).toEqual([]);
+  });
+
+  it("names a bounded number of them, and leaves a cyclic value to JSON.stringify", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+
+    const flood = await callTool("slow", { nums: new Array(1000).fill(Infinity) }).catch(
+      (e: unknown) => e
+    );
+    expect((flood as { issues: unknown[] }).issues).toHaveLength(12);
+
+    const cyclic: Record<string, unknown> = { x: 1 };
+    cyclic.self = cyclic;
+    await expect(callTool("slow", cyclic)).rejects.toThrow(/circular structure/);
+  });
+
+  it("sends the largest finite number, null, and text that only names Infinity", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+    const args = { x: 1.7976931348623157e308, y: null, text: "Infinity", list: [0, -1e308, null] };
+
+    await callTool("slow", args);
+
+    expect(JSON.parse(requests.at(-1)!.body)).toEqual(args);
+  });
 });
 
 describe("refuseRelativeProjectPaths", () => {

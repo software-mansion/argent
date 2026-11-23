@@ -732,6 +732,18 @@ describe("view-network-request-details: routing an ios- ID", () => {
     ).toBe(NOT_FOUND_ELSEWHERE(UNKNOWN_ID));
   });
 
+  it("says under a Mac app id that an ios- ID comes from an iOS simulator", async () => {
+    expect(
+      await networkRequestTool.execute!(noServices, {
+        device_id: "macos-app-com.example.app",
+        requestId: UNKNOWN_ID,
+        includeBody: true,
+      })
+    ).toBe(
+      `Request ${UNKNOWN_ID} not found. An ios- ID comes from an iOS simulator. Use native-network-logs or view-network-logs to list this Mac app's requests.`
+    );
+  });
+
   it.each([
     ["an iOS simulator UDID", UDID, "native-network-logs"],
     ["a Metro logicalDeviceId", "b1946ac92492d2347c6235b4d2611184", "native-network-logs"],
