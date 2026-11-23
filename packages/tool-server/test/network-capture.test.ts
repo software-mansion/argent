@@ -3758,16 +3758,27 @@ describe("a device the capture tools do not cover", () => {
 
 describe("a Chromium app", () => {
   const CHROMIUM = "chromium-cdp-9222";
+  const CHROMIUM_URN = `${CHROMIUM_CDP_NAMESPACE}:${CHROMIUM}`;
+  const KEEPS_LISTING =
+    "view-network-logs keeps listing the tab's requests while argent is attached; the stop marks where the capture window ends";
+  const NOT_STARTED_LAYER = { layer: "chromium", armed: false, total: 0, reason: NOT_STARTED };
   type CdpEvents = { event: (method: string, params: Record<string, unknown>) => void };
   /** The tab's CDP event bus and the real network store over it. */
   let tab: { events: TypedEventEmitter<CdpEvents>; network: NetworkManager } | undefined;
+  /** How many times argent attached to the tab, and what the next attach throws. */
+  let attaches = 0;
+  let attachError: Error | undefined;
 
   beforeEach(() => {
     tab = undefined;
+    attaches = 0;
+    attachError = undefined;
     const blueprint: ServiceBlueprint<unknown, string> = {
       namespace: CHROMIUM_CDP_NAMESPACE,
       getURN: (payload) => `${CHROMIUM_CDP_NAMESPACE}:${payload}`,
       async factory() {
+        attaches++;
+        if (attachError) throw attachError;
         const events = new TypedEventEmitter<CdpEvents>();
         tab = { events, network: createNetworkManager({ cdp: { events } as never }) };
         return {
@@ -3780,6 +3791,15 @@ describe("a Chromium app", () => {
     registry.registerBlueprint(blueprint);
   });
 
+  /** The tab sends a request, which argent records from CDP. */
+  function tabSends(requestId: string): void {
+    tab!.events.emit("event", "Network.requestWillBeSent", {
+      requestId,
+      request: { method: "GET", url: `https://x.test/${requestId}` },
+      timestamp: 1,
+    });
+  }
+
   it("marks where a start begins and where a stop ends, on the tab's one layer", async () => {
     const rt = new FakeRuntime(APP);
     serve(PORT, CHROMIUM, rt);
@@ -3788,29 +3808,73 @@ describe("a Chromium app", () => {
       status: "ok",
       layers: [{ layer: "chromium", armed: true }],
     });
-    for (const requestId of ["a", "b"]) {
-      tab!.events.emit("event", "Network.requestWillBeSent", {
-        requestId,
-        request: { method: "GET", url: `https://x.test/${requestId}` },
-        timestamp: 1,
-      });
-    }
+    tabSends("a");
+    tabSends("b");
 
     expect(await stop(CHROMIUM, APP)).toEqual({
       status: "ok",
-      layers: [
-        {
-          layer: "chromium",
-          armed: false,
-          total: 2,
-          reason:
-            "view-network-logs keeps listing the tab's requests while argent is attached; the stop marks where the capture window ends",
-        },
-      ],
+      layers: [{ layer: "chromium", armed: false, total: 2, reason: KEEPS_LISTING }],
     });
     // No Metro and no JS interceptor: the tab's CDP log is the layer.
     expect(rt.evaluated).toEqual([]);
     expect(jsCapturesOn(CHROMIUM)).toEqual([]);
+  });
+
+  it("does not attach to the tab at a stop: without a CDP session, capture was not started", async () => {
+    expect(await stop(CHROMIUM, APP)).toEqual({ status: "ok", layers: [NOT_STARTED_LAYER] });
+    expect(attaches).toBe(0);
+
+    // A session that ended, as at stop-simulator-server, took the mark of its start with it.
+    await start(CHROMIUM, APP);
+    await registry.disposeService(CHROMIUM_URN);
+    expect(await stop(CHROMIUM, APP)).toEqual({ status: "ok", layers: [NOT_STARTED_LAYER] });
+    expect(attaches).toBe(1);
+  });
+
+  it("says capture was not started at a stop of an attached tab that no start marked", async () => {
+    // The first Chromium tool call attaches, and argent records the tab's requests from then on.
+    await read(CHROMIUM);
+    tabSends("a");
+
+    expect(await stop(CHROMIUM, APP)).toEqual({ status: "ok", layers: [NOT_STARTED_LAYER] });
+    expect(attaches).toBe(1);
+  });
+
+  it("fails a start that cannot reach the tab with NETWORK_CAPTURE_UNAVAILABLE and the CDP error", async () => {
+    attachError = new Error("connect ECONNREFUSED 127.0.0.1:9222");
+
+    const err = await start(CHROMIUM, APP).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE,
+      error_kind: "unsupported",
+    });
+    expect(err?.message).toContain(
+      `Network capture cannot start for ${APP} on ${CHROMIUM}: chromium: argent cannot reach the app over CDP: `
+    );
+    expect(err?.message).toContain("connect ECONNREFUSED 127.0.0.1:9222");
+  });
+
+  it("keeps the mark at a second stop, and records the tab's requests after the stop", async () => {
+    await start(CHROMIUM, APP);
+    tabSends("a");
+    tabSends("b");
+
+    const first = await stop(CHROMIUM, APP);
+    expect(first).toEqual({
+      status: "ok",
+      layers: [{ layer: "chromium", armed: false, total: 2, reason: KEEPS_LISTING }],
+    });
+    expect(await stop(CHROMIUM, APP)).toEqual(first);
+
+    // The stop only marks where the window ends: view-network-logs lists a later request too.
+    tabSends("c");
+    const logs = await read(CHROMIUM);
+    expect(logs).toContain("3 total");
+    expect(logs).toContain('"GET /c"');
   });
 });
 
