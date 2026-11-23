@@ -167,7 +167,10 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer the call names can capture 
               ]
             : []),
         ]).then((started) => {
-          noteCaptureStart(params.udid, params.bundleId, started, nativeFloor);
+          // A start that fails leaves the window of the last start that did not.
+          if (!started.every((layer) => layer.unavailable)) {
+            noteCaptureStart(params.udid, params.bundleId, started, nativeFloor);
+          }
           return started;
         });
       });

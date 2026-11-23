@@ -186,10 +186,10 @@ export function nativeUnavailableReason(udid: string, bundleId: string): string 
 }
 
 /**
- * What the last network-capture-start of an app marked, by device and app: the layers it
- * started, and the native record number when it began. await-network-request reads the JS
- * layer only when that start named it, and a native layer only after that number, so a
- * layer the start left as it was gives no request from before it.
+ * What the last network-capture-start of an app that did not fail marked, by device and app:
+ * the layers it started, and the native record number when it began. await-network-request
+ * reads the JS layer only when that start named it, and a native layer only after that number,
+ * so a layer the start left as it was gives no request from before it.
  */
 export interface CaptureStart {
   layers: ReadonlySet<CaptureLayer>;

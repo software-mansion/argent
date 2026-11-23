@@ -536,7 +536,7 @@ A request that is still in progress never matches. Thus a streamed response that
 
 #### The layers that the tool reads
 
-The tool reads only the requests after the last `network-capture-start` for the device and the app. A start with `layer` moves only the mark of that layer. For the other layer, these rules apply:
+The tool reads only the requests after the last `network-capture-start` for the device and the app. Argent does not count a start that fails as the last start. A start with `layer` moves only the mark of that layer. For the other layer, these rules apply:
 
 - A native layer that the last start did not name: the tool reads only the requests that Argent recorded after the last start began. The tool does not read this layer when a stop ended it.
 - The `js` layer: the tool reads it only when the last start named it. Thus after a start with `layer: "native"`, the tool does not read the `js` layer.
