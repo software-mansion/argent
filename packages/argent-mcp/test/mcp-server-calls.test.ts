@@ -725,6 +725,7 @@ describe("startMcpServer screen capture after an interaction", () => {
   });
 
   it("appends the screenshot and the focus view after a TV remote press", async () => {
+    vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "");
     const result = await client.callTool({
       name: "tv-remote",
       arguments: { udid: "u", button: "down" },
