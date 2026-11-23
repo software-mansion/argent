@@ -12,7 +12,12 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
 import { unchangedTreeNote } from "../src/unchanged-tree.js";
-import { setFlag } from "@argent/configuration-core";
+import {
+  getWhatsNewSeenVersion,
+  setFlag,
+  setWhatsNewSeenVersion,
+} from "@argent/configuration-core";
+import { getInstalledVersion } from "../src/installed-version.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -35,6 +40,7 @@ beforeAll(async () => {
   vi.resetModules();
   ({ startMcpServer } = await import("../src/mcp-server.js"));
   toolsClient = await import("@argent/tools-client");
+  setWhatsNewSeenVersion(getInstalledVersion());
 });
 
 afterAll(() => {
@@ -474,6 +480,24 @@ describe("startMcpServer tool calls", () => {
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
     expect(textOf(result)).toContain('"ok": true');
+  });
+
+  it("tells the agent what is new on the first call after an update, and only then", async () => {
+    const version = getInstalledVersion();
+    setWhatsNewSeenVersion("0.0.1");
+    try {
+      const first = await client.callTool({ name: "noted", arguments: {} });
+      const second = await client.callTool({ name: "noted", arguments: {} });
+
+      const firstContent = first.content as Array<{ type: string; text?: string }>;
+      expect(firstContent.at(-1)?.text).toMatch(
+        new RegExp(`^Argent was updated to v${version}\\.`)
+      );
+      expect(textOf(second)).not.toContain("Argent was updated");
+      expect(getWhatsNewSeenVersion()).toBe(version);
+    } finally {
+      setWhatsNewSeenVersion(version);
+    }
   });
 });
 

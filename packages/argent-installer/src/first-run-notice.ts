@@ -11,6 +11,7 @@ import {
   TELEMETRY_OPT_OUT_COMMAND,
   TELEMETRY_DETAILS_URL,
 } from "@argent/telemetry";
+import { getWhatsNewSeenVersion, setWhatsNewSeenVersion } from "@argent/configuration-core";
 
 const TELEMETRY_OPT_IN_COMMAND = "argent telemetry enable";
 
@@ -26,6 +27,15 @@ export function printFirstRunNotice(): void {
     ].join("\n")
   );
   markFirstRunNoticeShown();
+}
+
+/**
+ * Starts the what's-new record of a fresh install at its own version, so the
+ * agent announces no update. An existing record is kept: a re-run of init after
+ * an update must not swallow that update's highlights.
+ */
+export function seedWhatsNewVersion(version: string): void {
+  if (getWhatsNewSeenVersion() === null) setWhatsNewSeenVersion(version);
 }
 
 type TelemetryConsentOutcome =

@@ -77,6 +77,12 @@ Over a link, the MCP server uploads files with the same rules as the `argent` CL
 
 Run `argent server status` to see the state of the local tool-server. Run `argent server logs` to read its output.
 
+## What is new after an update
+
+When the version of Argent changes, the MCP server adds a note to the first tool result. The note lists the main changes of the releases after your previous version, at most five items. The note tells the agent to give you these changes in one sentence or a short list.
+
+The MCP server records the version in `~/.argent/config.json`. Thus, only one session receives the note for an update. `argent init` records the version of a fresh install, so a new user receives no note.
+
 ## Configure the MCP server
 
 Environment variables in the MCP server entry configure the MCP server. `ARGENT_TOOLS_URL` selects the tool-server that receives the tool calls. `ARGENT_MCP_LOG` selects the file where the MCP server writes its log of tool calls. See [Configuration](/docs/reference/configuration#mcp-server) for the list of variables.
