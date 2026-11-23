@@ -50,7 +50,7 @@ export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
   id: "native-find-views",
   description: `Search for specific UIViews in the running app by class name, accessibility identifier, accessibility label, tag or React Native nativeID; at least one of these params is required.
 Use when you need to locate a specific view by its properties without dumping the entire native-full-hierarchy.
-Returns { status: "ok", matches }: the matching views with their frames, properties, optional ancestors and optional children. Frames are in points. frame and center are relative to the superview, and windowFrame turns with the UI. To tap a view, divide the centre of its screenFrame by the screen size in points, which native-full-hierarchy returns as screen (maxDepth: 1 is enough), and pass the result to gesture-tap. Matches are not filtered for visibility. Before tapping, call native-view-at-point with hitTest: true at that centre, with skipClasses ["UITextEffectsWindow"]. If it does not return the match or a descendant, check a screenshot.
+Returns { status: "ok", matches }: the matching views with their frames, properties, optional ancestors and optional children. Frames are in points. frame and center are relative to the superview, and windowFrame turns with the UI. screenFrame is on the axes of the UI as the user sees it, also when the UI is landscape. To tap a view, divide the centre of its screenFrame by the screen size in points, which native-full-hierarchy returns as screen (maxDepth: 1 is enough), and pass the result to gesture-tap. Matches are not filtered for visibility. Before tapping, call native-view-at-point with hitTest: true at that centre, with skipClasses ["UITextEffectsWindow"]. If it does not return the match or a descendant, check a screenshot.
 <flag:macos-apps>On a Mac app it searches the NSViews of every visible window: className is the NSView class, and identifier matches the accessibility identifier or the view identifier. SwiftUI sets a control's identifier and label on an accessibility element, not on an NSView, so an identifier or label search does not find SwiftUI controls: describe lists them with their identifiers and frames. The tap recipe above and the statuses below are iOS only.
 </flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 An Apple system app is rejected outright (terminal: never retry it).`,
@@ -68,7 +68,7 @@ An Apple system app is rejected outright (terminal: never retry it).`,
   capability: {
     apple: { simulator: true },
     appleRemote: { simulator: true },
-    macos: { app: true },
+    macos: { app: true, catalyst: false },
   },
   services: nativeAppServices,
   execute: (services, params) => {

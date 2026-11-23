@@ -1,5 +1,6 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { CDPClient } from "../utils/debugger/cdp-client";
+import { sleep } from "../utils/timing";
 import { browserWebSocketUrl, listPageTargets, type CdpTarget } from "./cdp-session";
 
 export interface TabInfo {
@@ -42,7 +43,17 @@ interface TabsManagerDeps {
    * re-prime everything bound to the old page.
    */
   onActivated: () => Promise<void>;
+  /** Whether network conditions are set, so a new tab must wait for them before loading. */
+  networkThrottled: () => boolean;
 }
+
+const isHttpUrl = (url: string | undefined): url is string => /^https?:/i.test(url ?? "");
+
+const isBlank = (url: string) => url === "" || url === "about:blank";
+
+const TYPED_LOAD_TIMEOUT_MS = 120_000;
+const HISTORY_RESET_ATTEMPTS = 20;
+const HISTORY_RESET_RETRY_MS = 100;
 
 export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   const { cdp, port } = deps;
@@ -156,12 +167,32 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
     }
   }
 
+  /**
+   * Loads `url` as a typed address, then drops the blank page the tab started
+   * on from its history. Chrome rejects the history reset until the load commits.
+   */
+  async function loadAsTyped(targetId: string, url: string): Promise<void> {
+    await cdp.send("Page.navigate", { url, transitionType: "typed" }, TYPED_LOAD_TIMEOUT_MS);
+    for (let attempt = 0; attempt < HISTORY_RESET_ATTEMPTS; attempt++) {
+      if (activeTargetId !== targetId) return;
+      const reset = await cdp.send("Page.resetNavigationHistory").then(
+        () => true,
+        () => false
+      );
+      if (reset) return;
+      await sleep(HISTORY_RESET_RETRY_MS);
+    }
+  }
+
   async function open(opts?: {
     url?: string;
     label?: string;
     activate?: boolean;
   }): Promise<TabInfo[]> {
-    const url = opts?.url ?? "about:blank";
+    const requestedUrl = opts?.url;
+    const activating = opts?.activate !== false;
+    const deferLoad = activating && isHttpUrl(requestedUrl) && deps.networkThrottled();
+    const url = deferLoad ? "about:blank" : (requestedUrl ?? "about:blank");
     const created = await withBrowserClient(async (browser) => {
       let out: { targetId?: string };
       try {
@@ -200,17 +231,23 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       labelToTab.set(opts.label, tabId);
       tabToLabel.set(tabId, opts.label);
     }
-    if (opts?.activate !== false) {
-      const targets = await listTargets();
-      await activate(created, targets);
-      return targets.map(toInfo);
-    }
-    return list();
+    if (activating) await activate(created, await listTargets());
+    if (deferLoad) loadAsTyped(created, requestedUrl).catch(() => {});
+    const tabs = await list();
+    return tabs.map((tab) =>
+      tab.targetId === created && requestedUrl && isBlank(tab.url)
+        ? { ...tab, url: requestedUrl }
+        : tab
+    );
   }
 
   async function close(ref?: string): Promise<TabInfo[]> {
     const targets = await listTargets();
     const targetId = ref ? resolveTargetId(ref, targets) : activeTargetId;
+    if (targetId === activeTargetId) {
+      const fallback = targets.find((t) => t.id !== targetId && t.webSocketDebuggerUrl);
+      if (fallback) await activate(fallback.id, targets);
+    }
     await withBrowserClient((browser) => browser.send("Target.closeTarget", { targetId }));
 
     const tabId = targetToTab.get(targetId);
@@ -223,14 +260,8 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       }
     }
 
-    // Falling back to another live page keeps the page-scoped tools working.
-    if (targetId === activeTargetId) {
-      const remaining = (await listTargets()).filter((t) => t.id !== targetId);
-      if (remaining.length > 0) {
-        await activate(remaining[0]!.id, remaining);
-      }
-    }
-    return list();
+    const remaining = (await listTargets()).filter((t) => t.id !== targetId);
+    return remaining.map(toInfo);
   }
 
   return {

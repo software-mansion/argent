@@ -13,8 +13,9 @@ import {
   MAX_TARGETING_REASON_CHARS,
   queryFullHierarchyTree,
 } from "../../src/tools/flows/flow-ios-tree";
-import { evaluateCondition, selectorToFrame } from "../../src/utils/ui-tree-match";
+import { evaluateCondition, findAll, selectorToFrame } from "../../src/utils/ui-tree-match";
 import { resolveNativeTargetApp } from "../../src/utils/native-target-app";
+import { __resetTypedSecretsForTesting, noteTypedSecrets } from "../../src/utils/typed-secrets";
 import {
   __resetDeviceSetCacheForTesting,
   rememberDeviceSet,
@@ -109,11 +110,11 @@ describe("flow iOS full-hierarchy source", () => {
   });
 
   // An unfolded foldable, or a rotated iPhone: the UI is landscape (951x669 pt
-  // window) on a portrait-native screen (669x951 pt), and touches are taken in
-  // the native space. The framework reports each view in that space as
-  // `screenFrame`, next to the screen's native size and the interface
-  // orientation on it.
-  it("normalizes screenFrame by the reported native screen size, not the landscape window", async () => {
+  // window) on a portrait-native screen (669x951 pt). The framework reports
+  // each view in that native space as `screenFrame`, next to the screen's
+  // native size and the interface orientation on it; the adapter turns the
+  // frames into the UI's upright space, the space of every other tool.
+  it("turns screenFrame into the UI's upright space", async () => {
     const raw = {
       screen: { width: 669, height: 951, interfaceOrientation: "landscapeRight" },
       windows: [
@@ -137,23 +138,25 @@ describe("flow iOS full-hierarchy source", () => {
         },
       ],
     };
-    const { tree, screen, uiOrientation } = await queryFullHierarchyTree(
-      registryFor(apiServing(raw)),
-      DEVICE
-    );
-    expect(screen).toEqual({ width: 669, height: 951 });
-    const frame = selectorToFrame(tree, { identifier: "probe.pad" })!;
-    expect(frame.x).toBeCloseTo(269 / 669, 6);
-    expect(frame.y).toBeCloseTo(500 / 951, 6);
-    expect(frame.width).toBeCloseTo(200 / 669, 6);
-    expect(frame.height).toBeCloseTo(300 / 951, 6);
-    // What the flow directions turn by, as the framework names it.
-    expect(uiOrientation).toBe("landscapeRight");
+    const data = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+    expect(data.screen).toEqual({ width: 951, height: 669 });
+    // Where the window has it: the upright space.
+    const frame = selectorToFrame(data.tree, { identifier: "probe.pad" })!;
+    expect(frame.x).toBeCloseTo(500 / 951, 6);
+    expect(frame.y).toBeCloseTo(200 / 669, 6);
+    expect(frame.width).toBeCloseTo(300 / 951, 6);
+    expect(frame.height).toBeCloseTo(200 / 669, 6);
+    expect(data).not.toHaveProperty("uiOrientation");
   });
 
-  it.each(["portrait", "portraitUpsideDown", "landscapeLeft", "landscapeRight"] as const)(
-    "reports the interface orientation the framework names: %s",
-    async (interfaceOrientation) => {
+  it.each([
+    ["portrait", { x: 0.1, y: 0.2 }, { width: 669, height: 951 }],
+    ["portraitUpsideDown", { x: 0.8, y: 0.7 }, { width: 669, height: 951 }],
+    ["landscapeLeft", { x: 0.7, y: 0.1 }, { width: 951, height: 669 }],
+    ["landscapeRight", { x: 0.2, y: 0.8 }, { width: 951, height: 669 }],
+  ] as const)(
+    "turns by the interface orientation the framework names: %s",
+    async (interfaceOrientation, origin, screen) => {
       const raw = {
         screen: { width: 669, height: 951, interfaceOrientation },
         windows: [
@@ -161,47 +164,27 @@ describe("flow iOS full-hierarchy source", () => {
             className: "UIWindow",
             windowFrame: { x: 0, y: 0, width: 669, height: 951 },
             screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-            children: [],
+            children: [
+              {
+                className: "UIButton",
+                identifier: "corner",
+                // Native (0.1, 0.2) to (0.2, 0.3).
+                screenFrame: { x: 66.9, y: 190.2, width: 66.9, height: 95.1 },
+                children: [],
+              },
+            ],
           },
         ],
       };
-      const { uiOrientation } = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
-      expect(uiOrientation).toBe(interfaceOrientation);
+      const data = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+      expect(data.screen).toEqual(screen);
+      const frame = selectorToFrame(data.tree, { identifier: "corner" })!;
+      expect(frame.x).toBeCloseTo(origin.x, 6);
+      expect(frame.y).toBeCloseTo(origin.y, 6);
     }
   );
 
-  // A game or a canvas: one full-screen view, whose screen rect is the same in
-  // both landscape orientations. The frames cannot say which way `down` is on
-  // the panel; the reported orientation can.
-  it("knows the orientation of a UI made of one full-screen view", async () => {
-    const pad = {
-      className: "PadView",
-      identifier: "sym.pad",
-      windowFrame: { x: 0, y: 0, width: 951, height: 669 },
-      screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-      children: [],
-    };
-    const serving = (interfaceOrientation: string) => ({
-      screen: { width: 669, height: 951, interfaceOrientation },
-      windows: [
-        {
-          className: "UIWindow",
-          windowFrame: { x: 0, y: 0, width: 951, height: 669 },
-          screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-          children: [pad],
-        },
-      ],
-    });
-    for (const orientation of ["landscapeLeft", "landscapeRight"]) {
-      const { uiOrientation } = await queryFullHierarchyTree(
-        registryFor(apiServing(serving(orientation))),
-        DEVICE
-      );
-      expect(uiOrientation).toBe(orientation);
-    }
-  });
-
-  it("reports no orientation when the framework names none it knows", async () => {
+  it("leaves the frames native when the framework names no orientation it knows", async () => {
     const unknown = {
       screen: { width: 669, height: 951, interfaceOrientation: "faceUp" },
       windows: [
@@ -209,34 +192,20 @@ describe("flow iOS full-hierarchy source", () => {
           className: "UIWindow",
           windowFrame: { x: 0, y: 0, width: 669, height: 951 },
           screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-          children: [],
-        },
-      ],
-    };
-    expect(
-      (await queryFullHierarchyTree(registryFor(apiServing(unknown)), DEVICE)).uiOrientation
-    ).toBeUndefined();
-    // A framework that predates screenFrame reports neither; its frames are in
-    // the window's space, where a direction needs no turning.
-    const older = {
-      windows: [
-        {
-          className: "UIWindow",
-          windowFrame: { x: 0, y: 0, width: 400, height: 800 },
           children: [
             {
               className: "UIButton",
-              identifier: "buy",
-              windowFrame: { x: 100, y: 400, width: 200, height: 40 },
+              identifier: "corner",
+              screenFrame: { x: 66.9, y: 190.2, width: 66.9, height: 95.1 },
               children: [],
             },
           ],
         },
       ],
     };
-    expect(
-      (await queryFullHierarchyTree(registryFor(apiServing(older)), DEVICE)).uiOrientation
-    ).toBeUndefined();
+    const data = await queryFullHierarchyTree(registryFor(apiServing(unknown)), DEVICE);
+    expect(data.screen).toEqual({ width: 669, height: 951 });
+    expect(selectorToFrame(data.tree, { identifier: "corner" })!.x).toBeCloseTo(0.1, 6);
   });
 
   it("falls back to windowFrame and the largest window for a framework that predates screenFrame", async () => {
@@ -273,6 +242,136 @@ describe("flow iOS full-hierarchy source", () => {
     await queryFullHierarchyTree(registryFor(api), DEVICE).catch(() => undefined);
     const params = vi.mocked(api.queryViewHierarchy).mock.calls[0]![2] as { fields: string[] };
     expect(params.fields).toEqual(expect.arrayContaining(["screenFrame", "windowFrame"]));
+  });
+
+  it("asks the framework for a view's value and reads a filled text field by it", async () => {
+    const raw = {
+      screen: { width: 400, height: 800 },
+      windows: [
+        {
+          className: "UIWindow",
+          screenFrame: { x: 0, y: 0, width: 400, height: 800 },
+          children: [
+            {
+              className: "UITextField",
+              identifier: "search-input",
+              value: "linda",
+              screenFrame: { x: 20, y: 100, width: 300, height: 44 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const api = apiServing(raw);
+    const { tree } = await queryFullHierarchyTree(registryFor(api), DEVICE);
+
+    const params = vi.mocked(api.queryViewHierarchy).mock.calls[0]![2] as { fields: string[] };
+    expect(params.fields).toContain("value");
+    const field = findAll(tree, { identifier: "search-input" });
+    expect(evaluateCondition("text", "linda", field, "equals")).toBe(true);
+  });
+
+  describe("the projection a result quotes from", () => {
+    const raw = {
+      screen: { width: 400, height: 800 },
+      windows: [
+        {
+          className: "UIWindow",
+          screenFrame: { x: 0, y: 0, width: 400, height: 800 },
+          children: [
+            {
+              className: "UIView",
+              identifier: "form",
+              screenFrame: { x: 0, y: 90, width: 400, height: 200 },
+              children: [
+                {
+                  className: "UILabel",
+                  label: "Signed in with tok-REVIEW-4242",
+                  screenFrame: { x: 20, y: 100, width: 300, height: 24 },
+                  children: [],
+                },
+                {
+                  className: "UITextField",
+                  label: "Token",
+                  value: "Too-REVIEW-4242",
+                  screenFrame: { x: 20, y: 140, width: 300, height: 44 },
+                  children: [],
+                },
+                {
+                  className: "UITextField",
+                  identifier: "secure",
+                  screenFrame: { x: 20, y: 200, width: 300, height: 44 },
+                  children: [],
+                },
+                {
+                  className: "UISwitch",
+                  value: "1",
+                  screenFrame: { x: 330, y: 250, width: 51, height: 31 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const NOTE = "[text withheld: a secret was typed on this device]";
+
+    afterEach(() => {
+      __resetTypedSecretsForTesting();
+    });
+
+    it("is absent for a device that no secret was typed on", async () => {
+      noteTypedSecrets("some-other-device", [{ name: "TOKEN", value: "tok-REVIEW-4242" }]);
+
+      const data = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+
+      expect(data.quotableTree).toBeUndefined();
+      expect(findAll(data.tree, { identifier: "form" })[0]!.subtreeText).toBe(
+        "Signed in with tok-REVIEW-4242 Token Too-REVIEW-4242"
+      );
+    });
+
+    it("holds the note for the value of each text input, and each typed value named in a label", async () => {
+      noteTypedSecrets(DEVICE.id, [{ name: "TOKEN", value: "tok-REVIEW-4242" }]);
+
+      const { tree, quotableTree } = await queryFullHierarchyTree(
+        registryFor(apiServing(raw)),
+        DEVICE
+      );
+
+      // The tree a check reads is as it was.
+      expect(findAll(tree, { identifier: "form" })[0]!.subtreeText).toBe(
+        "Signed in with tok-REVIEW-4242 Token Too-REVIEW-4242"
+      );
+      expect(findAll(quotableTree!, { identifier: "form" })[0]!.subtreeText).toBe(
+        `Signed in with {{secret:TOKEN}} Token ${NOTE}`
+      );
+      expect(JSON.stringify(quotableTree)).not.toContain("REVIEW-4242");
+      // A field with no value to read has none to withhold, and a value that is
+      // no text input's was never in either tree.
+      expect(findAll(quotableTree!, { identifier: "secure" })[0]!.value).toBeUndefined();
+      expect(findAll(quotableTree!, { text: NOTE })).toHaveLength(1);
+    });
+
+    it("has the nodes of the tree, one for one and in the same order", async () => {
+      noteTypedSecrets(DEVICE.id, [{ name: "TOKEN", value: "tok-REVIEW-4242" }]);
+
+      const { tree, quotableTree } = await queryFullHierarchyTree(
+        registryFor(apiServing(raw)),
+        DEVICE
+      );
+
+      const shape = (node: DescribeNode): unknown => [
+        node.role,
+        node.identifier,
+        node.frame,
+        node.children.map(shape),
+      ];
+      expect(tree.children.length).toBeGreaterThan(3);
+      expect(shape(quotableTree!)).toEqual(shape(tree));
+    });
   });
 
   it("adapts and resolves a view buried deeper than the old 40-level cap", async () => {

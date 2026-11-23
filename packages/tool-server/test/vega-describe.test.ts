@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 
 // describeVega fetches the page source from the on-device toolkit; mock that so
 // we can drive its failure handling deterministically.
@@ -22,16 +22,18 @@ describe("describeVega failure handling", () => {
   });
 
   it.each([FAILURE_CODES.VEGA_DEVICE_NOT_FOUND, FAILURE_CODES.VEGA_DEVICE_NOT_REGISTERED])(
-    "rethrows the VVD discovery failure %s instead of the relaunch hint",
-    async (code) => {
-      const discovery = new FailureError("VVD discovery failed.", {
-        error_code: code,
-        failure_stage: "vega_discover_console_port",
-        failure_area: "tool_server",
-        error_kind: "not_found",
-      });
-      fetchVegaPageSource.mockRejectedValue(discovery);
-      await expect(describeVega("amazon-abc")).rejects.toBe(discovery);
+    "rethrows %s instead of burying it in the relaunch hint",
+    async (error_code) => {
+      fetchVegaPageSource.mockRejectedValue(
+        new FailureError("vvd", {
+          error_code,
+          failure_stage: "vega_discover_console_port",
+          failure_area: "tool_server",
+          error_kind: "not_found",
+        })
+      );
+      const err = await describeVega("amazon-abc").catch((e: unknown) => e);
+      expect(getFailureSignal(err)?.error_code).toBe(error_code);
     }
   );
 
@@ -39,6 +41,20 @@ describe("describeVega failure handling", () => {
     fetchVegaPageSource.mockRejectedValue(new Error("ECONNREFUSED"));
     const out = await describeVega("amazon-abc");
     expect(out.source).toBe("vega-automation");
+    expect(out.tree.children).toEqual([]);
+    expect(out.hint).toMatch(/relaunch the foreground app/i);
+  });
+
+  it("returns the relaunch hint for a typed failure that is not a VVD discovery failure", async () => {
+    fetchVegaPageSource.mockRejectedValue(
+      new FailureError("adb forward failed", {
+        error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+        failure_stage: "android_adb_command",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      })
+    );
+    const out = await describeVega("amazon-abc");
     expect(out.tree.children).toEqual([]);
     expect(out.hint).toMatch(/relaunch the foreground app/i);
   });

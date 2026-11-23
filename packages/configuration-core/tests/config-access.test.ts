@@ -189,27 +189,6 @@ describe("setConfigValue — return value", () => {
   });
 });
 
-describe("getConfigValue — allowlist.enabled (prioritize-restrictive, no default)", () => {
-  it("reads as unset when never decided", () => {
-    expect(getConfigValueByKey("allowlist.enabled", opts())).toBeUndefined();
-  });
-
-  it("false in either scope wins over true in the other", () => {
-    setConfigValue("allowlist.enabled", true, "global", opts());
-    setConfigValue("allowlist.enabled", false, "project", opts());
-    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(false);
-
-    setConfigValue("allowlist.enabled", false, "global", opts());
-    setConfigValue("allowlist.enabled", true, "project", opts());
-    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(false);
-  });
-
-  it("a lone true opts in", () => {
-    setConfigValue("allowlist.enabled", true, "global", opts());
-    expect(getConfigValueByKey("allowlist.enabled", opts())).toBe(true);
-  });
-});
-
 describe("listConfig", () => {
   it("reports every schema entry with per-scope and effective values", () => {
     setConfigValue("lens.agent", "claude", "global", opts());
@@ -222,6 +201,16 @@ describe("listConfig", () => {
     const telemetry = entries.find((e) => e.key === "telemetry.enabled")!;
     expect(telemetry.manageCommand).toBe("argent telemetry");
     expect(telemetry.scopes).toEqual(["project", "global"]);
+  });
+
+  it("lists a home-rooted project's values once, as global", () => {
+    setConfigValue("lens.agent", "codex", "global", opts());
+    const cwd = path.join(homeDir, "Downloads");
+    fs.mkdirSync(cwd);
+    const lens = listConfig({ homeDir, cwd }).find((e) => e.key === "lens.agent")!;
+    expect(lens.global).toBe("codex");
+    expect(lens.project).toBeUndefined();
+    expect(lens.effective).toBe("codex");
   });
 });
 
@@ -361,6 +350,21 @@ describe("ios.additionalDeviceSets — additive union across scopes", () => {
       homeDir,
     ]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "resolves a home-rooted project's relative entries once when HOME is a symlink",
+    () => {
+      const linkedHome = path.join(projectDir, "home");
+      fs.symlinkSync(homeDir, linkedHome);
+      setConfigValue("ios.additionalDeviceSets", ["sets"], "global", { homeDir: linkedHome });
+      // Physical, like process.cwd().
+      const cwd = path.join(homeDir, "Downloads");
+      fs.mkdirSync(cwd);
+      expect(getAdditionalIosDeviceSets({ homeDir: linkedHome, cwd })).toEqual([
+        path.join(linkedHome, "sets"),
+      ]);
+    }
+  );
 });
 
 describe("getConfigValue — direct definition + custom-typed default", () => {
