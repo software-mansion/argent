@@ -1,13 +1,16 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { track } from "@argent/telemetry";
 import {
   getInstalledVersion,
   getGloballyInstalledVersion,
   getLatestVersion,
   isNewerVersion,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
+  globalCommandOptions,
   globalInstallCommand,
   localInstallCommand,
   projectInstallCommand,
@@ -21,6 +24,7 @@ import {
   getLocallyInstalledVersion,
   isYarnPnp,
 } from "./utils.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
 import { probeGlobalInstallTarget, unwritableGlobalTargetMessage } from "./global-prefix.js";
 import { PACKAGE_NAME } from "./constants.js";
@@ -56,6 +60,12 @@ export async function runInstall(args: {
   return runGlobal({ fromTar, nonInteractive, version: args.version, tel });
 }
 
+// A --from tarball or folder made absolute, since the package manager may run
+// elsewhere; any other value is a package spec and passes through.
+function installSpec(fromTar: string): string {
+  return fs.existsSync(fromTar) ? path.resolve(fromTar) : fromTar;
+}
+
 // Exits the process on a missing package.json or a failed/empty install — the
 // caller proceeds only once the dep is verified on disk (or is a Yarn PnP
 // layout, which has no node_modules).
@@ -89,7 +99,7 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   }
 
   const pm = detectProjectPackageManager(projectRoot);
-  const installTarget = fromTar ?? PACKAGE_NAME;
+  const installTarget = fromTar ? installSpec(fromTar) : PACKAGE_NAME;
   // Declared but not materialized (fresh clone): the plain project install
   // honors the committed pin — `add` would resolve to @latest and rewrite it.
   const materializeOnly = isDeclaredLocally(projectRoot) && !fromTar;
@@ -220,9 +230,9 @@ async function runGlobal(opts: {
   const { fromTar, nonInteractive, tel } = opts;
   let version = opts.version;
   const globallyInstalled = isGloballyInstalled();
+  const pm = detectGlobalPackageManager();
 
   if (!globallyInstalled) {
-    const pm = detectPackageManager();
     const preflightStartedAt = performance.now();
     const globalTarget = probeGlobalInstallTarget(pm);
     if (globalTarget?.blocked) {
@@ -250,14 +260,14 @@ async function runGlobal(opts: {
     p.log.info(`Argent is not installed globally — installing.`);
     track("installation:global_install_decision", { decision: "install" });
 
-    const installTarget = fromTar ?? PACKAGE_NAME;
+    const installTarget = fromTar ? installSpec(fromTar) : PACKAGE_NAME;
     const cmd = globalInstallCommand(pm, installTarget);
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing ${PACKAGE_NAME} globally...`);
     const packageActionStartedAt = performance.now();
     try {
-      await runShellCommand(cmd);
+      await runShellCommand(cmd, globalCommandOptions(pm));
       spinner.stop(pc.green("Installed globally."));
       if (!isGloballyInstalled()) {
         p.log.warn(
@@ -285,25 +295,24 @@ async function runGlobal(opts: {
   if (fromTar) {
     // Developer-only reinstall (`--from`) — not a product install decision, so
     // no decision event.
-    const pm = detectPackageManager();
     const globalTarget = probeGlobalInstallTarget(pm);
     if (globalTarget?.blocked) {
       p.log.error(unwritableGlobalTargetMessage(globalTarget, pm, "install"));
       await tel.finalize(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
       process.exit(1);
     }
-    const cmd = globalInstallCommand(pm, fromTar);
+    const cmd = globalInstallCommand(pm, installSpec(fromTar));
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing from ${fromTar}...`);
     try {
-      await runShellCommand(cmd);
+      await runShellCommand(cmd, globalCommandOptions(pm));
       spinner.stop(pc.green("Installed from tarball."));
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
+      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
       await tel.finalize(INSTALL_FROM_TAR_PACKAGE_FAILED);
       process.exit(1);
     }
@@ -341,9 +350,8 @@ async function runGlobal(opts: {
   } else if (latest && isNewerVersion(latest, version)) {
     const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
     const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
-    const updatePm = detectPackageManager();
     // --yes skips the update, so it skips the probe too.
-    const globalTarget = nonInteractive ? null : probeGlobalInstallTarget(updatePm);
+    const globalTarget = nonInteractive ? null : probeGlobalInstallTarget(pm);
     if (nonInteractive) {
       // Emit the same update_decision as the interactive branches so the
       // upgrade funnel isn't blind to --yes/CI runs.
@@ -355,7 +363,7 @@ async function runGlobal(opts: {
       await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
     } else if (globalTarget?.blocked) {
       // init still works against the installed version, so warn, don't abort.
-      p.log.warn(unwritableGlobalTargetMessage(globalTarget, updatePm, "update"));
+      p.log.warn(unwritableGlobalTargetMessage(globalTarget, pm, "update"));
       track("installation:update_decision", {
         from_major: fromMajor,
         to_major: toMajor,
@@ -392,13 +400,13 @@ async function runGlobal(opts: {
       if (p.isCancel(updateChoice) || updateChoice === "skip") {
         await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
       } else if (updateChoice === "update") {
-        const cmd = globalInstallCommand(updatePm, `${PACKAGE_NAME}@${latest}`);
+        const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
         const cmdStr = formatShellCommand(cmd);
         const updateSpinner = p.spinner();
         updateSpinner.start(`Updating to v${latest}...`);
         const updateStartedAt = performance.now();
         try {
-          await runShellCommand(cmd);
+          await runShellCommand(cmd, globalCommandOptions(pm));
           updateSpinner.stop(pc.green(`Updated to v${latest}.`));
           version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
           await tel.trackPackageAction("init_triggered_update", updateStartedAt, true);
@@ -410,7 +418,7 @@ async function runGlobal(opts: {
         } catch (err) {
           updateSpinner.stop(pc.red("Update failed."));
           p.log.error(`${err}`);
-          p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
+          p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
           await tel.trackPackageAction(
             "update_failed",
             updateStartedAt,

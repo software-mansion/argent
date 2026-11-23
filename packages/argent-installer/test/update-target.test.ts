@@ -38,10 +38,10 @@ describe("resolveInstallableUpdateTarget", () => {
       publishedAt: "2026-05-20T00:00:00Z",
     });
 
-    const result = await resolveInstallableUpdateTarget("npm", "1.0.0");
+    const result = await resolveInstallableUpdateTarget("npm", "1.0.0", "/home/u");
 
     expect(mockFetchRegistryInfo).toHaveBeenCalledWith(`${NPM_REGISTRY}/${PACKAGE_NAME}`);
-    expect(mockDetectMinReleaseAgeMsForPm).toHaveBeenCalledWith("npm");
+    expect(mockDetectMinReleaseAgeMsForPm).toHaveBeenCalledWith("npm", "/home/u");
     expect(result).toEqual({
       latestVersion: "99.0.0",
       latestPublishedAt: "2026-05-31T00:00:00Z",

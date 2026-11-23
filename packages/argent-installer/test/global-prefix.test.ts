@@ -55,6 +55,18 @@ describe("probeGlobalInstallTarget", () => {
     }
   });
 
+  it("asks from where the install runs", () => {
+    mockExecFileSync.mockReturnValue(`${tmpRoot}\n`);
+
+    probeGlobalInstallTarget("pnpm");
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "pnpm",
+      ["root", "-g"],
+      expect.objectContaining({ cwd: os.homedir() })
+    );
+  });
+
   it("kills a query that outlives its timeout instead of waiting on it", () => {
     mockExecFileSync.mockReturnValue(`${tmpRoot}\n`);
 

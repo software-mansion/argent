@@ -156,6 +156,36 @@ describe("withdrawDyldInsertLibraries", () => {
     expect(withdrawDyldInsertLibraries(thirdParty, ourBootstrap)).toBe(thirdParty);
   });
 
+  it("removes the audio hook with our bootstrap", () => {
+    const ourBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
+    const ourAudio = makeTempFile("libArgentAudio.dylib");
+    const thirdParty = makeTempFile("libSimCamLoader.dylib");
+
+    expect(
+      withdrawDyldInsertLibraries([thirdParty, ourBootstrap, ourAudio].join(":"), ourBootstrap)
+    ).toBe(thirdParty);
+    expect(withdrawDyldInsertLibraries([ourBootstrap, ourAudio].join(":"), ourBootstrap)).toBe(
+      null
+    );
+  });
+
+  /** An older install's copy still on disk: arming keeps it, withdrawing must not. */
+  it("removes an audio hook that an older install inserted from another path", () => {
+    const ourBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
+    const olderAudio = makeTempFile("libArgentAudio.dylib");
+    const thirdParty = makeTempFile("libSimCamLoader.dylib");
+
+    const armed = buildDyldInsertLibraries([olderAudio, thirdParty].join(":"), ourBootstrap);
+    expect(armed).toBe([olderAudio, thirdParty, ourBootstrap].join(":"));
+    expect(withdrawDyldInsertLibraries(armed, ourBootstrap)).toBe(thirdParty);
+    expect(
+      withdrawDyldInsertLibraries(
+        ["/tmp/old/location/libArgentAudio.dylib", ourBootstrap].join(":"),
+        ourBootstrap
+      )
+    ).toBe(null);
+  });
+
   it("undoes exactly what arming did", () => {
     const ourBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
     const thirdParty = makeTempFile("libSimCamLoader.dylib");

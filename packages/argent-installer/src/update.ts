@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import semver from "semver";
 import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
@@ -10,6 +11,8 @@ import {
   findConfiguredAdapterScopes,
   getMcpEntryForScope,
   isArgentManagedEntry,
+  isPinnedGlobalEntry,
+  resolveGlobalCommandMode,
   resolveLocalCommandMode,
   copyRulesAndAgents,
   findRetiredRulesAndAgents,
@@ -17,14 +20,15 @@ import {
   type McpServerEntry,
 } from "./mcp-configs.js";
 import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
-import { getConfigValueByKey } from "@argent/configuration-core";
+import { isGlobalInstallFirstOnPath } from "./topology.js";
 import {
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,
   isGloballyInstalled,
   isNewerVersion,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
+  globalCommandOptions,
   globalInstallCommand,
   localInstallCommand,
   probeLocalInstall,
@@ -42,6 +46,7 @@ import {
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
 import { probeGlobalInstallTarget, unwritableGlobalTargetMessage } from "./global-prefix.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { reportSkillRefresh } from "./skills.js";
 import { reportRetiredFiles } from "./retired-files.js";
 import { PACKAGE_NAME } from "./constants.js";
@@ -144,6 +149,15 @@ export function resolveUpdatePackageAction(
 ): UpdatePackageAction {
   if (trigger === "mcp_update") return "mcp_update";
   return installed ? "standalone_update" : "standalone_install";
+}
+
+function isLivePinnedEntry(entry: McpServerEntry | null): boolean {
+  return (
+    entry !== null &&
+    isPinnedGlobalEntry(entry) &&
+    fs.existsSync(entry.command) &&
+    fs.existsSync(entry.args[0])
+  );
 }
 
 export async function update(args: string[]): Promise<void> {
@@ -302,7 +316,10 @@ export async function update(args: string[]): Promise<void> {
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
-    const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
+    const pm =
+      mode === "local" ? detectProjectPackageManager(projectRoot) : detectGlobalPackageManager();
+    // Local installs must rewrite the project's manifest/lockfile.
+    const runIn = mode === "local" ? { cwd: projectRoot } : globalCommandOptions(pm);
     let latest: string | null = null;
     let target: string | null;
     let minReleaseAgeMs = 0;
@@ -313,7 +330,7 @@ export async function update(args: string[]): Promise<void> {
     } else {
       let resolved;
       try {
-        resolved = await resolveInstallableUpdateTarget(pm, installed);
+        resolved = await resolveInstallableUpdateTarget(pm, installed, runIn.cwd);
       } catch (err) {
         spinner.stop(pc.red("Could not reach registry."));
         await trackPackageAction(
@@ -477,9 +494,8 @@ export async function update(args: string[]): Promise<void> {
             // Current versions ship no postinstall, but downgrades and pinned
             // installs fetch older ones whose postinstall honors this — keep it
             // so they stay quiet and don't double-kill the tool server.
-            env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
-            // Local installs must rewrite the project's manifest/lockfile.
-            ...(mode === "local" ? { cwd: projectRoot } : {}),
+            env: { ...(runIn.env ?? process.env), ARGENT_SKIP_POSTINSTALL: "1" },
+            cwd: runIn.cwd,
           });
         },
         () => {
@@ -504,6 +520,8 @@ export async function update(args: string[]): Promise<void> {
             UPDATE_PACKAGE_ACTION_FAILED
           );
           p.log.error(`${installed ? "Update" : "Install"} failed: ${installError}`);
+          const note = yarnClassicNote(cmd);
+          if (note) p.log.info(`Run ${pc.cyan(cmdStr)}${note}.`);
           return { failed: UPDATE_PACKAGE_ACTION_FAILED };
         }
         p.log.warn(
@@ -709,8 +727,10 @@ export async function update(args: string[]): Promise<void> {
       const results: string[] = [];
 
       // Project-scope entries in local mode run the repo-local copy (the bin
-      // path may move across versions); global scopes keep the bare `argent`.
+      // path may move across versions); global scopes run the global install.
       const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
+      const globalCmdMode = resolveGlobalCommandMode();
+      const globalInstallOnPath = isGlobalInstallFirstOnPath();
       // Never REWRITE existing entries to the degraded npx fallback: local-npx
       // only means the repo-local bin can't be resolved right now (fresh clone,
       // pruned pnpm store), and the committed node-path command is right again
@@ -718,7 +738,7 @@ export async function update(args: string[]): Promise<void> {
       // scratch, with its own warning.)
       const skipEntryRewrite = localCmdMode?.kind === "local-npx";
       const entryFor = (scope: "local" | "global"): McpServerEntry =>
-        getMcpEntryForScope(installMode, scope, localCmdMode);
+        getMcpEntryForScope(installMode, scope, localCmdMode, globalCmdMode);
 
       // Only scopes that already contain an argent entry: a present editor dir
       // (`.gemini`, `.cursor`, ...) is not consent — issue #195.
@@ -737,8 +757,8 @@ export async function update(args: string[]): Promise<void> {
       // unreadable sentinel { command: "" }).
       for (const { adapter, scope, configPath } of configuredScopes) {
         const normScope = scope === "project" ? "local" : "global";
-        // Allowlists and rules still refresh for this adapter either way — only
-        // the MCP entry itself is protected.
+        // Rules and the allowlist carry-over still run for this adapter
+        // either way — only the MCP entry itself is protected.
         adaptersByScope.get(normScope)!.add(adapter);
         if (skipEntryRewrite && normScope === "local") continue;
         let existing: McpServerEntry | null;
@@ -755,9 +775,27 @@ export async function update(args: string[]): Promise<void> {
           );
           continue;
         }
+        const entry = entryFor(normScope);
+        const replacesLivePin = isLivePinnedEntry(existing) && !isPinnedGlobalEntry(entry);
+        if (replacesLivePin && normScope === "local") continue;
+        // A run without the user's PATH (the update-argent tool in a
+        // Dock-launched editor) sees no install at all, and bare `argent` fails
+        // with ENOENT in that editor.
+        if (replacesLivePin && !globalInstallOnPath) {
+          results.push(
+            `${pc.yellow("!")} ${adapter.name} kept its absolute-path entry (no global install ` +
+              `found first on PATH) ${pc.dim(configPath)}`
+          );
+          continue;
+        }
         try {
-          adapter.write(configPath, entryFor(normScope));
-          results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
+          adapter.write(configPath, entry);
+          results.push(
+            replacesLivePin
+              ? `${pc.yellow("!")} ${adapter.name} now runs the bare argent command (the global ` +
+                  `install on PATH has no node beside it to pin) ${pc.dim(configPath)}`
+              : `${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`
+          );
         } catch {
           // Skip paths that can't be written.
         }
@@ -772,21 +810,17 @@ export async function update(args: string[]): Promise<void> {
         );
       }
 
-      // Allowlists only for scopes that already had argent configured — unless
-      // the user opted out (`argent config set allowlist.enabled false`): then
-      // update leaves editor allowlists entirely alone. Unset keeps the
-      // refresh, so nothing changes for existing installs.
-      const allowlistDisabled =
-        getConfigValueByKey("allowlist.enabled", { cwd: projectRoot }) === false;
-      if (!allowlistDisabled) {
-        for (const [scope, adapters] of adaptersByScope) {
-          for (const adapter of adapters) {
-            if (!adapter.addAllowlist) continue;
-            try {
-              adapter.addAllowlist(projectRoot, scope);
-            } catch {
-              // non-fatal
-            }
+      // Allowlists are written once, by init, when the user agrees. Update
+      // never re-adds them: the user may have removed or narrowed them since.
+      // It only carries an allowlist the user still has over to tools this
+      // version added (Codex lists each tool id; the others use wildcards).
+      for (const [scope, adapters] of adaptersByScope) {
+        for (const adapter of adapters) {
+          if (!adapter.refreshAllowlist) continue;
+          try {
+            adapter.refreshAllowlist(projectRoot, scope);
+          } catch {
+            // non-fatal
           }
         }
       }
@@ -800,12 +834,6 @@ export async function update(args: string[]): Promise<void> {
       ];
 
       spinner.stop("Configuration refreshed.");
-
-      if (allowlistDisabled) {
-        p.log.info(
-          pc.dim("Left editor auto-approve allowlists alone (allowlist.enabled is false).")
-        );
-      }
 
       if (results.length > 0) {
         p.note(results.join("\n"), "MCP Configs Updated");

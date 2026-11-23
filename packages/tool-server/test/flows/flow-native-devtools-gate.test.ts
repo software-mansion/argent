@@ -129,6 +129,14 @@ describe("a flow step whose native-devtools precheck blocked", () => {
     }
   );
 
+  it("fails a network-conditions step that the precheck blocked", async () => {
+    const blocked = { status: "restart_required", message: "Relaunch com.example.app." };
+    const { run } = await runGated("restart_required", "network-conditions", NATIVE_ARGS, blocked);
+
+    expect(run.steps[0].status).toBe("fail");
+    expect(run.ok).toBe(false);
+  });
+
   it("passes the step when the tool did its work", async () => {
     const { run, registry } = await runGated("ok", "native-full-hierarchy", NATIVE_ARGS, {
       status: "ok",

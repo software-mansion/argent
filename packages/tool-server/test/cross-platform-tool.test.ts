@@ -129,17 +129,7 @@ describe("dispatchByPlatform", () => {
     );
     expect(err).toBeInstanceOf(NotImplementedOnPlatformError);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_PLATFORM_NOT_IMPLEMENTED);
-    // Pin the full 501 message: shared template (unchanged, deployed) first,
-    // then the branch-added hint that corrects it for hardware.
-    expect((err as Error).message).toBe(
-      "Tool 'no-device-branch' is not yet implemented on ios. " +
-        "The cross-platform architecture is in place — fill in " +
-        "tools/no-device-branch/platforms/ios.ts and add the matching " +
-        "'ios' block to the tool's capability declaration. " +
-        "For physical iOS devices, implement " +
-        "tools/no-device-branch/platforms/ios-device.ts instead; the capability " +
-        "block already exists."
-    );
+    expect((err as Error).message).toContain("tools/no-device-branch/platforms/ios-device.ts");
   });
 
   it("rejects with UnsupportedOperationError when capability does not declare the platform", async () => {

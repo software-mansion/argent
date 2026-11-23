@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FILE_INPUT_MARKER, flowMemberKey, type FileInputSpec } from "@argent/registry";
+import { createArchiveFile } from "@argent/archive";
 import { resolveFileInputs, type UploadEntry } from "../src/file-inputs";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
 
@@ -109,7 +110,11 @@ describe("resolveFileInputs — tar-upload kind", () => {
         { appPath: wire({ path: appDir, size: st.size, mtimeMs: 0 }) },
         () => undefined
       )
-    ).rejects.toThrow(/no upload was provided/);
+    ).rejects.toThrow(
+      `Path "${appDir}" no longer matches the file the client read: its size or ` +
+        `modification time changed, and the client uploaded none. If a build is still ` +
+        `writing it, call again once the build finishes.`
+    );
   });
 
   it("resolves a file in place when it exists on this host with matching stat", async () => {
@@ -180,6 +185,24 @@ describe("resolveFileInputs — tar-upload kind", () => {
     await expect(fs.stat(resolvedPath)).rejects.toThrow();
   });
 
+  it("extracts a zstd upload", async () => {
+    const appDir = await makeFakeApp();
+    const tarPath = path.join(tmpDir, "upload.tar.zst");
+    await createArchiveFile(appDir, tarPath, "zstd");
+    const entry = await uploadEntry(tarPath);
+
+    const { args, cleanup } = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wireUpload("/client/MyApp.app", "u-zstd", entry) },
+      (id) => (id === "u-zstd" ? entry : undefined)
+    );
+    cleanups.push(cleanup);
+
+    expect(await fs.readFile(path.join(args.appPath as string, "Info.plist"), "utf8")).toBe(
+      "<plist/>"
+    );
+  });
+
   it("extracts an uploaded single file (e.g. an .apk) and returns its path", async () => {
     const apk = await makeFakeApk("app.apk");
     const tarPath = await tarApp(apk);
@@ -237,16 +260,49 @@ describe("resolveFileInputs — tar-upload kind", () => {
     await cleanup();
   });
 
-  it("fails with guidance when remote but no uploadId provided", async () => {
+  it("says a path the client sent no stat for was not found, with advice for pre-0.16 clients", async () => {
     const ghost = path.join(tmpDir, "NotHere.app");
 
-    await expect(
-      resolveFileInputs(
+    const err = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wire({ path: ghost }) },
+      () => undefined
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).message).toBe(
+      `Path "${ghost}" was not found. The client sent no file for it, and the ` +
+        `tool-server host has none at that path. If the file is on the client, update ` +
+        `argent there: versions before 0.16 do not send it.`
+    );
+  });
+
+  it.each(["~/dl/MyApp.app", "$HOME/dl/MyApp.app", "file:///dl/MyApp.app"])(
+    "says %s is not an absolute path instead of advising an update",
+    async (spelled) => {
+      const err = await resolveFileInputs(
         { fileInputs: TAR_UPLOAD_SPEC },
-        { appPath: wire({ path: ghost }) },
+        { appPath: wire({ path: spelled }) },
         () => undefined
-      )
-    ).rejects.toThrow(/no upload was provided/);
+      ).catch((e: unknown) => e);
+
+      expect((err as Error).message).toBe(
+        `Path "${spelled}" is not an absolute path. Nothing expands "~", variables, ` +
+          `commands or URLs in a file argument, so pass the file's absolute path.`
+      );
+    }
+  );
+
+  it("says a plain relative path is resolved against the tool-server's working directory", async () => {
+    const err = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wire({ path: "build/MyApp.app" }) },
+      () => undefined
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).message).toBe(
+      `Path "build/MyApp.app" is not an absolute path. The tool-server resolves a relative path ` +
+        `against its own working directory, so pass the file's absolute path.`
+    );
   });
 
   it("fails when uploadId is set without contentHash", async () => {
