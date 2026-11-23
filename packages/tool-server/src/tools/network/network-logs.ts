@@ -313,7 +313,7 @@ Returns a paginated list of requests with method, URL, status, resource type, si
 A size with "~" is estimated from the body's length in characters; on React Native, "→ <url>" is the final URL after a redirect.
 Pass an entry's requestId to view-network-request-details for full details.
 On React Native, lists XMLHttpRequest (including axios), React Native fetch, Expo fetch, and requests from libraries such as react-native-fetch-api that call React Native's network module in a Metro development build.
-On iOS and Android, call network-capture-start before triggering requests and again after a reload. On Vega<flag:macos-apps> and React Native Mac apps</flag:macos-apps>, call this tool before triggering requests. The first read starts capture, and a read after a reload starts it again.<flag:macos-apps> Use native-network-logs for URLSession traffic on Mac apps. Both logs can contain the same fetch request.</flag:macos-apps>
+On iOS and Android<flag:macos-apps> and React Native Mac apps</flag:macos-apps>, call network-capture-start before triggering requests and again after a reload. On Vega, call this tool before triggering requests. The first read starts capture, and a read after a reload starts it again.<flag:macos-apps> Use native-network-logs for URLSession traffic on Mac apps. Both logs can contain the same fetch request.</flag:macos-apps>
 On Chromium, lists all request types for the active tab.
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
@@ -332,9 +332,8 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
       return { chromium: chromiumCdpRef(device) };
     }
     const payload = jsCapturePayload(jsReadPort(params), canonicalDeviceId(params.device_id)!);
-    // JS capture starts on read for Vega and Mac apps.
-    if (device.platform === "vega" || device.platform === "macos")
-      return { inspector: `NetworkInspector:${payload}` };
+    // JS capture starts on read for Vega, which network-capture-start does not cover.
+    if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
     // A read never starts capture: before a start it reaches nothing in the app.
     const capture = jsCapture(payload);
     return capture ? { debugger: jsCaptureDebuggerRef(params, capture) } : {};
@@ -347,7 +346,7 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     }
     const port = jsReadPort(params);
 
-    if (device.platform === "vega" || device.platform === "macos") {
+    if (device.platform === "vega") {
       const api = services.inspector as NetworkInspectorApi;
       // Idempotent: a second install is a no-op.
       const installError = await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).then(

@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { isLiveServiceState, type Registry, type ToolCapability } from "@argent/registry";
+import {
+  isLiveServiceState,
+  type DeviceInfo,
+  type Registry,
+  type ToolCapability,
+} from "@argent/registry";
 import type { DebuggerNotConnectedReason } from "@argent/telemetry";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { deviceKeyOf } from "../../utils/native-network-record";
@@ -9,7 +14,9 @@ import { settleWithin } from "../../utils/timing";
 import { classifyDevice } from "../../utils/device-info";
 import { proxyStart } from "../../utils/sim-remote";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
 import { resolveDebuggerService } from "../debugger/not-connected";
+import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 
 export const captureSchema = z.object({
   udid: z
@@ -30,7 +37,7 @@ export const captureSchema = z.object({
     .enum(["js", "native"])
     .optional()
     .describe(
-      "Use js for the app's JavaScript requests or native for requests captured by the native layer. Omit to control all supported layers.<flag:macos-apps> On Mac apps, this parameter supports only native. Read view-network-logs to start JavaScript capture in a React Native Mac app.</flag:macos-apps>"
+      "Use js for the app's JavaScript requests or native for requests captured by the native layer. Omit to control all supported layers."
     ),
   logicalDeviceId: z
     .string()
@@ -48,9 +55,26 @@ export function requestedLayers(layer: CaptureParams["layer"]): { js: boolean; n
   return { js: layer !== "native", native: layer !== "js" };
 }
 
-/** Why a call with layer js reaches nothing on a Mac app. */
-export const MACOS_NO_JS =
-  'on a Mac app these tools act only on the native layer (view-network-logs starts the capture of a React Native app\'s JS runtime when it reads), so omit layer or pass layer "native"';
+/** The Mac app a start or stop names; the bundle id must be the one the device id names. */
+export async function macosAppOfCall(
+  registry: Registry,
+  device: DeviceInfo,
+  toolId: string,
+  bundleId: string
+): Promise<MacosAppApi> {
+  const ref = macosAppRef(device);
+  return requireMacosAppOfBundle(
+    { macosApp: await registry.resolveService<MacosAppApi>(ref.urn, ref.options) },
+    device,
+    toolId,
+    bundleId
+  );
+}
+
+/** Why an Apple app has no JS layer: Apple builds load no React Native JS. */
+export function appleAppNoJs(bundleId: string, macos: boolean): string {
+  return `${bundleId} is an Apple ${macos ? "app" : "system app"}, which runs no React Native JS`;
+}
 
 /** The capture a call acts on, as its interaction messages name it. */
 export function captureName(layer: CaptureParams["layer"]): string {
