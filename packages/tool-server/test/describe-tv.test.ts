@@ -10,6 +10,9 @@ vi.mock("../src/tools/describe/platforms/android", () => ({
 
 import { describeTv } from "../src/tools/describe/platforms/tv";
 import type { TvControlApi, TvDescribeResponse } from "../src/blueprints/tv-control";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // The tool touches `describe()` and `recycleAx()`; the rest is unused here.
 function makeApi(

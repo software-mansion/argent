@@ -11,6 +11,9 @@ import { parseUiAutomatorDump } from "../src/tools/describe/platforms/android/ui
 import { describeAndroid, hasUnreadWebView } from "../src/tools/describe/platforms/android";
 import { formatDescribeTree } from "../src/tools/describe/format-tree";
 import type { DescribeNode } from "../src/tools/describe/contract";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const fixture = (name: string): string =>
   readFileSync(join(__dirname, "fixtures", `android-webview-${name}.xml`), "utf-8");

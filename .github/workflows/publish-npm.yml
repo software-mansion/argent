@@ -89,7 +89,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
 
@@ -313,8 +313,11 @@ jobs:
           '
 
       # The publish steps below upload this file and the github-release job
-      # attaches it, so the release asset is exactly what npm received.
-      - run: bun pm pack --cwd packages/argent --destination "$PWD"
+      # attaches it, so the release asset is exactly what npm received. npm
+      # publishes a tarball's package.json as packed, without adding gitHead.
+      - run: |
+          bun pm pkg set --cwd packages/argent gitHead="$(git rev-parse HEAD)"
+          bun pm pack --cwd packages/argent --destination "$PWD"
 
       - name: Dry run — skipping publish
         if: steps.mode.outputs.mode == 'release' && inputs.dry_run
@@ -410,7 +413,7 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
 
@@ -428,7 +431,7 @@ jobs:
           VERSION: ${{ needs.publish.outputs.published_version }}
           DIST_TAG: ${{ needs.publish.outputs.dist_tag }}
         run: |
-          bun pm pkg set version="$VERSION" "dependencies.@swmansion/argent=$VERSION"
+          bun pm pkg set version="$VERSION" "dependencies.@swmansion/argent=$VERSION" gitHead="$(git rev-parse HEAD)"
           if bun info "argent@${VERSION}" version >/dev/null 2>&1; then
             echo "argent@${VERSION} is already on npm — nothing to publish"
             exit 0
