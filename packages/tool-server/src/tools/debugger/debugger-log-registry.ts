@@ -62,7 +62,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   tail: z.coerce
     .number()
@@ -87,10 +87,9 @@ export function createDebuggerLogRegistryTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, LogRegistryResponse | DebuggerNotConnectedResult> {
   return {
     id: "debugger-log-registry",
-    description: `Get a summary of all console logs captured from the app's JS runtime, with the newest entries inline in { entries } (oldest first, each message cut to 300 characters).
-Read { entries } first: pass levels: ["warning", "error"] to see only those, and tail (default 20, max 100) for more lines. Grep the returned file only for older lines or full messages, and only if you can read files. Capture stops at 50,000 entries per session, so past that the stats, clusters and entries no longer change.
-Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
-Use when investigating warnings, errors, or unexpected output. Call this first for an overview, then Grep the returned file for details; never Read it whole, it can hold 50,000 lines. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when { file } does not exist or holds fewer entries than totalEntries counts (failed writes, e.g. a full disk), or when the stats are empty BECAUSE the previous debugger session ended: torn down (its log file deleted) or cut off by an app crash (the note names its kept log file, if it had one). Without that note, empty means the app has logged nothing.
+    description: `Get a summary of all console logs captured from the app's JS runtime, with the newest entries inline in { entries } (oldest first, each message cut to 300 characters; filter with levels and tail).
+Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Supports React Native<flag:macos-apps> (including Mac apps)</flag:macos-apps> and Chromium.
+Use when investigating warnings, errors, or unexpected output. Read { entries } first; Grep the returned file only for older lines or full messages, and never Read it whole: capture stops at 50,000 lines per session. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when { file } does not exist or holds fewer entries than totalEntries counts (failed writes, e.g. a full disk), or when the stats are empty BECAUSE the previous debugger session ended: torn down (its log file deleted) or cut off by an app crash (the note names its kept log file, if it had one). Without that note, empty means the app has logged nothing.
 When the debugger cannot be reached, it returns { status: "not_connected", reason, detail, guidance } with NO log file. Follow the guidance (do not retry in a loop). Grep a log file in this state only when a { note } names one kept from before the app crashed. A "connected" result's stats may come from a session whose socket has since died. Use debugger-status, not this tool, to judge debugger health.`,
     zodSchema,
     readOnly: true,

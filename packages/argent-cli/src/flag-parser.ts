@@ -123,7 +123,9 @@ function coerceScalar(raw: string, type: JsonSchema["type"], field: string): unk
     if (raw.trim() === "")
       throw new FlagParseException(`--${field} expected a number, got "${raw}"`);
     const n = Number(raw);
-    if (Number.isNaN(n)) throw new FlagParseException(`--${field} expected a number, got "${raw}"`);
+    // Infinity and 1e999 are not NaN, but JSON.stringify turns them into null on the wire.
+    if (!Number.isFinite(n))
+      throw new FlagParseException(`--${field} expected a number, got "${raw}"`);
     return n;
   }
   if (type === "integer") {

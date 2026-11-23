@@ -42,6 +42,7 @@ import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
 import { createRotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
+import { networkConditionsTool } from "../tools/network-conditions";
 import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
@@ -54,6 +55,8 @@ import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-e
 import { createDebuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
+import { createNetworkCaptureStartTool } from "../tools/network/network-capture-start";
+import { createNetworkCaptureStopTool } from "../tools/network/network-capture-stop";
 import { createDescribeTool } from "../tools/describe";
 import { createUiTreeTool } from "../tools/ui-tree";
 import { createForegroundAppTool } from "../tools/foreground-app";
@@ -176,6 +179,7 @@ export function createRegistry(): Registry {
   registry.registerTool(menuBarTool);
   registry.registerTool(createRotateTool(registry));
   registry.registerTool(shakeTool);
+  registry.registerTool(networkConditionsTool);
   registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));
@@ -188,6 +192,8 @@ export function createRegistry(): Registry {
   registry.registerTool(createDebuggerLogRegistryTool(registry));
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
+  registry.registerTool(createNetworkCaptureStartTool(registry));
+  registry.registerTool(createNetworkCaptureStopTool(registry));
   registry.registerTool(createDescribeTool(registry));
   registry.registerTool(createUiTreeTool(registry));
   registry.registerTool(createForegroundAppTool(registry));

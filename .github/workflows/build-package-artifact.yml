@@ -39,6 +39,9 @@ jobs:
 
       - run: npm run build
 
+      - name: Check the trace-processor engine loads
+        run: node scripts/check-trace-processor.cjs
+
       - run: npm run build -w @swmansion/argent
 
       # Keep the artifact build checks aligned with the publish workflow so the

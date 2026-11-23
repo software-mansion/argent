@@ -53,6 +53,9 @@ vi.mock("../src/tools/tv/tv-service", () => ({
 
 import { createAwaitScreenIdleTool } from "../src/tools/await-screen-idle";
 import { createAwaitUiElementTool } from "../src/tools/await-ui-element";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const TV_UDID = "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD";
 

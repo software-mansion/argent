@@ -166,6 +166,12 @@ curl http://localhost:3001/tools
 
 Tests are written with [Vitest](https://vitest.dev/). Each package has its own test suite.
 
+Run every package's tests in one run:
+
+```bash
+npm test
+```
+
 Run tests for a specific package:
 
 ```bash
