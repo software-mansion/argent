@@ -7,8 +7,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Runs scripts/resolve-sim-server-release-tag.sh against a fake `gh` that
-// prints a synthetic release list. Real gh applies --jq with its built-in jq,
-// so the fake pipes the list through the jq binary with the same filter.
+// serves a synthetic release list. Real gh applies --jq with its built-in jq,
+// so the fake pipes the data through the jq binary with the same filter.
+// `release list` gets tagName and publishedAt; `release view <tag>` gets the
+// release's assets, given as names (uploaded) or as { name, state } objects.
 
 const SCRIPT = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -18,35 +20,58 @@ const hasJq = spawnSync("jq", ["--version"]).status === 0;
 
 const sha = (c) => c.repeat(40);
 
-function resolve(channel, releases, { ghExit = 0 } = {}) {
+// Every asset download-simulator-server.sh asks the resolver for.
+const ASSETS = [
+  "simulator-server-argent-macos",
+  "simulator-server-argent-linux",
+  "simulator-server-argent-linux-arm64",
+  "simulator-server-argent-windows.exe",
+  "screen-sharing-agent.tar.gz",
+];
+
+function resolve(channel, releases, { ghExit = 0, viewExit = 0, assets = [] } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "resolve-sim-server-"));
   try {
     writeFileSync(path.join(dir, "releases.json"), JSON.stringify(releases));
-    // Fails on any call but the one the script is expected to make.
+    // Fails on any call but the two the script is expected to make.
     writeFileSync(
       path.join(dir, "gh"),
       `#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\\n' "$*" > "${dir}/args"
+printf '%s\\n' "$*" >> "${dir}/calls"
 [[ "${ghExit}" == 0 ]] || { echo "gh: To get started with GitHub CLI, please run: gh auth login" >&2; exit ${ghExit}; }
-[[ "$1 $2" == "release list" ]] || { echo "unexpected gh call: $*" >&2; exit 99; }
-while [[ $# -gt 0 ]]; do
-  if [[ "$1" == "--jq" ]]; then exec jq -r "$2" "${dir}/releases.json"; fi
-  shift
-done
-echo "missing --jq" >&2
-exit 98
+JQ=""
+for ((i = 1; i < $#; i++)); do [[ "\${!i}" == "--jq" ]] && { j=$((i + 1)); JQ="\${!j}"; }; done
+[[ -n "$JQ" ]] || { echo "missing --jq" >&2; exit 98; }
+case "$1 $2" in
+  "release list")
+    jq '[.[] | {tagName, publishedAt}]' "${dir}/releases.json" | jq -r "$JQ" ;;
+  "release view")
+    [[ "${viewExit}" == 0 ]] || { echo "HTTP 502: Bad Gateway" >&2; exit ${viewExit}; }
+    REL="$(jq --arg t "$3" '.[] | select(.tagName == $t)
+      | {assets: [(.assets // [])[] | if type == "string" then {name: ., state: "uploaded"} else . end]}' \
+      "${dir}/releases.json")"
+    [[ -n "$REL" ]] || { echo "release not found" >&2; exit 1; }
+    jq -r "$JQ" <<<"$REL" ;;
+  *) echo "unexpected gh call: $*" >&2; exit 99 ;;
+esac
 `
     );
     chmodSync(path.join(dir, "gh"), 0o755);
-    const args = channel === undefined ? [SCRIPT] : [SCRIPT, channel];
+    const args = channel === undefined ? [SCRIPT] : [SCRIPT, channel, ...assets];
     const res = spawnSync("bash", args, {
       encoding: "utf8",
       env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
     });
-    const argsFile = path.join(dir, "args");
-    const ghArgs = existsSync(argsFile) ? readFileSync(argsFile, "utf8").trim() : "";
-    return { status: res.status, stdout: res.stdout.trim(), stderr: res.stderr, ghArgs };
+    const callsFile = path.join(dir, "calls");
+    const ghCalls = existsSync(callsFile) ? readFileSync(callsFile, "utf8").trim().split("\n") : [];
+    return {
+      status: res.status,
+      stdout: res.stdout.trim(),
+      stderr: res.stderr,
+      ghArgs: ghCalls[0] ?? "",
+      ghCalls,
+    };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -149,4 +174,145 @@ test("rejects a channel that would change the jq regex", opts, () => {
     assert.match(res.stderr, /invalid channel/, channel);
     assert.equal(res.ghArgs, "", channel);
   }
+});
+
+test("skips a newest release that lacks a required asset", opts, () => {
+  const res = resolve(
+    "main",
+    [
+      {
+        tagName: `radon-main-${sha("b")}`,
+        publishedAt: "2026-11-23T12:00:00Z",
+        assets: ASSETS.filter((a) => a !== "simulator-server-argent-linux"),
+      },
+      { tagName: `radon-main-${sha("a")}`, publishedAt: "2026-11-23T09:00:00Z", assets: ASSETS },
+    ],
+    { assets: ASSETS }
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, `radon-main-${sha("a")}`);
+  assert.match(
+    res.stderr,
+    new RegExp(`Skipping radon-main-${sha("b")}: missing simulator-server-argent-linux$`, "m")
+  );
+});
+
+test("checks candidates newest first and stops at the first complete one", opts, () => {
+  const res = resolve(
+    "main",
+    [
+      { tagName: `radon-main-${sha("a")}`, publishedAt: "2026-11-21T10:00:00Z", assets: ASSETS },
+      { tagName: `radon-main-${sha("c")}`, publishedAt: "2026-11-23T10:00:00Z", assets: [] },
+      { tagName: `radon-main-${sha("b")}`, publishedAt: "2026-11-22T10:00:00Z", assets: ASSETS },
+      { tagName: `radon-daily-${sha("d")}`, publishedAt: "2026-11-24T10:00:00Z", assets: ASSETS },
+    ],
+    { assets: ASSETS }
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, `radon-main-${sha("b")}`);
+  assert.deepEqual(
+    res.ghCalls.slice(1).map((c) => c.split(" ")[2]),
+    [`radon-main-${sha("c")}`, `radon-main-${sha("b")}`]
+  );
+  for (const call of res.ghCalls.slice(1)) {
+    assert.match(
+      call,
+      /^release view \S+ --repo software-mansion-labs\/simulator-server-releases --json assets /
+    );
+  }
+});
+
+test("treats an asset that is still uploading as missing", opts, () => {
+  const res = resolve(
+    "main",
+    [
+      {
+        tagName: `radon-main-${sha("b")}`,
+        publishedAt: "2026-11-23T12:00:00Z",
+        assets: ASSETS.map((name) =>
+          name === "simulator-server-argent-windows.exe" ? { name, state: "open" } : name
+        ),
+      },
+      { tagName: `radon-main-${sha("a")}`, publishedAt: "2026-11-23T09:00:00Z", assets: ASSETS },
+    ],
+    { assets: ASSETS }
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, `radon-main-${sha("a")}`);
+  assert.match(res.stderr, /missing simulator-server-argent-windows\.exe/);
+});
+
+test("matches asset names exactly, not as substrings or patterns", opts, () => {
+  const res = resolve(
+    "main",
+    [
+      {
+        tagName: `radon-main-${sha("b")}`,
+        publishedAt: "2026-11-23T12:00:00Z",
+        // Has linux-arm64 but not linux, and a name that only a regex would match.
+        assets: [
+          "simulator-server-argent-macos",
+          "simulator-server-argent-linux-arm64",
+          "simulator-server-argent-windowsXexe",
+          "screen-sharing-agent.tar.gz",
+        ],
+      },
+    ],
+    { assets: ASSETS }
+  );
+  assert.equal(res.status, 1);
+  assert.match(
+    res.stderr,
+    /missing simulator-server-argent-linux simulator-server-argent-windows\.exe$/m
+  );
+});
+
+test("fails with a clear error when no release has every required asset", opts, () => {
+  const res = resolve(
+    "daily",
+    [
+      {
+        tagName: `radon-daily-${sha("b")}`,
+        publishedAt: "2026-11-23T12:00:00Z",
+        assets: ASSETS.slice(1),
+      },
+      {
+        tagName: `radon-daily-${sha("a")}`,
+        publishedAt: "2026-11-23T09:00:00Z",
+        assets: ASSETS.slice(0, 4),
+      },
+    ],
+    { assets: ASSETS }
+  );
+  assert.equal(res.status, 1);
+  assert.equal(res.stdout, "");
+  assert.match(
+    res.stderr,
+    /no radon-daily-<sha> release in software-mansion-labs\/simulator-server-releases has all of: simulator-server-argent-macos .* screen-sharing-agent\.tar\.gz/
+  );
+});
+
+test("fails instead of skipping when a release's assets can't be read", opts, () => {
+  const res = resolve(
+    "main",
+    [
+      { tagName: `radon-main-${sha("b")}`, publishedAt: "2026-11-23T12:00:00Z", assets: ASSETS },
+      { tagName: `radon-main-${sha("a")}`, publishedAt: "2026-11-23T09:00:00Z", assets: ASSETS },
+    ],
+    { assets: ASSETS, viewExit: 1 }
+  );
+  assert.equal(res.status, 1);
+  assert.equal(res.stdout, "");
+  assert.match(res.stderr, new RegExp(`could not read the assets of radon-main-${sha("b")}`));
+  assert.equal(res.ghCalls.length, 2);
+});
+
+test("without asset names, picks the newest release and never views assets", opts, () => {
+  const res = resolve("main", [
+    { tagName: `radon-main-${sha("b")}`, publishedAt: "2026-11-23T12:00:00Z", assets: [] },
+    { tagName: `radon-main-${sha("a")}`, publishedAt: "2026-11-23T09:00:00Z", assets: ASSETS },
+  ]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, `radon-main-${sha("b")}`);
+  assert.equal(res.ghCalls.length, 1);
 });
