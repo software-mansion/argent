@@ -49,13 +49,13 @@ A top-level `requires:` block limits the targets a test runs on: `platform` (`io
 
 ### Old e2e tests
 
-A file without `version`, or with `version: 1`, is an old e2e test. On an iOS simulator, an old e2e test resolves its selectors on the view hierarchy of the app, not on the `describe` tree. A selector that you record or copy from `describe` can miss there. With a landscape or upside-down UI, its `tap`, `swipe` and `tool:` coordinates also use the portrait axes of the screen, not the UI as the user sees it.
+A file without `version`, or with `version: 1`, is an old e2e test. On an iOS simulator, an old e2e test resolves its selectors on the view hierarchy of the app, not on the `describe` tree. A selector that you record or copy from `describe` can miss there. With a landscape or upside-down UI, its `tap`, `long-press`, `swipe` and `tool:` coordinates also use the portrait axes of the screen, not the UI as the user sees it. As a `run:` fragment of a `version: 2` e2e test, an old e2e test resolves its selectors on the tree of that test, but keeps its own coordinates.
 
 To replay an old e2e test, do not change it. To change an old e2e test, edit the YAML manually:
 
-1. Add `version: 2` as the first line.
+1. Set `version: 2` as the first line. Change the `version: 1` line, or add the line if the file has no `version` key. Two `version` lines make the file invalid.
 2. Replay the e2e test.
-3. Replace each selector that fails with a selector from `describe`. If the test ran in a landscape or upside-down UI, also replace its `tap`, `swipe` and `tool:` coordinates with ones from `describe`. Then replay again.
+3. Replace each selector that fails with a selector from `describe`. If the test ran in a landscape or upside-down UI, also replace its `tap`, `long-press`, `swipe` and `tool:` coordinates with ones from `describe`. Then replay again.
 
 Do not add recorded steps to an old e2e test that does not have `version: 2`.
 
