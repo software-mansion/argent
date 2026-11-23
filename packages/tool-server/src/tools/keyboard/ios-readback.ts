@@ -1,5 +1,5 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
-import { axServiceRef, type AXServiceApi } from "../../blueprints/ax-service";
+import { axServiceRef, type AXServiceApi, type AXTreeNode } from "../../blueprints/ax-service";
 
 /**
  * Reading back what `keyboard` typed on an iOS simulator (#2030).
@@ -42,6 +42,8 @@ export const READBACK_TIMING = {
    * needs.
    */
   checkMs: 3_500,
+  /** Budget for the tree read after a "no", which looks for focus that moved. */
+  treeMs: 1_500,
 };
 
 // Return and Tab can submit a form or move focus, so the field read after
@@ -108,5 +110,49 @@ export async function typeWithReadback<T>(
   if (after?.verified) return { result, readback: { verified: true } };
   // No answer, or focus left the field (the app moved it): nothing to judge.
   if (!after || !after.focused || after.timedOut) return { result };
+  // Focus can also move to another field while typing, as on a code screen
+  // that advances one box per digit. The check then reads the last box
+  // only, so its "no" says nothing about the keys.
+  const tree = await within(READBACK_TIMING.treeMs, () => ax.tree());
+  if (tree && spreadAcrossInputs(tree.nodes, text)) return { result };
   return { result, readback: { verified: false, warning: READBACK_MISMATCH_WARNING } };
+}
+
+// XCUIElementType values of the inputs that take typed text.
+const SECURE_TEXT_FIELD = 50;
+const TEXT_INPUT_TYPES = new Set([
+  45 /* searchField */,
+  49 /* textField */,
+  SECURE_TEXT_FIELD,
+  52 /* textView */,
+]);
+
+/**
+ * Whether the typed text is held by two or more inputs that follow one
+ * another in the tree, each holding the next part of it: focus moved from one
+ * to the next while typing. A secure input matches its part by length, as it
+ * shows bullets.
+ */
+export function spreadAcrossInputs(nodes: AXTreeNode[], text: string): boolean {
+  const chars = Array.from(text);
+  const inputs = nodes
+    .filter((node) => node.elementType !== undefined && TEXT_INPUT_TYPES.has(node.elementType))
+    .map((node) => ({
+      secure: node.elementType === SECURE_TEXT_FIELD,
+      value: Array.from(node.hintShowing ? "" : (node.value ?? "")),
+    }));
+  for (let start = 0; start < inputs.length; start++) {
+    let pos = 0;
+    let used = 0;
+    for (let i = start; i < inputs.length && pos < chars.length; i++) {
+      const { secure, value } = inputs[i]!;
+      const part = chars.slice(pos, pos + value.length);
+      if (value.length === 0 || part.length < value.length) break;
+      if (!secure && part.join("") !== value.join("")) break;
+      pos += value.length;
+      used++;
+    }
+    if (pos === chars.length && used >= 2) return true;
+  }
+  return false;
 }

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceInfo } from "@argent/registry";
+import type { AXTreeNode } from "../src/blueprints/ax-service";
 import {
   READBACK_MISMATCH_WARNING,
   READBACK_TIMING,
+  spreadAcrossInputs,
   typeWithReadback,
 } from "../src/tools/keyboard/ios-readback";
 import { SHIFT_KEYCODE } from "../src/tools/keyboard/key-codes";
@@ -27,7 +29,7 @@ function registryWith(api: unknown) {
 
 const saved = { ...READBACK_TIMING };
 beforeEach(() => {
-  Object.assign(READBACK_TIMING, { resolveMs: 50, precheckMs: 50, checkMs: 300 });
+  Object.assign(READBACK_TIMING, { resolveMs: 50, precheckMs: 50, checkMs: 300, treeMs: 50 });
 });
 afterEach(() => {
   Object.assign(READBACK_TIMING, saved);
@@ -154,6 +156,42 @@ describe("typeWithReadback", () => {
     expect(out.readback).toBeUndefined();
   });
 
+  // A code screen moves focus to the next box after each digit, so the
+  // check after typing reads the last box only.
+  describe("on a screen that moves focus from box to box", () => {
+    const box = (value: string, elementType = 49) =>
+      value
+        ? { index: 0, elementType, value }
+        : { index: 0, elementType, value: "", hintShowing: true };
+
+    async function typeIntoBoxes(boxes: AXTreeNode[]) {
+      let typed = false;
+      const { api } = fakeAx((text) => ({ focused: true, verified: text === "" && !typed }));
+      const tree = vi.fn(async () => ({ alertVisible: false, nodes: boxes, truncated: false }));
+      const out = await typeWithReadback(
+        registryWith({ ...api, tree }),
+        IOS_SIM,
+        "12",
+        async () => {
+          typed = true;
+          return { typed: "12", keys: 2 };
+        }
+      );
+      return { out, tree };
+    }
+
+    it("says nothing when the boxes hold the text between them", async () => {
+      const { out, tree } = await typeIntoBoxes([box("1"), box("2"), box("")]);
+      expect(out.readback).toBeUndefined();
+      expect(tree).toHaveBeenCalledTimes(1);
+    });
+
+    it("still warns when the boxes do not add up to the text", async () => {
+      const { out } = await typeIntoBoxes([box("1"), box("3"), box("")]);
+      expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
+    });
+  });
+
   it("does not check text with Return or Tab, which can move focus or submit", async () => {
     const { api, fill } = fakeAx(() => ({ focused: true, verified: true }));
     for (const text of ["a\nb", "a\tb", "a\rb"]) {
@@ -202,10 +240,48 @@ describe("typeWithReadback", () => {
   });
 });
 
-describe("typeSimulatorServer key release", () => {
-  // A Down that was not acknowledged in time can still land once the server
-  // resumes; without an Up the key stays held.
-  it("sends Up for every key that went down when a press fails", async () => {
+describe("spreadAcrossInputs", () => {
+  const node = (elementType: number, value = "", extra: Partial<AXTreeNode> = {}): AXTreeNode => ({
+    index: 0,
+    elementType,
+    value,
+    ...extra,
+  });
+
+  it("finds the text in boxes that follow one another, past other elements", () => {
+    const nodes = [
+      node(48, "Enter the code"),
+      node(49, "4"),
+      node(1),
+      node(49, "2"),
+      node(49, "7"),
+    ];
+    expect(spreadAcrossInputs(nodes, "427")).toBe(true);
+    expect(spreadAcrossInputs(nodes, "27")).toBe(true);
+  });
+
+  it("needs two inputs: one input holding the text is the check's job", () => {
+    expect(spreadAcrossInputs([node(49, "12")], "12")).toBe(false);
+  });
+
+  it("does not match across an empty box or a wrong part", () => {
+    expect(spreadAcrossInputs([node(49, "1"), node(49, ""), node(49, "2")], "12")).toBe(false);
+    expect(spreadAcrossInputs([node(49, "1"), node(49, "3")], "12")).toBe(false);
+    expect(spreadAcrossInputs([node(49, "1"), node(49, "23")], "12")).toBe(false);
+  });
+
+  it("reads a placeholder as empty and a secure box by its length", () => {
+    const placeholder = node(49, "0", { hintShowing: true });
+    expect(spreadAcrossInputs([node(49, "1"), placeholder], "10")).toBe(false);
+    expect(spreadAcrossInputs([node(50, "•"), node(50, "•")], "12")).toBe(true);
+  });
+});
+
+describe("typeSimulatorServer on a failed press", () => {
+  // Releasing a key still down is the socket's job: it writes the Up behind
+  // the unanswered Down, where a new socket could not
+  // (test/simulator-command-ack.test.ts).
+  it("stops at the failed press and sends no further keys", async () => {
     const sent: Array<[string, number]> = [];
     const api = {
       pressKey: async (direction: string, code: number) => {
@@ -218,24 +294,10 @@ describe("typeSimulatorServer key release", () => {
       typeSimulatorServer(registryWith(api), IOS_SIM, { udid: IOS_SIM.id, text: "Ab" })
     ).rejects.toThrow("no ack");
 
-    const aKey = sent[1]![1];
     expect(sent).toEqual([
       ["Down", SHIFT_KEYCODE],
-      ["Down", aKey],
-      ["Up", aKey],
-      ["Up", SHIFT_KEYCODE],
+      ["Down", sent[1]![1]],
     ]);
-  });
-
-  it("still fails with the press error when the release fails too", async () => {
-    const api = {
-      pressKey: async () => {
-        throw new Error("wedged");
-      },
-    };
-    await expect(
-      typeSimulatorServer(registryWith(api), IOS_SIM, { udid: IOS_SIM.id, text: "a" })
-    ).rejects.toThrow("wedged");
   });
 });
 

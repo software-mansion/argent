@@ -196,6 +196,51 @@ describe("sendCommand — command acknowledgement", () => {
     await server.close();
   });
 
+  // A stalled server still applies the Down it never answered once it
+  // resumes; an Up on a new socket could not open while it stalls (#2030).
+  it("releases the keys still down on the same socket when a key times out", async () => {
+    const server = await startServer();
+    const SHIFT = 225;
+    await sendCommand(server.api, { cmd: "key", code: SHIFT, direction: "Down" });
+    server.setReply("silent");
+    vi.useFakeTimers();
+    const inFlight = sendCommand(
+      server.api,
+      { cmd: "key", code: 5, direction: "Down" },
+      { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+    ).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(KEY_ACK_TIMEOUT_MS);
+    expect(getFailureSignal(await inFlight)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT
+    );
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(server.received).toHaveLength(4));
+    // Last pressed, first released, behind the Down it releases.
+    expect(server.received.slice(2)).toMatchObject([
+      { cmd: "key", code: 5, direction: "Up" },
+      { cmd: "key", code: SHIFT, direction: "Up" },
+    ]);
+    expect(server.connectionCount()).toBe(1);
+    await server.close();
+  });
+
+  it("releases nothing when no key is down at the timeout", async () => {
+    const server = await startServer();
+    await sendCommand(server.api, { cmd: "key", code: 4, direction: "Down" });
+    await sendCommand(server.api, { cmd: "key", code: 4, direction: "Up" });
+    server.setReply("silent");
+    vi.useFakeTimers();
+    const inFlight = sendCommand(server.api, { ...TOUCH }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await inFlight;
+    vi.useRealTimers();
+    // The next command reconnects, so anything the drop wrote has arrived.
+    server.setReply("ok");
+    await sendCommand(server.api, { ...TOUCH });
+    expect(server.received.map((m) => m.cmd)).toEqual(["key", "key", "touch", "touch"]);
+    await server.close();
+  });
+
   it("never resolves a command that was refused — no phantom success", async () => {
     const server = await startServer();
     server.setReply("error");
