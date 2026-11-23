@@ -55,6 +55,16 @@ Three details differ from a simulator recording:
 
 During a recording, iOS shows a clean status bar with the time 9:41, as it does for QuickTime Player.
 
+## Mac apps
+
+Ask your agent to start your Mac app through Argent and record the interaction. Mac Catalyst apps also work. See [how to start a Mac app](/docs/features/mac-apps#start-your-app).
+
+The video shows the app window, including any parts of menus, sheets, popovers, and alerts that overlap it. You can show the agent's pointer and clicks in the video. Mac app recording requires neither Screen Recording permission nor `ffmpeg`.
+
+Restore a minimized window and move it fully onto one display before you start. Argent keeps recording while the Mac is locked or the display sleeps, though the video can be less sharp.
+
+Have the agent save the video before you quit or restart the app. Record the video and collect a native performance profile in separate runs because recording uses CPU time in the app. For warnings and recovery steps, see the [Mac app recording reference](/docs/reference/tools#screen-recording-on-a-mac-app).
+
 ## Where the video lands
 
 Argent saves each video in the `.argent/recordings/` directory of the project. The file name contains the device and the time of the recording. Argent does not overwrite an existing file. You can change the directory in the Argent configuration.
@@ -70,10 +80,10 @@ The files stay in the working tree. Add the directory to `.gitignore` when you d
 
 ## Limits
 
-- Argent records iOS simulators, remote simulators, physical iPhones, Android emulators, and physical Android devices. Argent does not record tvOS simulators, Chromium apps, Mac apps, Vega devices, or HarmonyOS devices.
+- Argent records iOS simulators, remote simulators, physical iPhones, Android emulators, physical Android devices, and Mac apps. Argent does not record tvOS simulators, Chromium apps, Vega devices, or HarmonyOS devices.
 - Argent records a physical iPhone only when the iPhone is connected with a USB cable. Argent cannot record an iPhone that is connected over Wi-Fi.
 - One recording per device at a time. Different devices can record at the same time.
-- Argent uses `ffmpeg` to encode the video. Install `ffmpeg` before the first recording. On a remote simulator `ffmpeg` is optional: without it the video still comes back, with no watermark and with the still parts left in.
+- Install `ffmpeg` to record a local simulator, an Android device or emulator, or a cabled iPhone. On remote simulators, Argent needs `ffmpeg` only to add the watermark and trim still sections.
 - On Android, a secure screen such as a password field or a DRM video comes out black.
 - A recording needs a stop call before the agent can give you the file. This is also the case when the time limit stopped the recording.
 
