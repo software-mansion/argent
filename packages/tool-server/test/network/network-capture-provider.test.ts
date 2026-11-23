@@ -211,6 +211,8 @@ function jsLayer<L extends { layer: string }>(result: CaptureResult<L>): L | und
   return result.layers.find((l) => l.layer === "js");
 }
 
+const urns = (): string[] => [...registry.getSnapshot().services.keys()];
+
 /** The debugger the JS layer opened: the provider device's runtime, picked by its logicalDeviceId. */
 async function openedDebugger(): Promise<{ deviceName: string; logicalDeviceId?: string }> {
   return registry.resolveService(`JsRuntimeDebugger:${METRO_PORT}:${LOGICAL_ID}`);
@@ -277,6 +279,34 @@ describe.each([
       .catch(() => undefined);
 
     expect(dialled.urls).toEqual([PROVIDER_SOCKET_URL, PROVIDER_SOCKET_URL]);
+  });
+
+  it.each([
+    { tool: "view-network-logs", args: {} },
+    { tool: "view-network-request-details", args: { requestId: "rn-net-1" } },
+  ])(
+    "reads with $tool on the provider's Metro port when the read names only the logicalDeviceId",
+    async ({ tool, args }) => {
+      publishDescriptor({ jsDebugger: true });
+      await start(udid);
+
+      const answer = await registry.invokeTool<unknown>(tool, { device_id: LOGICAL_ID, ...args });
+
+      expect(JSON.stringify(answer)).not.toContain("Network capture is not started");
+      // The read reuses the debugger the start opened on the provider's port.
+      expect(dialled.urls).toEqual([PROVIDER_SOCKET_URL]);
+      expect(urns()).not.toContain(`JsRuntimeDebugger:8081:${LOGICAL_ID}`);
+    }
+  );
+
+  it("keeps an explicit port over the provider's Metro port on a read", async () => {
+    publishDescriptor({ jsDebugger: true });
+    await start(udid);
+
+    expect(
+      await registry.invokeTool("view-network-logs", { device_id: LOGICAL_ID, port: 8081 })
+    ).toContain("Network capture is not started");
+    expect(dialled.urls).toEqual([PROVIDER_SOCKET_URL]);
   });
 
   it("does not start the JS layer when the provider did not grant js-debugger", async () => {

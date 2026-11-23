@@ -29,6 +29,7 @@ import {
   FailureError,
   Registry,
   ServiceState,
+  getFailureSignal,
   type ServiceInstance,
 } from "@argent/registry";
 import {
@@ -4296,20 +4297,33 @@ describe("the tools on the Android native layer", () => {
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
   });
 
-  it("native-network-logs has only listing parameters: a key it does not know is dropped, and the read stops nothing", async () => {
+  it("native-network-logs rejects the retired stop with a hint to network-capture-stop, and the read stops nothing", async () => {
     expect(
       Object.keys(createNativeNetworkLogsTool(new Registry()).zodSchema!.shape).sort()
-    ).toEqual(["bundleId", "clear", "limit", "port", "udid"]);
+    ).toEqual(["bundleId", "clear", "limit", "port", "stop", "udid"]);
     const registry = toolRegistry();
     const api = await startThrough(registry);
     const agent = agents[0]!;
 
-    expect(
-      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG, stop: true })
-    ).toMatchObject({ status: "ok", armed: true, total: 0 });
+    for (const stop of [true, false]) {
+      const err = await registry
+        .invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG, stop })
+        .then(
+          () => undefined,
+          (e: unknown) => e
+        );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+      expect((err as Error).message).toContain(
+        "`stop`: native-network-logs no longer stops capture: call network-capture-stop with this udid and bundleId"
+      );
+    }
 
     expect(api.isStarted()).toBe(true);
     expect(agent.received).not.toContain("Network.disable");
+    // Without the key, the same read lists the app's requests.
+    expect(
+      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG })
+    ).toMatchObject({ status: "ok", armed: true, total: 0 });
   });
 
   it("routes an android- id in view-network-request-details to the body from the fake socket, and an unknown id to not found", async () => {

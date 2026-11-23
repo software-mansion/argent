@@ -176,6 +176,8 @@ class FakeRuntime {
   readonly evaluated: ScriptName[] = [];
   /** The runtime keeps the connection but answers no evaluate, as a busy or frozen one. */
   frozen = false;
+  /** Scripts that run in the app, but whose answer never reaches argent, as when Metro drops it. */
+  readonly lostAnswers = new Set<ScriptName>();
 
   constructor(
     readonly appId: string | undefined,
@@ -208,7 +210,11 @@ class FakeRuntime {
         )
       );
     }
-    return runInContext(expr, this.context);
+    const answer = runInContext(expr, this.context);
+    if (this.lostAnswers.has(scriptName(expr))) {
+      return Promise.reject(new Error("CDP connection closed before Runtime.evaluate answered"));
+    }
+    return answer;
   }
 
   get paused(): unknown {
@@ -1754,6 +1760,55 @@ describe("network-capture-stop", () => {
 
     expect(layer(second, "js")).toEqual(unconfirmed);
     expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", port: PORT });
+  });
+
+  it("treats an install whose answer was lost as recording, so a stop that cannot reach the runtime does not confirm it", async () => {
+    const runtime = new FakeRuntime(APP);
+    runtime.lostAnswers.add("install");
+    serve(PORT, SERIAL, runtime);
+    expect(layer(await start(SERIAL, APP), "js")).toMatchObject({ armed: false });
+    await reconnect(PORT, SERIAL, undefined);
+
+    const result = await stop(SERIAL, APP);
+
+    expect(layer(result, "js")).toEqual({
+      layer: "js",
+      armed: true,
+      total: 0,
+      reason: `${METRO_DOWN}; the interceptor already in the app's JS runtime may still record, so call network-capture-stop again once the app answers`,
+    });
+    // The install took effect in the app: a request sent after the stop is recorded.
+    runtime.send("/after-stop");
+    expect(
+      JSON.parse(String(runtime.evaluate(makeNetworkLogReadScript(0, 10, PORT))))
+    ).toMatchObject({ interceptorInstalled: true, total: 1 });
+  });
+
+  it("says nothing records when the install whose answer was lost ended with the app's process", async () => {
+    const runtime = new FakeRuntime(APP);
+    runtime.lostAnswers.add("install");
+    serve(PORT, SERIAL, runtime);
+    await start(SERIAL, APP);
+    await reconnect(PORT, SERIAL, undefined);
+    running = new Set([OTHER]);
+
+    expect(layer(await stop(SERIAL, APP), "js")).toMatchObject({
+      armed: false,
+      reason: expect.stringContaining(`${APP} is not running, so nothing records`),
+    });
+  });
+
+  it("confirms a stop that cannot reach the runtime when the runtime answered that the interceptor did not install", async () => {
+    serve(PORT, SERIAL, new FakeRuntime(APP, { loaded: false }));
+    expect(layer(await start(SERIAL, APP), "js")).toMatchObject({ armed: false });
+    await reconnect(PORT, SERIAL, undefined);
+
+    expect(layer(await stop(SERIAL, APP), "js")).toEqual({
+      layer: "js",
+      armed: false,
+      total: 0,
+      reason: `${METRO_DOWN}; while capture is stopped, the app's JS runtime gets no interceptor`,
+    });
   });
 
   it.each(PROCESS_PLATFORMS)(
