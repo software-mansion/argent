@@ -44,5 +44,6 @@ run("bash", ["scripts/download-simulator-server.sh"]);
 run("bash", ["scripts/download-native-binaries.sh", ...(tag ? [tag] : [])]);
 run("bash", ["scripts/download-trace-processor.sh", ...(tag ? [tag] : [])]);
 run("npm", ["run", "build"]);
+run("node", ["scripts/check-trace-processor.cjs"]);
 run("npm", ["run", "build", "-w", "@swmansion/argent"]);
 run("npm", ["pack", "-w", "@swmansion/argent", "--pack-destination", "."]);
