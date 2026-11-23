@@ -40,8 +40,11 @@ jobs:
       - name: Build workspace dependencies
         run: bun run build
 
+      # bun prefixes each line with its package, and the runner only reads
+      # vitest's `::error` annotations from the start of a line.
       - name: Run tests
-        run: bun run --workspaces --sequential --no-exit-on-error --if-present test
+        shell: bash
+        run: bun run --workspaces --sequential --no-exit-on-error --if-present test 2>&1 | sed -uE 's/^[^ |]+ +\| ::/::/'
 
       - name: Test root scripts
         run: bun run test:scripts
