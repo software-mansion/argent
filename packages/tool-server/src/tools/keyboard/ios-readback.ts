@@ -10,46 +10,42 @@ import { axServiceRef, type AXServiceApi, type AXTreeNode } from "../../blueprin
  *
  * `keyboard` inserts at the caret rather than replacing the field, so the
  * field is judged only where that means something: it was empty before
- * typing (the ax-service check, asked with `""`), and must hold the typed
- * text after. Any other case types without a check, as before.
+ * typing, and must hold the typed text after. Any other case types without a
+ * check, as before.
  *
- * After typing, the tree is read first: it answers at once, and it shows the
- * focused field's text, so a capital iOS put at the start of a word
- * (auto-capitalization, on by default in a UIKit text field) counts as the
- * keys landing. Where the tree cannot tell (a secure field shows bullets, or
- * the app has not applied the last key yet), the ax-service check decides:
- * it waits for a late app, and counts a secure field as holding the text
- * when it shows as many bullets.
+ * Both reads go through the tree, which answers at once. The ax-service check
+ * answers "no" only after its 1 s wait, and the daemon serves one request at
+ * a time, so a check given up on would hold up every later ax-service
+ * request, the orientation read of each touch among them. The check runs only
+ * where the tree cannot tell (a secure field shows bullets, or the app has
+ * not applied the last key yet), and is always waited for.
+ *
+ * The tree also shows which input is focused. When focus moved on while
+ * typing, as on a code screen that advances one box per digit, the focused
+ * input is not the one typed into, and nothing is judged.
  *
  * A mismatch is a warning, not a failure: the keys may be fine and the app or
- * iOS may have changed the text on purpose (auto-capitalization, a formatter,
- * a length limit). The warning never quotes the text: it may be a secret.
+ * iOS may have changed the text on purpose (auto-correction, a formatter, a
+ * length limit, a field that capitalizes every letter). The warning never
+ * quotes the text: it may be a secret.
  */
 
-/**
- * The ax-service check waits up to 1 s for the field to hold the text it is
- * asked about, re-reading it, and answers "no" only when that wait runs out.
- * So "yes" comes back fast and "no" after about 1 s. Mutable for tests only.
- */
+/** Mutable for tests only. */
 export const READBACK_TIMING = {
   /** Budget to reach the ax-service; past it, typing goes on unchecked. */
   resolveMs: 1_500,
   /**
-   * Budget for the empty-field check before typing. An empty field answers
-   * in about 0.1 s; a field that holds text answers only after the daemon's
-   * 1 s wait, which would slow every append. Past this budget the field
-   * counts as not empty, and typing goes on unchecked.
+   * Budget for each tree read. Before typing, past it the typing goes on
+   * unchecked; after typing, the ax-service check decides.
    */
-  precheckMs: 400,
+  treeMs: 1_500,
   /**
-   * Budget for the check after typing. It must outlast the daemon's 1 s
-   * wait, or a field that does not hold the text never answers "no". The
-   * daemon's wait also gives an app that applies input late the time it
-   * needs.
+   * Budget for the ax-service check after typing. It must outlast the
+   * daemon's 1 s wait, or a field that does not hold the text never answers
+   * "no". The daemon's wait also gives an app that applies input late the
+   * time it needs.
    */
   checkMs: 3_500,
-  /** Budget for each tree read after typing; past it, the check decides. */
-  treeMs: 1_500,
 };
 
 // Return and Tab can submit a form or move focus, so the field read after
@@ -58,8 +54,9 @@ const FOCUS_MOVING = /[\r\n\t]/;
 
 export interface ReadbackOutcome {
   /**
-   * True when the field holds the typed text, apart from a capital iOS put at
-   * the start of a word; false with `warning` when it does not.
+   * True when the field holds the typed text, apart from what iOS changes as
+   * the keys arrive (a capital at the start of a word, smart punctuation);
+   * false with `warning` when it does not.
    */
   verified: boolean;
   warning?: string;
@@ -108,22 +105,25 @@ export async function typeWithReadback<T>(
     const api = await registry.resolveService<AXServiceApi>(ref.urn, ref.options);
     return api.degraded ? undefined : api;
   });
-  const before =
-    ax && (await within(READBACK_TIMING.precheckMs, () => ax.fill("", { check: true })));
-  const checkable = before?.focused === true && before.verified === true && !before.timedOut;
+  const readTree = async () =>
+    ax ? (await within(READBACK_TIMING.treeMs, () => ax.tree()))?.nodes : undefined;
+
+  const before = await readTree();
+  const field = before && focusedInput(before);
+  const typedInto = field && heldText(field) === "" ? field : undefined;
 
   const result = await type();
-  if (!ax || !checkable) return { result };
+  if (!ax || !typedInto) return { result };
 
-  const readTree = async () => {
-    const tree = await within(READBACK_TIMING.treeMs, () => ax.tree());
-    return tree ? judgeTree(tree.nodes, text) : undefined;
+  const judge = async () => {
+    const nodes = await readTree();
+    return nodes && judgeTree(nodes, typedInto, text);
   };
   const verified = { result, readback: { verified: true } };
 
-  const early = await readTree();
+  const early = await judge();
   if (early === "holds") return verified;
-  if (early === "spread") return { result };
+  if (early === "moved") return { result };
 
   const after = await within(READBACK_TIMING.checkMs, () => ax.fill(text, { check: true }));
   if (after?.verified) return verified;
@@ -131,33 +131,95 @@ export async function typeWithReadback<T>(
   if (!after || !after.focused || after.timedOut) return { result };
   // The check waited up to 1 s, so an app that applies input late has done
   // so by now: read the tree again before calling it a mismatch.
-  const late = await readTree();
+  const late = await judge();
   if (late === "holds") return verified;
-  if (late === "spread") return { result };
+  if (late === "moved") return { result };
   return { result, readback: { verified: false, warning: READBACK_MISMATCH_WARNING } };
 }
 
 /**
- * What the tree says about the typed text: the focused field holds it (iOS
- * may have capitalized a word), it sits across inputs that focus moved
- * through, or neither.
+ * What the tree says about the typed text: the input typed into holds it,
+ * focus moved on to another input (or off every input), or it cannot tell.
  */
-function judgeTree(nodes: AXTreeNode[], text: string): "holds" | "spread" | undefined {
-  const focused = nodes.find(
-    (node) => node.traits?.includes("isEditing") && node.elementType !== SECURE_TEXT_FIELD
+function judgeTree(
+  nodes: AXTreeNode[],
+  typedInto: AXTreeNode,
+  text: string
+): "holds" | "moved" | undefined {
+  const focused = focusedInput(nodes);
+  if (!focused || !sameInput(focused, typedInto)) return "moved";
+  const held = heldText(focused);
+  return held !== undefined && holdsTyped(text, held) ? "holds" : undefined;
+}
+
+// XCUIElementType values of the inputs that take typed text.
+const SECURE_TEXT_FIELD = 50;
+const TEXT_INPUT_TYPES = new Set([
+  45 /* searchField */,
+  49 /* textField */,
+  SECURE_TEXT_FIELD,
+  52 /* textView */,
+]);
+
+/** The input that has keyboard focus. */
+function focusedInput(nodes: AXTreeNode[]): AXTreeNode | undefined {
+  return nodes.find(
+    (node) =>
+      node.traits?.includes("isEditing") &&
+      node.elementType !== undefined &&
+      TEXT_INPUT_TYPES.has(node.elementType)
   );
-  if (focused && !focused.hintShowing && typeof focused.value === "string") {
-    if (focused.value === text || capitalizedByIos(text, focused.value)) return "holds";
-  }
-  // Focus can also move to another field while typing, as on a code screen
-  // that advances one box per digit. The focused field is then the last box,
-  // so its text says nothing about the keys.
-  if (spreadAcrossInputs(nodes, text)) return "spread";
-  return undefined;
+}
+
+/** The input's text, or undefined for a secure input that holds some: it shows bullets. */
+function heldText(node: AXTreeNode): string | undefined {
+  if (node.hintShowing) return "";
+  if (node.elementType === SECURE_TEXT_FIELD) return node.value ? undefined : "";
+  return node.value ?? "";
+}
+
+/**
+ * Whether two reads show the same input, told by its place: the two frames
+ * cover mostly the same area. Two inputs do not overlap, while one input can
+ * move and change size a little as it fills: a search field narrows for its
+ * clear button and slides over, a text view grows.
+ */
+function sameInput(a: AXTreeNode, b: AXTreeNode): boolean {
+  if (a.elementType !== b.elementType) return false;
+  if (!a.frame || !b.frame) return true;
+  const [p, q] = [a.frame, b.frame];
+  const width = Math.min(p.x + p.width, q.x + q.width) - Math.max(p.x, q.x);
+  const height = Math.min(p.y + p.height, q.y + q.height) - Math.max(p.y, q.y);
+  if (width <= 0 || height <= 0) return false;
+  const smaller = Math.min(p.width * p.height, q.width * q.height);
+  return width * height >= smaller / 2;
+}
+
+/**
+ * Whether `held` is what iOS leaves in a UIKit text field for `typed` as the
+ * keys arrive: the same text, with smart punctuation, and with the first
+ * letters of some words made capital. Both are on by default.
+ */
+export function holdsTyped(typed: string, held: string): boolean {
+  const a = plainPunctuation(typed);
+  const b = plainPunctuation(held);
+  return a === b || capitalizedByIos(a, b);
+}
+
+/**
+ * Undoes smart punctuation: curly apostrophes and quotes (in the host
+ * keyboard's language, so „ ” as well) back to straight ones, and a dash for
+ * two hyphens on both sides.
+ */
+function plainPunctuation(text: string): string {
+  return text
+    .replace(/[‘’‚‛]/gu, "'")
+    .replace(/[“”„‟]/gu, '"')
+    .replace(/--|–/gu, "—");
 }
 
 // What may come before the first letter of a word.
-const WORD_OPENER = /[\s"'“‘([{¿¡]/u;
+const WORD_OPENER = /[\s"'([{¿¡]/u;
 
 /**
  * Whether `held` is `typed` with the first letters of some words made
@@ -181,43 +243,4 @@ export function capitalizedByIos(typed: string, held: string): boolean {
     changed = true;
   }
   return changed;
-}
-
-// XCUIElementType values of the inputs that take typed text.
-const SECURE_TEXT_FIELD = 50;
-const TEXT_INPUT_TYPES = new Set([
-  45 /* searchField */,
-  49 /* textField */,
-  SECURE_TEXT_FIELD,
-  52 /* textView */,
-]);
-
-/**
- * Whether the typed text is held by two or more inputs that follow one
- * another in the tree, each holding the next part of it: focus moved from one
- * to the next while typing. A secure input matches its part by length, as it
- * shows bullets.
- */
-export function spreadAcrossInputs(nodes: AXTreeNode[], text: string): boolean {
-  const chars = Array.from(text);
-  const inputs = nodes
-    .filter((node) => node.elementType !== undefined && TEXT_INPUT_TYPES.has(node.elementType))
-    .map((node) => ({
-      secure: node.elementType === SECURE_TEXT_FIELD,
-      value: Array.from(node.hintShowing ? "" : (node.value ?? "")),
-    }));
-  for (let start = 0; start < inputs.length; start++) {
-    let pos = 0;
-    let used = 0;
-    for (let i = start; i < inputs.length && pos < chars.length; i++) {
-      const { secure, value } = inputs[i]!;
-      const part = chars.slice(pos, pos + value.length);
-      if (value.length === 0 || part.length < value.length) break;
-      if (!secure && part.join("") !== value.join("")) break;
-      pos += value.length;
-      used++;
-    }
-    if (pos === chars.length && used >= 2) return true;
-  }
-  return false;
 }

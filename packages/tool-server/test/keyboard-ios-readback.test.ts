@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceInfo } from "@argent/registry";
-import type { AXTreeNode } from "../src/blueprints/ax-service";
+import type { AXFillResponse, AXTreeNode } from "../src/blueprints/ax-service";
 import {
   capitalizedByIos,
+  holdsTyped,
   READBACK_MISMATCH_WARNING,
   READBACK_TIMING,
-  spreadAcrossInputs,
   typeWithReadback,
 } from "../src/tools/keyboard/ios-readback";
 import { SHIFT_KEYCODE } from "../src/tools/keyboard/key-codes";
@@ -16,294 +16,275 @@ import { KEY_HOLD, typeSimulatorServer } from "../src/tools/keyboard/simulator-s
 
 const IOS_SIM: DeviceInfo = { id: "TEST-UDID", platform: "ios", kind: "simulator" };
 
-type FillAnswer = { focused: boolean; verified: boolean; timedOut?: boolean };
+const TEXT_FIELD = 49;
+const SECURE_TEXT_FIELD = 50;
 
-/** An ax-service whose `fill` check answers from a script, keyed by the text asked about. */
-function fakeAx(answer: (text: string) => FillAnswer | Promise<FillAnswer>, degraded = false) {
-  const fill = vi.fn(async (text: string, _opts?: { check?: boolean }) => answer(text));
-  return { api: { degraded, fill }, fill };
+/** A text input on screen; `slot` places it left to right, as code boxes sit. */
+function input(
+  value: string,
+  { focused = false, slot = 0, elementType = TEXT_FIELD } = {}
+): AXTreeNode {
+  return {
+    index: slot,
+    elementType,
+    // As the daemon sends it: fractions of the screen.
+    frame: { x: 0.1 + 0.17 * slot, y: 0.14, width: 0.15, height: 0.05 },
+    ...(value ? { value } : { value: "Placeholder", hintShowing: true }),
+    ...(focused ? { traits: ["isEditing"] } : {}),
+  };
+}
+
+/**
+ * A screen the tree reads from, and the ax-service check answers about: the
+ * focused input holds the text, a secure one as many bullets. `checkSays`
+ * overrides that answer, for an app that applies input late.
+ */
+function fakeScreen(nodes: AXTreeNode[], opts: { checkMs?: number } = {}) {
+  const screen = { nodes, checkSays: undefined as AXFillResponse | undefined };
+  const tree = vi.fn(async () => ({ alertVisible: false, nodes: screen.nodes, truncated: false }));
+  const fill = vi.fn(async (text: string, _opts?: { check?: boolean }) => {
+    if (opts.checkMs) await new Promise((r) => setTimeout(r, opts.checkMs));
+    if (screen.checkSays) return screen.checkSays;
+    const focused = screen.nodes.find((n) => n.traits?.includes("isEditing"));
+    if (!focused) return { focused: false, verified: false };
+    const held = focused.hintShowing ? "" : (focused.value ?? "");
+    const verified =
+      focused.elementType === SECURE_TEXT_FIELD ? held.length === text.length : held === text;
+    return { focused: true, verified };
+  });
+  return { screen, api: { degraded: false, tree, fill }, tree, fill };
 }
 
 function registryWith(api: unknown) {
   return { resolveService: vi.fn(async () => api) } as never;
 }
 
+/** Types `text`, which leaves the screen showing `after`. */
+async function typeOn(fake: ReturnType<typeof fakeScreen>, text: string, after: AXTreeNode[]) {
+  return typeWithReadback(registryWith(fake.api), IOS_SIM, text, async () => {
+    fake.screen.nodes = after;
+    return { typed: text, keys: text.length };
+  });
+}
+
 const saved = { ...READBACK_TIMING };
 beforeEach(() => {
-  Object.assign(READBACK_TIMING, { resolveMs: 50, precheckMs: 50, checkMs: 300, treeMs: 50 });
+  Object.assign(READBACK_TIMING, { resolveMs: 50, treeMs: 50, checkMs: 300 });
 });
 afterEach(() => {
   Object.assign(READBACK_TIMING, saved);
 });
 
 describe("typeWithReadback", () => {
-  it("verifies a field that was empty and now holds the text", async () => {
-    let typed = false;
-    const { api, fill } = fakeAx((text) => ({
-      focused: true,
-      verified: text === "" ? !typed : typed && text === "Ab@1",
-    }));
-    const type = vi.fn(async () => {
-      typed = true;
-      return { typed: "Ab@1", keys: 4 };
-    });
+  it("verifies a field that was empty and now holds the text, from the tree alone", async () => {
+    const fake = fakeScreen([input("", { focused: true })]);
 
-    const out = await typeWithReadback(registryWith(api), IOS_SIM, "Ab@1", type);
+    const out = await typeOn(fake, "Ab@1", [input("Ab@1", { focused: true })]);
 
     expect(out).toEqual({ result: { typed: "Ab@1", keys: 4 }, readback: { verified: true } });
-    // Only ever a check: the read-back never writes the field.
-    for (const call of fill.mock.calls) expect(call[1]).toEqual({ check: true });
+    expect(fake.fill).not.toHaveBeenCalled();
   });
 
   it("warns, without quoting the text, when the field holds something else", async () => {
-    let typed = false;
-    const { api } = fakeAx((text) => ({ focused: true, verified: text === "" && !typed }));
+    const fake = fakeScreen([input("", { focused: true })]);
 
-    const out = await typeWithReadback(registryWith(api), IOS_SIM, "s3cret!", async () => {
-      typed = true;
-      return { typed: "s3cret!", keys: 7 };
-    });
+    const out = await typeOn(fake, "s3cret!", [input("s3cret", { focused: true })]);
 
     expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
     expect(READBACK_MISMATCH_WARNING).not.toContain("s3cret");
+    // Only ever a check: the read-back never writes the field.
+    expect(fake.fill.mock.calls).toEqual([["s3cret!", { check: true }]]);
   });
 
   // The daemon answers "no" only after its own wait for the text runs out,
   // so the check after typing has to outlast that wait to see the mismatch.
   it("warns when the mismatch answer comes back late", async () => {
-    let typed = false;
-    const { api } = fakeAx(async (text) => {
-      if (text === "") return { focused: true, verified: !typed };
-      await new Promise((r) => setTimeout(r, 120));
-      return { focused: true, verified: false };
-    });
+    const fake = fakeScreen([input("", { focused: true })], { checkMs: 120 });
 
-    const out = await typeWithReadback(registryWith(api), IOS_SIM, "general", async () => {
-      typed = true;
-      return { typed: "general", keys: 7 };
-    });
+    const out = await typeOn(fake, "general", [input("generl", { focused: true })]);
 
     expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
   });
 
-  it("checks the field once after typing", async () => {
-    let typed = false;
-    const { api, fill } = fakeAx((text) => ({
-      focused: true,
-      verified: text === "" ? !typed : typed,
-    }));
+  // The check's "no" for a field holding text comes after the daemon's 1 s
+  // wait, and the daemon serves one request at a time: a check given up on
+  // before typing would hold up the next requests, a touch's orientation
+  // read among them.
+  it("does not ask the ax-service check about a field that holds text", async () => {
+    const fake = fakeScreen([input("seed", { focused: true })]);
 
-    await typeWithReadback(registryWith(api), IOS_SIM, "hi", async () => {
-      typed = true;
-      return { typed: "hi", keys: 2 };
-    });
-
-    expect(fill.mock.calls.map((c) => c[0])).toEqual(["", "hi"]);
-  });
-
-  // A field that holds text answers the empty check only after the daemon's
-  // wait: appending must not pay for that.
-  it("gives up on a slow empty-field check and types unchecked", async () => {
-    const { api, fill } = fakeAx(async () => {
-      await new Promise((r) => setTimeout(r, 1_000));
-      return { focused: true, verified: false };
-    });
-    const type = vi.fn(async () => ({ typed: "xyz", keys: 3 }));
-
-    const started = Date.now();
-    const out = await typeWithReadback(registryWith(api), IOS_SIM, "xyz", type);
+    const out = await typeOn(fake, "a", [input("seeda", { focused: true })]);
 
     expect(out.readback).toBeUndefined();
-    expect(Date.now() - started).toBeLessThan(500);
-    expect(type).toHaveBeenCalledTimes(1);
-    expect(fill).toHaveBeenCalledTimes(1);
+    expect(fake.fill).not.toHaveBeenCalled();
+    expect(fake.tree).toHaveBeenCalledTimes(1);
   });
 
-  it("skips the check when the field was not empty: the keys insert at the caret", async () => {
-    const { api, fill } = fakeAx(() => ({ focused: true, verified: false }));
+  it("skips the check when no input is focused", async () => {
+    const fake = fakeScreen([input("")]);
 
-    const out = await typeWithReadback(registryWith(api), IOS_SIM, "more", async () => ({
-      typed: "more",
-      keys: 4,
-    }));
+    const out = await typeOn(fake, "hi", [input("")]);
 
     expect(out.readback).toBeUndefined();
-    expect(fill).toHaveBeenCalledTimes(1);
+    expect(fake.fill).not.toHaveBeenCalled();
   });
 
-  it("skips the check when nothing is focused", async () => {
-    const { api, fill } = fakeAx(() => ({ focused: false, verified: false }));
+  it("types unchecked when the tree does not answer in time", async () => {
+    const fake = fakeScreen([input("", { focused: true })]);
+    fake.tree.mockImplementation(() => new Promise(() => {}));
 
-    const out = await typeWithReadback(registryWith(api), IOS_SIM, "hi", async () => ({
-      typed: "hi",
-      keys: 2,
-    }));
+    const out = await typeOn(fake, "hi", [input("hi", { focused: true })]);
 
     expect(out.readback).toBeUndefined();
-    expect(fill).toHaveBeenCalledTimes(1);
-  });
-
-  it("says nothing when focus left the field after typing", async () => {
-    let typed = false;
-    const { api } = fakeAx((text) =>
-      text === "" ? { focused: true, verified: !typed } : { focused: false, verified: false }
-    );
-
-    const out = await typeWithReadback(registryWith(api), IOS_SIM, "hi", async () => {
-      typed = true;
-      return { typed: "hi", keys: 2 };
-    });
-
-    expect(out.readback).toBeUndefined();
+    expect(fake.fill).not.toHaveBeenCalled();
   });
 
   // A code screen moves focus to the next box after each digit, so the
-  // check after typing reads the last box only.
-  describe("on a screen that moves focus from box to box", () => {
-    const box = (value: string, elementType = 49) =>
-      value
-        ? { index: 0, elementType, value }
-        : { index: 0, elementType, value: "", hintShowing: true };
+  // focused input after typing is not the one typed into.
+  describe("when focus moves to another input while typing", () => {
+    const boxes = (values: string[], focus: number) =>
+      values.map((value, slot) => input(value, { slot, focused: slot === focus }));
 
-    async function typeIntoBoxes(boxes: AXTreeNode[]) {
-      let typed = false;
-      const { api } = fakeAx((text) => ({ focused: true, verified: text === "" && !typed }));
-      const tree = vi.fn(async () => ({ alertVisible: false, nodes: boxes, truncated: false }));
-      const out = await typeWithReadback(
-        registryWith({ ...api, tree }),
-        IOS_SIM,
-        "12",
-        async () => {
-          typed = true;
-          return { typed: "12", keys: 2 };
-        }
-      );
-      return { out, tree };
-    }
-
-    it("says nothing when the boxes hold the text between them", async () => {
-      const { out, tree } = await typeIntoBoxes([box("1"), box("2"), box("")]);
+    it("says nothing when one digit moved focus to the next box", async () => {
+      const fake = fakeScreen(boxes(["", "", ""], 0));
+      const out = await typeOn(fake, "1", boxes(["1", "", ""], 1));
       expect(out.readback).toBeUndefined();
-      expect(tree).toHaveBeenCalledTimes(1);
+      expect(fake.fill).not.toHaveBeenCalled();
     });
 
-    it("still warns when the boxes do not add up to the text", async () => {
-      const { out } = await typeIntoBoxes([box("1"), box("3"), box("")]);
+    it("says nothing when several digits moved focus box by box", async () => {
+      const fake = fakeScreen(boxes(["", "", ""], 0));
+      const out = await typeOn(fake, "12", boxes(["1", "2", ""], 2));
+      expect(out.readback).toBeUndefined();
+    });
+
+    it("verifies the last box, where focus stays", async () => {
+      const fake = fakeScreen(boxes(["1", "2", ""], 2));
+      const out = await typeOn(fake, "3", boxes(["1", "2", "3"], 2));
+      expect(out.readback).toEqual({ verified: true });
+    });
+
+    it("says nothing when focus left every input", async () => {
+      const fake = fakeScreen([input("", { focused: true })]);
+      const out = await typeOn(fake, "hi", [input("hi")]);
+      expect(out.readback).toBeUndefined();
+    });
+
+    it("says nothing when the app moved focus only after the check's wait", async () => {
+      const fake = fakeScreen(boxes(["", ""], 0));
+      fake.fill.mockImplementation(async () => {
+        fake.screen.nodes = boxes(["1", ""], 1);
+        return { focused: true, verified: false };
+      });
+      const out = await typeOn(fake, "1", boxes(["", ""], 0));
+      expect(out.readback).toBeUndefined();
+    });
+  });
+
+  // A search field narrows for its clear button once it holds text, and
+  // slides over a little.
+  it("judges a field that moved and changed size a little as it filled", async () => {
+    const field = input("", { focused: true, elementType: 45 });
+    const fake = fakeScreen([field]);
+    const narrowed = { ...field, value: "general", hintShowing: undefined };
+    narrowed.frame = { x: 0.11, y: 0.141, width: 0.11, height: 0.048 };
+
+    const out = await typeOn(fake, "general", [narrowed]);
+
+    expect(out.readback).toEqual({ verified: true });
+  });
+
+  describe("text iOS changes as the keys arrive", () => {
+    it.each([
+      ["hello world", "Hello world"],
+      ["hi. see you", "Hi. See you"],
+      ["don't", "don’t"],
+      ["a--b", "a—b"],
+      ['say "hi"', "say „hi”"],
+      ["don't go", "Don’t go"],
+    ])("verifies %s held as %s, without the slow check", async (typed, held) => {
+      const fake = fakeScreen([input("", { focused: true })]);
+      const out = await typeOn(fake, typed, [input(held, { focused: true })]);
+      expect(out.readback).toEqual({ verified: true });
+      expect(fake.fill).not.toHaveBeenCalled();
+    });
+
+    it("warns for a field that capitalizes every letter: that reads like a held Shift", async () => {
+      const fake = fakeScreen([input("", { focused: true })]);
+      const out = await typeOn(fake, "general", [input("GENERAL", { focused: true })]);
       expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
     });
   });
 
-  // The tree shows the focused field's text, so it answers before the check,
-  // whose "no" waits out the daemon's 1 s.
-  describe("reading the focused field in the tree", () => {
-    const field = (value: string, extra: Partial<AXTreeNode> = {}): AXTreeNode => ({
-      index: 0,
-      elementType: 49,
-      value,
-      traits: ["isEditing"],
-      ...extra,
+  it("leaves a field the app has not caught up with to the check", async () => {
+    const fake = fakeScreen([input("", { focused: true })]);
+    fake.screen.checkSays = { focused: true, verified: true };
+
+    const out = await typeOn(fake, "hello", [input("hel", { focused: true })]);
+
+    expect(out.readback).toEqual({ verified: true });
+    expect(fake.fill.mock.calls.map((c) => c[0])).toEqual(["hello"]);
+  });
+
+  it("reads the tree again after the check's wait, for an app that capitalizes late", async () => {
+    const fake = fakeScreen([input("", { focused: true })]);
+    fake.fill.mockImplementation(async () => {
+      fake.screen.nodes = [input("Hello", { focused: true })];
+      return { focused: true, verified: false };
     });
 
-    /** Types `text`; the tree answers from `trees`, one per read, the last one repeating. */
-    async function typeWithTree(text: string, trees: AXTreeNode[][], checkSays = false) {
-      let typed = false;
-      const { api, fill } = fakeAx((asked) => ({
-        focused: true,
-        verified: asked === "" ? !typed : checkSays,
-      }));
-      let reads = 0;
-      const tree = vi.fn(async () => ({
-        alertVisible: false,
-        nodes: trees[Math.min(reads++, trees.length - 1)]!,
-        truncated: false,
-      }));
-      const out = await typeWithReadback(
-        registryWith({ ...api, tree }),
-        IOS_SIM,
-        text,
-        async () => {
-          typed = true;
-          return { typed: text, keys: text.length };
-        }
-      );
-      return { out, fill, tree };
-    }
+    const out = await typeOn(fake, "hello", [input("hel", { focused: true })]);
 
-    it("verifies a capital iOS put at the start of a sentence, without the slow check", async () => {
-      const { out, fill } = await typeWithTree("hello world", [[field("Hello world")]]);
-      expect(out.readback).toEqual({ verified: true });
-      // Only the empty-field check before typing.
-      expect(fill.mock.calls.map((c) => c[0])).toEqual([""]);
-    });
+    expect(out.readback).toEqual({ verified: true });
+    expect(fake.tree).toHaveBeenCalledTimes(3);
+  });
 
-    it("verifies the exact text from the tree as well", async () => {
-      const { out, fill } = await typeWithTree("hello", [[field("hello")]]);
-      expect(out.readback).toEqual({ verified: true });
-      expect(fill).toHaveBeenCalledTimes(1);
-    });
+  it("leaves a secure field, which shows bullets, to the check", async () => {
+    const secure = (value: string) =>
+      input(value, { focused: true, elementType: SECURE_TEXT_FIELD });
 
-    it("warns for a field that capitalizes every letter: that reads like a held Shift", async () => {
-      const { out } = await typeWithTree("general", [[field("GENERAL")]]);
-      expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
-    });
+    const ok = fakeScreen([secure("")]);
+    expect((await typeOn(ok, "s3cret", [secure("••••••")])).readback).toEqual({ verified: true });
+    expect(ok.fill).toHaveBeenCalledTimes(1);
 
-    it("leaves a field the app has not caught up with to the check", async () => {
-      const { out, fill } = await typeWithTree("hello", [[field("hel")]], true);
-      expect(out.readback).toEqual({ verified: true });
-      expect(fill.mock.calls.map((c) => c[0])).toEqual(["", "hello"]);
-    });
-
-    it("reads the tree again after the check's wait, for an app that capitalizes late", async () => {
-      const { out, tree } = await typeWithTree("hello", [[field("hel")], [field("Hello")]]);
-      expect(out.readback).toEqual({ verified: true });
-      expect(tree).toHaveBeenCalledTimes(2);
-    });
-
-    it("leaves a secure field, which shows bullets, to the check", async () => {
-      const { out, fill } = await typeWithTree("s3cret", [[field("••••••", { elementType: 50 })]]);
-      expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
-      expect(fill).toHaveBeenCalledTimes(2);
-    });
-
-    it("ignores a field that is not the focused one", async () => {
-      const { out } = await typeWithTree("hello", [[field("Hello", { traits: [] })]]);
-      expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
+    const short = fakeScreen([secure("")]);
+    expect((await typeOn(short, "s3cret", [secure("•••••")])).readback).toEqual({
+      verified: false,
+      warning: READBACK_MISMATCH_WARNING,
     });
   });
 
   it("does not check text with Return or Tab, which can move focus or submit", async () => {
-    const { api, fill } = fakeAx(() => ({ focused: true, verified: true }));
+    const fake = fakeScreen([input("", { focused: true })]);
     for (const text of ["a\nb", "a\tb", "a\rb"]) {
-      const out = await typeWithReadback(registryWith(api), IOS_SIM, text, async () => ({
-        typed: text,
-        keys: 3,
-      }));
-      expect(out.readback).toBeUndefined();
+      expect((await typeOn(fake, text, [input("", { focused: true })])).readback).toBeUndefined();
     }
-    expect(fill).not.toHaveBeenCalled();
+    expect(fake.tree).not.toHaveBeenCalled();
+    expect(fake.fill).not.toHaveBeenCalled();
   });
 
   it("types unchecked when the ax-service is degraded, missing or hangs", async () => {
     const type = vi.fn(async () => ({ typed: "hi", keys: 2 }));
 
-    const degraded = fakeAx(() => ({ focused: true, verified: true }), true);
-    expect((await typeWithReadback(registryWith(degraded.api), IOS_SIM, "hi", type)).readback).toBe(
+    const degraded = fakeScreen([input("", { focused: true })]);
+    const degradedApi = { ...degraded.api, degraded: true };
+    expect((await typeWithReadback(registryWith(degradedApi), IOS_SIM, "hi", type)).readback).toBe(
       undefined
     );
-    expect(degraded.fill).not.toHaveBeenCalled();
+    expect(degraded.tree).not.toHaveBeenCalled();
 
     const failing = { resolveService: vi.fn(async () => Promise.reject(new Error("no ax"))) };
     expect((await typeWithReadback(failing as never, IOS_SIM, "hi", type)).readback).toBe(
       undefined
     );
 
-    // A service without `fill` throws synchronously; that is unchecked too.
+    // A service without `tree` throws synchronously; that is unchecked too.
     expect((await typeWithReadback(registryWith({}), IOS_SIM, "hi", type)).readback).toBe(
       undefined
     );
 
-    const hanging = fakeAx(() => new Promise<FillAnswer>(() => {}));
-    expect((await typeWithReadback(registryWith(hanging.api), IOS_SIM, "hi", type)).readback).toBe(
+    const hanging = { resolveService: vi.fn(() => new Promise(() => {})) };
+    expect((await typeWithReadback(hanging as never, IOS_SIM, "hi", type)).readback).toBe(
       undefined
     );
 
@@ -316,6 +297,26 @@ describe("typeWithReadback", () => {
     await typeWithReadback(registry as never, IOS_SIM, "", type);
     expect(type).toHaveBeenCalledTimes(1);
     expect(registry.resolveService).not.toHaveBeenCalled();
+  });
+});
+
+describe("holdsTyped", () => {
+  it("accepts smart punctuation: curly apostrophes and quotes, a dash for two hyphens", () => {
+    expect(holdsTyped("it's O'Brien", "it’s O’Brien")).toBe(true);
+    expect(holdsTyped('"hi"', "“hi”")).toBe(true);
+    expect(holdsTyped("'hi'", "‘hi’")).toBe(true);
+    expect(holdsTyped("a -- b", "a – b")).toBe(true);
+  });
+
+  it("accepts smart punctuation and a capital together", () => {
+    expect(holdsTyped("don't go", "Don’t go")).toBe(true);
+  });
+
+  it("rejects what a held Shift or a dropped key leaves", () => {
+    expect(holdsTyped("don't", 'don"t')).toBe(false);
+    expect(holdsTyped("a--b", "a-b")).toBe(false);
+    expect(holdsTyped("a-b", "a—b")).toBe(false);
+    expect(holdsTyped("a--b", "a__b")).toBe(false);
   });
 });
 
@@ -342,43 +343,6 @@ describe("capitalizedByIos", () => {
     expect(capitalizedByIos("hello", "Jello")).toBe(false);
     expect(capitalizedByIos("Hello", "hello")).toBe(false);
     expect(capitalizedByIos("1abc", "!abc")).toBe(false);
-  });
-});
-
-describe("spreadAcrossInputs", () => {
-  const node = (elementType: number, value = "", extra: Partial<AXTreeNode> = {}): AXTreeNode => ({
-    index: 0,
-    elementType,
-    value,
-    ...extra,
-  });
-
-  it("finds the text in boxes that follow one another, past other elements", () => {
-    const nodes = [
-      node(48, "Enter the code"),
-      node(49, "4"),
-      node(1),
-      node(49, "2"),
-      node(49, "7"),
-    ];
-    expect(spreadAcrossInputs(nodes, "427")).toBe(true);
-    expect(spreadAcrossInputs(nodes, "27")).toBe(true);
-  });
-
-  it("needs two inputs: one input holding the text is the check's job", () => {
-    expect(spreadAcrossInputs([node(49, "12")], "12")).toBe(false);
-  });
-
-  it("does not match across an empty box or a wrong part", () => {
-    expect(spreadAcrossInputs([node(49, "1"), node(49, ""), node(49, "2")], "12")).toBe(false);
-    expect(spreadAcrossInputs([node(49, "1"), node(49, "3")], "12")).toBe(false);
-    expect(spreadAcrossInputs([node(49, "1"), node(49, "23")], "12")).toBe(false);
-  });
-
-  it("reads a placeholder as empty and a secure box by its length", () => {
-    const placeholder = node(49, "0", { hintShowing: true });
-    expect(spreadAcrossInputs([node(49, "1"), placeholder], "10")).toBe(false);
-    expect(spreadAcrossInputs([node(50, "•"), node(50, "•")], "12")).toBe(true);
   });
 });
 
