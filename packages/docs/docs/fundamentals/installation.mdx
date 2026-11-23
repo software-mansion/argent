@@ -89,12 +89,6 @@ Add `--no-telemetry` to also commit a telemetry opt-out for the repository. Loca
 In local mode the committed MCP config runs the project-local copy, so the bare `argent` command is **not** on teammates' `PATH`. Note that `npm install` builds Argent's native dependencies (`tree-sitter`) on each machine. These are prebuilt for macOS, Linux x64 and Windows x64; other targets compile from source and need a C/C++ toolchain.
 :::
 
-## Update Argent
-
-Run `argent update` to install the latest version. The command also refreshes the MCP configs, rules and skills in your workspace.
-
-After the update, the agent tells you the main changes in Argent once. See [What is new after an update](/docs/fundamentals/mcp-server#what-is-new-after-an-update).
-
 ## macOS hosts after an Xcode update
 
 After you install or update Xcode, Xcode must install its system components. Until then, a `simctl` or `devicectl` call can start that install. The install waits for an administrator password, also when nobody sees the prompt.

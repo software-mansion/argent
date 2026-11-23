@@ -32,7 +32,7 @@ describe("highlightsSince", () => {
 describe("formatWhatsNewNote", () => {
   it("names the version and lists each highlight", () => {
     expect(formatWhatsNewNote("0.35.0", ["b1", "b2"])).toBe(
-      "Argent was updated to v0.35.0. Tell the user what is new in one sentence or a short list, then continue the task:\n- b1\n- b2"
+      "Argent was updated to v0.35.0 before this session. Briefly tell the user what is new, then continue:\n- b1\n- b2"
     );
   });
 });

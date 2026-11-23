@@ -27,7 +27,7 @@ export function highlightsSince(
 
 export function formatWhatsNewNote(version: string, highlights: readonly string[]): string {
   return [
-    `Argent was updated to v${version}. Tell the user what is new in one sentence or a short list, then continue the task:`,
+    `Argent was updated to v${version} before this session. Briefly tell the user what is new, then continue:`,
     ...highlights.map((highlight) => `- ${highlight}`),
   ].join("\n");
 }

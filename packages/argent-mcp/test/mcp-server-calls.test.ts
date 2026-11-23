@@ -491,7 +491,7 @@ describe("startMcpServer tool calls", () => {
 
       const firstContent = first.content as Array<{ type: string; text?: string }>;
       expect(firstContent.at(-1)?.text).toMatch(
-        new RegExp(`^Argent was updated to v${version}\\.`)
+        new RegExp(`^Argent was updated to v${version} before this session\\.`)
       );
       expect(textOf(second)).not.toContain("Argent was updated");
       expect(getWhatsNewSeenVersion()).toBe(version);
