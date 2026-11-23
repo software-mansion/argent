@@ -28,7 +28,7 @@ import {
   readTakeover,
   STOP_IN_PROGRESS_NOTE,
 } from "../../../utils/react-profiler/session-ownership";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import {
@@ -211,7 +211,7 @@ Fails if no active profiling session exists, another stop is running, the CDP co
       failedMsg: ({ failureSignal }) =>
         `Failed to stop React profiler: ${failureSignal.error_code}`,
     },
-    capability: REACT_PROFILER_TOOL_CAPABILITY,
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
       const port = metroPort(params);

@@ -85,6 +85,7 @@ export async function createChromiumServer(
       viewport = await readViewport(cdp);
       await network.reattach();
     },
+    networkThrottled: () => network.throttled(),
   });
 
   // Also the initial attach: starts recording on the active page.

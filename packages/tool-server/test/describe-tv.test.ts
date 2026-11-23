@@ -10,6 +10,9 @@ vi.mock("../src/tools/describe/platforms/android", () => ({
 
 import { describeTv } from "../src/tools/describe/platforms/tv";
 import type { TvControlApi, TvDescribeResponse } from "../src/blueprints/tv-control";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // The tool touches `describe()` and `recycleAx()`; the rest is unused here.
 function makeApi(
@@ -108,6 +111,8 @@ describe("describe (TV) — empty-state resilience", () => {
     expect(recycleAx).toHaveBeenCalledTimes(1);
     expect(res.description).toContain("Focusable: (none reported)");
     expect(res.hint).toMatch(/still launching|loading|transition|recycl/i);
+    // A press can also land on a screen with no focus at all.
+    expect(res.hint).toMatch(/nothing focusable \(sleep, screensaver, video playback\)/);
     expect(res.description).toContain("Note:");
   });
 });

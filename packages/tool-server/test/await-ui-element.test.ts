@@ -12,6 +12,9 @@ import { findAll } from "../src/utils/ui-tree-match";
 import { __resetTypedSecretsForTesting, noteTypedSecrets } from "../src/utils/typed-secrets";
 import type { DescribeNode } from "../src/tools/describe/contract";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // execute() resolves the target's form factor before polling: isTvOsSimulator()
 // shells out to `xcrun simctl list` (the fake UDID is never listed, so it never
