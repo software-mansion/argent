@@ -81,6 +81,8 @@ interface RecordSpec {
   status?: number;
   state?: NativeRecordState;
   errorText?: string;
+  /** Epoch ms of the app's clock, from the agent's wallTime. */
+  startedAt?: number;
 }
 
 /** The simulator's native-devtools service, with one app's records, numbered across the tool-server. */
@@ -92,7 +94,7 @@ class FakeIos {
   /** What each read of the records asked for. */
   readonly asked: Array<{ port: number; includeHidden?: boolean }> = [];
 
-  add(n: number, { url, status, state = "complete", errorText }: RecordSpec): void {
+  add(n: number, { url, status, state = "complete", errorText, startedAt = 0 }: RecordSpec): void {
     this.records.push({
       id: `ios-t7-${n}`,
       layer: "ios-native",
@@ -103,7 +105,7 @@ class FakeIos {
       ...(status !== undefined
         ? { response: { url, status, statusText: "", headers: {}, mimeType: "text/plain" } }
         : {}),
-      timing: { startedAt: 0 },
+      timing: { startedAt },
       ...(errorText !== undefined ? { errorText } : {}),
     });
   }
@@ -169,12 +171,13 @@ class FakeRuntime {
     return (this.context as { __argent_network_install: string }).__argent_network_install;
   }
 
-  /** A request the interceptor logged, with the id it gave. */
-  push(id: number, url: string, status = 200): void {
+  /** A request the interceptor logged, with the id it gave, and maybe when it started in epoch ms. */
+  push(id: number, url: string, status = 200, startedAt?: number): void {
     (this.context as { __argent_network_log: unknown[] }).__argent_network_log.push({
       id,
       requestId: `rn-net-${id}`,
       state: "finished",
+      ...(startedAt !== undefined ? { timestamp: startedAt / 1000 } : {}),
       request: { method: "GET", url: `${API}${url}`, headers: {} },
       response: { status, headers: {} },
     });
@@ -603,6 +606,45 @@ describe("diagnostics: near misses and JS reinstall", () => {
     expect(result.note).toContain(
       `Nearest: GET ${API}/v1/login 500 complete [ios-native ios-t7-11] (mismatch: status); `
     );
+  });
+
+  it("orders the near misses by when each request started, across the layers", async () => {
+    await startIos();
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    const at = Date.UTC(2026, 10, 23, 12);
+    runtime.push(1, "/v1/login?try=1", 500, at + 100);
+    ios.add(11, { url: "/v1/login?try=2", status: 500, startedAt: at + 200 });
+    runtime.push(2, "/v1/login?try=3", 500, at + 300);
+    ios.add(12, { url: "/v1/login?try=4", status: 500, startedAt: at + 400 });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    expect(result.nearMisses?.map(({ id }) => id)).toEqual(["ios-t7-12", "rn-net-2", "ios-t7-11"]);
+    // The start orders the list and stays out of the result.
+    expect(result.nearMisses?.[0]).not.toHaveProperty("startedAt");
+  });
+
+  it("lists a request that the JS and native layers both recorded once, and each retry of it", async () => {
+    await startIos();
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    const at = Date.UTC(2026, 10, 23, 12);
+    // On iOS, the native layer also records an XMLHttpRequest, a little after the JS layer.
+    runtime.push(1, "/v1/login", 500, at + 100);
+    ios.add(11, { url: "/v1/login", status: 500, startedAt: at + 105 });
+    ios.add(12, { url: "/v1/other", status: 200, startedAt: at + 200 });
+    // The app retries the login.
+    runtime.push(2, "/v1/login", 500, at + 300);
+    ios.add(13, { url: "/v1/login", status: 500, startedAt: at + 305 });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    expect(result.nearMisses?.map(({ id, mismatch }) => ({ id, mismatch }))).toEqual([
+      { id: "ios-t7-13", mismatch: ["status"] },
+      { id: "ios-t7-11", mismatch: ["status"] },
+      { id: "ios-t7-12", mismatch: ["url"] },
+    ]);
   });
 
   it("installs the interceptor in a context that reloaded without it, and reads it next poll", async () => {

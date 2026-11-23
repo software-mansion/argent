@@ -37,7 +37,7 @@ import {
   resolveJsRuntime,
   withCaptureLock,
 } from "../network/network-capture";
-import type { WaitLayer, WaitRecord } from "./match";
+import type { LayerRecord, WaitLayer, WaitRecord } from "./match";
 
 /** What one read of a marked layer found. */
 export interface LayerRead {
@@ -49,7 +49,7 @@ export interface LayerRead {
   /** network-capture-stop stopped the layer: nothing after the stop is recorded. */
   stopped: boolean;
   /** The requests after the start's mark, oldest first. */
-  records: WaitRecord[];
+  records: LayerRecord[];
   /** Why the layer is not armed, or was not read, or what it may have missed. */
   note?: string;
 }
@@ -104,7 +104,7 @@ const LOST_ENDINGS: ReadonlySet<string> = new Set([
   MACOS_CONNECTION_DROPPED,
 ]);
 
-function fromNative(record: NativeNetworkRecord): WaitRecord {
+function fromNative(record: NativeNetworkRecord): LayerRecord {
   const lost =
     record.state === "failed" &&
     record.errorText !== undefined &&
@@ -120,10 +120,12 @@ function fromNative(record: NativeNetworkRecord): WaitRecord {
       ? { durationMs: Math.round(record.timing.durationMs) }
       : {}),
     ...(record.errorText ? { errorText: record.errorText } : {}),
+    // From the agent's wallTime, on the app's clock, as the start of a JS request.
+    startedAt: record.timing.startedAt,
   };
 }
 
-function nativeAfter(records: NativeNetworkRecord[], floor: number): WaitRecord[] {
+function nativeAfter(records: NativeNetworkRecord[], floor: number): LayerRecord[] {
   return records.filter((r) => recordNumber(r.id) > floor).map(fromNative);
 }
 
@@ -349,10 +351,12 @@ interface WaitReadAnswer {
     status?: number;
     durationMs?: number;
     errorText?: string;
+    /** When the request started, in epoch seconds of the app's clock. */
+    timestamp?: number;
   }>;
 }
 
-function fromJs(entry: NonNullable<WaitReadAnswer["entries"]>[number]): WaitRecord {
+function fromJs(entry: NonNullable<WaitReadAnswer["entries"]>[number]): LayerRecord {
   const state =
     entry.state === "finished"
       ? "complete"
@@ -370,6 +374,7 @@ function fromJs(entry: NonNullable<WaitReadAnswer["entries"]>[number]): WaitReco
     state,
     ...(typeof entry.durationMs === "number" ? { durationMs: Math.round(entry.durationMs) } : {}),
     ...(entry.errorText ? { errorText: entry.errorText } : {}),
+    ...(typeof entry.timestamp === "number" ? { startedAt: entry.timestamp * 1000 } : {}),
   };
 }
 
