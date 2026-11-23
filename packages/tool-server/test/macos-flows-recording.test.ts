@@ -58,8 +58,8 @@ function registry(): Registry {
     }),
     getTool: vi.fn((id: string) => ({
       inputSchema: { properties: { udid: {} } },
-      // Not on a Mac, as gesture-swipe and the debugger tools declare.
-      ...(id === "gesture-swipe" || id === "debugger-status"
+      // Not on a Mac, as gesture-swipe and the Chromium tools declare.
+      ...(id === "gesture-swipe" || id === "chromium-tabs"
         ? { capability: { apple: { simulator: true } } }
         : {}),
     })),
@@ -183,11 +183,11 @@ describe("a tap recorded on a Mac app", () => {
 
   it("refuses a device_id tool the same way: the runner binds device_id too", async () => {
     serve([], "macos-devtools");
-    await start("debugger");
+    await start("tabs");
     const reg = registry();
 
     const args = { udid: undefined, device_id: MAC };
-    const err = await record("debugger", "debugger-status", args, reg).catch((e: unknown) => e);
+    const err = await record("tabs", "chromium-tabs", args, reg).catch((e: unknown) => e);
 
     expect(String(err)).toMatch(/no macos support declared/);
     expect(reg.invokeTool).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   type ProfilerSessionPaths,
   getCachedProfilerPaths,
@@ -583,7 +583,7 @@ Fails if no CPU profile is stored; run react-profiler-stop (and ideally react-pr
     failedMsg: ({ failureSignal }) => `Failed to query CPU profile: ${failureSignal.error_code}`,
   },
   // RN-only: reads Hermes-format CPU profiles; Chromium's V8 sample format differs.
-  capability: REACT_PROFILER_TOOL_CAPABILITY,
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const sessionPaths = getCachedProfilerPaths(metroPort(params), params.device_id);

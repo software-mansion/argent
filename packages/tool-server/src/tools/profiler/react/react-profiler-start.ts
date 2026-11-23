@@ -30,7 +30,7 @@ import {
   STOP_IN_PROGRESS_NOTE,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "../../../utils/debugger/device-alias";
 import { findRuntimeDevices, type RuntimeDevices } from "../../../utils/debugger/runtime-device";
 import type { CDPClient } from "../../../utils/debugger/cdp-client";
@@ -241,7 +241,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       failedMsg: ({ failureSignal }) =>
         `Failed to start React profiler: ${failureSignal.error_code}`,
     },
-    capability: REACT_PROFILER_TOOL_CAPABILITY,
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
       // Collapse a forwarded logicalDeviceId onto the connect id so this
