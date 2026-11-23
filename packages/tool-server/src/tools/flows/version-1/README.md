@@ -16,13 +16,15 @@ git show b6402f269:packages/tool-server/src/tools/flows/flow-run.ts |
 - To remove version 1, delete this folder and `test/flows/version-1/`. Then remove what
   refers to version 1:
   - the check in `../flow-run.ts`;
-  - `isVersion1` in `../flow-utils.ts`, and its cases in `test/flows/flow-file-version.test.ts`;
+  - `isVersion1` and the version 1 runner in the comment on `FLOW_FILE_VERSION`, in
+    `../flow-utils.ts`, and the `isVersion1` cases in `test/flows/flow-file-version.test.ts`;
   - the old e2e test warning in `../flow-add-step.ts`;
-  - the version 1 cases in `test/flows/flow-file-version-run.test.ts`;
+  - the version 1 cases in `test/flows/flow-file-version-run.test.ts`, and the comment on the
+    `version: 2` prefix in `test/flows/flow-idle-run.test.ts`;
   - the skipped folder in `scripts/extract-tools.mjs` and its test;
   - the entry for this folder in `knip.jsonc`;
-  - the view hierarchy text of "File version" and "Runner tree and discovery tree" in
-    `packages/docs/docs/reference/e2e-yaml.mdx`, and the file version paragraph in
+  - the view hierarchy text of "File version", "Runner tree and discovery tree" and
+    "Conditions" in `packages/docs/docs/reference/e2e-yaml.mdx`, and the file version paragraph in
     `packages/docs/docs/features/e2e.mdx`;
   - "Old e2e tests" in `packages/skills/skills/argent-create-e2e/references/e2e-yaml.md`, and
     the lines that refer to it there and in that skill's `SKILL.md`.
