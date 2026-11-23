@@ -22,14 +22,16 @@ type CapturePlatform = "android" | "ios";
 /** What the in-app agent does to the processes of the apps named before it. */
 function agentSentence(platform: CapturePlatform, one: boolean, where = ""): string {
   return platform === "android"
-    ? `Argent attaches its in-app agent to the processes of ${one ? "that app" : "these apps"}${where}.`
+    ? `Argent's in-app agent can run in the processes of ${one ? "that app" : "these apps"}${where}.`
     : `Argent's in-app agent captures the requests of ${one ? "that app's" : "these apps'"} processes${where}.`;
 }
 
 /**
- * Warning for a profiler start on a device where `native-network-logs` turned
+ * Warning for a profiler start on a device where `network-capture-start` turned
  * native network capture on for an app: the capture follows the app across
  * launches, and nothing else in a profile says the app may run instrumented.
+ * After `network-capture-stop` the app is no longer named, except while its
+ * connected process has not acknowledged the stop.
  * "On" is the capture's setting, not a live attachment: the app may not be
  * running, or its current process may not have the agent yet. On iOS an app
  * counts only after it has connected, because an app that never connected,
@@ -62,10 +64,7 @@ export function nativeNetworkCaptureWarning(
     if (packages.length === 0) return logicalDeviceWarning(deviceId, runtimeApp);
     const apps = packages.join(", ");
     const one = packages.length === 1;
-    const remedy =
-      platform === "android"
-        ? `call native-network-logs with stop: true for ${one ? "that app" : "each of these apps"}`
-        : "call stop-all-simulator-servers for this device";
+    const remedy = `call network-capture-stop for ${one ? "that app" : "each of these apps"}`;
     return (
       `Native network capture is on for ${apps} on this device: ${agentSentence(platform, one)} ${CAPTURE_COST} ` +
       `To profile without it, stop this profile, ${remedy}, then restart-app and profile again.`
@@ -78,7 +77,7 @@ export function nativeNetworkCaptureWarning(
 /**
  * For a logicalDeviceId session whose runtime was found: checks every id of
  * that device and no other device. One device can have several ids, one per
- * adb transport, and capture is kept under the one `native-network-logs` was
+ * adb transport, and capture is kept under the one `network-capture-start` was
  * called with. The caller's own id reaches none of them, so the warning names
  * the id each capture is under, as the `udid` to pass.
  *
@@ -97,10 +96,12 @@ function foundDeviceWarning(
   const iosApps = found.length === 1 ? liveIosNetworkCaptures(found[0]) : [];
   if (iosApps.length > 0) {
     const [udid] = found;
+    const one = iosApps.length === 1;
     return (
       `Native network capture is on for ${iosApps.join(", ")} on ${udid}, the device this profile ` +
-      `runs on: ${agentSentence("ios", iosApps.length === 1)} ${CAPTURE_COST} To profile without it, ` +
-      `stop this profile, call stop-all-simulator-servers for ${udid}, then restart-app on ${udid} and profile again.`
+      `runs on: ${agentSentence("ios", one)} ${CAPTURE_COST} To profile without it, stop this profile, ` +
+      `call network-capture-stop with udid ${udid} for ${one ? "that app" : "each of these apps"}, ` +
+      `then restart-app on ${udid} and profile again.`
     );
   }
   const captures = found
@@ -121,8 +122,8 @@ function foundDeviceWarning(
         ? `${first.device}, the device this profile runs on`
         : `${captures.map(({ device }) => device).join(" and ")}, adb serials of the device this profile runs on`;
     sentences.push(
-      `Native network capture is on for ${apps.join(", ")} on ${where}: Argent attaches its in-app ` +
-        `agent to the processes of ${apps.length === 1 ? "that app" : "these apps"}.`
+      `Native network capture is on for ${apps.join(", ")} on ${where}: ` +
+        agentSentence("android", apps.length === 1)
     );
   }
   if (appId && maybe.length > 0) {
@@ -130,8 +131,8 @@ function foundDeviceWarning(
     sentences.push(
       `Native network capture is ${first ? "also " : ""}on for ${appId} on ${maybe.join(", ")}, ` +
         `${one ? "which" : "each of which"} may also be the device this profile runs on: ` +
-        `${one ? "its logcat" : "their logcats"} could not be read to tell. Argent attaches its ` +
-        `in-app agent to the processes of that app there.`
+        `${one ? "its logcat" : "their logcats"} could not be read to tell. ` +
+        agentSentence("android", true, " there")
     );
   }
 
@@ -141,13 +142,13 @@ function foundDeviceWarning(
   ];
   const stop =
     first && captures.length === 1 && maybe.length === 0
-      ? `with udid ${first.device} and stop: true for ${first.packages.length === 1 ? "that app" : "each of these apps"}`
-      : `with stop: true for ${stops.map(({ app, device }) => `${app} with udid ${device}`).join(", ")}`;
+      ? `with udid ${first.device} for ${first.packages.length === 1 ? "that app" : "each of these apps"}`
+      : `for ${stops.map(({ app, device }) => `${app} with udid ${device}`).join(", ")}`;
   // Any id of the profiled device restarts it; one of them for every case.
   const restart = first?.device ?? found[0];
   return (
     `${sentences.join(" ")} ${CAPTURE_COST} To profile without it, stop this profile, ` +
-    `call native-network-logs ${stop}, then restart-app on ${restart} and profile again.`
+    `call network-capture-stop ${stop}, then restart-app on ${restart} and profile again.`
   );
 }
 
@@ -176,10 +177,7 @@ function logicalDeviceWarning(
   if (devices.length === 0) return undefined;
   const one = devices.length === 1;
   const those = one ? "that device" : "each of those devices";
-  const remedy =
-    platform === "android"
-      ? `call native-network-logs with stop: true for ${appId} on ${those}`
-      : `call stop-all-simulator-servers for ${those}`;
+  const remedy = `call network-capture-stop for ${appId} on ${those}`;
   return (
     `Native network capture is on for ${appId} on ${devices.join(", ")}, ` +
     `${one ? "which" : "one of which"} may be the device this profile runs on: its device_id is a ` +

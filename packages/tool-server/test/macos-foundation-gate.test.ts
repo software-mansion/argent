@@ -34,6 +34,8 @@ import { debuggerConnectTool } from "../src/tools/debugger/debugger-connect";
 import { profilerCommitQueryTool } from "../src/tools/profiler/query/profiler-commit-query";
 import { profilerCpuQueryTool } from "../src/tools/profiler/query/profiler-cpu-query";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
+import { CAPTURE_CAPABILITY } from "../src/tools/network/network-capture";
+import { networkRequestTool } from "../src/tools/network/network-request";
 import { definitionsById } from "./helpers/catalog";
 
 const flag = useMacosAppsFlag();
@@ -70,6 +72,10 @@ describe("the macos-apps flag gate", () => {
       "no macos support declared"
     );
     expect(() => assertSupported("button", NOT_MAC_CAPABLE, device)).toThrow("use keyboard");
+    // The network capture tools take a Mac app.
+    for (const id of ["network-capture-start", "network-capture-stop"]) {
+      expect(() => assertSupported(id, CAPTURE_CAPABILITY, device)).not.toThrow();
+    }
     expect(() => assertMacosAppsEnabled("boot-device")).not.toThrow();
   });
 
@@ -351,6 +357,16 @@ describe("over HTTP", () => {
       .post("/tools/menu-bar")
       .send({ udid: MAC, action: "list" });
     expect(menuBar.status).toBe(404);
+  });
+
+  it("admits view-network-request-details for a Mac app id, which has only native ids", async () => {
+    const registry = new Registry();
+    registry.registerTool(networkRequestTool);
+    const res = await request(createHttpApp(registry).app)
+      .post("/tools/view-network-request-details")
+      .send({ device_id: MAC, requestId: "macos-1a2b-7" });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatch(/^Request macos-1a2b-7 not found\. /);
   });
 
   it("with the flag on, names restart-app instead of reinstall-app", async () => {
