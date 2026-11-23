@@ -6,6 +6,7 @@ import {
   clearRecordingSession,
   withFlowFileLock,
   clientFileDirective,
+  PROJECT_ROOT_INPUT,
   parseFlow,
   serializeFlow,
   type FlowStep,
@@ -152,6 +153,7 @@ export const flowFinishRecordingTool: ToolDefinition<
 A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
+  fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-finish-recording"],
   interaction: {
     // Name the flow: other recordings stay live, so an unqualified message would

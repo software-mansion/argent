@@ -42,6 +42,7 @@ import {
   findAndroidNativeRecord,
   handshakeProof,
   liveAndroidNetworkCaptureDevices,
+  liveAndroidNetworkCaptureSerials,
   liveAndroidNetworkCaptures,
   openFrame,
   sealFrame,
@@ -2255,6 +2256,8 @@ describe("device identity", () => {
     // Looked up by app, the device is named by its adb serial.
     expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([SERIAL]);
     expect(liveAndroidNetworkCaptureDevices(OTHER)).toEqual([]);
+    // So are the serials with capture for any app.
+    expect(liveAndroidNetworkCaptureSerials()).toEqual([SERIAL]);
   });
 
   it("refuses a second adb serial of the same device for the same app, naming the serial in use", async () => {
@@ -2463,6 +2466,7 @@ describe("attaching and the app's lifecycle", () => {
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBeUndefined();
     expect(device.commands).toEqual([]);
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+    expect(liveAndroidNetworkCaptureSerials()).toEqual([]);
   });
 
   it("waits for the agent of the launched process, and says capture is attached", async () => {
@@ -2677,6 +2681,7 @@ describe("attaching and the app's lifecycle", () => {
     await expect(api.ensureAttached(8081)).rejects.toThrow(/error: closed/);
 
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+    expect(liveAndroidNetworkCaptureSerials()).toEqual([]);
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBeUndefined();
     expect(attachCommands()).toEqual([]);
     // The next call that goes through turns it on.
@@ -3343,7 +3348,9 @@ describe("timing and filtering", () => {
     agent.request(agent.rid(2), "http://10.0.2.2:8081/status");
     agent.request(agent.rid(3), "https://example.com/api");
     agent.request(agent.rid(4), "http://localhost:3000/mock-api");
-    await vi.waitFor(() => expect(api.records(0)).toHaveLength(4));
+    // The emulator's alias for the host: Metro here, a real host on iOS.
+    agent.request(agent.rid(5), "http://10.0.2.2:8081/api/items");
+    await vi.waitFor(() => expect(api.records(0)).toHaveLength(5));
 
     expect(api.records(8081).map((r) => r.request.url)).toEqual([
       "https://example.com/api",
@@ -3625,6 +3632,28 @@ describe("the tools on the Android native layer", () => {
     await vi.waitFor(() =>
       expect(api.records(8081).map((r) => [r.id, r.state])).toEqual([[slow!.id, "complete"]])
     );
+  });
+
+  it("native-network-logs with limit 0 returns no requests, but the header and the total count them all", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    for (const n of [1, 2, 3]) agent.request(agent.rid(n), `https://example.com/${n}`);
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(3));
+
+    const result = await nativeNetworkLogsTool.execute!(
+      { androidNetwork: api },
+      { udid: SERIAL, bundleId: PKG, limit: 0, clear: false }
+    );
+
+    expect(result).toEqual({
+      status: "ok",
+      header: "android-native: armed, 3 requests (pid 4722; capture active)",
+      armed: true,
+      capture: "active",
+      count: 0,
+      total: 3,
+      requests: [],
+    });
   });
 
   it("native-network-logs routes Android through the inspector service, keyed by the device whatever its spelling", async () => {

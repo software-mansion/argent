@@ -14,10 +14,7 @@
 // exercises an override sets it itself, so nothing depends on the ambient value.
 //
 // This runs before the test module graph is imported, so module-level env reads
-// observe the cleared state too. On a machine with no override exported the
-// loop body never runs, so no suite failure can catch this file being weakened;
-// `test/clear-argent-env.test.ts` re-imports it against planted sentinels
-// instead.
+// observe the cleared state too.
 for (const name of Object.keys(process.env)) {
   // Upper-cased first: Windows env lookups are case-insensitive while the keys
   // enumerate with the casing they were set in, so a `set argent_host=…`

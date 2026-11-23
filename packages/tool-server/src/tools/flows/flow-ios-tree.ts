@@ -10,8 +10,11 @@ import {
 import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils/native-target-app";
 import { stripRemotePrefix } from "../../utils/device-info";
 import { simctlTargetForUdid } from "../../utils/ios-device-sets";
-import { axServiceRef, type AXServiceApi } from "../../blueprints/ax-service";
+import { axDaemonCrashSignal, axServiceRef, type AXServiceApi } from "../../blueprints/ax-service";
 import { nodeText } from "../../utils/ui-tree-match";
+import { redactTypedSecrets, secretTypedOn, WITHHELD_INPUT_TEXT } from "../../utils/typed-secrets";
+import { isTurned, nativeTreeToUi, uiScreenSize } from "../../utils/ui-orientation";
+import { noteUiOrientation } from "../../utils/ios-ui-orientation";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import { adaptAxTree } from "../ui-tree/ios";
 import type { UiTree, UiTreeNode } from "../ui-tree";
@@ -21,9 +24,8 @@ import {
   type DescribeFrame,
   type DescribeNode,
   type DescribeTreeData,
-  parseDescribeResult,
-  type UiOrientation,
   asUiOrientation,
+  parseDescribeResult,
 } from "../describe/contract";
 
 /**
@@ -33,10 +35,8 @@ import {
  * ax-service daemon walks — the tree `describe` shows, with the hidden and
  * covered elements describe drops and the unlabelled containers it does not
  * print. Recording and replay therefore read one tree, so a selector copied
- * from `describe` (id, text, role) resolves at replay. Frames are normalized
- * to the screen's fixed (portrait-native) panel, the space touches are taken
- * in; the daemon reports the interface orientation, which turns the flow's
- * directions and reading order on a landscape UI (`flow-orientation.ts`).
+ * from `describe` (id, text, role) resolves at replay. Frames are in the UI's
+ * upright space, as `describe` frames them (`adaptAxTree`).
  *
  * The injected view hierarchy reader (`queryFullHierarchyTree`), the simulator
  * source before the accessibility tree, stays for e2e tests recorded on it.
@@ -110,8 +110,16 @@ function onScreenFrame(frame: DescribeFrame): DescribeFrame | undefined {
  * describe would print — an id, a label, a value, a non-group role, input
  * focus — and for a scrolling container. An identifier shields hoisted text
  * to the nearest identified ancestor; a password never contributes its value.
+ *
+ * With `quoted` the node is projected as a result may quote it, on a device a
+ * secret was typed on (see `utils/typed-secrets`): a text input's value is the
+ * note that it is withheld, since the field can hold the secret in a form no
+ * typed value matches (capitalized, corrected, formatted), and every other
+ * label and value is what `quoted` makes of it. Which nodes become leaves does
+ * not depend on either text, so the two projections of one tree give the same
+ * nodes in the same order.
  */
-function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
+function projectAxNode(node: UiTreeNode, quoted?: (text: string) => string): FlatNode<UiTreeNode> {
   if (node.covered) {
     return { skip: true, children: [], ownText: "", leaf: null, shield: false };
   }
@@ -122,14 +130,17 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
     Boolean(node.identifier || node.label || node.value || node.placeholder || node.focused) ||
     node.role !== "AXGroup";
   // An empty input reports its placeholder as its value, as `describe` prints it.
-  const value = node.value ?? (node.hintShowing ? node.placeholder : undefined);
+  const read = node.value ?? (node.hintShowing ? node.placeholder : undefined);
+  const value =
+    quoted && read !== undefined ? (node.editable ? WITHHELD_INPUT_TEXT : quoted(read)) : read;
+  const label = quoted && node.label !== undefined ? quoted(node.label) : node.label;
   let leaf: DescribeNode | null = null;
   if (frame && addressable) {
     leaf = {
       role: node.role,
       frame,
       children: [],
-      ...(node.label !== undefined ? { label: node.label } : {}),
+      ...(label !== undefined ? { label } : {}),
       // A secure field's placeholder is not its secret.
       ...(value !== undefined && (!node.password || node.hintShowing) ? { value } : {}),
       // The text a filled field holds names no element (see `resolveSelector`).
@@ -166,13 +177,18 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
  * Flatten the accessibility tree into the flow contract: flat leaves under one
  * synthetic root, descendant text hoisted onto container leaves. Each app root
  * (the daemon lists the system app first while an alert shows) contributes its
- * children; the Application nodes themselves are not leaves.
+ * children; the Application nodes themselves are not leaves. `quoted` builds
+ * the projection a result may quote (see {@link projectAxNode}).
  */
-export function adaptIosUiTreeForFlows(tree: UiTree): DescribeNode {
+export function adaptIosUiTreeForFlows(
+  tree: UiTree,
+  quoted?: (text: string) => string
+): DescribeNode {
   const children: DescribeNode[] = [];
+  const project = (node: UiTreeNode): FlatNode<UiTreeNode> => projectAxNode(node, quoted);
   for (const root of tree.roots) {
     if (root.covered) continue;
-    for (const child of root.children) flattenHoisting(child, projectAxNode, children);
+    for (const child of root.children) flattenHoisting(child, project, children);
   }
   return parseDescribeResult({
     role: "AXGroup",
@@ -189,6 +205,14 @@ const UPDATE_REMEDY =
 const BOOT_REMEDY =
   "Boot the simulator with `boot-device` (`force: true` when it is already booted), then " +
   "run the e2e test again.";
+
+// A crash says nothing about how the simulator was booted, and on a host where
+// the service crashes every time, a reboot or a tool-server restart starts the
+// same binary into the same crash (see `axCrashHint` in describe).
+const CRASH_REMEDY =
+  "Every read starts the accessibility service again, so run the e2e test again. If it " +
+  "crashes again, the crash is in the service on this host: rebooting the simulator or " +
+  "restarting the tool-server starts the same binary and does not fix it.";
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -213,10 +237,12 @@ function treeUnavailable(device: DeviceInfo, err: unknown): Error {
     );
   }
   const remedy =
-    code === FAILURE_CODES.AX_QUERY_TIMEOUT
-      ? "The screen took too long to read: wait for the app to settle, or scroll a long list or " +
-        "web page out of view, then run the e2e test again."
-      : BOOT_REMEDY;
+    axDaemonCrashSignal(err) !== undefined
+      ? CRASH_REMEDY
+      : code === FAILURE_CODES.AX_QUERY_TIMEOUT
+        ? "The screen took too long to read: wait for the app to settle, or scroll a long list or " +
+          "web page out of view, then run the e2e test again."
+        : BOOT_REMEDY;
   return new Error(
     `the accessibility tree of ${device.id} could not be read: ${errMsg(err)}. ${remedy}`
   );
@@ -238,7 +264,10 @@ export async function readIosSimulatorUiTree(
   let tree: UiTree;
   try {
     ax = await registry.resolveService<AXServiceApi>(ref.urn, ref.options);
-    tree = adaptAxTree(await ax.tree());
+    const response = await ax.tree();
+    // As `readIosUiTree` does: the next touch need not ask for the orientation.
+    noteUiOrientation(device.id, response.interfaceOrientation, response.screenFrame);
+    tree = adaptAxTree(response);
   } catch (err) {
     throw treeUnavailable(device, err);
   }
@@ -285,11 +314,17 @@ export async function queryIosSimulatorFlowTree(
             `draw, or relaunch it with \`restart-app\`, then run the e2e test again.`
     );
   }
+  // A field can hold a typed secret in a form no value matches, so once a
+  // secret was typed on the device a quote reads a second projection, in which
+  // that text is never present (see `utils/typed-secrets`).
+  const quotableTree = secretTypedOn(device.id)
+    ? adaptIosUiTreeForFlows(tree, (text) => redactTypedSecrets(device.id, text))
+    : undefined;
   return {
     tree: adaptIosUiTreeForFlows(tree),
+    ...(quotableTree ? { quotableTree } : {}),
     source: "ax-service",
     screen: tree.screen,
-    uiOrientation: tree.interfaceOrientation,
     ...(tree.truncated ? { truncated: true } : {}),
   };
 }
@@ -307,6 +342,8 @@ interface RawViewNode {
   className?: string;
   identifier?: string;
   label?: string;
+  /** The view's `accessibilityValue`: for a text input, the text it holds. */
+  value?: string;
   frame?: RawRect;
   windowFrame?: RawRect;
   /** The view in the screen's fixed (portrait-native) point space. */
@@ -348,6 +385,7 @@ function asViewNode(v: unknown): RawViewNode | null {
     className: nonEmptyString(r.className),
     identifier: nonEmptyString(r.identifier),
     label: nonEmptyString(r.label),
+    value: nonEmptyString(r.value),
     frame: asRect(r.frame),
     windowFrame: asRect(r.windowFrame),
     screenFrame: asRect(r.screenFrame),
@@ -358,13 +396,19 @@ function asViewNode(v: unknown): RawViewNode | null {
   };
 }
 
+/**
+ * The role of a text input in the simulator tree, and the only role whose leaf
+ * carries a `value` there: see {@link projectIosNode}.
+ */
+const IOS_TEXT_INPUT_ROLE = "AXTextField";
+
 // Role guessed from the UIView class name — the full hierarchy carries no
 // accessibility traits. Selectors lean on text/identifier, so a coarse mapping
 // is enough.
 function roleFromClassName(cn: string | undefined): string {
   if (!cn) return "AXGroup";
   if (/Button/i.test(cn)) return "AXButton";
-  if (/(TextField|TextView|SearchField)/i.test(cn)) return "AXTextField";
+  if (/(TextField|TextView|SearchField)/i.test(cn)) return IOS_TEXT_INPUT_ROLE;
   if (/(Label|Text)/i.test(cn)) return "AXStaticText";
   if (/Image/i.test(cn)) return "AXImage";
   if (/(Slider|Stepper|Switch|ProgressView)/i.test(cn)) return "AXAdjustable";
@@ -395,14 +439,30 @@ function normalizeFrame(rect: RawRect, screenW: number, screenH: number): Descri
  * `label`, or a specific semantic role — or is the first responder, which the
  * type directive's focus wait reads — and has an on-screen frame. An identified
  * node shields its text, scoping hoisting to the nearest identified ancestor.
+ *
+ * Only a text input carries its `value`: the text it holds, which no label in
+ * the hierarchy repeats, so without it a filled field reads as empty. An empty
+ * field reports its placeholder there, and a secure field reports nothing.
+ * Every other view's value stays out: a switch's "1" would hoist into the text
+ * of the row around it and break an `equals` check on what that row shows.
+ *
+ * With `quotedLabel` the node is projected as a result may quote it, on a
+ * device a secret was typed on: a text input's value is the note that it is
+ * withheld, and a label is what `quotedLabel` makes of it. Which views become
+ * leaves does not depend on either text, so the two projections of one payload
+ * give the same nodes in the same order.
  */
 function projectIosNode(
   node: RawViewNode,
   screenW: number,
-  screenH: number
+  screenH: number,
+  quotedLabel?: (label: string) => string
 ): FlatNode<RawViewNode> {
   const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
   const role = roleFromClassName(node.className);
+  const held = role === IOS_TEXT_INPUT_ROLE && node.value !== node.label ? node.value : undefined;
+  const value = quotedLabel && held !== undefined ? WITHHELD_INPUT_TEXT : held;
+  const label = quotedLabel && node.label !== undefined ? quotedLabel(node.label) : node.label;
 
   // Scroll-clip inputs (see `flattenHoisting`). Screen (or window) space only:
   // `frame` is parent-local, so falling back to it (as the leaf frame does)
@@ -421,12 +481,15 @@ function projectIosNode(
         role,
         frame,
         children: [],
-        label: node.label,
+        label,
+        value,
         identifier: node.identifier,
         focused: node.firstResponder || undefined,
       };
     }
   }
+
+  const ownTextParts = frame ? [label, value].filter((text): text is string => Boolean(text)) : [];
 
   return {
     skip,
@@ -434,8 +497,13 @@ function projectIosNode(
     // Text hoists only from on-screen nodes (frame is null when the view is
     // scrolled off or zero-area) — otherwise a text assert against an ancestor
     // would pass on content the screen doesn't show. A label makes a node
-    // leaf-eligible, so `frame` was computed for any node with text.
-    ownText: frame ? (node.label ?? "") : "",
+    // leaf-eligible, and so does the text input role a value needs, so `frame`
+    // was computed for any node with text. Mirrors what `nodeText` reads off
+    // the leaf: the label plus a distinct value.
+    ownText: ownTextParts.join(" "),
+    // Apart as well: the view under an empty field that draws its placeholder
+    // repeats the value and not the label, and a floating label the reverse.
+    ownTextParts,
     leaf,
     shield: Boolean(node.identifier),
     rect,
@@ -457,20 +525,24 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
 /**
  * Like {@link adaptFullHierarchyToDescribeResult}, but also reports the screen
  * size (points) the frames were normalized against — the rotate directive needs
- * the aspect ratio for its physical-circle geometry — and how the UI lies on
- * that space, for the directives that turn a UI-space direction into it.
+ * the aspect ratio for its physical-circle geometry.
  *
- * The orientation is the one the framework reports next to the screen size
- * (`screen.interfaceOrientation`, as UIKit names interface orientations), not
- * one told from the frames: a UI made only of full-screen or centred views (a
- * game, a canvas) frames the same way in both landscape orientations. A
- * framework that predates `screenFrame` reports neither, and its frames are in
- * the window's space, where a direction needs no turning.
+ * The frames come in the screen's fixed (portrait-native) space and go out in
+ * the UI's upright one, the space every agent-facing tool and every touch uses
+ * on an iOS simulator (`utils/ios-ui-orientation.ts`); the screen size is the
+ * UI's too. The turn is by the orientation the framework reports next to the
+ * screen size (`screen.interfaceOrientation`, as UIKit names interface
+ * orientations), not one told from the frames: a UI made only of full-screen
+ * or centred views (a game, a canvas) frames the same way in both landscape
+ * orientations. A framework that predates `screenFrame` reports neither, and
+ * its frames are in the window's space, which already is the UI's.
  */
-function adaptFullHierarchy(raw: unknown): {
+function adaptFullHierarchy(
+  raw: unknown,
+  quotedLabel?: (label: string) => string
+): {
   tree: DescribeNode;
   screen?: { width: number; height: number };
-  uiOrientation?: UiOrientation;
 } {
   const payload =
     typeof raw === "object" && raw !== null ? (raw as { windows?: unknown; screen?: unknown }) : {};
@@ -505,7 +577,7 @@ function adaptFullHierarchy(raw: unknown): {
   const children: DescribeNode[] = [];
   if (screenW > 0 && screenH > 0) {
     for (const win of windows) {
-      flattenHoisting(win, (n) => projectIosNode(n, screenW, screenH), children);
+      flattenHoisting(win, (n) => projectIosNode(n, screenW, screenH, quotedLabel), children);
     }
   }
 
@@ -516,10 +588,10 @@ function adaptFullHierarchy(raw: unknown): {
   });
   if (!(screenW > 0 && screenH > 0)) return { tree };
   const uiOrientation = asUiOrientation(reportedScreen?.interfaceOrientation);
+  if (!isTurned(uiOrientation)) return { tree, screen: { width: screenW, height: screenH } };
   return {
-    tree,
-    screen: { width: screenW, height: screenH },
-    ...(uiOrientation ? { uiOrientation } : {}),
+    tree: nativeTreeToUi(tree, uiOrientation),
+    screen: uiScreenSize({ width: screenW, height: screenH }, uiOrientation),
   };
 }
 
@@ -537,6 +609,9 @@ const FULL_HIERARCHY_FIELDS = [
   "className",
   "identifier",
   "label",
+  // A text input's text; an injected framework that omits it leaves a filled
+  // field reading as empty.
+  "value",
   "frame",
   "windowFrame",
   "screenFrame",
@@ -833,12 +908,19 @@ export async function queryFullHierarchyTree(
     );
   }
 
-  const { tree, screen, uiOrientation } = adaptFullHierarchy(rawResult);
+  const { tree, screen } = adaptFullHierarchy(rawResult);
+  // This tree reads the text of text inputs, and a field can hold a typed
+  // secret in a form no value matches (capitalized, corrected, formatted). So
+  // once a secret was typed on the device, a quote reads a second projection,
+  // in which that text is never present.
+  const quotableTree = secretTypedOn(device.id)
+    ? adaptFullHierarchy(rawResult, (label) => redactTypedSecrets(device.id, label)).tree
+    : undefined;
   return {
     tree,
+    ...(quotableTree ? { quotableTree } : {}),
     source: "native-devtools",
     ...(screen ? { screen } : {}),
-    ...(uiOrientation ? { uiOrientation } : {}),
   };
 }
 

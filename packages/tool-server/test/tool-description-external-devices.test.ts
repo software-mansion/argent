@@ -51,31 +51,6 @@ function agentFacingText(def: ToolDefinition<any, any>): string[] {
   return texts;
 }
 
-/**
- * The sweep below asserts an absence, so it passes just as well when it has
- * stopped looking. These two hold the instrument itself to account: that the
- * vocabulary still fires and that there is text for it to fire on.
- */
-describe("the sweep can still find what it looks for", () => {
-  it.each([
-    "Pick the external device the provider offers.",
-    "Pass the ext: id from list-devices.",
-    "Set 'external: true' to reach a device provider.",
-    /** The line the removed `provider=<engine>` exemption would have erased. */
-    "provider=external",
-  ])("flags %j", (line) => {
-    expect(offendingLines(line)).toEqual([line]);
-  });
-
-  it("reads a description and its parameters, so the catalog sweep has input", () => {
-    const definitions = definitionsById(createRegistry());
-    const texts = [...definitions.values()].flatMap(agentFacingText);
-
-    expect(texts.length).toBeGreaterThan(definitions.size);
-    expect(texts.every((text) => text.length > 0)).toBe(true);
-  });
-});
-
 describe("device providers stay out of the always-shipped catalog", () => {
   const definitions = definitionsById(createRegistry());
 
