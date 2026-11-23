@@ -83,7 +83,8 @@ The emulator runs an AVD writable one time, or read-only any number of times. It
 An emulator started with `-port` belongs to the boots that give that `port`:
 
 - A boot with `port` reuses only the emulator on that port. It fails with `BOOT_ANDROID_PORT_IN_USE` when an emulator of another AVD uses the port, also when that emulator takes the port during the boot.
-- A boot without `port` never reuses or stops an emulator started with `-port`. With `force: true`, it stops only an emulator started without `-port`.
+- A boot without `port` never reuses or stops a read-only emulator started with `-port`. A writable boot without `port` still reuses a writable emulator started with `-port`, or stops it with `force: true`, because the AVD runs only one writable emulator at a time.
+- With `force: true`, a boot stops an emulator only when no other emulator of the AVD would still block the boot. Otherwise it fails with `BOOT_ANDROID_READ_ONLY_CONFLICT` and stops nothing.
 - A read-only boot with `port` fails with `BOOT_ANDROID_PORT_IN_USE` when the AVD runs writable on that port. Add `force: true` to stop that emulator and boot it read-only.
 
 A read-only emulator that Argent did not start is reused only if it was started with `-port`, because Argent finds its serial in the command line. On Windows, Argent cannot read the command lines of the emulators. There, a read-only boot reuses only an emulator that Argent started.

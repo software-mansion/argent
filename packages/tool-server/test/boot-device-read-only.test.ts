@@ -237,6 +237,7 @@ async function failureCode(pending: Promise<unknown>): Promise<string | undefine
   try {
     await pending;
   } catch (err) {
+    console.log("DEBUGERR", String(err).slice(0, 300));
     return getFailureSignal(err)?.error_code;
   }
   throw new Error("expected the boot to fail");
@@ -485,6 +486,63 @@ describe("boot-device Android — readOnly and port", () => {
 
     expect(await failureCode(boot({ port: 5582 }))).toBe("BOOT_ANDROID_READ_ONLY_CONFLICT");
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  // The AVD runs one writable instance at a time, so a writable boot that left
+  // a pinned writable emulator alone could only fail.
+  it("lets a writable boot without a port reuse, or force, a writable emulator started with -port", async () => {
+    world = [emulator("emulator-5556", { portArg: true })];
+
+    expect(await boot({})).toMatchObject({ serial: "emulator-5556" });
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    const forced = await boot({ force: true });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(forced).toMatchObject({ booted: true });
+    expect(world.map((e) => e.serial)).toEqual([(forced as { serial: string }).serial]);
+  });
+
+  it("still leaves a pinned writable emulator alone on a read-only boot without a port", async () => {
+    world = [emulator("emulator-5556", { portArg: true })];
+
+    expect(await failureCode(boot({ readOnly: true, force: true }))).toBe(
+      "BOOT_ANDROID_READ_ONLY_CONFLICT"
+    );
+    expect(world.map((e) => e.serial)).toEqual(["emulator-5556"]);
+  });
+
+  // Shutting the emulator down would not let the boot go ahead, and other
+  // agents may be using it.
+  it.each([
+    ["one argent booted", true],
+    ["one started outside argent, told by its console listener", false],
+  ])(
+    "on force, shuts nothing down while another instance would still block the boot: %s",
+    async (_label, ours) => {
+      if (ours) await boot({ readOnly: true });
+      else world.push(emulator("emulator-5554", { readOnly: true }));
+      world.push(emulator("emulator-5584", { readOnly: true, portArg: true }));
+      const spawnsBefore = spawnMock.mock.calls.length;
+
+      const started = Date.now();
+      expect(await failureCode(boot({ force: true }))).toBe("BOOT_ANDROID_READ_ONLY_CONFLICT");
+
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(world.map((e) => e.serial).sort()).toEqual(["emulator-5554", "emulator-5584"]);
+      expect(spawnMock.mock.calls.length).toBe(spawnsBefore);
+    }
+  );
+
+  it("on force, still replaces the only instance in the way", async () => {
+    const first = await boot({ readOnly: true });
+
+    const forced = await boot({ force: true });
+
+    expect(forced).toMatchObject({ booted: true });
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnArgs(1)).not.toContain("-read-only");
+    expect(world.map((e) => e.serial)).toEqual([(first as { serial: string }).serial]);
   });
 
   it("reports the conflict, not a corrupted AVD, for concurrent boots in different modes", async () => {

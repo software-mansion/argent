@@ -1293,6 +1293,64 @@ function bootsClash(
   return a.avdName === b.avdName && !(a.readOnly && b.readOnly);
 }
 
+/**
+ * The running instances of `avdName` matching `filter`, leaving out the one
+ * behind `serial`. One launched with `-port` shows its serial's port in the
+ * process table. One launched without it is told by the pid argent recorded
+ * for it, or else by which process listens on the serial's console port. A
+ * portless process that cannot be told either way is left out: it may be the
+ * one behind `serial`. Empty when the process table cannot be read.
+ */
+async function blockersBesides(
+  avdName: string,
+  serial: string,
+  filter: (p: EmulatorProcess) => boolean
+): Promise<EmulatorProcess[]> {
+  const processes = await readEmulatorProcessesForAvd(avdName);
+  if (processes === null) return [];
+  const port = Number(serial.match(/^emulator-(\d+)$/)?.[1]);
+  const record = readOnlyBoots.get(serial);
+  const knownPid = record?.avdName === avdName ? record.pid : undefined;
+  const others: EmulatorProcess[] = [];
+  for (const p of processes.filter(filter)) {
+    if (p.port !== null) {
+      if (p.port !== port) others.push(p);
+    } else if (knownPid !== undefined) {
+      if (p.pid !== knownPid) others.push(p);
+    } else if ((await consoleOwnership(serial, p.pid)) === "other") {
+      others.push(p);
+    }
+  }
+  return others;
+}
+
+/** The emulator refuses to start this boot next to the `blocking` instances. */
+function readOnlyConflictError(
+  params: AndroidBootParams,
+  blocking: EmulatorProcess[]
+): FailureError {
+  const describe = (p: EmulatorProcess) =>
+    `pid ${p.pid}${p.port !== null ? ` on emulator-${p.port}` : ""}`;
+  const writable = blocking.filter((p) => !p.readOnly);
+  const message = params.readOnly
+    ? `AVD "${params.avdName}" is running writable (${writable.map(describe).join(", ")}), and ` +
+      `the emulator starts a read-only instance only next to other read-only ones. Close that ` +
+      `emulator, or start it with \`-read-only\` too, then retry.`
+    : writable.length > 0
+      ? `AVD "${params.avdName}" is already running writable (${writable.map(describe).join(", ")}), ` +
+        `and the emulator runs one writable instance of an AVD at a time. Boot without \`port\`, ` +
+        `or with that instance's \`port\`, to use it, or close it, then retry.`
+      : `AVD "${params.avdName}" is running read-only (${blocking.map(describe).join(", ")}), and ` +
+        `the emulator cannot start a writable instance next to it. Pass \`readOnly: true\`, or ` +
+        `close the read-only emulators, then retry.`;
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.BOOT_ANDROID_READ_ONLY_CONFLICT,
+    failure_stage: "boot_android_read_only",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
 async function bootAndroid(params: AndroidBootParams): Promise<AndroidBootResult> {
   const key = inFlightBootKey(params);
   for (;;) {
@@ -1430,18 +1488,27 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
     existingDevices.splice(0, existingDevices.length, ...refreshed);
   };
   // Which running instance is this boot's. With a port, only the emulator on
-  // it. Without one, never an instance pinned with `-port`: that belongs to the
-  // calls that name its port, typically another agent's. A read-only boot takes
-  // only a read-only instance, never a writable one, which would be someone's
-  // own emulator holding the AVD. A writable boot takes any, preferring a
-  // writable one: the emulator refuses to start a writable instance next to a
-  // read-only one anyway.
+  // it. Without one, never a read-only instance pinned with `-port`: that
+  // belongs to the calls that name its port, typically another agent's. A
+  // writable instance is taken even when pinned: the AVD runs one writable
+  // instance at a time, so a writable boot could do nothing else, and a
+  // read-only boot is refused next to it below. A read-only boot takes only a
+  // read-only instance, never a writable one, which would be someone's own
+  // emulator holding the AVD. A writable boot takes any, preferring a writable
+  // one: the emulator refuses to start a writable instance next to a read-only
+  // one anyway.
   const instances = await avdInstances(params.avdName);
   const candidates = existingDevices.filter(
     (d) =>
       isRunningAvd(d, params.avdName) &&
-      (portSerial === null ? !instances.pinned.has(d.serial) : d.serial === portSerial)
+      (portSerial !== null
+        ? d.serial === portSerial
+        : !instances.pinned.has(d.serial) ||
+          (!params.readOnly && !instances.readOnly.has(d.serial)))
   );
+  // The instances that keep this boot from spawning: for a read-only boot a
+  // writable one, for a writable boot any.
+  const blocks = (p: EmulatorProcess) => !params.readOnly || !p.readOnly;
   let alreadyRunning = params.readOnly
     ? candidates.find((d) => instances.readOnly.has(d.serial))
     : (candidates.find((d) => !instances.readOnly.has(d.serial)) ?? candidates[0]);
@@ -1471,6 +1538,11 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   let killedRunning = false;
   if (alreadyRunning) {
     if (params.force) {
+      // Shutting it down only helps when nothing else blocks the boot: another
+      // instance would leave the call failing with this emulator gone, though
+      // other agents may still have been using it.
+      const others = await blockersBesides(params.avdName, alreadyRunning.serial, blocks);
+      if (others.length > 0) throw readOnlyConflictError(params, others);
       await killEmulatorQuietly(alreadyRunning.serial);
       await dropKilledEmulator(alreadyRunning.serial);
       killedRunning = true;
@@ -1504,31 +1576,10 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   // just shut down may take a moment to leave the process table.
   const blocking = await awaitEmulatorProcessesGone(
     params.avdName,
-    (p) => !params.readOnly || !p.readOnly,
+    blocks,
     killedRunning ? Math.min(overallDeadline, Date.now() + EMULATOR_GONE_BUDGET_MS) : 0
   );
-  if (blocking.length > 0) {
-    const describe = (p: EmulatorProcess) =>
-      `pid ${p.pid}${p.port !== null ? ` on emulator-${p.port}` : ""}`;
-    const writable = blocking.filter((p) => !p.readOnly);
-    const message = params.readOnly
-      ? `AVD "${params.avdName}" is running writable (${writable.map(describe).join(", ")}), and ` +
-        `the emulator starts a read-only instance only next to other read-only ones. Close that ` +
-        `emulator, or start it with \`-read-only\` too, then retry.`
-      : writable.length > 0
-        ? `AVD "${params.avdName}" is already running writable (${writable.map(describe).join(", ")}), ` +
-          `and the emulator runs one writable instance of an AVD at a time. Boot with that ` +
-          `instance's \`port\`, or without \`port\` if it has none, to use it, or close it, then retry.`
-        : `AVD "${params.avdName}" is running read-only (${blocking.map(describe).join(", ")}), and ` +
-          `the emulator cannot start a writable instance next to it. Pass \`readOnly: true\`, or ` +
-          `close the read-only emulators, then retry.`;
-    throw new FailureError(message, {
-      error_code: FAILURE_CODES.BOOT_ANDROID_READ_ONLY_CONFLICT,
-      failure_stage: "boot_android_read_only",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    });
-  }
+  if (blocking.length > 0) throw readOnlyConflictError(params, blocking);
 
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
   await dropUnreachableSerials(existingDevices, serialsBefore);
@@ -2646,7 +2697,7 @@ const zodSchema = z.object({
     .multipleOf(2)
     .optional()
     .describe(
-      "Android only: the emulator's console port, an even number from 5554 to 5584 (`emulator -port`), the range adb finds emulators in; its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. The gRPC server Argent needs for screenshots and gestures goes on the port plus 3000, which must be free too. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there writable on a read-only boot and `force` is not set. An emulator started with `-port` belongs to the calls that give that port: a call without `port` never reuses or shuts it down. Ignored on other platforms."
+      "Android only: the emulator's console port, an even number from 5554 to 5584 (`emulator -port`), the range adb finds emulators in; its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. The gRPC server Argent needs for screenshots and gestures goes on the port plus 3000, which must be free too. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there writable on a read-only boot and `force` is not set. A read-only emulator started with `-port` belongs to the calls that give that port: a call without `port` never reuses or shuts it down. A writable one is still reused, or with `force` shut down, by a writable call without `port`, since the AVD runs one writable emulator at a time. `force` shuts nothing down when another emulator of the AVD would still block the boot. Ignored on other platforms."
     ),
   headless: z
     .boolean()
