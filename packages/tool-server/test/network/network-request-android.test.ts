@@ -858,6 +858,15 @@ describe("view-network-request-details: routing an android- ID", () => {
         );
       });
 
+      it("is not found on a Mac app, whose native-network-logs lists no android- ID", async () => {
+        const params = { device_id: "macos-app-com.example.app", requestId, includeBody: true };
+
+        expect(networkRequestTool.services!(params)).toEqual({});
+        expect(await networkRequestTool.execute!({}, params)).toBe(
+          `Request ${requestId} not found. An android- ID comes from an Android device. Use native-network-logs or view-network-logs to list this Mac app's requests.`
+        );
+      });
+
       it("stays Chromium's to answer, because a Chromium request ID is opaque", async () => {
         const params = { device_id: "chromium-cdp-9222", requestId, includeBody: false };
         expect(Object.keys(networkRequestTool.services!(params))).toEqual(["chromium"]);

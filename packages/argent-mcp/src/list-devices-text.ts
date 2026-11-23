@@ -51,15 +51,19 @@ function cleanEntry(device: Entry): Entry {
  * A simulator the header tells the agent to start: a local or remote iOS
  * simulator that is shut down. One that is changing state (`Booting`,
  * `Shutting Down`, `Creating`) keeps its full entry, as do a physical iPhone
- * (`kind: "device"`) and a provider's device (`external`).
+ * (`kind: "device"`) and a provider's device (`external`). An older
+ * tool-server lists simulators without a `kind`.
  */
 function isStoppedSimulator(device: Entry): boolean {
   if (device.platform !== "ios" && device.platform !== "ios-remote") return false;
-  if ("kind" in device || "external" in device) return false;
+  if ((device.kind !== undefined && device.kind !== "simulator") || "external" in device) {
+    return false;
+  }
   return typeof device.udid === "string" && device.state === "Shutdown";
 }
 
-const ONE_LINE_FIELDS = new Set(["platform", "udid", "name", "runtime", "state"]);
+// `kind` is always "simulator" here, which the header already says.
+const ONE_LINE_FIELDS = new Set(["platform", "kind", "udid", "name", "runtime", "state"]);
 
 function quoteIfNeeded(value: string): string {
   return value === "" || /[\s"\\]/.test(value) ? JSON.stringify(value) : value;
