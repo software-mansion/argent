@@ -41,6 +41,9 @@ describe("text diff", () => {
     expect(normalizeTextForDiff("10%")).toBe("10%");
     expect(normalizeTextForDiff("$ 10")).toBe("$10");
     expect(normalizeTextForDiff("A / B")).toBe("a/b");
+    expect(normalizeTextForDiff("1+2-3")).toBe("1+2-3");
+    expect(normalizeTextForDiff("a/b/c")).toBe("a/b/c");
+    expect(normalizeTextForDiff("1+2-3")).not.toBe(normalizeTextForDiff("1+2+3"));
     expect(normalizeTextForDiff("10%")).not.toBe(normalizeTextForDiff("10"));
   });
 

@@ -12,6 +12,7 @@ vi.mock("../../src/utils/ios-profiler/pipeline/index", () => ({
     bottlenecks: [],
     cpuSamples: [],
     uiHangs: [],
+    hangsRecorded: false,
     cpuHotspots: [],
     memoryLeaks: [],
   })),

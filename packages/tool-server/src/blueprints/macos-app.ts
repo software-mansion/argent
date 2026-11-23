@@ -40,11 +40,16 @@ import {
   trackedAppKind,
 } from "../utils/macos-apps";
 import type { MacosAppKind } from "../utils/macos-app-kind";
-import {
-  isInjectableBundleId,
-  NATIVE_NETWORK_LOG_LIMIT,
-  type NetworkEvent,
-} from "./native-devtools";
+import { isInjectableBundleId } from "./native-devtools";
+
+export interface NetworkEvent {
+  method: string;
+  params: unknown;
+  timestamp: number;
+}
+
+/** How many network events a Mac app's log keeps; the oldest go first. */
+const NATIVE_NETWORK_LOG_LIMIT = 1000;
 
 /**
  * The in-app library of one native Mac app (device id `macos-app-<bundle id>`):
@@ -192,9 +197,9 @@ export interface MacosAppApi {
    */
   watchSuspensions(pid: number): Promise<{ end(): AppSuspensionWindow[] } | null>;
   /**
-   * Turns on the library's network capture, as the first `native-network-logs`
-   * call does on iOS. It stays on: each later connection, also the one to a
-   * restarted app, turns it on again.
+   * Turns on the library's network capture; the first `native-network-logs`
+   * call does this, since a Mac app has no network-capture-start. It stays on:
+   * each later connection, also the one to a restarted app, turns it on again.
    */
   activateNetworkInspection(): Promise<void>;
   /**
@@ -781,7 +786,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   let launching = false;
   let disposed = false;
 
-  // Network capture. Off until the first native-network-logs call, as on iOS;
+  // Network capture. Off until the first native-network-logs call;
   // after that each new channel turns it on again. The log belongs to one app
   // process: a restarted app starts an empty one, a reconnect keeps it.
   let networkInspection = false;

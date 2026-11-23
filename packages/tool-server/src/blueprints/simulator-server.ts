@@ -13,7 +13,7 @@ import {
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerRunDir } from "@argent/native-devtools-ios";
 import { getAndroidSdkRoot } from "@argent/configuration-core";
-import { ensureAutomationEnabled } from "./ax-service";
+import { clearAutomationEnabledOrWarn } from "../utils/ax-prefs";
 import { ensureDep } from "../utils/check-deps";
 import { isFoldableSimulator, isTvOsSimulator } from "../utils/ios-devices";
 import { deviceSetForUdid } from "../utils/ios-device-sets";
@@ -307,10 +307,12 @@ function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_d
  * `avd/running/pid_*.ini` discovery file. An emulator started under another
  * user or HOME, or with `-port`, has no such file where argent looks. The phone
  * controller (screen-sharing agent over adb) needs only adb, so such an
- * emulator is retried through it.
+ * emulator is retried through it. A stale discovery file left by a dead
+ * emulator on the same serial makes the controller dial a closed gRPC port
+ * ("Connection refused" on Unix, "actively refused" on Windows).
  */
 const EMULATOR_NOT_DISCOVERED =
-  /not found among running emulators|Failed to find any running emulator/;
+  /not found among running emulators|Failed to find any running emulator|transport error[\s\S]*tcp connect error: (?:Connection refused|[^\n]*actively refused)/;
 
 const FIRST_FRAME_TIMEOUT_MS = 5_000;
 
@@ -625,7 +627,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       }
       // Input could open an app from the home screen, which must not launch
       // before the watcher has armed native-devtools injection.
-      await Promise.all([ensureAutomationEnabled(device.id).catch(() => {}), firstSimulatorPoll()]);
+      await Promise.all([clearAutomationEnabledOrWarn(device.id), firstSimulatorPoll()]);
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
       // through adb (gRPC bridge / screen-sharing agent respectively).

@@ -142,6 +142,15 @@ describe("Authorization gate (token unset / dev mode)", () => {
     const res = await request(handle.app).get("/tools");
     expect(res.status).toBe(200);
   });
+
+  it("permits unauthenticated requests when ARGENT_AUTH_TOKEN is empty (--no-auth)", async () => {
+    handle.dispose();
+    process.env.ARGENT_AUTH_TOKEN = "";
+    handle = createHttpApp(stubRegistry());
+
+    const res = await request(handle.app).get("/tools");
+    expect(res.status).toBe(200);
+  });
 });
 
 describe("CORS removal", () => {

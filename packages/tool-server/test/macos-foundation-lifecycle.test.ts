@@ -930,7 +930,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
 
     it("turns the capture on at the first call and returns the app's network events", async () => {
       await run("boot-device", { macosAppPath: appPath });
-      // Off until now, as on iOS: the first call has nothing to show.
+      // Off until now: the first call has nothing to show.
       expect(await readLog()).toEqual({ status: "ok", count: 0, events: [] });
 
       // One request is three events; the CDP reply frame after them is not one.
@@ -948,10 +948,11 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       });
       expect(log.events.every((e) => typeof e.timestamp === "number")).toBe(true);
 
-      // `limit` keeps the most recent; `clear` empties the log after the read.
+      // `limit` keeps the most recent, and 0 keeps none; `clear` empties the log after the read.
       expect((await readLog({ limit: 1 })).events.map((e) => e.method)).toEqual([
         "Network.loadingFinished",
       ]);
+      expect(await readLog({ limit: 0 })).toEqual({ status: "ok", count: 0, events: [] });
       expect((await readLog({ clear: true })).count).toBe(3);
       expect((await readLog()).count).toBe(0);
     });
