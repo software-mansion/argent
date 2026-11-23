@@ -16,6 +16,7 @@ import {
   getWhatsNewSeenVersion,
   setFlag,
   setWhatsNewSeenVersion,
+  unsetFlag,
 } from "@argent/configuration-core";
 import { getInstalledVersion } from "../src/installed-version.js";
 
@@ -496,6 +497,27 @@ describe("startMcpServer tool calls", () => {
       expect(textOf(second)).not.toContain("Argent was updated");
       expect(getWhatsNewSeenVersion()).toBe(version);
     } finally {
+      setWhatsNewSeenVersion(version);
+    }
+  });
+
+  it("sends no what's new note when the whats-new flag is off", async () => {
+    const version = getInstalledVersion();
+    setWhatsNewSeenVersion("0.0.1");
+    setFlag("whats-new", false, "global", { homeDir: TEST_HOME });
+    try {
+      const other = await connect({
+        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+        simulatorServerDir: "",
+        nativeDevtoolsDir: "",
+      });
+      const result = await other.callTool({ name: "noted", arguments: {} });
+      await other.close();
+
+      expect(textOf(result)).not.toContain("Argent was updated");
+      expect(getWhatsNewSeenVersion()).toBe("0.0.1");
+    } finally {
+      unsetFlag("whats-new", "global", { homeDir: TEST_HOME });
       setWhatsNewSeenVersion(version);
     }
   });

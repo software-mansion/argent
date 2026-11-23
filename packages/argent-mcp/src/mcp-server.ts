@@ -47,7 +47,7 @@ import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
-import { takeWhatsNewNote } from "./whats-new.js";
+import { takeWhatsNewNote, whatsNewEnabled } from "./whats-new.js";
 
 export { fetchWithReconnect } from "./tool-caller.js";
 
@@ -103,6 +103,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // tool call. A flag change therefore needs an MCP restart to take effect.
   const autoScreenshotOn = autoScreenshotEnabled();
   const autoDescribeOn = autoDescribeEnabled();
+  const whatsNewOn = whatsNewEnabled();
   const captureTimeoutMs = options.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS;
   const trees = createTreeMemory();
 
@@ -283,7 +284,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   let whatsNewChecked = false;
 
   function whatsNewBlocks(): ContentBlock[] {
-    if (whatsNewChecked) return [];
+    if (!whatsNewOn || whatsNewChecked) return [];
     whatsNewChecked = true;
     try {
       const note = takeWhatsNewNote(getInstalledVersion());

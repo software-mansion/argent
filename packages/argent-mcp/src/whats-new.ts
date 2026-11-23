@@ -1,8 +1,22 @@
 import semver from "semver";
-import { getWhatsNewSeenVersion, setWhatsNewSeenVersion } from "@argent/configuration-core";
+import {
+  getWhatsNewSeenVersion,
+  isFeatureEnabled,
+  setWhatsNewSeenVersion,
+} from "@argent/configuration-core";
 import { RELEASE_HIGHLIGHTS } from "./release-highlights.js";
 
 const MAX_HIGHLIGHTS = 5;
+
+export function whatsNewEnabled(): boolean {
+  return isFeatureEnabled("whats-new");
+}
+
+function isNewerThanSeen(current: string, seen: string | null): boolean {
+  if (!semver.valid(current)) return false;
+  const previous = semver.valid(seen);
+  return previous === null || semver.gt(current, previous);
+}
 
 /**
  * Highlights of the releases after `seen` up to `current`, newest first. Without
@@ -35,10 +49,11 @@ export function formatWhatsNewNote(version: string, highlights: readonly string[
 /**
  * The note for the first tool result after an update, or undefined. Records the
  * current version, so every later call, in this process or another, gets nothing.
+ * The record only moves forward: local-mode repos on older versions share it.
  */
 export function takeWhatsNewNote(current: string): string | undefined {
   const seen = getWhatsNewSeenVersion();
-  if (seen === current || !semver.valid(current)) return undefined;
+  if (!isNewerThanSeen(current, seen)) return undefined;
   setWhatsNewSeenVersion(current);
   const highlights = highlightsSince(seen, current);
   return highlights.length > 0 ? formatWhatsNewNote(current, highlights) : undefined;
