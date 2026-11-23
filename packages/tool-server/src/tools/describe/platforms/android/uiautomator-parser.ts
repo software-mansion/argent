@@ -527,14 +527,17 @@ function computeNodeOutput(
     label = "[password]";
   }
 
+  // A list that holds focus marks its D-pad cursor row selected.
+  const selected = attrIsTrue(attrs, "selected");
+
   // Decorative ImageView — drop it, passing surviving descendants through.
-  if (cls.endsWith(".ImageView") && !interactive && !label) {
+  if (cls.endsWith(".ImageView") && !interactive && !label && !selected) {
     return keptChildren;
   }
 
   // Layout container with no own info — pass children through, flattening the
   // FrameLayout > LinearLayout > ConstraintLayout chains --compressed leaves.
-  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label) {
+  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label && !selected) {
     return keptChildren;
   }
 

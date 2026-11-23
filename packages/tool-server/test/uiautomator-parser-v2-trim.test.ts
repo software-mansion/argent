@@ -323,6 +323,30 @@ ${row("Sound", 'focused="false" selected="false"').replace("[0,100][800,200]", "
     expect(focusedFrameX(dump(false))).toEqual([400 / 1920]);
   });
 
+  it.each([
+    ["a layout", "android.widget.FrameLayout", true],
+    ["an unlabelled image", "android.widget.ImageView", false],
+  ])("keeps %s that is the selected row of a list holding focus", (_, cls, titled) => {
+    const rowAt = (title: string, selected: boolean, y: number) =>
+      `<node class="${cls}" selected="${selected}" package="com.example.tv" bounds="[0,${y}][800,${y + 100}]">
+  ${titled ? `<node class="android.widget.TextView" text="${title}" package="com.example.tv" bounds="[0,${y}][800,${y + 100}]" />` : ""}
+</node>`;
+    const dump = (firstSelected: boolean) => `<hierarchy rotation="0">
+<node class="android.widget.ListView" focusable="true" focused="true" package="com.example.tv" bounds="[0,0][800,200]">
+${rowAt("Network", firstSelected, 0)}
+${rowAt("Display", !firstSelected, 100)}
+</node>
+</hierarchy>`;
+
+    const selectedY = (xml: string) =>
+      flatten(parseUiAutomatorDump(xml, 1920, 1080))
+        .filter((n) => n.selected)
+        .map((n) => n.frame.y);
+
+    expect(selectedY(dump(true))).toEqual([0]);
+    expect(selectedY(dump(false))).toEqual([100 / 1080]);
+  });
+
   it("keeps the focus of a wrapper collapsed into its same-bounds inner target", () => {
     const xml = `<hierarchy rotation="0">
 <node class="android.widget.FrameLayout" content-desc="Play" clickable="true" focusable="true" focused="true" selected="true" package="com.example.tv" bounds="[0,0][400,200]">
