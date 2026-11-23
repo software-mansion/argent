@@ -64,7 +64,7 @@ export const nativeProfilerStartTool: ToolDefinition<
   longRunning: true,
   description: `Start native profiling. Instruments records CPU, hangs, and leaks on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>. Perfetto records CPU, jank, and memory growth on Android.
 Start the target app first for an attach recording. Wait for this call to return before reproducing the scenario, then call native-profiler-stop while the app is still running.
-On Android, a warning names apps whose timings may be affected by native network capture.<flag:macos-apps> On a Mac app, a warning says when the app runs with malloc stack logging. Launch the app through Argent and use a development-signed build. If signing blocks profiling in a background session such as SSH, try the "Time Profiler" template for CPU and hangs without leak checks.
+On iOS and Android, a warning names apps whose timings may be affected by native network capture.<flag:macos-apps> On a Mac app, a warning says when the app runs with malloc stack logging. Launch the app through Argent and use a development-signed build. If signing blocks profiling in a background session such as SSH, try the "Time Profiler" template for CPU and hangs without leak checks.
 With malloc stack logging off, Argent blocks the bundled template if it detects a WebKit heap or the check fails. Use "Time Profiler" to keep the app's state, or set malloc_stack_logging to true to restart the app and record leaks with the bundled template. With logging off, other templates that use the Allocations instrument, including "Leaks" and "Allocations", can freeze an affected app.</flag:macos-apps>`,
   zodSchema,
   interaction: {
@@ -93,6 +93,7 @@ With malloc stack logging off, Argent blocks the bundled template if it detects 
     if (api.platform === "ios") {
       await ensureDeps(["xcrun"]);
       started = await startNativeProfilerIos(api, params);
+      warning = nativeNetworkCaptureWarning(params.device_id);
     } else if (api.platform === "macos") {
       await ensureDeps(["xcrun"]);
       ({ warning, ...started } = await startNativeProfilerMacos(

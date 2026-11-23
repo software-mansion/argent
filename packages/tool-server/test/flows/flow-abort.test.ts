@@ -91,6 +91,21 @@ describe("run cancellation mid-directive", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("reports an echo skipped by an abort on one line", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    currentFetch = () => ({ tree: screen([]), source: "native-devtools" });
+
+    await writeFlow("cancelled-narration", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "a\nb\u001b[31m" }],
+    });
+
+    const result = await run("cancelled-narration", mockRegistry([]), controller.signal);
+
+    expect(result.steps).toMatchObject([{ reason: "run aborted", message: "a\\nb\\u001b[31m" }]);
+  });
+
   it("reports a tap cancelled during its auto-wait as a skip, not an offscreen failure", async () => {
     const controller = new AbortController();
     // The target never appears; the run is cancelled on the third tree read
