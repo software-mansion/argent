@@ -8,7 +8,7 @@
 // from the anchors in patchGlueForNode. This fails the build when it does,
 // instead of shipping a package whose Android analysis can't load.
 //
-// Run after `npm run build` (it loads packages/native-devtools-android/dist).
+// Run after `bun run build` (it loads packages/native-devtools-android/dist).
 
 const fs = require("node:fs");
 const os = require("node:os");

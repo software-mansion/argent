@@ -89,6 +89,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
       # Trusted publishing needs npm >= 11.5.1; don't rely on whatever the
       # runner image bundles.
       - name: Ensure npm supports trusted publishing
@@ -158,18 +162,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BINARIES_TAG: ${{ steps.mode.outputs.binaries_tag }}
 
-      - run: npm ci
+      - run: bun install --frozen-lockfile
 
-      - run: npm run build
+      - run: bun run build
 
       - name: Check the trace-processor engine loads
         run: node scripts/check-trace-processor.cjs
 
-      # Sequenced after `npm ci` (the checked-out lockfile still matches the
-      # original version at install time) and before the bundle build, which
-      # bakes the version into the telemetry payload as a string literal — a
-      # build that ran first would stamp every canary's events with the previous
-      # release's version.
+      # Sequenced before the bundle build, which bakes the version into the
+      # telemetry payload as a string literal — a build that ran first would
+      # stamp every canary's events with the previous release's version.
       - name: Compute and stamp canary version
         if: steps.mode.outputs.mode == 'canary'
         id: canary
@@ -178,7 +180,7 @@ jobs:
           echo "Canary version: ${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - run: npm run build -w @swmansion/argent
+      - run: bun run --filter @swmansion/argent build
         env:
           # Release-only: build-package-artifact.yml omits it so test tarballs
           # stay inert. An unset secret bakes in an empty token, which disables
@@ -310,7 +312,12 @@ jobs:
             console.log(`Verified the baked telemetry version in ${checked} bundle(s).`);
           '
 
-      - run: npm pack --dry-run -w @swmansion/argent
+      # The publish steps below upload this file and the github-release job
+      # attaches it, so the release asset is exactly what npm received. npm
+      # publishes a tarball's package.json as packed, without adding gitHead.
+      - run: |
+          bun pm pkg set --cwd packages/argent gitHead="$(git rev-parse HEAD)"
+          bun pm pack --cwd packages/argent --destination "$PWD"
 
       - name: Dry run — skipping publish
         if: steps.mode.outputs.mode == 'release' && inputs.dry_run
@@ -321,16 +328,10 @@ jobs:
 
       - name: Publish
         if: steps.mode.outputs.mode == 'release' && !inputs.dry_run
-        run: npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance
+        run: npm publish "swmansion-argent-${VERSION}.tgz" --tag "$DIST_TAG" --provenance
         env:
+          VERSION: ${{ steps.mode.outputs.version }}
           DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
-
-      # For the github-release job. `npm publish` packs with the same packer
-      # (libnpmpack) and packing is deterministic, so this is byte-identical to
-      # the tarball npm just received.
-      - name: Pack the published tarball
-        if: steps.mode.outputs.mode == 'release' && !inputs.dry_run
-        run: npm pack -w @swmansion/argent --pack-destination .
 
       - uses: actions/upload-artifact@v7
         if: steps.mode.outputs.mode == 'release' && !inputs.dry_run
@@ -343,7 +344,7 @@ jobs:
       # read-after-write lag can still hand a back-to-back run a stale version
       # list, so retry a version-exists collision by recomputing + restamping.
       # npm stages a publish for minutes before listing it, and rejects a
-      # second publish of a staged version with E409 while `npm view` still
+      # second publish of a staged version with E409 while `bun info` still
       # cannot see it, so that counts as a collision too, and --taken makes
       # the recompute step past it. Any other publish failure is real and
       # fails fast.
@@ -356,14 +357,15 @@ jobs:
           for attempt in 1 2 3; do
             VERSION="$(node -p "require('./packages/argent/package.json').version")"
             echo "Publishing ${VERSION} (attempt ${attempt})"
-            if npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance 2>&1 | tee publish.log; then
+            if npm publish "swmansion-argent-${VERSION}.tgz" --tag "$DIST_TAG" --provenance 2>&1 | tee publish.log; then
               echo "Published ${VERSION}"
               exit 0
             fi
             if grep -q "previously staged version" publish.log \
-              || npm view "@swmansion/argent@${VERSION}" version >/dev/null 2>&1; then
+              || bun info "@swmansion/argent@${VERSION}" version >/dev/null 2>&1; then
               echo "::warning::${VERSION} already on npm (lost a race / stale read) — recomputing"
               node scripts/next-canary-version.mjs --write --taken "$VERSION"
+              bun pm pack --cwd packages/argent --destination "$PWD"
               sleep 10
             else
               echo "::error::npm publish failed for ${VERSION} (not a version collision)"
@@ -411,6 +413,10 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
       - name: Ensure npm supports trusted publishing
         run: |
           npm install -g npm@^11.5.1
@@ -425,12 +431,13 @@ jobs:
           VERSION: ${{ needs.publish.outputs.published_version }}
           DIST_TAG: ${{ needs.publish.outputs.dist_tag }}
         run: |
-          npm pkg set version="$VERSION" "dependencies.@swmansion/argent=$VERSION"
-          if npm view "argent@${VERSION}" version >/dev/null 2>&1; then
+          bun pm pkg set version="$VERSION" "dependencies.@swmansion/argent=$VERSION" gitHead="$(git rev-parse HEAD)"
+          if bun info "argent@${VERSION}" version >/dev/null 2>&1; then
             echo "argent@${VERSION} is already on npm — nothing to publish"
             exit 0
           fi
-          npm publish --tag "$DIST_TAG" --provenance
+          bun pm pack
+          npm publish "argent-${VERSION}.tgz" --tag "$DIST_TAG" --provenance
           echo "Published \`argent@${VERSION}\` (alias for \`@swmansion/argent@${VERSION}\`) under dist-tag \`${DIST_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
 
   # Creates the GitHub release for the tag, with the published tarball attached
