@@ -15,6 +15,7 @@ Read this file before creating or changing an e2e test. Exercise the saved path 
     - [Typing](#typing)
     - [Scrolling and swiping](#scrolling-and-swiping)
     - [Live waits and checks](#live-waits-and-checks)
+    - [Network capture](#network-capture)
     - [Wrong turns](#wrong-turns)
   - [Finish and polish](#finish-and-polish)
   - [Worked example](#worked-example)
@@ -142,6 +143,16 @@ A stale `hidden` whose selector matches nothing replays as a silent pass: the un
 The live tool and e2e runner use [different trees](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree). After a successful wait, the recorder checks the same condition on the runner tree and warns when it does not hold there or could not be checked; the warning says what to rule out. If the trees really differ, keep the raw `await-ui-element` step: it replays on the tree it passed on.
 
 A warning does not reject the step. If `e2e-finish-recording` reports dropped warnings, record those waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs`, `bundleId`, or a cross-tree mismatch.
+
+### Network capture
+
+On iOS and Android, `view-network-logs` and `native-network-logs` only read. On a Mac app, `native-network-logs` only reads. Before `network-capture-start`, they say that capture is not started. A `tool:` step passes whatever text it returns, so a read before a start replays green and proves nothing.
+
+1. Record `network-capture-start` through `e2e-add-step` after the launch and its first-screen wait, before the action whose requests the test reads. A launch ends the capture of the JS layer. A start before `launch:` makes the test a fragment.
+2. Before a recorded `network-capture-stop`, record a wait for the screen that shows the result of the request. Argent records no request that the app sends after the stop.
+3. If a read says that capture is not started, do not answer it with a direct `network-capture-start` call: the replay does not have that call. Record the start, then record the action and the read again.
+4. A `tool:` step keeps its recorded `bundleId` on every platform. Only `launch:` takes an id per platform. If the app id differs by platform, add a top-level `requires:` block with the recording platform (see [File shape and test type](e2e-yaml.md#file-shape-and-test-type)). Record a separate test for each other platform.
+5. A `tool: network-capture-start` or `tool: network-capture-stop` step passes whatever its `armed` says. A start that armed no layer passes, and so does a stop whose JS layer stays `armed: true`. After each replay, read `armed` and `reason` of each layer in the step's `result`. If the start did not arm the layer that the test reads, or the stop did not disarm it, the reads after it prove nothing.
 
 ### Wrong turns
 

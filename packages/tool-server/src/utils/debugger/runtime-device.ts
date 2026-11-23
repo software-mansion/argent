@@ -44,8 +44,8 @@ const NOT_FOUND: RuntimeDevices = { found: [], unresolved: [] };
  * The device a debugger session's JS runtime runs on, for a session keyed by
  * Metro's `logicalDeviceId`.
  *
- * Once two devices share one Metro, `selectTarget` makes the caller connect
- * with the logicalDeviceId, a hash that nothing in argent can turn back into a
+ * Once two devices share one Metro, a caller may have to connect with the
+ * logicalDeviceId, a hash that nothing in argent can turn back into a
  * serial or UDID (see device-alias.ts). The runtime itself can tell: it writes a
  * one-off marker through React Native's native logger, and the device whose log
  * holds the marker is the one it runs on. Android writes it to logcat under

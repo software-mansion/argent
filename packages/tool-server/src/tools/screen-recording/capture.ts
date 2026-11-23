@@ -1,5 +1,3 @@
-import * as os from "os";
-import * as path from "path";
 import { promises as fs } from "fs";
 import { spawn } from "child_process";
 import type { LivePanel } from "../../utils/foldable";
@@ -21,6 +19,7 @@ import {
   statNonEmptyOutput,
   type StartRecordingResult,
   type StopRecordingFile,
+  recordingOutputPath,
 } from "./session-guards";
 import {
   buildWatermarkGraph,
@@ -464,10 +463,7 @@ async function startCaptureLocked(
 ): Promise<StartRecordingResult> {
   const ffmpeg = await requireFfmpeg();
 
-  const outputFile = path.join(
-    os.tmpdir(),
-    `argent-screen-recording-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
-  );
+  const outputFile = recordingOutputPath(api.deviceId);
 
   const stream = withCloseHook(
     await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS),

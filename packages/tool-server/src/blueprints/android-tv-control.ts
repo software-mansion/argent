@@ -7,10 +7,9 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { adbExecOutBinary, adbShell, getAndroidRuntimeKind } from "../utils/adb";
-import { adbCommandPrefix } from "../utils/adb-server";
 import { assertTypeableAndroidText, injectAndroidText } from "../utils/android-input";
 import { UnsupportedOperationError } from "../utils/capability";
-import { queueUiautomatorDump } from "../utils/uiautomator-dump-queue";
+import { uiautomatorKilledMessage, withUiautomatorLock } from "../utils/uiautomator-lock";
 import {
   parseUiAutomatorXml,
   attrIsTrue,
@@ -126,8 +125,9 @@ function activeWindow(root: ParsedXmlNode): ParsedXmlNode {
 }
 
 /**
- * Collect the focused node and every focusable node. `parseUiAutomatorDump`
- * drops the `focused` attribute, so the focus walk needs its own pass.
+ * Collect the focused node and every focusable node, from the window holding
+ * focus. `parseUiAutomatorDump` reads every window, so the focus walk needs its
+ * own pass.
  */
 function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNode[] } {
   const root = parseUiAutomatorXml(xml);
@@ -233,41 +233,30 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
     const events = new TypedEventEmitter<ServiceEvents>();
 
     async function dumpHierarchy(): Promise<string> {
-      const raw = await queueUiautomatorDump(serial, runDumpHierarchy);
+      // Per-call dump path so concurrent calls on the same serial don't race on
+      // a shared /sdcard file. `uiautomator` rejects unwritable paths, hence
+      // /data/local/tmp; trailing `; rm -f` so cleanup fires even when it fails.
+      const suffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
+      const dumpPath = `/data/local/tmp/argent-tv-dump-${suffix}.xml`;
+      const raw = (
+        await withUiautomatorLock(serial, () =>
+          adbExecOutBinary(
+            serial,
+            `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
+            { timeoutMs: 20_000 }
+          )
+        )
+      ).toString("utf-8");
       if (!raw.includes("<hierarchy")) {
         const output = raw.trim().slice(0, 200);
-        // `uiautomator` can't register its UiAutomation connection while another
-        // client holds one, and the system kills it.
-        if (/\bKilled\b/.test(output)) {
-          throw new Error(
-            `uiautomator could not capture the screen: ${output}. Another UiAutomation client ` +
-              `(the argent devtools helper, or a test runner such as Espresso or Appium) holds ` +
-              `the accessibility connection. Stop it, for the helper with ` +
-              `\`${adbCommandPrefix(process.env)}adb shell am force-stop com.argent.androiddevtools\`, ` +
-              `and try again.`
-          );
-        }
+        const killed = uiautomatorKilledMessage(output, serial);
+        if (killed) throw new Error(killed);
         throw new Error(
           `uiautomator could not capture the screen: ${output}. ` +
             `The device may be locked or showing a secure overlay — take a screenshot to confirm.`
         );
       }
       return raw;
-    }
-
-    async function runDumpHierarchy(): Promise<string> {
-      // Per-call dump path so concurrent calls on the same serial don't race on
-      // a shared /sdcard file. `uiautomator` rejects unwritable paths, hence
-      // /data/local/tmp; trailing `; rm -f` so cleanup fires even when it fails.
-      const suffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
-      const dumpPath = `/data/local/tmp/argent-tv-dump-${suffix}.xml`;
-      return (
-        await adbExecOutBinary(
-          serial,
-          `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
-          { timeoutMs: 20_000 }
-        )
-      ).toString("utf-8");
     }
 
     // The helper first, `uiautomator dump` on any error. They can't both run:

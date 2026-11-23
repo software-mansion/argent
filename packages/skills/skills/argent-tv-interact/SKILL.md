@@ -8,7 +8,7 @@ description: Control and inspect TV apps via argent, Apple TV (tvOS), Android TV
 ## Critical
 
 - A TV is **focus-driven, not touch-driven.** Drive every interaction with `describe` + `tv-remote` + `keyboard`; never use `gesture-*` / coordinate taps; they don't apply on any TV platform.
-- **Always `describe` before navigating** to find the live cursor and your target; never guess focus from a screenshot. The cursor is the focused element; on **Vega** the toolkit often leaves `focused` false and marks the highlighted item `[selected]`, so treat `[selected]` as the cursor when nothing reports `[focused]`.
+- **Always read the focus view before navigating** (`describe`, or the tree the last action returned) to find the live cursor and your target; never guess focus from a screenshot. The cursor is the focused element; on **Vega** the toolkit often leaves `focused` false and marks the highlighted item `[selected]`, so treat `[selected]` as the cursor when nothing reports `[focused]`.
 - Pass the `udid` from `list-devices`: an Apple TV simulator UDID or an Android TV / Vega `serial`. Dispatch is automatic from the id; the same tools drive all three.
 - **E2E tests: Vega only.** Apple TV and Android TV have no e2e support (a `tap:` can pass without doing anything): report that limitation.
 - **Fire TV (Vega)** (`platform: "vega"` in `list-devices`): read `references/vega.md` before driving it. It covers booting and stopping the VVD, Fast Refresh, and debugging the JS runtime.
@@ -16,8 +16,8 @@ description: Control and inspect TV apps via argent, Apple TV (tvOS), Android TV
 ## The navigation loop
 
 1. `describe`: find the cursor and your target.
-2. `tv-remote`: move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; count rows/columns from the list order.
-3. `describe` again to confirm, or on Apple TV `await-ui-element {condition:"exists", selector:{text:"X", role:"focused"}}`. On a miss, repeat.
+2. `tv-remote`: move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; on Vega, count rows/columns from the frames to build the path. The Apple TV / Android TV focus view is a flat list with no positions: count from the list order, and read the grid's shape from the screenshot.
+3. Read where focus landed from the focus view returned under `--- Elements after action (describe) ---`; call `describe` only when that section is missing. To wait for focus to land on Apple TV, `await-ui-element {condition:"exists", selector:{text:"X", role:"focused"}}`. On a miss, repeat.
 
 ## Tools
 
