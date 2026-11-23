@@ -60,7 +60,7 @@ jobs:
         run: npm run test:scripts
 
   # Typechecking needs the same install and build as the tests but none of their
-  # output, so running it alongside them takes it off the critical path
+  # output, so running it alongside them takes its ~60s off the critical path
   # rather than adding to it.
   typecheck:
     name: Typecheck
@@ -93,10 +93,8 @@ jobs:
       - name: Build workspace dependencies
         run: npm run build
 
-      # tsc is single-threaded; the runner has four cores.
       - name: Typecheck tests
-        shell: bash
-        run: npm query .workspace | jq -r '.[].location' | xargs -P 4 -I{} npm run typecheck:tests --if-present -w {}
+        run: npm run typecheck:tests --workspaces --if-present
 
       - name: Typecheck scripts
         run: npm run typecheck:scripts
