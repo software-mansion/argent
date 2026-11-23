@@ -429,6 +429,11 @@ On an iOS simulator, a `text` check reads a text field as follows:
 - A text field with an accessibility label reads as the label, then a space, then the text or the placeholder. For example, an empty field with the label `Email` and the placeholder `Required` reads as `Email Required`.
 - Argent does not read the text in a secure text field.
 
+In a version 1 e2e test on an iOS simulator, and in the `run:` fragments that it runs, the runner reads the view hierarchy of the app. There, two rules are different:
+
+- `matches` never reads a text field as empty.
+- The runner knows a text field by the class name of its view. The name must contain `TextField`, `TextView` or `SearchField`. Argent does not read the text in a text field of a different class, for example a `UITextField` subclass with the name `AmountField`. For such a field, `matches: '^$'` passes also when the field contains text.
+
 On an iOS simulator, Argent does not use the text in a text field as the selector of a recorded tap.
 
 A negative condition passes before the element appears, for a typo, and on the wrong screen. First prove the screen and the same selector with `visible`. Then perform the action and check `hidden`.
