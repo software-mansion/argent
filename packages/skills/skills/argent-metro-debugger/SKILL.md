@@ -14,19 +14,19 @@ Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`
 
 ## 2. Tools
 
-Pass the same `device_id`, the id from `list-devices`, to every tool in the table except `restart-app`, which takes the `list-devices` id as `udid`, never a `logicalDeviceId`. With two or more devices on one Metro, `debugger-connect` refuses a serial, or a simulator udid it cannot match to one Metro device by name, and returns a `logicalDeviceId`: use that as `device_id` from then on, and include it in `stop-all-simulator-servers`' `devices` at teardown, or the debugger session outlives yours.
+Pass the same `device_id`, the id from `list-devices`, to every tool in the table except `restart-app`, which takes the `list-devices` id as `udid`, never a `logicalDeviceId`. With two or more devices on one Metro, `debugger-connect` refuses a serial, or a simulator udid it cannot match to one Metro device by name, and returns a `logicalDeviceId`: use that as `device_id` from then on, and include it in `stop-all-simulator-servers`' `devices` at teardown, or the debugger session outlives yours. `network-capture-start` and `network-capture-stop` take a `udid`, not a `device_id`: always pass them the id from `list-devices`, never a `logicalDeviceId`. On a shared Metro, their JS layer is unavailable until you also pass the device's `logicalDeviceId` in their own `logicalDeviceId` parameter; then read with that id as `device_id`.
 
-| Tool                                                 | Use for                                                                                                                |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `debugger-status`                                    | Diagnosing the connection. Call it first when anything fails                                                           |
-| `debugger-connect`                                   | Connecting to the runtime's CDP (Metro on iOS / Android / Vega; the page session on Chromium)                          |
-| `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                             |
-| `restart-app`                                        | Relaunching the app when it lost its Metro connection. Takes `udid` and `bundleId`, not `device_id`                    |
-| `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                |
-| `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
-| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                         |
-| `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                             |
-| `view-network-logs` → `view-network-request-details` | JS-level HTTP traffic, then the headers and body of one request                                                        |
+| Tool                                                 | Use for                                                                                                                                                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `debugger-status`                                    | Diagnosing the connection. Call it first when anything fails                                                                                                                               |
+| `debugger-connect`                                   | Connecting to the runtime's CDP (Metro on iOS / Android / Vega; the page session on Chromium)                                                                                              |
+| `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                                                                                                 |
+| `restart-app`                                        | Relaunching the app when it lost its Metro connection. Takes `udid` and `bundleId`, not `device_id`                                                                                        |
+| `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                                                                                    |
+| `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1                                                                     |
+| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                                                                                             |
+| `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                                                                                                 |
+| `view-network-logs` → `view-network-request-details` | JS-level HTTP traffic, then the headers and body of one request. On iOS and Android, call `network-capture-start` before the action, and `network-capture-stop` when you have the requests |
 
 A component missing from `debugger-component-tree`? `includeSkipped` only adds counts of what was pruned. Use `onScreenOnly: false` for one off screen, or `debugger-inspect-element` at its point for one on screen.
 

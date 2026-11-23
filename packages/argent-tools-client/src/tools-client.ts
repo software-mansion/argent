@@ -335,6 +335,47 @@ function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   );
 }
 
+/** Cap on the numbers one refusal names: an array of them follows the caller's input. */
+const MAX_NON_FINITE_ISSUES = 12;
+
+/**
+ * Refuses a call carrying a number that JSON cannot write. `JSON.stringify`
+ * sends Infinity and NaN as `null`, and a tool that coerces its number reads
+ * `null` as 0, so the tool would run on a value nobody passed. `1e999` in JSON
+ * input parses to Infinity, so a CLI `--args` payload or an MCP call can carry one.
+ */
+function assertFiniteNumbers(args: unknown): void {
+  const issues: { code: string; path: (string | number)[]; message: string }[] = [];
+  // A queue, not recursion, and each object once: a value nested too deep or
+  // in a cycle is left for `JSON.stringify` to refuse as it did before. A path
+  // is built only for a number that is refused, so the walk stays linear.
+  type Visit = { value: unknown; key: string | number; parent?: Visit };
+  const seen = new WeakSet<object>();
+  const pending: Visit[] = [{ value: args, key: "" }];
+  for (let i = 0; i < pending.length && issues.length < MAX_NON_FINITE_ISSUES; i++) {
+    const visit = pending[i]!;
+    const { value } = visit;
+    if (typeof value !== "object" || value === null || seen.has(value)) continue;
+    seen.add(value);
+    for (const [key, item] of Array.isArray(value) ? value.entries() : Object.entries(value)) {
+      if (typeof item === "object" && item !== null) {
+        pending.push({ value: item, key, parent: visit });
+      } else if (typeof item === "number" && !Number.isFinite(item)) {
+        const path = [key];
+        for (let at = visit; at.parent; at = at.parent) path.push(at.key);
+        path.reverse();
+        issues.push({ code: "invalid_type", path, message: `expected a number, got ${item}` });
+        if (issues.length === MAX_NON_FINITE_ISSUES) break;
+      }
+    }
+  }
+  if (issues.length === 0) return;
+  throw new ToolInvocationError(
+    describeParamIssues({ issues } as unknown as Parameters<typeof describeParamIssues>[0], args),
+    { errorKind: "validation", issues }
+  );
+}
+
 /** A rejected fetch's reason, with undici's cause ("other side closed") beside its "fetch failed". */
 function fetchFailure(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
@@ -566,6 +607,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   ): Promise<ToolInvocationResult> {
     // An aborted signal must not start a tool-server.
     opts?.signal?.throwIfAborted();
+    assertFiniteNumbers(args);
     const { url, token, remote } = await route();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
