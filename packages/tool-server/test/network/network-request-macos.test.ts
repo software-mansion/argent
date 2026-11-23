@@ -87,13 +87,14 @@ describe("view-network-request-details: Mac app IDs", () => {
     responseBody.mockReset();
   });
 
-  it("needs no service for a macos- ID, nor for any ID under a Mac app id", () => {
+  it("needs no service for a macos- ID, and reads a JS ID under a Mac app id from its JS runtime", () => {
     expect(
       networkRequestTool.services!({ device_id: "chromium-cdp-9222", requestId: ID } as never)
     ).toEqual({});
+    expect(networkRequestTool.services!({ device_id: MAC, requestId: ID } as never)).toEqual({});
     expect(
       networkRequestTool.services!({ device_id: MAC, requestId: "rn-net-1" } as never)
-    ).toEqual({});
+    ).toEqual({ inspector: `NetworkInspector:${jsCapturePayload(8081, MAC)}` });
   });
 
   it("renders a macos- record with secret headers redacted and its body as the app sent it", async () => {
@@ -147,9 +148,12 @@ describe("view-network-request-details: Mac app IDs", () => {
     }
   });
 
-  it("answers an ID that no native layer issued under a Mac app id without a debugger", async () => {
-    expect(await details("rn-net-1")).toBe(
-      "Request rn-net-1 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
+  it("answers a malformed macos- ID under a Mac app id from the native layer, without a debugger", async () => {
+    expect(
+      networkRequestTool.services!({ device_id: MAC, requestId: "macos-1a2b" } as never)
+    ).toEqual({});
+    expect(await details("macos-1a2b")).toBe(
+      "Request macos-1a2b not found. Use native-network-logs to list the requests the Mac app native layer recorded."
     );
   });
 });

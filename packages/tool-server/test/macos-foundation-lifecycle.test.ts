@@ -1042,10 +1042,8 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(await details("macos-0000-999999")).toBe(
         "Request macos-0000-999999 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
       );
-      // A Mac app has only native ids.
-      expect(await details("rn-net-1")).toBe(
-        "Request rn-net-1 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
-      );
+      // A JS ID is read from the app's JS runtime through Metro, which this fake has none of.
+      await expect(details("rn-net-1")).rejects.toThrow(/NetworkInspector:8081:macos-app-/);
     });
 
     it("keeps a request body read open while the app sends the body, past the default wait of a CDP request", async () => {

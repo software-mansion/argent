@@ -29,7 +29,7 @@ import {
   type LostRunInfo,
   type SavedSessionInfo,
 } from "../../../utils/react-profiler/last-run";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
@@ -108,7 +108,7 @@ export function createReactProfilerStatusTool(
         `Failed to check React profiler: ${failureSignal.error_code}`,
     },
     // RN-only: companion to react-profiler-start.
-    capability: REACT_PROFILER_TOOL_CAPABILITY,
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params): Promise<StatusResponse> {
       // Same key as react-profiler-start/stop, so a forwarded logicalDeviceId
@@ -146,8 +146,8 @@ export function createReactProfilerStatusTool(
         api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
       } catch (err) {
         // The reason says what to do, for example to start the app or to pass
-        // another port. A fixed "reconnect the debugger" is wrong for a Mac
-        // app, which debugger-connect refuses.
+        // another port. A fixed "reconnect the debugger" is wrong when the app
+        // is not running or loads its bundle from another Metro.
         return noRuntime(
           `Unable to resolve a React profiler session: the Hermes runtime may not be reachable. ${innermostMessage(err)}`
         );

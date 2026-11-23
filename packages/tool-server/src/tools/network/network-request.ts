@@ -213,7 +213,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial, the same id used with debugger-connect<flag:macos-apps>, or a Mac app id</flag:macos-apps>). A native ID needs no debugger connection."
+      "Device id used to list the request<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   requestId: z
     .string()
@@ -231,10 +231,11 @@ export const networkRequestTool: ToolDefinition<
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
-  description: `Get full details of a specific network request by its requestId: one from view-network-logs, or a native ID (ios-, android-<flag:macos-apps> or macos-</flag:macos-apps>) from native-network-logs, which needs no debugger connection.
+  description: `Read the details of one request after listing captured traffic. Native requests can be read without a debugger connection.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
 Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of a native ID. For a native ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app may still be sending the request body, call again once the request has ended. Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found; on iOS<flag:macos-apps>, a Mac app</flag:macos-apps> and Android it also says when network capture is not started, which network-capture-start does. IDs keep working after network-capture-stop. A view-network-logs ID holds until the app's JS runtime reloads: the new runtime numbers its requests from rn-net-1 again, so an old ID can name a new request. Native IDs are not affected.`,
+Returns an error message if the request is missing: list requests again. When the response says capture is off, start it and repeat the app action. On Vega<flag:macos-apps> and React Native Mac apps</flag:macos-apps>, a JS request lookup can start capture. Use view-network-logs to start capture before triggering a request.
+IDs from stopped capture still work. After a JavaScript reload, list requests again because an old JS ID may now refer to a different request.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -243,7 +244,6 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
-  // A Mac app has only native IDs, which need no debugger.
   capability: { ...DEBUGGER_TOOL_CAPABILITY, macos: { app: true, catalyst: true } },
   services: (params): Record<string, ServiceRef> => {
     /**
@@ -255,7 +255,6 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
      */
     if (isNativeRequestId(params.requestId)) return {};
     const device = resolveDevice(params.device_id);
-    if (device.platform === "macos") return {};
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
@@ -267,8 +266,9 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
      */
     if (nativeIdPlatform(params.requestId)) return {};
     const payload = jsCapturePayload(jsReadPort(params), canonicalDeviceId(params.device_id)!);
-    // Vega has no network-capture-start, so its read still installs the interceptor.
-    if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
+    // JS capture starts on read for Vega and Mac apps.
+    if (device.platform === "vega" || device.platform === "macos")
+      return { inspector: `NetworkInspector:${payload}` };
     // A read never starts capture: before a start it reaches nothing in the app.
     const capture = jsCapture(payload);
     return capture ? { debugger: jsCaptureDebuggerRef(params, capture) } : {};
@@ -294,14 +294,6 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
     }
 
     const device = resolveDevice(params.device_id);
-    // A Mac app's requests are listed only by its native layer.
-    if (device.platform === "macos") {
-      return nativeNotFound(
-        params.requestId,
-        params.device_id,
-        nativeIdPlatform(params.requestId) ?? "macos"
-      );
-    }
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
       const rec = chromium.server.network.get(params.requestId);
@@ -359,7 +351,7 @@ Returns an error message string if the requestId is not found; on iOS<flag:macos
 
     let cdp: CDPClient;
     let noLog: string | undefined;
-    if (device.platform === "vega") {
+    if (device.platform === "vega" || device.platform === "macos") {
       const api = services.inspector as NetworkInspectorApi;
       // Idempotent: the script no-ops if already installed.
       await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
@@ -463,8 +455,9 @@ function isNativeRequestId(requestId: string): boolean {
 
 /**
  * The answer to a native ID no layer holds names a tool the caller's device
- * can list with: native-network-logs refuses Chromium and Vega. There it also
- * says where the ID came from, because view-network-logs never lists one. A
+ * can list with: native-network-logs refuses Chromium and Vega, and on a Mac
+ * app it lists only that app's macos- IDs. There it also says where the ID
+ * came from, because view-network-logs never lists one. A
  * device ID of another platform keeps the native hint: it can be the
  * logicalDeviceId of a device on a shared Metro, and native-network-logs
  * accepts it.
@@ -475,6 +468,10 @@ function nativeNotFound(requestId: string, deviceId: string, layer: NativePlatfo
   const { source, name } = NATIVE_LAYERS[layer];
   if (platform === "chromium" || platform === "vega") {
     return `Request ${requestId} not found. ${layer === "macos" ? "A" : "An"} ${prefix} ID comes from ${source}. Use view-network-logs to list this device's requests.`;
+  }
+  // A Mac app's native layer lists macos- IDs only: an ios- or android- ID is another device's.
+  if (platform === "macos" && layer !== "macos") {
+    return `Request ${requestId} not found. An ${prefix} ID comes from ${source}. Use native-network-logs or view-network-logs to list this Mac app's requests.`;
   }
   const captured =
     layer === "android"
