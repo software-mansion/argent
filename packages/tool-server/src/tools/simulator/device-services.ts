@@ -8,10 +8,12 @@ import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
 import { ANDROID_TV_CONTROL_NAMESPACE } from "../../blueprints/android-tv-control";
 import { AX_SERVICE_NAMESPACE } from "../../blueprints/ax-service";
 import { SCREEN_RECORDING_SESSION_NAMESPACE } from "../../blueprints/screen-recording-session";
+import { IOS_AUDIO_SESSION_NAMESPACE } from "../../blueprints/ios-audio-session";
 import { NATIVE_PROFILER_SESSION_NAMESPACE } from "../../blueprints/native-profiler-session";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
+import { MACOS_APP_NAMESPACE } from "../../blueprints/macos-app";
 import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
 import { externalNativeId } from "../../utils/external-devices";
@@ -96,7 +98,9 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   ANDROID_TV_CONTROL_NAMESPACE,
   AX_SERVICE_NAMESPACE,
   SCREEN_RECORDING_SESSION_NAMESPACE,
+  IOS_AUDIO_SESSION_NAMESPACE,
   NATIVE_PROFILER_SESSION_NAMESPACE,
+  MACOS_APP_NAMESPACE,
   ...PORT_KEYED_NAMESPACES,
   ...APP_KEYED_NAMESPACES,
 ];
@@ -120,6 +124,7 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
  */
 export function transportNamespacesForPlatform(platform: string): readonly string[] {
   if (platform === "chromium") return [CHROMIUM_CDP_NAMESPACE];
+  if (platform === "macos") return [MACOS_APP_NAMESPACE];
   if (platform === "android") return [SIMULATOR_SERVER_NAMESPACE, ANDROID_TV_CONTROL_NAMESPACE];
   // Shape cannot tell tvOS from iOS or a simulator from a physical device here. Cover all three namespaces.
   return [SIMULATOR_SERVER_NAMESPACE, IOS_DEVICE_RUNNER_NAMESPACE, TV_CONTROL_NAMESPACE];
@@ -202,9 +207,9 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
  * Of `urns`, the port-keyed sessions no device-scoped teardown could ever name,
  * whatever ids it was given.
  *
- * On a Metro serving two or more devices, `selectTarget` refuses to guess which
- * target a udid or serial means and makes the caller re-target with the
- * `logicalDeviceId` Metro echoed — an opaque per-connection handle
+ * On a Metro serving two or more devices, `selectTarget` refuses a serial, or a
+ * simulator udid it cannot match to one Metro device by name, and makes the
+ * caller re-target with the `logicalDeviceId` Metro echoed — an opaque per-connection handle
  * `list-devices` never mints, which the debugger URN then embeds. A teardown
  * scoped to real device ids leaves that session holding its CDP socket, a bound
  * loopback server and a log file handle, while the caller's serial still

@@ -18,10 +18,13 @@ import {
   canonicalToolArgs,
   canonicalToolId,
   describeParamIssues,
+  flowYamlSource,
+  toolParamAliases,
 } from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import {
+  callerPath,
   prepareFileInputs,
   applyClientFileDirectives,
   FILE_INPUT_MARKER,
@@ -63,6 +66,13 @@ export interface ToolInvocationResult {
   profiling?: boolean;
   /** The `outputHint` of the tool's listing entry, when it has one. */
   outputHint?: string;
+  /**
+   * Why the call did not do what it was asked, when it returned anyway: the
+   * result reports a failure (an e2e test that did not pass, an unmet
+   * `await-ui-element`), or a baseline it returned was not written on this
+   * client.
+   */
+  failure?: string;
 }
 
 export interface CallToolOptions {
@@ -103,8 +113,9 @@ export interface CreateToolsClientOptions {
    * `meta.longRunning` is the tool's flag from the listing (false for GET
    * /tools), so the caller can disable its timeout. `meta.carriesUpload` is true
    * when the body names an upload: the tool-server consumes an upload on the
-   * first request that reaches it, so the caller must not abort or resend that
-   * request. POST /upload keeps the global fetch.
+   * first request that reaches it, so the caller must not time out or resend
+   * that request. `init.signal` is the call's `signal`, which the request must
+   * still follow. POST /upload keeps the global fetch.
    */
   fetchImpl?: (
     url: string,
@@ -125,6 +136,14 @@ export interface CreateToolsClientOptions {
    * secrets is checked against.
    */
   headers?: () => Record<string, string>;
+  /**
+   * Refuse a relative `project_root` or `e2e_test_path` instead of resolving
+   * it against `process.cwd()`. For a client whose working directory need not
+   * be the project, such as the MCP server, which runs where the editor
+   * started it: a recording would be saved there, or a same-named test run
+   * from there, without any error.
+   */
+  refuseRelativeProjectPaths?: boolean;
 }
 
 function authHeaders(token: string | undefined): Record<string, string> {
@@ -162,7 +181,7 @@ async function consumeToolStream(
   onProgress: (event: unknown) => void,
   signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
-  let final: { data?: unknown; note?: string; profiling?: boolean } | undefined;
+  let final: { data?: unknown; note?: string; profiling?: boolean; failure?: string } | undefined;
   let progress = 0;
   const reader = body.getReader();
   const handleLine = (line: string): void => {
@@ -172,6 +191,7 @@ async function consumeToolStream(
       data?: unknown;
       note?: string;
       profiling?: boolean;
+      failure?: string;
       error?: string;
       error_code?: string;
       error_kind?: string;
@@ -184,6 +204,7 @@ async function consumeToolStream(
         data: msg.data,
         note: msg.note,
         ...(msg.profiling === true ? { profiling: true } : {}),
+        ...(typeof msg.failure === "string" ? { failure: msg.failure } : {}),
       };
     } else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
@@ -245,6 +266,7 @@ async function consumeToolStream(
     data: final.data,
     note: final.note,
     ...(final.profiling ? { profiling: true } : {}),
+    ...(final.failure !== undefined ? { failure: final.failure } : {}),
   };
 }
 
@@ -389,7 +411,8 @@ async function forwardedSecrets(args: unknown): Promise<Map<string, string> | un
       // run, not to this terminal.
       let parsed: unknown;
       try {
-        parsed = text === undefined ? undefined : parseYaml(text.trim(), { logLevel: "error" });
+        parsed =
+          text === undefined ? undefined : parseYaml(flowYamlSource(text), { logLevel: "error" });
       } catch {
         continue;
       }
@@ -436,6 +459,48 @@ export function secretsTransportRefusal(url: string): string | undefined {
 /** Upper bound of the head bytes fetch adds to a call's own headers and URL. */
 const FETCH_HEAD_BYTES = 256;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The advice each refused relative project path gets. */
+const PROJECT_PATH_ADVICE: Record<string, string> = {
+  project_root:
+    "Pass the absolute path to the project root directory - the same cwd the calling agent is working in.",
+  e2e_test_path: "Pass the absolute path to the e2e test file.",
+};
+
+/**
+ * Throws when `args` sets a relative project path that a file input of `meta`
+ * resolves, under its name or a former one (an older tool-server's).
+ */
+function assertAbsoluteProjectPaths(meta: ToolMeta | null, args: unknown): void {
+  if (!meta || !isRecord(args)) return;
+  const aliases = Object.entries(toolParamAliases(meta.name));
+  for (const [param, advice] of Object.entries(PROJECT_PATH_ADVICE)) {
+    const value = args[param];
+    if (typeof value !== "string" || callerPath(value) === value) continue;
+    const names = [param, ...aliases.filter(([, current]) => current === param).map(([f]) => f)];
+    if (!meta.fileInputs?.some((spec) => names.some((n) => spec.path.includes(`\${${n}}`)))) {
+      continue;
+    }
+    throw new Error(`${param} must be an absolute path (got "${value}"). ${advice}`);
+  }
+}
+
+/**
+ * `result` with its run marked failed: a run report's `ok`, or that of the
+ * run `e2e-add-step` recorded (`toolResult`).
+ */
+function failedRun(result: unknown): unknown {
+  if (!isRecord(result)) return result;
+  if (result.ok === true) return { ...result, ok: false };
+  if (isRecord(result.toolResult) && result.toolResult.ok === true) {
+    return { ...result, toolResult: { ...result.toolResult, ok: false } };
+  }
+  return result;
+}
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -469,7 +534,9 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     return { url, token };
   }
 
-  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+  async function fetchToolList(opts?: {
+    signal?: AbortSignal;
+  }): Promise<{ tools: ToolMeta[]; uploadFormats?: string[] }> {
     opts?.signal?.throwIfAborted();
     const { url, token } = await baseUrl();
     const res = await doFetch(
@@ -478,8 +545,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       { longRunning: false, carriesUpload: false }
     );
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
-    const json = (await res.json()) as { tools: ToolMeta[] };
-    return json.tools;
+    return (await res.json()) as { tools: ToolMeta[]; uploadFormats?: string[] };
+  }
+
+  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+    return (await fetchToolList(opts)).tools;
   }
 
   async function fetchTool(
@@ -501,8 +571,9 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
     let finalArgs = canonicalToolArgs(name, args);
-    const tools = await fetchTools({ signal: opts?.signal });
+    const { tools, uploadFormats } = await fetchToolList({ signal: opts?.signal });
     const meta = findTool(tools, name);
+    if (options.refuseRelativeProjectPaths) assertAbsoluteProjectPaths(meta, finalArgs);
     // An older tool-server reads saved tests only from `.argent/flows/`, and
     // lists its tools by their `flow-*` ids only.
     const olderServer = meta !== null && !tools.some((t) => t.name === canonicalToolId(meta.name));
@@ -517,11 +588,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     const shadowWarning = await e2eShadowWarningFor(name, args);
     // Where a baseline the result returns may be written (see file-inputs.ts).
     const baselineDirs: string[] = [];
+    let unwrittenBaselines: string[] = [];
     if (meta?.fileInputs?.length) {
       if (remote) assertRequiredPresent(meta, finalArgs);
       finalArgs = await prepareFileInputs(meta.fileInputs, finalArgs ?? {}, {
         includeContent: remote,
-        uploadEndpoint: remote ? { url, token } : undefined,
+        uploadEndpoint: remote ? { url, token, formats: uploadFormats } : undefined,
         log: diagnose,
         baselineDirs,
         collectMembers: collectFlowMembers,
@@ -540,6 +612,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // not see is said in the result's `warning`, as it says one it sees.
     const settle = async (data: unknown): Promise<unknown> => {
       const applied = await applyClientFileDirectives(data, { allowedDirs: baselineDirs });
+      unwrittenBaselines = applied.failed.map((f) => f.path);
       for (const { path: file, error } of applied.failed) {
         diagnose(`The baseline ${file} was not written on this client: ${error}`);
       }
@@ -551,7 +624,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
           }
         }
       }
-      const result = applied.result;
+      const result = applied.failed.length > 0 ? failedRun(applied.result) : applied.result;
       if (
         shadowWarning === undefined ||
         typeof result !== "object" ||
@@ -563,6 +636,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       }
       return { ...result, warning: shadowWarning };
     };
+
+    const unwrittenFailure = (): string | undefined =>
+      unwrittenBaselines.length > 0
+        ? `Baselines not written on this client: ${unwrittenBaselines.join(", ")}`
+        : undefined;
 
     // A call that sends a flow's closure runs that flow over a link, and its
     // progress lines keep the connection busy through a proxy's idle timeout.
@@ -647,11 +725,14 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         opts?.onProgress ?? (() => {}),
         opts?.signal
       );
+      const data = await settle(streamed.data);
+      const failure = streamed.failure ?? unwrittenFailure();
       return {
-        data: await settle(streamed.data),
+        data,
         note: streamed.note,
         outputHint: meta?.outputHint,
         ...(streamed.profiling ? { profiling: true } : {}),
+        ...(failure !== undefined ? { failure } : {}),
       };
     }
     let json: {
@@ -660,6 +741,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       message?: string;
       note?: string;
       profiling?: boolean;
+      failure?: string;
       error_code?: string;
       error_kind?: string;
       issues?: unknown;
@@ -707,11 +789,15 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       });
     }
     opts?.signal?.throwIfAborted();
+    const data = await settle(json.data);
+    const failure =
+      (typeof json.failure === "string" ? json.failure : undefined) ?? unwrittenFailure();
     return {
-      data: await settle(json.data),
+      data,
       note: json.note,
       outputHint: meta?.outputHint,
       ...(json.profiling === true ? { profiling: true } : {}),
+      ...(failure !== undefined ? { failure } : {}),
     };
   }
 

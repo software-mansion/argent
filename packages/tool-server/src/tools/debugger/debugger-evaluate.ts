@@ -6,7 +6,12 @@ import {
   type ToolDefinition,
 } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
-import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
+import {
+  DEBUGGER_TOOL_CAPABILITY,
+  debuggerServiceRef,
+  isChromiumDebuggerTarget,
+} from "./debugger-service-ref";
+import { guardModuleLoadErrors } from "../../utils/debugger/scripts/guard-module-errors";
 import { metroPortField } from "../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
@@ -25,8 +30,10 @@ export const debuggerEvaluateTool: ToolDefinition<
 > = {
   id: "debugger-evaluate",
   description: `Execute arbitrary JavaScript in the app's JS runtime via CDP: Hermes on iOS / Android / Vega, V8 on Chromium.
-Returns the result serialized by value as JSON, with deviceName, appName, and logicalDeviceId. Use when you need to read app state, call app functions, or test logic at runtime. Cyclic objects, which many RN runtime values are (fiber nodes, navigation refs, global), fail with a serialization error. Fails if the expression throws or the runtime is not connected.`,
+Returns the result serialized by value as JSON, with deviceName, appName, and logicalDeviceId. A returned Promise is awaited and its resolved value returned. Use when you need to read app state, including localStorage and sessionStorage on Chromium, call app functions, or test logic at runtime. Cyclic objects, which many RN runtime values are (fiber nodes, navigation refs, global), fail with a serialization error. Fails if the expression throws or the runtime is not connected. On React Native, a module that fails to load while the expression runs (e.g. a lazy react-native export whose native module the app lacks) fails the call with that module's error instead of opening the app's red box.`,
   zodSchema,
+  searchHint:
+    "javascript js eval expression runtime app state localstorage sessionstorage web storage",
   interaction: {
     startedMsg: () => "Running JavaScript in the app",
     completedMsg: () => "Ran JavaScript in the app",
@@ -41,7 +48,11 @@ Returns the result serialized by value as JSON, with deviceName, appName, and lo
     const api = services.debugger as JsRuntimeDebuggerApi;
     let result: unknown;
     try {
-      result = await api.cdp.evaluate(params.expression);
+      // Chromium has no Metro module loader, and a page's CSP may forbid eval.
+      const expression = isChromiumDebuggerTarget(params.device_id)
+        ? params.expression
+        : guardModuleLoadErrors(params.expression);
+      result = await api.cdp.evaluateAwaited(expression);
     } catch (err) {
       // The agent's expression throwing is not a tool malfunction, so re-code it
       // to keep it separable from genuine CDP faults in telemetry. getFailureSignal

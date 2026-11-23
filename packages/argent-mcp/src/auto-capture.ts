@@ -26,6 +26,8 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "run-sequence",
   // A wait is almost always followed by a look at the screen it waited for.
   "await-ui-element",
+  "file-panel",
+  "menu-bar",
 ]);
 
 /**
@@ -102,6 +104,8 @@ export const AUTO_DESCRIBE_TOOLS = new Set([
   "open-url",
   "run-sequence",
   "await-ui-element",
+  "file-panel",
+  "menu-bar",
 ]);
 
 // Opt-out only: the `disable-auto-describe` flag is off by default.
@@ -119,8 +123,9 @@ export const PROFILING_CAPTURE_SKIPPED_NOTE =
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
 
-export function shouldAutoDescribe(toolName: string): boolean {
-  return AUTO_DESCRIBE_TOOLS.has(normalizeToolName(toolName));
+export function shouldAutoDescribe(toolName: string, args?: unknown): boolean {
+  const canonical = normalizeToolName(toolName);
+  return AUTO_DESCRIBE_TOOLS.has(canonical) && !isListCall(canonical, args);
 }
 
 /**
@@ -164,9 +169,21 @@ export function normalizeToolName(name: string): string {
   return idx === -1 ? name : name.slice(idx + 2);
 }
 
-export function shouldAutoScreenshot(toolName: string): boolean {
+export function shouldAutoScreenshot(toolName: string, args?: unknown): boolean {
   const canonical = normalizeToolName(toolName);
-  return canonical !== "screenshot" && AUTO_SCREENSHOT_TOOLS.has(canonical);
+  return (
+    canonical !== "screenshot" &&
+    AUTO_SCREENSHOT_TOOLS.has(canonical) &&
+    !isListCall(canonical, args)
+  );
+}
+
+/** `menu-bar` and `file-panel` only read with `action: "list"`. */
+function isListCall(canonical: string, args: unknown): boolean {
+  return (
+    (canonical === "menu-bar" || canonical === "file-panel") &&
+    (args as { action?: unknown } | null | undefined)?.action === "list"
+  );
 }
 
 export function getAutoScreenshotDelayMs(toolName: string): number {

@@ -148,6 +148,12 @@ export interface InvokeToolOptions {
    * `flow-execute`. The HTTP route never sets it.
    */
   flowStack?: readonly { canonical: string; display: string }[];
+  /**
+   * Internal: one holder shared by a flow run and every run nested in it, set
+   * once a step of any of them types a `{{secret:…}}` value. A sub-tool call
+   * passes it on as it does {@link flowStack}. The HTTP route never sets it.
+   */
+  flowSecret?: { typed?: boolean };
 }
 
 /**
@@ -161,9 +167,14 @@ export interface ToolContext extends InvokeToolOptions {
   artifacts: ArtifactStore;
 }
 
-export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega" | "harmony";
+export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega" | "harmony" | "macos";
 
-export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
+/**
+ * `catalyst` is a Mac Catalyst app, an iPad (UIKit) app built for the Mac. It is
+ * a `macos` device with a `macos-app-` id, as an AppKit app (`app`) is.
+ */
+export type DeviceKind =
+  "simulator" | "emulator" | "vvd" | "device" | "app" | "catalyst" | "unknown";
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
@@ -203,6 +214,15 @@ export interface ToolCapability {
   };
   chromium?: {
     app?: boolean;
+  };
+  /**
+   * A native Mac app that argent drives from inside the app. Behind the macos-apps
+   * flag. `app` is an AppKit app (also SwiftUI for macOS and react-native-macos),
+   * `catalyst` a Mac Catalyst app. A tool with a `macos` block names both.
+   */
+  macos?: {
+    app?: boolean;
+    catalyst?: boolean;
   };
   vega?: {
     vvd?: boolean;

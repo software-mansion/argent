@@ -6,6 +6,7 @@ import { isAndroidTv } from "../../utils/adb";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isRemoteTvOsSimulator } from "../../utils/sim-remote";
 import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
+import { noteTypedSecrets } from "../../utils/typed-secrets";
 import { iosRequires } from "../describe/platforms/ios";
 import { androidRequires } from "../describe/platforms/android";
 import { fillIos } from "./ios";
@@ -90,7 +91,7 @@ export function createFillTool(registry: Registry): ToolDefinition<Params, FillR
     id: "fill",
     description: `Set the text of the focused text field to exactly \`text\`, replacing what it holds; "" clears it. Tap the field first.
 Returns { verified }, never the text: true when the field was read back holding the text, false on a physical iPhone, where nothing can read it back.
-Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text, FILL_UNSUPPORTED_FIELD for a field that cannot take the text (a date or time input, a newline in a single-line field; nothing is changed). Fails if the device's ax-service or devtools helper predates fill; update argent. Not supported on TV targets or Vega.`,
+Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text or the device does not answer in time, FILL_UNSUPPORTED_FIELD for a field that cannot take the text (a date or time input, a newline in a single-line field; on Chromium also text over the field's maxlength, text a number input does not hold as a number, whitespace around an email address, or focus in a cross-origin frame, a closed shadow root or an <embed>; nothing is changed). Fails if the device's ax-service or devtools helper predates fill; update argent. Not supported on TV targets or Vega.`,
     zodSchema,
     hideFromMcp: true,
     interaction: {
@@ -107,6 +108,7 @@ Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIF
       const { text, secrets } = resolveSecretPlaceholders(params.text, {
         clientSecrets: options?.clientSecrets,
       });
+      noteTypedSecrets(params.udid, secrets);
       try {
         return await dispatch(services, { udid: params.udid, text }, options);
       } catch (err) {

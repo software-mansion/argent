@@ -89,9 +89,11 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
     isAppRunning: async () => false,
     listConnectedBundleIds: () => [],
     appConnectionState: async () => "stale_process",
-    activateNetworkInspection: () => {},
-    getNetworkLog: () => [],
-    clearNetworkLog: () => {},
+    activateNetworkInspection: async () => false,
+    takeCaptureGap: () => false,
+    networkRecords: () => undefined,
+    networkCaptureAfterLaunch: async () => undefined,
+    setNetworkConditions: async () => {},
     getAppState: async () => {
       throw new Error("not implemented");
     },
@@ -193,9 +195,11 @@ describe("simulator-watcher with api-owned init failure state", () => {
       isAppRunning: async () => false,
       listConnectedBundleIds: () => [],
       appConnectionState: async () => "stale_process",
-      activateNetworkInspection: () => {},
-      getNetworkLog: () => [],
-      clearNetworkLog: () => {},
+      activateNetworkInspection: async () => false,
+      takeCaptureGap: () => false,
+      networkRecords: () => undefined,
+      networkCaptureAfterLaunch: async () => undefined,
+      setNetworkConditions: async () => {},
       getAppState: async () => {
         throw new Error("not implemented");
       },

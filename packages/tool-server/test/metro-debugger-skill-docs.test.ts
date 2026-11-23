@@ -22,7 +22,7 @@ const OVERVIEW_TOOLS: ToolDefinition<any, any>[] = [
   createDebuggerStatusTool(registry),
   debuggerReloadMetroTool,
   createRestartAppTool(registry),
-  createDebuggerComponentTreeTool(registry),
+  createDebuggerComponentTreeTool(),
   debuggerInspectElementTool,
   createDebuggerLogRegistryTool(registry),
   debuggerEvaluateTool,

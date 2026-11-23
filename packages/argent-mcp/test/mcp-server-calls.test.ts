@@ -1,18 +1,23 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
+import { unchangedTreeNote } from "../src/unchanged-tree.js";
+import { setFlag } from "@argent/configuration-core";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
-// the listing, a tool call that must upload, an error answer and the note.
+// the listing, a tool call that must upload, an error answer, the note and
+// the auto-describe block.
 //
 // HOME is redirected before the import: the tools client builds its state and
 // link paths from homedir() at module load, and the local cases write their
@@ -51,6 +56,10 @@ interface Stub {
   url: string;
   port: number;
   requests: Recorded[];
+  /** Routes that hold their answer for 3 s. */
+  hanging: Set<string>;
+  /** The routes whose caller closed the connection before the answer. */
+  hungUp: string[];
   close: () => Promise<void>;
 }
 
@@ -64,6 +73,12 @@ const LISTING = {
     },
     { name: "reject", description: "Reject", inputSchema: { type: "object", properties: {} } },
     { name: "noted", description: "Noted", inputSchema: { type: "object", properties: {} } },
+    {
+      name: "hang",
+      description: "Hang",
+      inputSchema: { type: "object", properties: {} },
+      longRunning: true,
+    },
     { name: "e2e-execute", description: "Run", inputSchema: { type: "object", properties: {} } },
     // A former id, as the tool-server lists it.
     {
@@ -93,6 +108,20 @@ const RUN_REPORT = {
 /** What the stub answers `e2e-execute` with: RUN_REPORT unless a test swaps it. */
 let runReport: Record<string, unknown> = RUN_REPORT;
 
+const DEVICES = {
+  devices: [
+    { platform: "ios", udid: "BOOTED", name: "iPhone 17", state: "Booted", runtimeKind: "mobile" },
+    {
+      platform: "ios",
+      udid: "STOPPED",
+      name: "iPad",
+      state: "Shutdown",
+      runtime: "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+    },
+  ],
+  avds: [],
+};
+
 type Route = (res: http.ServerResponse) => void | Promise<void>;
 
 /**
@@ -105,6 +134,8 @@ async function startStub({
   listing = LISTING,
 }: { token?: string; routes?: Record<string, Route>; listing?: unknown } = {}): Promise<Stub> {
   const requests: Recorded[] = [];
+  const hanging = new Set(["/tools/hang"]);
+  const hungUp: string[] = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
@@ -118,6 +149,14 @@ async function startStub({
       };
       if (token !== undefined && req.headers.authorization !== `Bearer ${token}`) {
         return json(401, { error: "unauthorized" });
+      }
+      if (hanging.has(reqUrl)) {
+        const timer = setTimeout(() => json(200, { data: {} }), 3_000);
+        res.on("close", () => {
+          clearTimeout(timer);
+          if (!res.writableFinished) hungUp.push(reqUrl);
+        });
+        return;
       }
       const route = routes[reqUrl];
       if (route) return void route(res);
@@ -135,6 +174,9 @@ async function startStub({
       }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/list-devices") {
+        return json(200, { data: DEVICES });
       }
       // Both made while a profiler records on the device.
       if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
@@ -155,6 +197,8 @@ async function startStub({
     url: `http://127.0.0.1:${port}`,
     port,
     requests,
+    hanging,
+    hungUp,
     close: () =>
       new Promise((resolve) => {
         server.closeAllConnections();
@@ -224,6 +268,7 @@ describe("startMcpServer tool calls", () => {
       "reinstall-app",
       "reject",
       "noted",
+      "hang",
       "e2e-execute",
       "gesture-tap",
     ]);
@@ -233,6 +278,18 @@ describe("startMcpServer tool calls", () => {
     // Every client's model reads the instructions; only Claude Code loads .claude/rules.
     expect(client.getInstructions()).toMatch(/^Argent/);
     expect(client.getInstructions()).not.toContain(".claude/");
+  });
+
+  it("ends the tool-server request of a listing the client cancels", async () => {
+    stub.hanging.add("/tools");
+    const controller = new AbortController();
+
+    const pending = client.listTools(undefined, { signal: controller.signal });
+    await vi.waitFor(() => expect(requests.filter((r) => r.url === "/tools")).toHaveLength(1));
+    controller.abort("stopped in the editor");
+
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    await vi.waitFor(() => expect(stub.hungUp).toEqual(["/tools"]));
   });
 
   it("renders a run report the same whether called as flow-execute or e2e-execute", async () => {
@@ -294,6 +351,42 @@ describe("startMcpServer tool calls", () => {
     expect(textOf(described)).not.toContain("profiler");
   });
 
+  it("ends the settle wait of a call the client cancels while a profiler records", async () => {
+    stub.hanging.add("/tools/await-screen-idle");
+    const controller = new AbortController();
+
+    const pending = client.callTool(
+      { name: "gesture-tap", arguments: { udid: "emulator-5554", x: 0.5, y: 0.5 } },
+      undefined,
+      { signal: controller.signal }
+    );
+    await vi.waitFor(() =>
+      expect(requests.filter((r) => r.url === "/tools/await-screen-idle")).toHaveLength(1)
+    );
+    controller.abort("stopped in the editor");
+
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    await vi.waitFor(() => expect(stub.hungUp).toEqual(["/tools/await-screen-idle"]));
+  });
+
+  it("renders list-devices in the short form", async () => {
+    const result = await client.callTool({ name: "list-devices", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    // One block: the short text replaces the JSON, it does not go out beside it.
+    expect(result.content).toHaveLength(1);
+    expect(textOf(result)).toBe(
+      [
+        '{"devices":[',
+        '{"platform":"ios","udid":"BOOTED","name":"iPhone 17","state":"Booted"}',
+        "],",
+        '"avds":[]}',
+        "iOS simulators that are shut down, one per line (platform, udid, name, runtime, state, tags); start one with boot-device:",
+        'ios STOPPED "iPad" iOS 27.0 Shutdown',
+      ].join("\n")
+    );
+  });
+
   it("uploads a tar-upload input and returns the tool result", async () => {
     const result = await client.callTool({
       name: "reinstall-app",
@@ -340,6 +433,38 @@ describe("startMcpServer tool calls", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toBe("nope");
     expect(requests.filter((r) => r.url === "/tools/reject")).toHaveLength(1);
+    const logged = readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")
+      .split("\n")
+      .filter((l) => l.includes('"event":"tool_result"') && l.includes('"name":"reject"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ isError: true });
+    expect(logged[0]).not.toHaveProperty("cancelled");
+  });
+
+  it("ends the tool-server request of a call the client cancels, and answers the next call", async () => {
+    const controller = new AbortController();
+
+    const pending = client.callTool({ name: "hang", arguments: {} }, undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(requests.filter((r) => r.url === "/tools/hang")).toHaveLength(1));
+    controller.abort("stopped in the editor");
+
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    await vi.waitFor(() => expect(stub.hungUp).toEqual(["/tools/hang"]));
+    await vi.waitFor(() =>
+      expect(readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")).toContain(
+        '"name":"hang","durationMs"'
+      )
+    );
+    const logged = readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")
+      .split("\n")
+      .filter((l) => l.includes('"event":"tool_result"') && l.includes('"name":"hang"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(logged).toMatchObject([{ isError: true, cancelled: true }]);
+    const next = await client.callTool({ name: "noted", arguments: {} });
+    expect(next.isError).toBeFalsy();
   });
 
   it("puts the tool-server's note before the result", async () => {
@@ -437,10 +562,14 @@ describe("startMcpServer screen capture after an interaction", () => {
   let settled: boolean;
   let idleStatus: number;
   let screenshotStatus: number;
+  let describeHint: string | undefined;
+  let describeText: string;
   let waitResult: Record<string, unknown>;
   // A hanging route never answers, as a read of a frozen device's tree.
   let idleHangs: boolean;
   let describeHangs: boolean;
+  // The screenshot answers with an artifact handle, which the adapter downloads.
+  let shotAsArtifact: boolean;
 
   const send = (res: http.ServerResponse, status: number, payload: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -460,11 +589,16 @@ describe("startMcpServer screen capture after an interaction", () => {
     settled = true;
     idleStatus = 200;
     screenshotStatus = 200;
+    describeHint = undefined;
+    describeText = "button Done (0.1,0.2,0.3,0.1)";
     waitResult = { success: true, elapsed: 120 };
     idleHangs = false;
     describeHangs = false;
+    shotAsArtifact = false;
     const describeRoute = slow("describe", (res) =>
-      send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
+      send(res, 200, {
+        data: { description: describeText, hint: describeHint },
+      })
     );
     stub = await startStub({
       routes: {
@@ -476,13 +610,43 @@ describe("startMcpServer screen capture after an interaction", () => {
           else send(res, idleStatus, { error: "await-screen-idle is not supported" });
         },
         "/tools/screenshot": slow("screenshot", (res) =>
-          screenshotStatus === 200
-            ? send(res, 200, { data: { url: `${stub.url}/shot.png`, path: "/tmp/shot.png" } })
-            : send(res, screenshotStatus, { error: "screenshot failed" })
+          screenshotStatus !== 200
+            ? send(res, screenshotStatus, { error: "screenshot failed" })
+            : shotAsArtifact
+              ? send(res, 200, {
+                  data: {
+                    __argentArtifact: true,
+                    id: "shot-1",
+                    filename: "shot.png",
+                    mimeType: "image/png",
+                    size: PNG.length,
+                  },
+                })
+              : send(res, 200, { data: { url: `${stub.url}/shot.png`, path: "/tmp/shot.png" } })
         ),
         "/tools/describe": (res) => (describeHangs ? undefined : describeRoute(res)),
         "/shot.png": (res) => {
           res.writeHead(200, { "Content-Type": "image/png" });
+          res.end(PNG);
+        },
+        ...Object.fromEntries(
+          ["screen-recording-stop", "native-profiler-stop"].map((name): [string, Route] => [
+            `/tools/${name}`,
+            slow(name, (res) =>
+              send(res, 200, {
+                data: {
+                  __argentArtifact: true,
+                  id: "kept-1",
+                  filename: "kept.bin",
+                  mimeType: "application/octet-stream",
+                  size: PNG.length,
+                },
+              })
+            ),
+          ])
+        ),
+        "/artifacts/kept-1": (res) => {
+          res.writeHead(200, { "Content-Type": "application/octet-stream" });
           res.end(PNG);
         },
       },
@@ -506,13 +670,35 @@ describe("startMcpServer screen capture after an interaction", () => {
     await stub.close();
   });
 
-  const tap = () =>
-    client.callTool({ name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } });
-  const wait = () =>
+  type Result = Awaited<ReturnType<Client["callTool"]>>;
+  const tap = (udid = "u") =>
+    client.callTool({ name: "gesture-tap", arguments: { udid, x: 0.5, y: 0.5 } });
+  const wait = (udid = "u") =>
     client.callTool({
       name: "await-ui-element",
-      arguments: { udid: "u", condition: "visible", selector: { text: "Settings" } },
+      arguments: { udid, condition: "visible", selector: { text: "Settings" } },
     });
+  const describeScreen = (udid = "u") => client.callTool({ name: "describe", arguments: { udid } });
+  /** The last text block: the element tree after an action, or the note. */
+  const lastText = (result: Result) =>
+    (result.content as Array<{ type: string; text?: string }>).at(-1)!.text!;
+  /** The id the result gives its full tree, as the agent reads it. */
+  const treeId = (result: Result) => {
+    const id = /^Tree id: (\S+)$/m.exec(textOf(result))?.[1];
+    expect(id).toMatch(/^[0-9a-z]{3}-\d+$/);
+    return id!;
+  };
+  const fullTree = (result: Result, tree: string) =>
+    `${AUTO_DESCRIBE_HEADER}\nTree id: ${treeId(result)}\n${tree}`;
+  const note = (id: string, tool: string) =>
+    `${AUTO_DESCRIBE_HEADER}\n${unchangedTreeNote(id, tool)}`;
+  /** What the adapter logged for each tree it read after an action, oldest first. */
+  const loggedTrees = () =>
+    readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.event === "auto_describe");
   const toolCalls = () =>
     stub.requests.filter((r) => r.url.startsWith("/tools/")).map((r) => r.url);
 
@@ -530,6 +716,182 @@ describe("startMcpServer screen capture after an interaction", () => {
     ]);
     expect(content[0]!.text).toContain('"tapped": true');
     expect(content.at(-1)!.text).toContain("button Done");
+  });
+
+  it("keeps describe's hint with the element tree", async () => {
+    describeHint = "1 element(s) lie outside the app window and were omitted.";
+
+    const result = await tap();
+
+    expect(lastText(result)).toBe(
+      "--- Elements after action (describe) ---\n" +
+        `Tree id: ${treeId(result)}\n` +
+        "Hint: 1 element(s) lie outside the app window and were omitted.\n" +
+        "button Done (0.1,0.2,0.3,0.1)"
+    );
+  });
+
+  it("shows a hint once when the tree already contains it", async () => {
+    describeHint = "No focusable elements. Wait and call describe again.";
+    describeText = `Focused: (none)\nFocusable: (none reported)\n\nNote: ${describeHint}`;
+
+    const result = await tap();
+
+    expect(lastText(result)).toBe(fullTree(result, describeText));
+  });
+
+  it("sends a note in place of a tree identical to the last one, and the screenshot still", async () => {
+    const first = await tap();
+
+    const second = await wait();
+
+    expect(lastText(second)).toBe(note(treeId(first), "gesture-tap"));
+    expect(textOf(second)).not.toContain("button Done");
+    const content = second.content as Array<{ type: string; text?: string }>;
+    expect(content.some((c) => c.type === "image")).toBe(true);
+  });
+
+  it("sends a changed tree in full, under a new id", async () => {
+    const first = await tap();
+    describeText = "button Save (0.1,0.2,0.3,0.1)";
+
+    const second = await tap();
+
+    expect(lastText(second)).toBe(fullTree(second, describeText));
+    expect(treeId(second)).not.toBe(treeId(first));
+  });
+
+  it("gives the tree of the agent's describe call an id, and names it in the next note", async () => {
+    // The memory already holds the same tree from the tap: the describe call
+    // replaces that record, so the note names the tree the agent read last.
+    const tapped = await tap();
+
+    const described = await describeScreen();
+
+    // Right after the tree, before the screenshot of the describe call.
+    const blocks = (described.content as Array<{ type: string; text?: string }>).map((c) =>
+      c.type === "image" ? "image" : c.text!.split("\n")[0]
+    );
+    expect(blocks.slice(0, 3)).toEqual([
+      "{",
+      `Tree id: ${treeId(described)}`,
+      "--- Screen after action ---",
+    ]);
+    expect(textOf(described)).toContain("button Done");
+    expect(treeId(described)).not.toBe(treeId(tapped));
+    expect(lastText(await wait())).toBe(note(treeId(described), "describe"));
+  });
+
+  it("sends the tree in full when it lacks the hint of the agent's describe call", async () => {
+    describeHint = "The display is suspended.";
+    await describeScreen();
+    describeHint = undefined;
+
+    const result = await tap();
+
+    expect(lastText(result)).toBe(fullTree(result, describeText));
+  });
+
+  it("sends the tree in full when only describe's hint is new", async () => {
+    await tap();
+    describeHint = "The display is suspended.";
+
+    const result = await tap();
+
+    expect(lastText(result)).toBe(
+      fullTree(result, `Hint: The display is suspended.\n${describeText}`)
+    );
+  });
+
+  it("keeps the trees of two devices apart", async () => {
+    const first = await tap("u");
+
+    const other = await tap("v");
+
+    expect(lastText(other)).toBe(fullTree(other, describeText));
+    expect(lastText(await wait("u"))).toBe(note(treeId(first), "gesture-tap"));
+    expect(lastText(await wait("v"))).toBe(note(treeId(other), "gesture-tap"));
+  });
+
+  // The SDK drops the response of a call the client cancelled, while the
+  // handler runs to its end.
+  it.each([
+    ["an action", () => ({ name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } })],
+    ["a describe call", () => ({ name: "describe", arguments: { udid: "u" } })],
+  ])("sends the tree in full after %s the client gave up on", async (_label, call) => {
+    // The stub answers describe after 100 ms.
+    await expect(client.callTool(call(), undefined, { timeout: 30 })).rejects.toThrow(/timed out/i);
+    await vi.waitFor(() => expect(events).toContain("describe end"));
+    await new Promise((r) => setTimeout(r, 50));
+
+    const result = await wait();
+
+    expect(lastText(result)).toBe(fullTree(result, describeText));
+  });
+
+  it("sends the tree in full after an action the client gave up on once its tree was read", async () => {
+    // The tree is recorded while the screenshot is still in flight; the cancel ends the screenshot.
+    stub.hanging.add("/tools/screenshot");
+    const before = loggedTrees().length;
+    const controller = new AbortController();
+
+    const pending = client.callTool(
+      { name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } },
+      undefined,
+      { signal: controller.signal }
+    );
+    await vi.waitFor(() => expect(loggedTrees()).toHaveLength(before + 1));
+    controller.abort("stopped in the editor");
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    await vi.waitFor(() => expect(stub.hungUp).toEqual(["/tools/screenshot"]));
+    stub.hanging.delete("/tools/screenshot");
+
+    const result = await wait();
+
+    expect(lastText(result)).toBe(fullTree(result, describeText));
+  });
+
+  it("logs whether each tree repeated the last full one, and whether a note replaced it", async () => {
+    const before = loggedTrees().length;
+    await tap();
+    for (let i = 0; i < 4; i++) await wait();
+    describeText = "button Save (0.1,0.2,0.3,0.1)";
+    await wait();
+
+    expect(
+      loggedTrees()
+        .slice(before)
+        .map(({ name, identical, note: noted }) => ({ name, identical, noted }))
+    ).toEqual([
+      { name: "gesture-tap", identical: false, noted: false },
+      { name: "await-ui-element", identical: true, noted: true },
+      { name: "await-ui-element", identical: true, noted: true },
+      { name: "await-ui-element", identical: true, noted: true },
+      // Sent in full again after three notes: still a repeat.
+      { name: "await-ui-element", identical: true, noted: false },
+      { name: "await-ui-element", identical: false, noted: false },
+    ]);
+  });
+
+  it("gives describe no tree id when the element tree after an action is turned off", async () => {
+    setFlag("disable-auto-describe", true, "global", { homeDir: TEST_HOME });
+    try {
+      const other = await connect(
+        {
+          bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+          simulatorServerDir: "",
+          nativeDevtoolsDir: "",
+        },
+        { captureTimeoutMs: CAPTURE_MS }
+      );
+      const described = await other.callTool({ name: "describe", arguments: { udid: "u" } });
+      await other.close();
+
+      expect(textOf(described)).toContain("button Done");
+      expect(textOf(described)).not.toContain("Tree id");
+    } finally {
+      setFlag("disable-auto-describe", false, "global", { homeDir: TEST_HOME });
+    }
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {
@@ -620,6 +982,163 @@ describe("startMcpServer screen capture after an interaction", () => {
     const text = textOf(result);
     expect(text).toContain("--- Screen after action ---");
     expect(text).toContain(AUTO_DESCRIBE_HEADER);
+  });
+
+  it("keeps the settle and capture budgets through a garbage collection", async () => {
+    vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "300");
+    idleHangs = true;
+    describeHangs = true;
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const collect = setInterval(gc, 20);
+    const started = Date.now();
+    try {
+      const result = await tap();
+
+      // 300 + CAPTURE_MS for the settle wait, CAPTURE_MS for the captures.
+      expect(Date.now() - started).toBeLessThan(4_000);
+      expect(textOf(result)).toContain("--- Screen after action ---");
+      expect(textOf(result)).not.toContain(AUTO_DESCRIBE_HEADER);
+    } finally {
+      clearInterval(collect);
+    }
+  });
+
+  const cancellableTap = (signal: AbortSignal) =>
+    client.callTool({ name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } }, undefined, {
+      signal,
+    });
+
+  it.each(["/artifacts/shot-1", "/shot.png"])(
+    "drops a screenshot download %s that outlasts the capture budget",
+    async (route) => {
+      shotAsArtifact = route !== "/shot.png";
+      stub.hanging.add(route);
+      const started = Date.now();
+
+      const result = await tap();
+
+      // The stalled download answers after 3 s; CAPTURE_MS ends it first.
+      expect(Date.now() - started).toBeLessThan(2_500);
+      await vi.waitFor(() => expect(stub.hungUp).toEqual([route]));
+      const text = textOf(result);
+      expect(text).not.toContain("--- Screen after action ---");
+      expect(text).toContain(AUTO_DESCRIBE_HEADER);
+    }
+  );
+
+  it.each([
+    "/tools/await-screen-idle",
+    "/tools/screenshot",
+    "/artifacts/shot-1",
+    "/shot.png",
+    "/tools/describe",
+  ])("ends the capture request %s of an interaction the client cancels", async (route) => {
+    shotAsArtifact = route !== "/shot.png";
+    stub.hanging.add(route);
+    const controller = new AbortController();
+
+    const pending = cancellableTap(controller.signal);
+    await vi.waitFor(() => expect(stub.requests.filter((r) => r.url === route)).toHaveLength(1));
+    controller.abort("stopped in the editor");
+
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    // Well inside CAPTURE_MS, whose timeout also ends a capture request.
+    await vi.waitFor(() => expect(stub.hungUp).toEqual([route]), { timeout: 300 });
+  });
+
+  it.each(["screen-recording-stop", "native-profiler-stop"])(
+    "saves the file of a %s the client cancels, since a retry finds no session",
+    async (name) => {
+      const artifactsDir = join(TEST_HOME, `artifacts-${name}`);
+      vi.stubEnv("ARGENT_ARTIFACTS_DIR", artifactsDir);
+      const controller = new AbortController();
+
+      const pending = client.callTool({ name, arguments: { udid: "u" } }, undefined, {
+        signal: controller.signal,
+      });
+      await vi.waitFor(() =>
+        expect(stub.requests.filter((r) => r.url === `/tools/${name}`)).toHaveLength(1)
+      );
+      controller.abort("stopped in the editor");
+
+      await expect(pending).rejects.toThrow("stopped in the editor");
+      await vi.waitFor(() =>
+        expect(
+          readdirSync(artifactsDir, { recursive: true }).map((f) => basename(String(f)))
+        ).toContain("kept.bin")
+      );
+      expect(stub.hungUp).toEqual([]);
+    }
+  );
+
+  it("ends the artifact download of a screenshot the client cancels", async () => {
+    const route = "/artifacts/shot-1";
+    shotAsArtifact = true;
+    stub.hanging.add(route);
+    const controller = new AbortController();
+
+    const pending = client.callTool({ name: "screenshot", arguments: { udid: "u" } }, undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(stub.requests.filter((r) => r.url === route)).toHaveLength(1));
+    controller.abort("stopped in the editor");
+
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    await vi.waitFor(() => expect(stub.hungUp).toEqual([route]), { timeout: 300 });
+  });
+
+  it("skips the fallback wait for the screen once the client cancels", async () => {
+    vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "60000");
+    stub.hanging.add("/tools/await-screen-idle");
+    const controller = new AbortController();
+
+    const pending = cancellableTap(controller.signal);
+    await vi.waitFor(() =>
+      expect(toolCalls().filter((url) => url === "/tools/await-screen-idle")).toHaveLength(1)
+    );
+    controller.abort("cancelled during the wait");
+
+    await expect(pending).rejects.toThrow("cancelled during the wait");
+    // The handler's last step logs the describe it skipped.
+    await vi.waitFor(() =>
+      expect(readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")).toContain(
+        '"error":"cancelled during the wait"'
+      )
+    );
+    expect(toolCalls()).not.toContain("/tools/screenshot");
+  });
+
+  it("sleeps out the settle budget when the settle wait fails", async () => {
+    vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "600");
+    idleStatus = 400;
+    const started = Date.now();
+
+    await tap();
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(550);
+  });
+
+  it("ends the fallback sleep at a cancel", async () => {
+    vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "60000");
+    idleStatus = 400;
+    const controller = new AbortController();
+
+    const pending = cancellableTap(controller.signal);
+    await vi.waitFor(() =>
+      expect(toolCalls().filter((url) => url === "/tools/await-screen-idle")).toHaveLength(1)
+    );
+    // Into the sleep that follows the failed settle wait.
+    await new Promise((r) => setTimeout(r, 100));
+    controller.abort("cancelled during the sleep");
+
+    await expect(pending).rejects.toThrow("cancelled during the sleep");
+    // The handler's last step logs the describe it skipped.
+    await vi.waitFor(() =>
+      expect(readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")).toContain(
+        '"error":"cancelled during the sleep"'
+      )
+    );
   });
 });
 

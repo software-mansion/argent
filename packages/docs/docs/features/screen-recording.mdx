@@ -43,6 +43,18 @@ Four details differ from a local recording:
 
 If the download fails, the recording stays on the remote machine until you release the machine. The error message gives the `sim-remote screen-record fetch` command that downloads it.
 
+## Physical iPhones
+
+Argent also records a physical iPhone that is connected to the Mac with a USB cable. Argent captures the screen in the same way as QuickTime Player. Argent installs nothing on the iPhone for the recording.
+
+Three details differ from a simulator recording:
+
+- The first recording on a Mac takes longer. Argent compiles a small capture helper with Xcode and keeps it for the next recordings.
+- macOS asks for camera access for `ios-screen-stream` at the first recording. Allow the access. macOS needs it to capture the screen of an iPhone. If you deny it, allow `ios-screen-stream` in System Settings > Privacy & Security > Camera.
+- The video does not show the touch markers.
+
+During a recording, iOS shows a clean status bar with the time 9:41, as it does for QuickTime Player.
+
 ## Where the video lands
 
 Argent saves each video in the `.argent/recordings/` directory of the project. The file name contains the device and the time of the recording. Argent does not overwrite an existing file. You can change the directory in the Argent configuration.
@@ -58,7 +70,8 @@ The files stay in the working tree. Add the directory to `.gitignore` when you d
 
 ## Limits
 
-- Argent records iOS simulators, remote simulators, Android emulators, and physical Android devices. Argent does not record tvOS simulators, physical iPhones, Chromium apps, Vega devices, or HarmonyOS devices.
+- Argent records iOS simulators, remote simulators, physical iPhones, Android emulators, and physical Android devices. Argent does not record tvOS simulators, Chromium apps, Mac apps, Vega devices, or HarmonyOS devices.
+- Argent records a physical iPhone only when the iPhone is connected with a USB cable. Argent cannot record an iPhone that is connected over Wi-Fi.
 - One recording per device at a time. Different devices can record at the same time.
 - Argent uses `ffmpeg` to encode the video. Install `ffmpeg` before the first recording. On a remote simulator `ffmpeg` is optional: without it the video still comes back, with no watermark and with the still parts left in.
 - On Android, a secure screen such as a password field or a DRM video comes out black.

@@ -6,7 +6,7 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from "@argent/registry";
-import { E2E_FILE_TEMPLATES, parseFlow } from "./flow-utils";
+import { E2E_FILE_TEMPLATES, PROJECT_ROOT_INPUT, parseFlow } from "./flow-utils";
 import { resolveFlowSource } from "./flow-run";
 
 // Must stay field-for-field identical to flow-execute's specs, or the same
@@ -28,6 +28,7 @@ const fileInputs: FileInputSpec[] = [
     kind: "file",
     skipWhenSet: "e2e_test_path",
   },
+  ...PROJECT_ROOT_INPUT,
 ];
 
 const zodSchema = z
@@ -90,6 +91,12 @@ Fails if the e2e test file does not exist.
 Address the e2e test exactly as you will address it in e2e-execute: name or e2e_test_path, one and only one; supplying both or neither is rejected.`,
   zodSchema,
   readOnly: true,
+  // When its gates pass, e2e-execute without prerequisiteAcknowledged returns
+  // the same executionPrerequisite, from the same resolveFlowSource, before any
+  // device work. An invalid test gets the gate's error, and a test with no
+  // prerequisite runs. The SDK, `argent run` and e2e tool: steps still call it,
+  // by its id or its alias.
+  hideFromMcp: true,
   aliases: ["flow-read-prerequisite"],
   interaction: {
     startedMsg: () => "Reading e2e test prerequisite",

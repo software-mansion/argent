@@ -66,6 +66,7 @@ jobs:
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      # TODO: assert libArgentAudio.dylib once an argent-private release ships it.
       # tvOS (Apple TV) binaries — fail the build if any is missing rather
       # than silently shipping a package where tv-* tools crash at runtime.
       - run: test -x packages/argent/bin/darwin/tvos-ax-service
@@ -73,6 +74,11 @@ jobs:
       - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
+      # Native Mac app library and launch helper: without them boot-device
+      # cannot start a Mac app.
+      - run: test -f packages/argent/dylibs/macos/libNativeDevtoolsMacos.dylib
+      - run: test -f packages/argent/dylibs/macos/libArgentInjectionBootstrap.dylib
+      - run: test -x packages/argent/bin/darwin/argent-macos-helper
       - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj/project.pbxproj
       - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj/xcshareddata/xcschemes/ArgentRunner.xcscheme
       - run: test -f packages/argent/dist/ios-device-runner/ArgentRunner/ArgentRunnerUITests/ArgentRunnerSession.swift
@@ -81,7 +87,7 @@ jobs:
       - run: test -f packages/argent/assets/manifest.json
       - run: test -f packages/argent/assets/trace-processor/trace_processor.wasm
       - run: test -f packages/argent/assets/trace-processor/engine_bundle.node.js
-      - run: test -f packages/argent/assets/trace-processor/engine.mjs
+      - run: test ! -e packages/argent/assets/trace-processor/engine.mjs
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
