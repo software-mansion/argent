@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import type { AXTreeResponse } from "../../src/blueprints/ax-service";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
+import { useMacosAppsFlag } from "../helpers/macos-apps-flag";
 
 // Runs of each file version through the REAL `e2e-execute`. On an iOS simulator
 // a file without `version: 2` runs on the runner from before version 2
@@ -337,11 +338,7 @@ describe("the runner each version runs on", () => {
     }
   );
 
-  it.each([
-    [PHONE, "device"],
-    [ANDROID, "android"],
-    [MAC_APP, "macos"],
-  ])("%s runs every version on the current runner", async (deviceId, source) => {
+  async function runsEveryVersionOnTheCurrentRunner(deviceId: string, source: string) {
     for (const version of [undefined, 1, 2]) {
       runners = [];
       sources = [];
@@ -351,6 +348,19 @@ describe("the runner each version runs on", () => {
       expect(runners).toEqual(["current"]);
       expect(sources).toEqual([source]);
     }
+  }
+
+  it.each([
+    [PHONE, "device"],
+    [ANDROID, "android"],
+  ])("%s runs every version on the current runner", runsEveryVersionOnTheCurrentRunner);
+
+  describe("on a Mac", () => {
+    // A Mac app runs only on a Mac host, with the macos-apps flag on.
+    useMacosAppsFlag();
+
+    it(`${MAC_APP} runs every version on the current runner`, () =>
+      runsEveryVersionOnTheCurrentRunner(MAC_APP, "macos"));
   });
 });
 
