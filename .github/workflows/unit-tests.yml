@@ -17,32 +17,63 @@ concurrency:
 jobs:
   # Node 22 is the oldest line Argent supports.
   unit-tests:
-    name: Unit tests
+    name: Unit tests (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Set up Node.js
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Restore node_modules
+        id: node-modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
 
       - name: Install dependencies
-        run: npm ci
-      - name: Fix rollup native bindings
-        run: npm install @rollup/rollup-linux-x64-gnu --no-save
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        run: bun install --frozen-lockfile
 
       - name: Build workspace dependencies
-        run: npm run build
+        run: bun run build
 
       - name: Run tests
-        run: npm test --workspaces --if-present
+        run: bun run test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Test root scripts
-        run: npm run test:scripts
+        if: matrix.shard == 1
+        run: bun run test:scripts
+
+  # Branch protection requires a check named "Unit tests"; this reports the
+  # shards' combined result under that name. `!cancelled()` keeps it from being
+  # skipped when a shard fails, since a skipped required check counts as passed.
+  unit-tests-result:
+    name: Unit tests
+    needs: unit-tests
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require every shard to pass
+        run: test "${{ needs.unit-tests.result }}" = success
 
   # Typechecking needs the same install and build as the tests but none of their
   # output, so running it alongside them takes its ~60s off the critical path
@@ -56,19 +87,34 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node.js
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Restore node_modules
+        id: node-modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
 
       - name: Install dependencies
-        run: npm ci
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        run: bun install --frozen-lockfile
 
       - name: Build workspace dependencies
-        run: npm run build
+        run: bun run build
 
       - name: Typecheck tests
-        run: npm run typecheck:tests --workspaces --if-present
+        run: bun run --workspaces --sequential --no-exit-on-error --if-present typecheck:tests
 
       - name: Typecheck scripts
-        run: npm run typecheck:scripts
+        run: bun run typecheck:scripts

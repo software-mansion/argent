@@ -2,6 +2,7 @@
 sidebar_position: 1
 sidebar_label: CLI
 title: CLI reference
+description: "Reference for the argent command-line tool: init, update, tools, run, e2e, config, secrets, telemetry and the other commands."
 sidebar_custom_props:
   icon: terminal
 ---
@@ -36,6 +37,8 @@ Run `argent --help` for the full set of options, and `argent --version` to print
 `argent init` exits with code `1` when the skills install fails and no skills are on disk.
 
 `argent update` and `argent uninstall` use the package manager that installed the global `argent` on `PATH`: npm, pnpm, bun or Yarn classic.
+
+After an update, the agent tells you the main changes once, on its first Argent tool call (`argent disable whats-new` turns this off).
 
 `argent uninstall` exits with code `1` when a package removal fails, or when a global `argent` is still on `PATH` after the removal.
 

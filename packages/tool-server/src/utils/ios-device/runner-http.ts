@@ -19,8 +19,8 @@ interface PostRunnerCommandOptions {
 /**
  * POST one runner command over a pre-connected socket. Resolves with the parsed JSON body.
  *
- * @param options.socketFactory opens the usbmux socket when the send starts.
- * @param options.deadline send budget, shared with the usbmux handshake.
+ * @param options.socketFactory opens the selected runner socket when the send starts.
+ * @param options.deadline send budget, shared with connection setup.
  */
 export async function postRunnerCommand(options: PostRunnerCommandOptions): Promise<unknown> {
   requireTimeRemaining(options.deadline.remainingMs(), "send runner command");
@@ -86,7 +86,7 @@ async function requestOverAgent(
       );
 
       request.once("error", reject);
-      // Resume the paused usbmux socket. The HTTP response arrives on this pipe.
+      // Resume the paused runner socket. The HTTP response arrives on this pipe.
       socket.resume();
       request.end(payload);
     });

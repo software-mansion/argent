@@ -45,6 +45,9 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
 import { settleTree, type ActionEnv } from "../../src/tools/flows/flow-actions";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 /** The same simulator addressed through sim-remote — platform `ios-remote`, which reads the iOS flow tree. */
