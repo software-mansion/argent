@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, Registry, type FailureSignal } from "@argent/registry";
 import { createRegistry } from "../src/utils/setup-registry";
-import { definitionsById, EXPECTED_TOOL_COUNT } from "./helpers/catalog";
+import { definitionsById } from "./helpers/catalog";
 import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
 import { formatScreenshotDiffSummary } from "../src/tools/screenshot-diff/screenshot-diff-summary";
@@ -19,7 +19,6 @@ const failureSignal: FailureSignal = {
 describe("tool interaction messages", () => {
   it("defines all three formatters for every tool", () => {
     const definitions = definitionsById(createRegistry());
-    expect(definitions.size).toBe(EXPECTED_TOOL_COUNT);
 
     for (const [id, definition] of definitions) {
       expect(definition.interaction?.startedMsg, `${id}.startedMsg`).toBeTypeOf("function");

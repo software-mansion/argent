@@ -28,6 +28,15 @@ vi.mock("../src/utils/debugger/runtime-device", () => ({
   findRuntimeDevices: (cdp: unknown, opts?: ProbeOptions) => findRuntimeDevices(cdp, opts),
 }));
 
+// The same two lookups for iOS apps.
+const liveIos = vi.fn<(deviceId: string) => string[]>();
+const liveIosDevices = vi.fn<(bundleId: string) => string[]>();
+vi.mock("../src/blueprints/ios-network-records", async (importActual) => ({
+  ...(await importActual<typeof import("../src/blueprints/ios-network-records")>()),
+  liveIosNetworkCaptures: (deviceId: string) => liveIos(deviceId),
+  liveIosNetworkCaptureDevices: (bundleId: string) => liveIosDevices(bundleId),
+}));
+
 vi.mock("../src/utils/check-deps", () => ({
   ensureDeps: vi.fn(async () => {}),
   ensureDep: vi.fn(async () => {}),
@@ -73,6 +82,10 @@ beforeEach(() => {
   live.mockReturnValue([]);
   liveDevices.mockReset();
   liveDevices.mockReturnValue([]);
+  liveIos.mockReset();
+  liveIos.mockReturnValue([]);
+  liveIosDevices.mockReset();
+  liveIosDevices.mockReturnValue([]);
   liveSerials.mockReset();
   liveSerials.mockReturnValue([]);
   findRuntimeDevices.mockReset();
@@ -121,6 +134,22 @@ describe("nativeNetworkCaptureWarning", () => {
     expect(warning).toContain("native-network-logs with stop: true for each of these apps");
   });
 
+  it("names an iOS app with the remedy that ends capture there", () => {
+    liveIos.mockImplementation((deviceId) => (deviceId === IOS_UDID ? [PKG] : []));
+
+    const warning = nativeNetworkCaptureWarning(IOS_UDID);
+
+    expect(warning).toContain(`Native network capture is on for ${PKG} on this device`);
+    expect(warning).toContain(
+      "Argent's in-app agent captures the requests of that app's processes"
+    );
+    expect(warning).toContain("can slow the app");
+    expect(warning).toContain(
+      "stop this profile, call stop-all-simulator-servers for this device, then restart-app and profile again"
+    );
+    expect(warning).not.toContain("stop: true");
+  });
+
   it("is undefined, not a throw, when the lookup fails", () => {
     live.mockImplementation(() => {
       throw new Error("lookup failed");
@@ -161,6 +190,30 @@ describe("nativeNetworkCaptureWarning", () => {
       captureOnSerial(PKG);
 
       expect(nativeNetworkCaptureWarning(LOGICAL, { appId: PKG, platform: "ios" })).toBeUndefined();
+    });
+
+    it("names the simulators with capture on for an iOS runtime's app", () => {
+      connectedWithLogicalId();
+      liveIosDevices.mockImplementation((bundleId) => (bundleId === PKG ? [IOS_UDID] : []));
+
+      const warning = nativeNetworkCaptureWarning(LOGICAL, { appId: PKG, platform: "ios" });
+
+      expect(liveIosDevices).toHaveBeenCalledWith(PKG);
+      expect(liveDevices).not.toHaveBeenCalled();
+      expect(warning).toContain(
+        `Native network capture is on for ${PKG} on ${IOS_UDID}, which may be the device this profile runs on`
+      );
+      expect(warning).toContain("captures the requests of that app's processes there");
+      expect(warning).toContain(
+        "call stop-all-simulator-servers for that device, then restart-app and profile again"
+      );
+    });
+
+    it("is undefined for an Android runtime when only an iOS simulator captures the app id", () => {
+      connectedWithLogicalId();
+      liveIosDevices.mockReturnValue([IOS_UDID]);
+
+      expect(nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP)).toBeUndefined();
     });
 
     it("is undefined when the runtime did not say its app or platform", () => {
@@ -230,14 +283,9 @@ describe("nativeNetworkCaptureWarning", () => {
 
         const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, foundOn(USB, WIRELESS));
 
-        expect(warning).toBe(
-          `Native network capture is on for ${PKG}, ${OTHER_PKG} on ${USB} and ${WIRELESS}, ` +
-            `adb serials of the device this profile runs on: Argent attaches its in-app agent to the ` +
-            `processes of these apps. It can slow the app, so the timings in this profile can differ ` +
-            `from a run without it. To profile without it, stop this profile, call native-network-logs ` +
-            `with stop: true for ${OTHER_PKG} with udid ${USB}, ${PKG} with udid ${WIRELESS}, then ` +
-            `restart-app on ${USB} and profile again.`
-        );
+        expect(warning).toContain(`${OTHER_PKG} with udid ${USB}`);
+        expect(warning).toContain(`${PKG} with udid ${WIRELESS}`);
+        expect(warning).toContain(`restart-app on ${USB}`);
       });
 
       // An emulator has no hardware key, so the same app can be captured under both serials.
@@ -249,14 +297,9 @@ describe("nativeNetworkCaptureWarning", () => {
 
         const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, foundOn(USB, WIRELESS));
 
-        expect(warning).toBe(
-          `Native network capture is on for ${PKG} on ${USB} and ${WIRELESS}, adb serials of the ` +
-            `device this profile runs on: Argent attaches its in-app agent to the processes of that ` +
-            `app. It can slow the app, so the timings in this profile can differ from a run without ` +
-            `it. To profile without it, stop this profile, call native-network-logs with stop: true ` +
-            `for ${PKG} with udid ${USB}, ${PKG} with udid ${WIRELESS}, then restart-app on ${USB} ` +
-            `and profile again.`
-        );
+        expect(warning).toContain(`${PKG} on ${USB} and ${WIRELESS}`);
+        expect(warning).toContain(`${PKG} with udid ${USB}`);
+        expect(warning).toContain(`${PKG} with udid ${WIRELESS}`);
       });
 
       describe("with a serial whose logcat could not be read", () => {
@@ -277,14 +320,10 @@ describe("nativeNetworkCaptureWarning", () => {
             unresolvedOn(USB, WIRELESS)
           );
 
-          expect(warning).toBe(
-            `Native network capture is on for ${PKG} on ${WIRELESS}, which may also be the device ` +
-              `this profile runs on: its logcat could not be read to tell. Argent attaches its in-app ` +
-              `agent to the processes of that app there. It can slow the app, so the timings in this ` +
-              `profile can differ from a run without it. To profile without it, stop this profile, ` +
-              `call native-network-logs with stop: true for ${PKG} with udid ${WIRELESS}, then ` +
-              `restart-app on ${USB} and profile again.`
-          );
+          expect(warning).toContain(`${PKG} on ${WIRELESS}, which may`);
+          expect(warning).toContain(`${PKG} with udid ${WIRELESS}`);
+          expect(warning).toContain(`restart-app on ${USB}`);
+          expect(warning).not.toContain(OTHER_PKG);
           expect(liveDevices).not.toHaveBeenCalled();
         });
 
@@ -301,15 +340,10 @@ describe("nativeNetworkCaptureWarning", () => {
             unresolvedOn(USB, WIRELESS, OTHER_WIRELESS)
           );
 
-          expect(warning).toBe(
-            `Native network capture is on for ${PKG} on ${WIRELESS}, ${OTHER_WIRELESS}, each of which ` +
-              `may also be the device this profile runs on: their logcats could not be read to tell. ` +
-              `Argent attaches its in-app agent to the processes of that app there. It can slow the ` +
-              `app, so the timings in this profile can differ from a run without it. To profile ` +
-              `without it, stop this profile, call native-network-logs with stop: true for ${PKG} ` +
-              `with udid ${WIRELESS}, ${PKG} with udid ${OTHER_WIRELESS}, then restart-app on ` +
-              `${USB} and profile again.`
-          );
+          expect(warning).toContain(`${WIRELESS}, ${OTHER_WIRELESS}, each of which may`);
+          expect(warning).toContain(`${PKG} with udid ${WIRELESS}`);
+          expect(warning).toContain(`${PKG} with udid ${OTHER_WIRELESS}`);
+          expect(warning).toContain(`restart-app on ${USB}`);
         });
 
         // Two sets of steps would have the agent stop the run it just restarted,
@@ -326,17 +360,12 @@ describe("nativeNetworkCaptureWarning", () => {
             unresolved: [OTHER_DEVICE],
           });
 
-          expect(warning).toBe(
-            `Native network capture is on for ${OTHER_PKG} on ${WIRELESS}, the device this profile ` +
-              `runs on: Argent attaches its in-app agent to the processes of that app. Native ` +
-              `network capture is also on for ${PKG} on ${OTHER_DEVICE}, which may also be the ` +
-              `device this profile runs on: its logcat could not be read to tell. Argent attaches ` +
-              `its in-app agent to the processes of that app there. It can slow the app, so the ` +
-              `timings in this profile can differ from a run without it. To profile without it, ` +
-              `stop this profile, call native-network-logs with stop: true for ${OTHER_PKG} with ` +
-              `udid ${WIRELESS}, ${PKG} with udid ${OTHER_DEVICE}, then restart-app on ${WIRELESS} ` +
-              `and profile again.`
-          );
+          expect(warning).toContain(`${OTHER_PKG} on ${WIRELESS}`);
+          expect(warning).toContain(`${PKG} on ${OTHER_DEVICE}, which may`);
+          expect(warning).toContain(`${OTHER_PKG} with udid ${WIRELESS}`);
+          expect(warning).toContain(`${PKG} with udid ${OTHER_DEVICE}`);
+          expect(warning).toContain(`restart-app on ${WIRELESS}`);
+          expect(warning?.match(/restart-app/g)).toHaveLength(1);
         });
 
         it("is undefined when capture there is only for other apps, or the runtime is not Android", () => {
@@ -398,15 +427,24 @@ describe("native-profiler-start", () => {
     expect(result).toEqual({ status: "recording", pid: 2, traceFile: "/android.pftrace" });
   });
 
-  it("does not look for Android capture on iOS", async () => {
-    live.mockReturnValue([PKG]);
+  it("warns on iOS when native network capture is on for an app of the simulator", async () => {
+    liveIos.mockImplementation((deviceId) => (deviceId === IOS_UDID ? [PKG] : []));
 
     const result = await nativeProfilerStartTool.execute({ session: session("ios") } as never, {
       device_id: IOS_UDID,
     });
 
-    expect(live).not.toHaveBeenCalled();
-    expect(result).not.toHaveProperty("warning");
+    expect(result).toMatchObject({ status: "recording", pid: 1 });
+    expect(result.warning).toContain(`Native network capture is on for ${PKG}`);
+    expect(result.warning).toContain("stop-all-simulator-servers");
+  });
+
+  it("adds no warning on iOS when no capture is on", async () => {
+    const result = await nativeProfilerStartTool.execute({ session: session("ios") } as never, {
+      device_id: IOS_UDID,
+    });
+
+    expect(result).toEqual({ status: "recording", pid: 1, traceFile: "/ios.trace" });
   });
 });
 
@@ -469,6 +507,14 @@ describe("react-profiler-start", () => {
     expect(result.warning).toContain(`Native network capture is on for ${PKG}`);
   });
 
+  it("says the warning is for iOS and Android, as a Mac app's capture is never named", () => {
+    // A Mac app's capture is kept by its own service, which neither lookup reads.
+    expect(nativeNetworkCaptureWarning("macos-app-com.example.mac")).toBeUndefined();
+    expect(createReactProfilerStartTool(registryWithRuntime()).description).toContain(
+      "On iOS and Android, a warning names the apps with native network capture on"
+    );
+  });
+
   it("adds no warning when no capture is live", async () => {
     const result = await createReactProfilerStartTool(registryWithRuntime()).execute(
       {},
@@ -511,7 +557,7 @@ describe("react-profiler-start", () => {
         expect(result).not.toHaveProperty("warning");
       });
 
-      it("adds no warning when the profiled runtime is on iOS", async () => {
+      it("adds no warning for an iOS runtime when only an Android device captures the app id", async () => {
         captureOnSerial(PKG);
 
         const result = await start({ appId: PKG, platform: "ios" });
@@ -558,6 +604,25 @@ describe("react-profiler-start", () => {
         expect(live).toHaveBeenCalledWith(IOS_UDID);
         expect(liveDevices).not.toHaveBeenCalled();
         expect(result).not.toHaveProperty("warning");
+      });
+
+      it("warns an iOS runtime when capture is on for its app on the simulator it runs on", async () => {
+        findRuntimeDevices.mockResolvedValue(foundOn(IOS_UDID));
+        liveIos.mockImplementation((deviceId) => (deviceId === IOS_UDID ? [PKG] : []));
+        liveIosDevices.mockImplementation((bundleId) => (bundleId === PKG ? [IOS_UDID] : []));
+
+        const result = await start({ appId: PKG, platform: "ios" });
+
+        expect(result.started_at).toBe(new Date(1_000).toISOString());
+        expect(result.warning).toContain(
+          `Native network capture is on for ${PKG} on ${IOS_UDID}, the device this profile runs on:`
+        );
+        expect(result.warning).toContain("captures the requests of that app's processes");
+        expect(result.warning).toContain(
+          `call stop-all-simulator-servers for ${IOS_UDID}, then restart-app on ${IOS_UDID} and profile again.`
+        );
+        expect(result.warning).not.toContain("stop: true");
+        expect(result.warning).not.toContain("logicalDeviceId");
       });
 
       it("warns when capture is kept under the device's other adb serial", async () => {

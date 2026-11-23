@@ -46,10 +46,6 @@ export async function startSuspensionWatch(
   let ended = false;
   let waiters: Array<() => void> = [];
   let stderr = "";
-  child.stderr!.on("data", (d: Buffer) => {
-    if (stderr.length < 2_000) stderr += d.toString("utf8");
-  });
-
   const close = (atMs: number): void => {
     if (since !== null) windows.push({ startMs: since, endMs: Math.max(since, atMs) });
     since = null;
@@ -60,7 +56,16 @@ export async function startSuspensionWatch(
 
   let reported!: (ok: boolean) => void;
   const firstState = new Promise<boolean>((resolve) => (reported = resolve));
-  readline.createInterface({ input: child.stdout! }).on("line", (line) => {
+  child.on("error", (err) => {
+    stderr ||= err.message;
+    reported(false);
+  });
+  child.stderr?.on("data", (d: Buffer) => {
+    if (stderr.length < 2_000) stderr += d.toString("utf8");
+  });
+
+  const rl = child.stdout ? readline.createInterface({ input: child.stdout }) : null;
+  rl?.on("line", (line) => {
     let event: { suspended?: unknown; at?: unknown };
     try {
       event = JSON.parse(line);
@@ -72,10 +77,6 @@ export async function startSuspensionWatch(
     if (ended) return;
     if (event.suspended && since === null) since = event.at;
     else if (!event.suspended) close(event.at);
-  });
-  child.on("error", (err) => {
-    stderr ||= err.message;
-    reported(false);
   });
   // The app ended, or the helper was stopped: nothing is suspended any more.
   child.on("exit", () => {

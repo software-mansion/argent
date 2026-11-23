@@ -3,6 +3,8 @@ import { axServiceRef, type AXServiceApi, type AXTreeResponse } from "../../blue
 import type { DescribeFrame } from "../describe/contract";
 import { mapNativeTraitsToDescribeRole } from "../describe/platforms/ios/ios-native-adapter";
 import type { UiTree, UiTreeNode } from "./index";
+import { isTurned, nativeFrameToUi, uiScreenSize } from "../../utils/ui-orientation";
+import { noteUiOrientation } from "../../utils/ios-ui-orientation";
 
 // What an ax-service older than `treeVersion` 2 does not send. `hidden`
 // comes from frames, so every version reports it.
@@ -126,8 +128,18 @@ function markHidden(node: UiTreeNode, clip: DescribeFrame | undefined): void {
   for (const child of node.children) markHidden(child, inner);
 }
 
-/** Nests the daemon's document-order nodes by `parentIndex`; a node whose parent is missing becomes a root. */
+/**
+ * Nests the daemon's document-order nodes by `parentIndex`; a node whose parent is missing becomes a root.
+ *
+ * The daemon frames on the screen's portrait-native axes; the tree comes out in
+ * the UI's upright space, as `describe` does (`utils/ios-ui-orientation.ts`),
+ * turned by the orientation the daemon reported with it, and the screen size
+ * with it. A daemon that predates the orientation leaves both native.
+ */
 export function adaptAxTree(response: AXTreeResponse): UiTree {
+  const orientation = response.interfaceOrientation;
+  const turn = (frame: DescribeFrame | undefined): DescribeFrame | undefined =>
+    frame && isTurned(orientation) ? nativeFrameToUi(frame, orientation) : frame;
   const byIndex = new Map<number, UiTreeNode>();
   const roots: UiTreeNode[] = [];
   let keyboardVisible = false;
@@ -142,7 +154,7 @@ export function adaptAxTree(response: AXTreeResponse): UiTree {
       value: raw.hintShowing ? undefined : raw.value,
       identifier: raw.identifier,
       roleDescription: raw.roleDescription,
-      frame: raw.frame,
+      frame: turn(raw.frame),
       children: [],
     };
     // AX answers 0 (Any, a query wildcard) for a plain container; XCTest reports it as Other.
@@ -173,7 +185,7 @@ export function adaptAxTree(response: AXTreeResponse): UiTree {
   return {
     schemaVersion: 1,
     source: "ax-service",
-    screen: response.screenFrame,
+    screen: response.screenFrame && uiScreenSize(response.screenFrame, orientation),
     roots,
     truncated: response.truncated,
     alertVisible: response.alertVisible,
@@ -187,5 +199,7 @@ export function adaptAxTree(response: AXTreeResponse): UiTree {
 export async function readIosUiTree(registry: Registry, device: DeviceInfo): Promise<UiTree> {
   const ref = axServiceRef(device);
   const ax = await registry.resolveService<AXServiceApi>(ref.urn, ref.options);
-  return adaptAxTree(await ax.tree());
+  const response = await ax.tree();
+  noteUiOrientation(device.id, response.interfaceOrientation, response.screenFrame);
+  return adaptAxTree(response);
 }

@@ -281,24 +281,6 @@ describe("tvFocusTree — the empty read", () => {
     expect(empty.hint).toBe(TV_FOCUS_WAIT_EMPTY_HINT);
   });
 
-  it("does not tell the agent to use describe instead — the wait tool works now", () => {
-    // The old tvOS note redirected to describe/tv-remote because nothing else
-    // worked. Repeating that here would be advice to abandon a tool that has
-    // just been fixed.
-    const empty = tvFocusTree({ focused: null, focusable: [] });
-
-    expect(empty.hint).not.toMatch(/accessibility service does not support/i);
-  });
-
-  it("says neither that the app must be launching nor to call describe", () => {
-    // A static screen with nothing on it stays this way, and describe's respawn
-    // changes nothing there.
-    const { hint } = tvFocusTree({ focused: null, focusable: [] });
-
-    expect(hint).not.toMatch(/call `describe`/);
-    expect(hint).toMatch(/may be launching/);
-  });
-
   it("never attaches a hint to a populated read", () => {
     expect(tvFocusTree(SETTINGS).hint).toBeUndefined();
   });

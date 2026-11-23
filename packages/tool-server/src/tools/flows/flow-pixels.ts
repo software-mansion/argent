@@ -70,7 +70,7 @@ const MACOS_CAPTURE_SCALE = CAPTURE_SCALE * 2;
 // it moves less than that per 200ms sample. For a full-contrast cross-fade that
 // is ~6.7s here, but only ~2s at the borrowed tolerance, which would call any
 // slower cross-fade settled mid-animation.
-export const PIXEL_THRESHOLD = 0.03;
+const PIXEL_THRESHOLD = 0.03;
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
 const PIXEL_THRESHOLD_SQUARED = PIXEL_THRESHOLD * PIXEL_THRESHOLD * MAX_RGB_DISTANCE_SQUARED;
 
