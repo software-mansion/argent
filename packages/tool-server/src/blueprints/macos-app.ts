@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomInt } from "node:crypto";
 import { once } from "node:events";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -523,6 +524,16 @@ interface PendingCall {
   timer: NodeJS.Timeout;
 }
 
+/**
+ * The next id of a CDP request on the wire. The channels share it, so no two
+ * of them send the same id. The app answers a request body read that it holds
+ * until the upload ends on its connection of that time, so a reply can come
+ * on a later channel than its request, also on one of a later tool-server.
+ * There it must answer no request. The random start keeps the ids of two
+ * tool-servers apart.
+ */
+let nextCdpWireId = randomInt(2 ** 47);
+
 /** What a channel hands its app's service about the network capture. */
 interface ChannelNetworkSink {
   /** One network event, with the pid of the process that sent it. */
@@ -565,6 +576,8 @@ class LibraryChannel {
    */
   private readonly disableIds = new Set<number>();
   private readonly pending = new Map<number, PendingCall>();
+  /** The requester's id of each CDP request this channel sent, by its id on the wire. */
+  private readonly cdpIds = new Map<number, number>();
   private nextId = 1;
   private hello: MacosLibraryHandshake | null = null;
   private closeError: FailureError | null = null;
@@ -599,7 +612,7 @@ class LibraryChannel {
           this.enableIds.clear();
           this.disableIds.add(p.id);
         }
-        return writeNdjsonFrame(socket, frame);
+        return this.sendCdp(frame as { type: string; payload: { id: number } });
       },
     });
     this.ready.catch(() => undefined);
@@ -679,6 +692,16 @@ class LibraryChannel {
     this.socket.destroy();
   }
 
+  /** Sends a CDP request under a wire id that no other channel uses. */
+  private sendCdp(frame: { type: string; payload: { id: number } }): boolean {
+    const wireId = nextCdpWireId++;
+    if (!writeNdjsonFrame(this.socket, { ...frame, payload: { ...frame.payload, id: wireId } })) {
+      return false;
+    }
+    this.cdpIds.set(wireId, frame.payload.id);
+    return true;
+  }
+
   private onMessage(raw: unknown): void {
     if (!raw || typeof raw !== "object") return;
     const msg = raw as { type?: unknown; payload?: Record<string, unknown> };
@@ -695,20 +718,26 @@ class LibraryChannel {
       return;
     }
     if (msg.type === "CDP") {
-      // A frame with an id answers a CDP request of this channel, before the
-      // events after it are read. A network event has a method and no id.
+      // A frame with an id answers a CDP request, before the events after it
+      // are read. An id that this channel did not send answers a request of
+      // an earlier channel, so it answers nothing here. A network event has a
+      // method and no id.
       const p = msg.payload;
-      // An app held suspended (Instruments, a debugger) acknowledges after the
-      // request timed out, also while a retry waits for its own, and from then on it captures.
-      if (p && typeof p.id === "number" && this.enableIds.has(p.id) && "result" in p) {
-        this.network.enabled(this);
+      if (p?.id !== undefined) {
+        const id = typeof p.id === "number" ? this.cdpIds.get(p.id) : undefined;
+        // An app held suspended (Instruments, a debugger) acknowledges after the
+        // request timed out, also while a retry waits for its own, and from then on it captures.
+        if (id !== undefined && this.enableIds.has(id) && "result" in p) this.network.enabled(this);
+        if (id !== undefined && this.disableIds.has(id) && "result" in p) {
+          this.stopUnconfirmed = false;
+          this.confirmDisabling?.();
+        }
+        if (id !== undefined && this.cdp.handleResponse({ ...p, id })) {
+          this.cdpIds.delete(p.id as number);
+        }
+        return;
       }
-      if (p && typeof p.id === "number" && this.disableIds.has(p.id) && "result" in p) {
-        this.stopUnconfirmed = false;
-        this.confirmDisabling?.();
-      }
-      if (this.cdp.handleResponse(p)) return;
-      if (p && typeof p.method === "string" && p.id === undefined) {
+      if (p && typeof p.method === "string") {
         this.network.event(p.method, p.params, this.hello.pid);
       }
       return;
@@ -953,9 +982,15 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
    * The app process whose events the records take, and the channel they come
    * on. The records number the process as their connection: argent can
    * reconnect to the same process, which keeps its number, and a new process
-   * gets the next one.
+   * gets the next one. A process without a listening socket keeps only the
+   * channel of its start, so argent cannot reconnect to it.
    */
-  let recordedProcess: { pid: number; index: number; channel: LibraryChannel } | null = null;
+  let recordedProcess: {
+    pid: number;
+    index: number;
+    channel: LibraryChannel;
+    listens: boolean;
+  } | null = null;
   let nextProcessIndex = 1;
 
   /** The adopted channel, while it is open. */
@@ -998,6 +1033,12 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           ? ch.cdp.request(method, params, { timeoutMs })
           : Promise.reject(connectionClosedBefore(bundleId, method));
       },
+      // Not once the app's services stopped, which drops the records, or the process ended.
+      canReconnect: (index) =>
+        !disposed &&
+        recordedProcess?.index === index &&
+        recordedProcess.listens &&
+        pidIsAlive(recordedProcess.pid),
     },
     () => captureStarted,
     "macos-native"
@@ -1074,7 +1115,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     return enabling;
   };
 
-  const adopt = (ch: LibraryChannel, launched = false): void => {
+  const adopt = (ch: LibraryChannel, launched = false, listens = true): void => {
     if (channel !== ch) channel?.close();
     channel = ch;
     const pid = ch.handshake!.pid;
@@ -1083,7 +1124,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       if (recordedProcess) {
         records.connectionClosed(recordedProcess.index, { superseded: true });
       }
-      recordedProcess = { pid, index: nextProcessIndex++, channel: ch };
+      recordedProcess = { pid, index: nextProcessIndex++, channel: ch, listens };
       // A process argent did not start just now ran before capture reached it.
       captureGap = captureStarted && !launched;
       armedSinceLaunch = launched && captureStarted;
@@ -1618,7 +1659,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       sandboxed: info.sandboxed,
       logPath,
     };
-    adopt(ch, true);
+    adopt(ch, true, listen !== null);
     const { note: noWindow, refusal: noDrivableWindow } = await waitForFirstWindow(
       ch,
       pid,
