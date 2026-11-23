@@ -1212,10 +1212,13 @@ steps:
   });
 
   it("stops on abort without judging the screen", async () => {
-    let tick = 0;
-    currentTree = () => screenWith(`frame ${tick++}`); // never settles
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 300);
+    let tick = 0;
+    // Never settles; aborted from the third read, so the abort lands mid-wait.
+    currentTree = () => {
+      if (tick === 2) controller.abort();
+      return screenWith(`frame ${tick++}`);
+    };
     await writeFlow(
       "ready",
       `executionPrerequisite: ""
