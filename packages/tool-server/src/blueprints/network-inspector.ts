@@ -2,6 +2,7 @@ import {
   FAILURE_CODES,
   FailureError,
   TypedEventEmitter,
+  getFailureSignal,
   isLiveServiceState,
   type Registry,
   type ServiceBlueprint,
@@ -308,12 +309,26 @@ export async function installNetworkInterceptor(
   const before = capture.installed;
   // From the dispatch on, the app may record even if its answer never arrives.
   capture.installed = true;
-  await cdp.evaluate(makeNetworkCaptureControlScript(false));
+  try {
+    await cdp.evaluate(makeNetworkCaptureControlScript(false));
+  } catch (err) {
+    // A client that refuses to send reaches nothing in the app.
+    if (neverSent(err)) capture.installed = before;
+    throw err;
+  }
   const install = parseInstall(await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT));
   if (install.installed || install.reason === "already installed") return { installed: true };
   // The runtime answered that the script installed nothing in it.
   if (install.reason === NO_XHR_YET) capture.installed = before;
   return install;
+}
+
+/** CDPClient rejects these before it sends the request: its socket is not open, or the runtime is paused. */
+function neverSent(err: unknown): boolean {
+  const code = getFailureSignal(err)?.error_code;
+  return (
+    code === FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED || code === FAILURE_CODES.JS_RUNTIME_PAUSED
+  );
 }
 
 function parseInstall(raw: unknown): InterceptorInstall {
