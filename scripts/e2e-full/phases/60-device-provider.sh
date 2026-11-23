@@ -223,11 +223,11 @@ run_phase() {
   fi
 
   # The rules ride on the result, not the description. One device IS listed
-  # here, so the hint must be present and carry the boot-device rule.
-  if printf '%s' "$RT_JSON" | jq -e '(.hint // "") | test("boot-device")' >/dev/null 2>&1; then
+  # here, so a note must be present and carry the boot-device rule.
+  if printf '%s' "$RT_JSON" | jq -e 'any(.notes[]?; test("boot-device"))' >/dev/null 2>&1; then
     pass "$P" list-devices "result explains the provider rules"
   else
-    fail "$P" list-devices "result explains the provider rules" "hint missing or incomplete"
+    fail "$P" list-devices "result explains the provider rules" "no note carries the boot-device rule"
   fi
 
   # The provider claimed this serial, so the plain adb row must be gone — a

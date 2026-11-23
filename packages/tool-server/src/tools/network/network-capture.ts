@@ -12,14 +12,26 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { resolveDebuggerService } from "../debugger/not-connected";
 
 export const captureSchema = z.object({
-  udid: z.string().describe("Device ID from list-devices: an iOS simulator UDID or Android serial"),
+  udid: z
+    .string()
+    .describe(
+      "Device ID from list-devices: an iOS simulator UDID or Android serial<flag:macos-apps>, or a Mac app id (macos-app-<bundle id>)</flag:macos-apps>"
+    ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
-    .describe("App bundle ID on iOS or package name on Android"),
+    .describe(
+      "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
+    ),
   port: metroPortField.describe(
     "The app's Metro port: the JS layer is reached through it, and the native layers leave its requests out. Omit it to use this device's port, 8081 by default."
   ),
+  layer: z
+    .enum(["js", "native"])
+    .optional()
+    .describe(
+      "Use js for the app's JavaScript requests or native for requests captured by the native layer. Omit to control all supported layers.<flag:macos-apps> On Mac apps, this parameter supports only native. Read view-network-logs to start JavaScript capture in a React Native Mac app.</flag:macos-apps>"
+    ),
   logicalDeviceId: z
     .string()
     .min(1)
@@ -31,14 +43,56 @@ export const captureSchema = z.object({
 
 export type CaptureParams = z.infer<typeof captureSchema>;
 
+/** The layers a call acts on: both when it names none. */
+export function requestedLayers(layer: CaptureParams["layer"]): { js: boolean; native: boolean } {
+  return { js: layer !== "native", native: layer !== "js" };
+}
+
+/** Why a call with layer js reaches nothing on a Mac app. */
+export const MACOS_NO_JS =
+  'on a Mac app these tools act only on the native layer (view-network-logs starts the capture of a React Native app\'s JS runtime when it reads), so omit layer or pass layer "native"';
+
+/** The capture a call acts on, as its interaction messages name it. */
+export function captureName(layer: CaptureParams["layer"]): string {
+  return layer === "js"
+    ? "JS network capture"
+    : layer === "native"
+      ? "native network capture"
+      : "network capture";
+}
+
+/**
+ * The layers as a call with `layer` returns them: a reason that tells to call
+ * network-capture-start or network-capture-stop again also tells to pass the same
+ * layer, so that call leaves the other layer as it is.
+ */
+export function withLayerInRetries<L extends { reason?: string }>(
+  layers: L[],
+  layer: CaptureParams["layer"]
+): L[] {
+  if (layer === undefined) return layers;
+  return layers.map((entry) =>
+    // A reason that already names the layer to pass is left as it is.
+    entry.reason &&
+    /network-capture-(start|stop)/.test(entry.reason) &&
+    !/layer "(js|native)"/.test(entry.reason)
+      ? {
+          ...entry,
+          reason: `${entry.reason}; pass layer "${layer}" to that call, so it leaves the other layer as it is`,
+        }
+      : entry
+  );
+}
+
 /** The devices native-network-logs reads, where every layer start covers can run. */
 export const CAPTURE_CAPABILITY: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true },
+  macos: { app: true, catalyst: true },
 };
 
-type CaptureLayer = "js" | "ios-native" | "android-native";
+type CaptureLayer = "js" | "ios-native" | "android-native" | "macos-native";
 
 export interface StartedLayer {
   layer: CaptureLayer;

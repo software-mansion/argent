@@ -2,6 +2,7 @@
 sidebar_position: 4
 sidebar_label: Configuration
 title: Configuration
+description: Argent reads its settings from configuration keys, feature flags, secrets and environment variables. This page lists all of them.
 sidebar_custom_props:
   icon: settings-2
 ---
@@ -110,6 +111,7 @@ argent enable argent-lens --scope project    # this project only
 | `harmonyos`                 | Off     | Enable HarmonyOS support: list, boot and drive HarmonyOS phones and DevEco Studio emulators over `hdc`                                                                                                                |
 | `forward-secrets`           | Off     | Send the secrets of the client to a linked tool-server. See [Secrets over a link](#secrets-over-a-link)                                                                                                               |
 | `video-watermark`           | On      | Put the Argent watermark in the corner of a recorded screen video                                                                                                                                                     |
+| `whats-new`                 | On      | After an update, tell the agent the main changes of the new version on its first tool call                                                                                                                            |
 | `macos-apps`                | On      | Enable [Mac app support](/docs/features/mac-apps), including Mac Catalyst and the `file-panel` and `menu-bar` tools.                                                                                                  |
 | `ios-audio-always-inserted` | On      | Load the audio hook into every app that an iOS simulator starts, so the audio tools work without a restart of the app. Off: the first audio tool call loads it. A simulator that has the hook keeps it until a reboot |
 

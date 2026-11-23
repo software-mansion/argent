@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import type {
   DevToolsFiberCommit,
@@ -562,7 +562,7 @@ Fails if react-profiler-stop has not been called.`,
     failedMsg: ({ failureSignal }) => `Failed to query React commits: ${failureSignal.error_code}`,
   },
   // Reads React commit data captured via the React DevTools backend.
-  capability: REACT_PROFILER_TOOL_CAPABILITY,
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const commitTree = await getCommitData(metroPort(params), params.device_id);

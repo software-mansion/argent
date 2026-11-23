@@ -158,9 +158,6 @@ const MACOS_POINTER_ONLY =
 const MACOS_NO_TRACKPAD_GESTURES =
   "a Mac app has no trackpad gesture input: use the app's own zoom or rotate controls with " +
   "gesture-tap or keyboard";
-const MACOS_NO_CAPTURE_START_STOP =
-  "a Mac app's network capture has no start or stop: native-network-logs turns it on at its first call, " +
-  "and stop-simulator-server or stop-all-simulator-servers for the app ends it and drops its log";
 
 /**
  * Why a tool without a `macos` block refuses a Mac app, where the stock "no
@@ -175,8 +172,6 @@ const MACOS_REFUSAL_REASONS: Readonly<Record<string, string>> = {
   "reinstall-app":
     "argent does not install Mac apps, it starts the .app where it was built. Rebuild the app, " +
     "then run restart-app (or boot-device with macosAppPath for a .app at another path)",
-  "network-capture-start": MACOS_NO_CAPTURE_START_STOP,
-  "network-capture-stop": MACOS_NO_CAPTURE_START_STOP,
 };
 
 /**

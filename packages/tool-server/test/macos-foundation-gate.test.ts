@@ -31,9 +31,12 @@ import { runDirective } from "../src/tools/flows/flow-actions";
 import { parseFlow, parseRequires } from "../src/tools/flows/flow-utils";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { debuggerConnectTool } from "../src/tools/debugger/debugger-connect";
+import { jsRuntimeDebuggerBlueprint } from "../src/blueprints/js-runtime-debugger";
 import { profilerCommitQueryTool } from "../src/tools/profiler/query/profiler-commit-query";
 import { profilerCpuQueryTool } from "../src/tools/profiler/query/profiler-cpu-query";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
+import { CAPTURE_CAPABILITY } from "../src/tools/network/network-capture";
+import { networkRequestTool } from "../src/tools/network/network-request";
 import { definitionsById } from "./helpers/catalog";
 
 const flag = useMacosAppsFlag();
@@ -70,10 +73,9 @@ describe("the macos-apps flag gate", () => {
       "no macos support declared"
     );
     expect(() => assertSupported("button", NOT_MAC_CAPABLE, device)).toThrow("use keyboard");
+    // The network capture tools take a Mac app.
     for (const id of ["network-capture-start", "network-capture-stop"]) {
-      expect(() => assertSupported(id, NOT_MAC_CAPABLE, device)).toThrow(
-        "stop-simulator-server or stop-all-simulator-servers for the app ends it"
-      );
+      expect(() => assertSupported(id, CAPTURE_CAPABILITY, device)).not.toThrow();
     }
     expect(() => assertMacosAppsEnabled("boot-device")).not.toThrow();
   });
@@ -358,6 +360,16 @@ describe("over HTTP", () => {
     expect(menuBar.status).toBe(404);
   });
 
+  it("admits view-network-request-details for a Mac app id, which has only native ids", async () => {
+    const registry = new Registry();
+    registry.registerTool(networkRequestTool);
+    const res = await request(createHttpApp(registry).app)
+      .post("/tools/view-network-request-details")
+      .send({ device_id: MAC, requestId: "macos-1a2b-7" });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatch(/^Request macos-1a2b-7 not found\. /);
+  });
+
   it("with the flag on, names restart-app instead of reinstall-app", async () => {
     const res = await request(app())
       .post("/tools/reinstall-app")
@@ -379,7 +391,7 @@ describe("over HTTP", () => {
   });
 });
 
-describe("the React profiler tools on a Mac id", () => {
+describe("the JS runtime tools on a Mac id", () => {
   // A react-native-macos Debug build serves its Hermes runtime through Metro.
   const REACT_PROFILER_TOOLS = [
     "react-profiler-start",
@@ -403,29 +415,36 @@ describe("the React profiler tools on a Mac id", () => {
     "debugger-component-tree",
     "debugger-inspect-element",
     "debugger-log-registry",
+    "view-network-logs",
+    "view-network-request-details",
   ];
   const definitions = definitionsById(createRegistry());
   const gate = (id: string) => () =>
     assertSupported(id, definitions.get(id)!.capability, resolveDevice(MAC));
 
-  it("with the flag on, admits the React profiler tools and still refuses the debugger tools", () => {
-    for (const id of REACT_PROFILER_TOOLS) expect(gate(id), id).not.toThrow();
-    for (const id of DEBUGGER_TOOLS) expect(gate(id), id).toThrow("no macos support declared");
+  it("with the flag on, admits the React profiler, debugger and JS network tools", () => {
+    for (const id of [...REACT_PROFILER_TOOLS, ...DEBUGGER_TOOLS])
+      expect(gate(id), id).not.toThrow();
   });
 
-  it("with the flag off, or off macOS, refuses the React profiler tools", () => {
+  it("with the flag off, or off macOS, refuses them", () => {
     flag.off();
-    for (const id of REACT_PROFILER_TOOLS) expect(gate(id), id).toThrow(FLAG_MESSAGE);
+    for (const id of [...REACT_PROFILER_TOOLS, ...DEBUGGER_TOOLS]) {
+      expect(gate(id), id).toThrow(FLAG_MESSAGE);
+    }
     flag.on();
     onLinux();
-    for (const id of REACT_PROFILER_TOOLS) expect(gate(id), id).toThrow(HOST_MESSAGE);
+    for (const id of [...REACT_PROFILER_TOOLS, ...DEBUGGER_TOOLS]) {
+      expect(gate(id), id).toThrow(HOST_MESSAGE);
+    }
   });
 
-  it("over HTTP, a React data query reaches its own state check and debugger-connect is refused", async () => {
+  it("over HTTP, a React data query reaches its own state check and debugger-connect reaches Metro", async () => {
     const registry = new Registry();
     registry.registerTool(profilerCommitQueryTool);
     registry.registerTool(profilerCpuQueryTool);
     registry.registerTool(debuggerConnectTool);
+    registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
     const http = createHttpApp(registry).app;
 
     for (const [tool, body] of [
@@ -438,9 +457,12 @@ describe("the React profiler tools on a Mac id", () => {
         code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
       });
     }
-    const connect = await request(http).post("/tools/debugger-connect").send({ device_id: MAC });
-    expect(connect.status).toBe(400);
-    expect(connect.body.error).toContain("no macos support declared");
+    // Port 9 has no listener, so the call stops at Metro discovery, past the gate.
+    const connect = await request(http)
+      .post("/tools/debugger-connect")
+      .send({ device_id: MAC, port: 9 });
+    expect(connect.body.error ?? "").not.toContain("no macos support declared");
+    expect(connect.body.error_code).toBe(FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING);
   });
 });
 
