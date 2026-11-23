@@ -739,7 +739,9 @@ describe("view-network-request-details: routing an ios- ID", () => {
         requestId: UNKNOWN_ID,
         includeBody: true,
       })
-    ).toBe(NOT_FOUND_ELSEWHERE(UNKNOWN_ID));
+    ).toBe(
+      `Request ${UNKNOWN_ID} not found. An ios- ID comes from an iOS simulator. Use native-network-logs or view-network-logs to list this Mac app's requests.`
+    );
   });
 
   it.each([

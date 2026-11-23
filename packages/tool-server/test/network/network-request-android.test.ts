@@ -863,7 +863,7 @@ describe("view-network-request-details: routing an android- ID", () => {
 
         expect(networkRequestTool.services!(params)).toEqual({});
         expect(await networkRequestTool.execute!({}, params)).toBe(
-          `Request ${requestId} not found. An android- ID comes from an Android device. Use view-network-logs to list this device's requests.`
+          `Request ${requestId} not found. An android- ID comes from an Android device. Use native-network-logs or view-network-logs to list this Mac app's requests.`
         );
       });
 

@@ -12,11 +12,17 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { resolveDebuggerService } from "../debugger/not-connected";
 
 export const captureSchema = z.object({
-  udid: z.string().describe("Device ID from list-devices: an iOS simulator UDID or Android serial"),
+  udid: z
+    .string()
+    .describe(
+      "Device ID from list-devices: an iOS simulator UDID or Android serial<flag:macos-apps>, or a Mac app id (macos-app-<bundle id>)</flag:macos-apps>"
+    ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
-    .describe("App bundle ID on iOS or package name on Android"),
+    .describe(
+      "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
+    ),
   port: metroPortField.describe(
     "The app's Metro port: the JS layer is reached through it, and the native layers leave its requests out. Omit it to use this device's port, 8081 by default."
   ),
@@ -36,9 +42,10 @@ export const CAPTURE_CAPABILITY: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true },
+  macos: { app: true, catalyst: true },
 };
 
-type CaptureLayer = "js" | "ios-native" | "android-native";
+type CaptureLayer = "js" | "ios-native" | "android-native" | "macos-native";
 
 export interface StartedLayer {
   layer: CaptureLayer;
