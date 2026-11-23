@@ -43,6 +43,9 @@ jobs:
 
       - run: bun run build
 
+      - name: Check the trace-processor engine loads
+        run: node scripts/check-trace-processor.cjs
+
       - run: bun run --filter @swmansion/argent build
 
       # Keep the artifact build checks aligned with the publish workflow so the

@@ -44,5 +44,6 @@ run("bash", ["scripts/download-simulator-server.sh"]);
 run("bash", ["scripts/download-native-binaries.sh", ...(tag ? [tag] : [])]);
 run("bash", ["scripts/download-trace-processor.sh", ...(tag ? [tag] : [])]);
 run("bun", ["run", "build"]);
+run("node", ["scripts/check-trace-processor.cjs"]);
 run("bun", ["run", "--filter", "@swmansion/argent", "build"]);
 run("bun", ["pm", "pack", "--cwd", "packages/argent", "--destination", WORKSPACE_ROOT]);
