@@ -347,6 +347,30 @@ ${rowAt("Display", !firstSelected, 100)}
     expect(selectedY(dump(false))).toEqual([100 / 1080]);
   });
 
+  it("flattens the wrappers under a selected tab, which inherit its flag", () => {
+    const tab = (title: string, selected: boolean, x: number) => {
+      const s = `selected="${selected}" package="com.example.app"`;
+      return `<node class="android.widget.FrameLayout" content-desc="${title}" clickable="true" ${s} bounds="[${x},2000][${x + 360},2200]">
+  <node class="android.widget.FrameLayout" ${s} bounds="[${x},2000][${x + 360},2120]">
+    <node class="android.view.View" ${s} bounds="[${x},2000][${x + 360},2120]" />
+    <node class="android.widget.ImageView" ${s} bounds="[${x + 150},2040][${x + 210},2100]" />
+  </node>
+  <node class="android.view.ViewGroup" ${s} bounds="[${x},2120][${x + 360},2200]">
+    <node class="android.widget.TextView" text="${title}" ${s} bounds="[${x},2120][${x + 360},2200]" />
+  </node>
+</node>`;
+    };
+    const tree = parseUiAutomatorDump(
+      `<hierarchy rotation="0">${tab("Home", true, 0)}${tab("Search", false, 360)}</hierarchy>`,
+      1080,
+      2400
+    );
+
+    const [home, search] = tree.children;
+    expect(flatten(home!)).toHaveLength(flatten(search!).length);
+    expect(home!.selected).toBe(true);
+  });
+
   it("keeps the focus of a wrapper collapsed into its same-bounds inner target", () => {
     const xml = `<hierarchy rotation="0">
 <node class="android.widget.FrameLayout" content-desc="Play" clickable="true" focusable="true" focused="true" selected="true" package="com.example.tv" bounds="[0,0][400,200]">
