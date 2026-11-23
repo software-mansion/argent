@@ -624,6 +624,31 @@ describe("view-network-request-details: an iOS request body that came with the r
   });
 });
 
+describe("view-network-request-details: secrets in an iOS request body", () => {
+  const signIn = '{"email":"a","password":"hunter2","pad":"' + "x".repeat(1100) + '"}';
+
+  it.each<[string, NativeNetworkBody, Record<string, string>?]>([
+    ["inline", inlineBody(signIn)],
+    ["inline and cut by the host", inlineBody(signIn.slice(0, 1050), signIn.length)],
+    ["read as text", textBody(signIn)],
+    ["read as base64", base64Body(Buffer.from(signIn))],
+    [
+      "that the upload cut",
+      toBody({ postData: signIn, base64Encoded: false, incomplete: true }, "post"),
+    ],
+    ["under gzip", base64Body(zlib.gzipSync(signIn)), { "Content-Encoding": "gzip" }],
+  ])("masks the password in a request body %s", async (_, sent, encoding = {}) => {
+    serve(post({ "Content-Type": "application/json", ...encoding }));
+    requestPostData.mockResolvedValue(sent);
+    responseBody.mockResolvedValue(textBody('{"access_token":"tok"}'));
+
+    const out = await details();
+    expect(out.request.postData).toContain('{"email":"a","password":"[REDACTED]","pad":"x');
+    expect(out.request.postData).not.toContain("hunter2");
+    expect(out.response.body).toBe('{"access_token":"tok"}');
+  });
+});
+
 describe("view-network-request-details: iOS bodies that cannot be read", () => {
   it("shows the store's reason for a request body and a response body it cannot give", async () => {
     serve(post({ "Content-Type": "application/json" }));
