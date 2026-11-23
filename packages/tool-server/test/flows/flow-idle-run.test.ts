@@ -248,10 +248,9 @@ steps:
   // the option means nothing, since three reads take about 400ms whatever it
   // is set to.
   //
-  // Timed between the READS the hold runs across, not around the run: the run
-  // also carries the flow's start-up, which a loaded suite stretches by
-  // seconds. That the settle landed inside the wait needs no clock — every
-  // other way out of it carries a warning.
+  // Timed between the READS the hold runs across. That the settle landed
+  // inside the wait needs no clock — every other way out of it carries a
+  // warning.
   it("holds a still screen for the whole requested hold before passing", async () => {
     const readsAt: number[] = [];
     currentTree = () => {
@@ -551,14 +550,7 @@ steps:
   it("does not call a slow but answering source a wedged one", async () => {
     // 2800ms reads in a 5400ms wait: the first answers, the second is cut off
     // with 2400ms of budget — over the hung threshold, and under what this
-    // source has already been seen to need. Both margins are 400ms wide, since
-    // the closing round's budget is whatever the first read left over and a
-    // loaded suite that eats it down past the threshold leaves the split
-    // untested.
-    //
-    // The threshold is a constant the answering read has to beat, so the wait
-    // cannot be much shorter than the default test timeout — hence one of its
-    // own.
+    // source has already been seen to need.
     treeDelayMs = 2_800;
     await writeFlow(
       "ready",
@@ -577,7 +569,7 @@ steps:
     // What it actually was: too few looks to judge the screen by.
     expect(step.warning).toContain("content on 1 read in 5400ms");
     expect(r.steps.at(-1)).toMatchObject({ kind: "echo", status: "pass" });
-  }, 20_000);
+  });
 
   // A settle is three reads spanning two intervals. A step that got fewer has
   // no evidence either way, and both of the verdicts it used to reach for —
@@ -655,11 +647,10 @@ steps:
   // reported as having settled.
   it("does not report a tree-only settle when the hold was never served", async () => {
     currentFrame = () => undefined;
-    // The tree keeps changing for the first 800ms of the WAIT — anchored on the
-    // first read, since a loaded suite can spend longer than that reaching it
-    // and every read would then see a tree still from the start. It holds after
-    // that, and the last read lands ~1400ms in, so the hierarchy has been still
-    // for well under the 800ms hold, however many agreeing intervals it managed.
+    // The tree keeps changing for the first 800ms of the WAIT, counted from the
+    // first read. It holds after that, and the last read lands ~1400ms in, so
+    // the hierarchy has been still for well under the 800ms hold, however many
+    // agreeing intervals it managed.
     let firstReadAt: number | undefined;
     let churn = 0;
     currentTree = () => {
@@ -769,9 +760,7 @@ steps:
     // Captures did go missing; the point is that they cost only their own
     // interval.
     expect(captures).toBeGreaterThan(3);
-    // Room for the pre-fix behaviour — burning the whole 6000ms wait — to be
-    // reported as the failed assertion it is rather than as a harness timeout.
-  }, 15_000);
+  });
 
   // The other half of that, and the reason a missing frame is never simply
   // waved through: it is the ABSENCE of visual evidence, and treating it as
@@ -1279,12 +1268,8 @@ steps:
     currentFrame = () => undefined; // force the tree-only path
     // Three still reads set the verdict — two agreeing intervals is what it
     // takes — and everything after them moves, so the case needs a fourth read
-    // to show the movement. 6000ms serves about thirty when the machine is
-    // idle and still four when a batch run stretches every round; the
-    // assertion on `reads` below separates a run that never saw movement from
-    // a latch that failed to clear. It stops there because a longer wait here
-    // starves the budget-tail case below, which needs its own reads inside a
-    // 2000ms window.
+    // to show the movement; the assertion on `reads` below separates a run that
+    // never saw movement from a latch that failed to clear.
     let reads = 0;
     currentTree = () => {
       reads += 1;
@@ -1302,7 +1287,7 @@ steps:
       4
     );
     expect(r.steps.at(-1)!.warning).toContain("never held still");
-  }, 25_000);
+  });
 
   // H2: the same latch let a screen that had gone BLANK by the deadline report
   // ready. A blank tree is an observation, not a gap — it clears the verdict.
@@ -1328,7 +1313,7 @@ steps:
       "reads served — under four, nothing went blank to be judged"
     ).toBeGreaterThanOrEqual(4);
     expect(r.steps.at(-1)!.warning).toContain("never held still");
-  }, 25_000);
+  });
 
   // H3: bounding the tree read by the remaining budget made the LAST read
   // time out on every run, which turned every honest timeout into an
