@@ -76,6 +76,7 @@ On an iOS simulator, local or remote, the version sets how Argent runs the e2e t
 - A `run:` fragment resolves its selectors on the tree of the e2e test that runs it. An e2e test that a `tool: e2e-execute` step runs uses its own version.
 - When you record `e2e-execute` of a version 1 e2e test on an iOS simulator, the recorder writes a `run:` step. That step replays the e2e test on the accessibility tree. The message of `e2e-add-step` warns about this difference.
 - A selector from `describe` can miss in a version 1 e2e test.
+- On an iOS simulator, a version 1 e2e test does not get the rules that came with version 2. For example, a run of whitespace does not match one space in `id` and `text`, and a toggle does not have the role `AXSwitch`. For text fields, see [Conditions](#conditions).
 
 To change a version 1 e2e test:
 
@@ -429,7 +430,7 @@ On an iOS simulator, a `text` check reads a text field as follows:
 - A text field with an accessibility label reads as the label, then a space, then the text or the placeholder. For example, an empty field with the label `Email` and the placeholder `Required` reads as `Email Required`.
 - Argent does not read the text in a secure text field.
 
-In a version 1 e2e test on an iOS simulator, and in the `run:` fragments that it runs, the runner reads the view hierarchy of the app. There, two rules are different:
+A version 1 e2e test on an iOS simulator reads the view hierarchy of the app, also in the `run:` fragments that it runs. There, these rules are different:
 
 - `matches` never reads a text field as empty.
 - The runner knows a text field by the class name of its view. The name must contain `TextField`, `TextView` or `SearchField`. Argent does not read the text in a text field of a different class, for example a `UITextField` subclass with the name `AmountField`. For such a field, `matches: '^$'` passes also when the field contains text.

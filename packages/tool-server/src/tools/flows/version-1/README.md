@@ -19,8 +19,9 @@ git show b6402f269:packages/tool-server/src/tools/flows/flow-run.ts |
   - `isVersion1` and the version 1 runner in the comment on `FLOW_FILE_VERSION`, in
     `../flow-utils.ts`, and the `isVersion1` cases in `test/flows/flow-file-version.test.ts`;
   - the old e2e test warning in `../flow-add-step.ts`;
-  - the version 1 cases in `test/flows/flow-file-version-run.test.ts`, and the comment on the
-    `version: 2` prefix in `test/flows/flow-idle-run.test.ts`;
+  - the version 1 cases and the mocks of this folder in `test/flows/flow-file-version-run.test.ts`;
+  - the test comments that explain a `version: 2`
+    (`git grep -n '// Version 2' -- packages/tool-server/test`);
   - the skipped folder in `scripts/extract-tools.mjs` and its test;
   - the entry for this folder in `knip.jsonc`;
   - the view hierarchy text of "File version", "Runner tree and discovery tree" and
