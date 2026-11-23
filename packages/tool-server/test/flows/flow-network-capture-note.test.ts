@@ -15,6 +15,9 @@ import { serializeFlow } from "../../src/tools/flows/flow-utils";
 import { createNetworkCaptureStartTool } from "../../src/tools/network/network-capture-start";
 import { createNetworkCaptureStopTool } from "../../src/tools/network/network-capture-stop";
 import { advertisedSchema } from "../helpers/catalog";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // Each launch waits out the runner's real post-launch settle (1.5 s).
 vi.setConfig({ testTimeout: 30_000 });

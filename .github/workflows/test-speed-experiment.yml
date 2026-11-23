@@ -6,64 +6,40 @@ on:
       - ci/test-speedup
 
 jobs:
-  single:
-    name: single w=${{ matrix.workers }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        workers: [3, 8, 16, 32]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "20"
-          cache: npm
-      - run: npm ci
-      - run: npm install @rollup/rollup-linux-x64-gnu --no-save
-      - run: npm run build
-      - name: Tests
-        run: /usr/bin/time -v npx vitest run --maxWorkers=${{ matrix.workers }} --reporter=dot --reporter=json --outputFile.json=report.json 2>&1 | tail -60
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: report-single-${{ matrix.workers }}
-          path: report.json
-
   sharded:
-    name: shard ${{ matrix.shard }}/4 w=16
+    name: shard ${{ matrix.shard }}/4 w=${{ matrix.workers }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+        workers: ["default", "8"]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - id: node
+        uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
-      - run: npm ci
-      - run: npm install @rollup/rollup-linux-x64-gnu --no-save
+      - id: node-modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+      - if: steps.node-modules.outputs.cache-hit != 'true'
+        run: npm ci
       - run: npm run build
       - name: Tests
-        run: /usr/bin/time -v npx vitest run --shard=${{ matrix.shard }}/4 --maxWorkers=16 --reporter=dot --reporter=json --outputFile.json=report.json 2>&1 | tail -60
+        shell: bash
+        run: |
+          set -o pipefail
+          extra=""
+          [ "${{ matrix.workers }}" != default ] && extra="--maxWorkers=${{ matrix.workers }}"
+          /usr/bin/time -v npm test -- --shard=${{ matrix.shard }}/4 $extra --reporter=default --reporter=json --outputFile.json=report.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: report-shard-${{ matrix.shard }}
+          name: report-${{ matrix.shard }}-${{ matrix.workers }}
           path: report.json
-
-  typecheck-parallel:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "20"
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - name: Typecheck tests (parallel)
-        run: |
-          ls -d packages/*/tsconfig.test.json | xargs -P 4 -I{} sh -c 'npx tsc --noEmit -p {} || exit 255'
