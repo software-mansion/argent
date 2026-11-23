@@ -372,13 +372,15 @@ export async function parseCpuFile(
   }
 }
 
-export async function parseHangsFile(filePath: string | null): Promise<RawHang[]> {
-  if (!filePath) return [];
+/** Null means no readable table. An empty array means the table contains no hangs. */
+export async function parseHangsFile(filePath: string | null): Promise<RawHang[] | null> {
+  if (!filePath) return null;
   try {
     const xml = await fs.readFile(filePath, "utf8");
-    return parseHangsXml(xml);
+    // xctrace can return a query result with no matching table node.
+    return /<node(?=[\s/>])/.test(xml) ? parseHangsXml(xml) : null;
   } catch {
-    return [];
+    return null;
   }
 }
 

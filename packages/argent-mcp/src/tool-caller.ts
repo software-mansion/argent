@@ -159,6 +159,7 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
   const client = createToolsClient({
     baseUrl: async () => ({ ...deps.getHandle(), remote: deps.remote }),
     headers: deps.extraHeaders,
+    refuseRelativeProjectPaths: true,
     fetchImpl: async (url, init, meta) => {
       // A retry cannot fix a URL that does not parse, so fail at once.
       parseUrl(url);
