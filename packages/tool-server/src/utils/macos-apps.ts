@@ -256,6 +256,14 @@ export async function removeUnusedLibraries(libRoot: string, keep: string): Prom
   }
 }
 
+/**
+ * Closes a refusal of a hardened Debug build. A Release build that Xcode signs for
+ * development carries get-task-allow and runs like Debug; only an exported one is out.
+ */
+const EXPORTED_RELEASE_NOTE =
+  "An exported or notarized Release build with the hardened runtime cannot be driven " +
+  "without extra entitlements.";
+
 /** The team of a file's code signature, from `codesign -dv`. */
 async function signatureTeam(file: string): Promise<string | undefined> {
   try {
@@ -309,7 +317,7 @@ export async function stageLibraryFor(
       `codesign --force --sign "<identity of team ${teamId}>" ` +
       `${files.map((file) => `"${file}"`).join(" ")}\n` +
       `then start the app again. Signing uses the keychain, so the user runs this command, ` +
-      `not the agent.${debug ? " A Release build with the hardened runtime cannot be driven." : ""}`,
+      `not the agent.${debug ? ` ${EXPORTED_RELEASE_NOTE}` : ""}`,
     FAILURE_CODES.MACOS_APP_HARDENED_RUNTIME,
     "macos_app_launch",
     "unsupported"
@@ -1019,8 +1027,7 @@ export function hardenedRuntimeRefusal(info: MacosAppInfo): string | null {
     `${info.bundleId} is a Debug build with the hardened runtime, so macOS does not load the ` +
     `argent library into it. Build it without the hardened runtime (ENABLE_HARDENED_RUNTIME = ` +
     `NO in the Debug configuration), or add the entitlement ` +
-    `com.apple.security.cs.disable-library-validation to the Debug build. A Release build ` +
-    `with the hardened runtime cannot be driven.`
+    `com.apple.security.cs.disable-library-validation to the Debug build. ${EXPORTED_RELEASE_NOTE}`
   );
 }
 

@@ -3200,7 +3200,9 @@ describe("stageMacosLibraries", () => {
           `"${folder}/libArgentInjectionBootstrap.dylib" "${folder}/libNativeDevtoolsMacos.dylib"`
       );
       expect(message).toContain("the user runs this command, not the agent");
-      expect(message).toContain("A Release build with the hardened runtime cannot be driven");
+      expect(message).toContain(
+        "An exported or notarized Release build with the hardened runtime cannot be driven"
+      );
 
       // The user signs the files in place; the next launch takes them as they are.
       fs.writeFileSync(path.join(folder!, "libNativeDevtoolsMacos.dylib"), "signed by the user");
