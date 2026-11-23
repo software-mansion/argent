@@ -82,6 +82,43 @@ describe("fetchVegaPageSource serializes reads of one VVD", () => {
     expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
   });
 
+  it("fails a response cut off mid-body and lets the next read through", async () => {
+    let requests = 0;
+    server = createServer((req, res) => {
+      requests += 1;
+      req.resume();
+      res.setHeader("content-type", "application/json");
+      if (requests === 1) {
+        res.write('{"jsonrpc":"2.0","id":1,"result":"<root');
+        setTimeout(() => res.destroy(), 20);
+        return;
+      }
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: PAGE }));
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    emulatorSerial.mockResolvedValue({
+      serial: "emulator-5554",
+      consolePort: (server.address() as AddressInfo).port - HOST_PORT_OFFSET,
+    });
+    const hung = new Promise<string>((r) => setTimeout(() => r("hung"), 1000));
+
+    const [cut, next] = await Promise.all([
+      Promise.race([
+        fetchVegaPageSource(2000).then(
+          () => "ok",
+          () => "rejected"
+        ),
+        hung,
+      ]),
+      Promise.race([fetchVegaPageSource(2000), hung]),
+    ]);
+
+    expect(cut).toBe("rejected");
+    expect(next).toBe(PAGE);
+    expect(requests).toBe(2);
+  });
+
   it("removes each read's forward before the next read adds it", async () => {
     await singleFlightToolkit();
 

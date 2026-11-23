@@ -87,6 +87,8 @@ function postJson(
         let data = "";
         res.setEncoding("utf-8");
         res.on("data", (chunk) => (data += chunk));
+        // A body cut off mid-way ends here, never in "end".
+        res.on("error", reject);
         res.on("end", () => {
           // Reject non-2xx: an error body handed downstream would either parse as
           // a real tree or be misreported as an empty screen.
