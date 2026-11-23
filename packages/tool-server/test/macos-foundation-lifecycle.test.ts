@@ -122,6 +122,7 @@ import { createHttpApp } from "../src/http";
 import { pollPidsUntilGone } from "../src/utils/process-kill";
 import { PROCESS_ENDED } from "../src/utils/native-network-record";
 import { MACOS_CONNECTION_DROPPED } from "../src/blueprints/ios-network-records";
+import { MACOS_NO_JS } from "../src/tools/network/network-capture";
 import {
   chromiumRefusal,
   findMacosAppByBundleId,
@@ -1498,6 +1499,53 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         "https://example.com/kept",
         "https://example.com/again",
       ]);
+    });
+
+    it("acts only on the native layer: layer js starts nothing and stops nothing, and layer native acts as without layer", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      const capture = (tool: string, layer: "js" | "native"): Promise<Capture> =>
+        run(tool, { udid: DEVICE_ID, bundleId: BUNDLE_ID, layer });
+
+      const err = await capture("network-capture-start", "js").catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect((err as Error).message).toContain(`js: ${MACOS_NO_JS}`);
+      expect(await request("https://example.com/before")).toEqual({
+        active: false,
+        activations: 0,
+      });
+
+      expect(await capture("network-capture-start", "native")).toEqual({
+        status: "ok",
+        layers: [{ layer: "macos-native", armed: true }],
+      });
+      await request("https://example.com/during");
+
+      // A JS-only stop leaves the native capture running.
+      expect(await capture("network-capture-stop", "js")).toEqual({
+        status: "ok",
+        layers: [
+          {
+            layer: "js",
+            armed: false,
+            total: 0,
+            reason: `${MACOS_NO_JS}; its native capture stays as it is`,
+          },
+        ],
+      });
+      expect(await request("https://example.com/after-js-stop")).toEqual({
+        active: true,
+        activations: 1,
+      });
+      expect(await readUntil((log) => log.total === 2)).toMatchObject({ armed: true, total: 2 });
+
+      expect(await capture("network-capture-stop", "native")).toEqual({
+        status: "ok",
+        layers: [{ layer: "macos-native", armed: false, total: 2 }],
+      });
+      expect(await request("https://example.com/after-stop")).toEqual({
+        active: false,
+        activations: 1,
+      });
     });
 
     it("completes a request in flight at network-capture-stop when its end comes after the stop", async () => {
