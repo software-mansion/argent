@@ -17,7 +17,12 @@ import { MACOS_APP_NAMESPACE } from "../../blueprints/macos-app";
 import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
 import type { ServiceSnapshot } from "@argent/registry";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
-import { externalClaimForAnyId, externalNativeId } from "../../utils/external-devices";
+import {
+  externalClaimForAnyId,
+  externalClaimForNativeId,
+  externalNativeId,
+  isExternalDeviceUrn,
+} from "../../utils/external-devices";
 
 /**
  * The one URN matcher both `stop-simulator-server` and
@@ -208,6 +213,21 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
     if (portion !== undefined) return portion;
   }
   return undefined;
+}
+
+/**
+ * Whether `urn` is a device provider's service, which a teardown drops without
+ * shutting anything down. An `ext:`-keyed URN is one, and so is a claimed
+ * device's attached simulator-server under its raw udid. A native devtools URN
+ * holds the udid under both of the device's names, and on a device a provider
+ * claims, that service only attaches to the agent the provider lends.
+ */
+export function isProviderOwnedUrn(urn: string): boolean {
+  if (isExternalDeviceUrn(urn) || isAttachedSimulatorServerUrn(urn)) return true;
+  const portion = deviceIdOfUrn(urn, [NATIVE_DEVTOOLS_NAMESPACE]);
+  if (portion === undefined) return false;
+  const suffix = URN_SUFFIXES.find((s) => s !== "" && portion.endsWith(s)) ?? "";
+  return externalClaimForNativeId(portion.slice(0, portion.length - suffix.length)) !== undefined;
 }
 
 /**
