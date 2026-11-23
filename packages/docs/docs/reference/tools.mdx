@@ -261,8 +261,8 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process                                                                                     |
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app. On iOS, Android and Mac apps, a read never starts capture                                    |
 | `view-network-request-details` | Get full details of one request by its `requestId` from `view-network-logs`, or by an `ios-`, `android-` or `macos-` ID from `native-network-logs` |
-| `network-capture-start`        | Start network capture for an app on iOS, Android or a Mac app, on each layer that sees its requests                                                |
-| `network-capture-stop`         | Stop network capture for an app, and keep the requests that Argent recorded                                                                        |
+| `network-capture-start`        | Start network capture for an app on iOS, Android or a Mac app, on each layer that sees its requests. On Chromium, mark where the capture starts    |
+| `network-capture-stop`         | Stop network capture for an app on iOS, Android or a Mac app, and keep the requests that Argent recorded. On Chromium, mark where the capture ends |
 
 ### Network capture on iOS, Android and Mac apps
 
@@ -276,7 +276,7 @@ To capture a request with `network-capture-start`:
 2. Do the action that sends the request.
 3. Read the requests with the tool listed for the layer below.
 
-`network-capture-start` and `network-capture-stop` work on iOS simulators, remote iOS simulators, Android emulators, Android devices and Mac apps. Each call controls two layers of the app: the `js` layer and the native layer of the platform:
+`network-capture-start` and `network-capture-stop` work on iOS simulators, remote iOS simulators, Android emulators, Android devices, Mac apps and Chromium. On iOS, Android and Mac apps, each call controls two layers of the app: the `js` layer and the native layer of the platform. Chromium has one layer:
 
 | Layer            | Platform               | Requests                                | Read with             |
 | ---------------- | ---------------------- | --------------------------------------- | --------------------- |
@@ -284,20 +284,21 @@ To capture a request with `network-capture-start`:
 | `ios-native`     | iOS                    | The `URLSession` requests               | `native-network-logs` |
 | `android-native` | Android                | The OkHttp requests of a debuggable app | `native-network-logs` |
 | `macos-native`   | Mac apps               | The `URLSession` requests               | `native-network-logs` |
+| `chromium`       | Chromium and Electron  | All request types of the active tab     | `view-network-logs`   |
 
 Other capture starts automatically:
 
-- Chromium and Electron record when Argent attaches to the page on the first Chromium tool call.
+- Chromium and Electron record when Argent attaches to the page on the first Chromium tool call. `network-capture-start` and `network-capture-stop` do not change this record. A start marks where a capture window begins. A stop marks where the capture window ends. `view-network-logs` lists each request of the tab, also after a stop.
 - Vega starts JS capture on the first call to `view-network-logs` or the first JS request lookup with `view-network-request-details`. Call `view-network-logs` before reproducing the request and again after any reload.
 
 On a React Native Mac app, use `view-network-logs` for JavaScript requests and `native-network-logs` for `URLSession` requests. Both can show the same `fetch()` request. Pass the ID from either log to `view-network-request-details`. A `macos-` ID does not require a debugger connection.
 
 | Parameter         | Effect                                                                                                                                                                                                                      |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `udid`            | The UDID of the iOS simulator, the serial of the Android device, or the device ID of the Mac app (`macos-app-<bundle id>`)                                                                                                  |
-| `bundleId`        | The bundle ID of the app on iOS and on a Mac app, or the package name of the app on Android                                                                                                                                 |
+| `udid`            | The UDID of the iOS simulator, the serial of the Android device, the device ID of the Mac app (`macos-app-<bundle id>`), or the Chromium ID                                                                                 |
+| `bundleId`        | The bundle ID of the app on iOS and on a Mac app, or the package name of the app on Android. On Chromium, any name, because the device ID identifies the app                                                                |
 | `port`            | The Metro port of the app. Argent reaches the JS runtime of the app through this port. The native layers remove the requests to this port on a local address from their lists. The default is the Metro port of the device. |
-| `layer`           | Use `js` for the JS runtime or `native` for the native layer. Omit to control all supported layers.                                                                                                                         |
+| `layer`           | Use `js` for the JS runtime or `native` for the native layer. Omit to control all supported layers. On Chromium, each call acts on the `chromium` layer.                                                                    |
 | `logicalDeviceId` | Only for a Metro server that two or more devices use. The `logicalDeviceId` of the device on this Metro server. See [Several devices on one Metro server](#several-devices-on-one-metro-server).                            |
 
 On a Mac app, `layer` works as on iOS. The `js` layer reaches the app through Metro. Thus it also captures a React Native app that Argent did not start. An example is a build with the hardened runtime that you start from Xcode. The `macos-native` layer captures only a copy of the app that Argent starts. For a build that Argent does not start, the start reports the `macos-native` layer as unavailable. The reasons are in the table under [Start](#start).
@@ -327,12 +328,13 @@ The `js` layer does not need `adb` or the Xcode command-line tools, because it r
 - iOS: Argent sends `Network.enable` to the app. Then Argent waits until the app acknowledges it, for at most 5 seconds. If the app still connects to Argent, these 5 seconds also include the connection.
 - Mac app: Argent connects to the app if it is not connected, and sends `Network.enable`. Then Argent waits until the app acknowledges it, for at most 5 seconds. A late acknowledgement of the `Network.enable` of an earlier start also arms the app, unless `network-capture-stop` came after that start.
 - Android: Argent attaches the in-app agent to the running process of the app. Then Argent waits until the capture is ready, for at most 5 seconds.
+- Chromium: Argent attaches to the page if it is not attached. The start marks the last request that Argent recorded for the tab, and the layer is armed at once. A second start moves the mark.
 
 The result contains `status` and `layers`. Each entry of `layers` contains these fields:
 
 | Field         | Content                                                                                                                               |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `layer`       | `js`, `ios-native`, `android-native` or `macos-native`                                                                                |
+| `layer`       | `js`, `ios-native`, `android-native`, `macos-native` or `chromium`                                                                    |
 | `armed`       | `true` when the capture of the layer is ready                                                                                         |
 | `reason`      | Why the layer is not armed. The field is present only when `armed` is `false`                                                         |
 | `unavailable` | `true` when Argent cannot arm the layer without a change that you make, for example a debuggable build, or a Metro server on the port |
@@ -362,6 +364,7 @@ A native layer that is not armed often arms later without a new start. For examp
 | `macos-native`   | The app does not run. `boot-device`, `launch-app` or `restart-app` starts it, and Argent arms its process.                                   | absent        |
 | `macos-native`   | A copy of the app that Argent did not start runs. The reason gives its process ID. Quit this copy, then start the app with Argent.           | absent        |
 | `macos-native`   | No copy that Argent started runs. Argent cannot find the app build, so it cannot find other copies. Use `boot-device` with `macosAppPath`.   | absent        |
+| `chromium`       | Argent cannot reach the app over the Chrome DevTools Protocol.                                                                               | `true`        |
 
 On iOS, Argent cannot tell an app that does not run from an app that is not installed. Thus the `ios-native` reason that tells you to call `restart-app` also says this: if `restart-app` cannot start the app, the bundle ID is not installed on the simulator.
 
@@ -397,7 +400,7 @@ The result contains `status` and `layers`. Each entry of `layers` contains these
 
 | Field    | Content                                                                                                                                                                                    |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `layer`  | `js`, `ios-native`, `android-native` or `macos-native`                                                                                                                                     |
+| `layer`  | `js`, `ios-native`, `android-native`, `macos-native` or `chromium`                                                                                                                         |
 | `armed`  | `false` when the layer confirmed the stop. `true` when the layer did not confirm the stop. The `reason` tells why                                                                          |
 | `total`  | The number of requests that the layer keeps for the app. `0` when the stop cannot count the requests, for example when it does not reach the JS runtime of the app. The `reason` tells why |
 | `reason` | Why the stop did not reach the layer, what the stop did not change, or `capture was not started for this app`                                                                              |
@@ -422,8 +425,9 @@ At the stop:
 - On Android, Argent keeps the files and the `adb reverse` of the capture. See [Native network capture on Android](#native-network-capture-on-android).
 - On Android, the connection of the in-app agent can be down at the stop, for example while adb does not answer. Then `armed` is `true` for the `android-native` layer, unless Argent finds that the process of the app ended. The in-app agent gets the stop when it connects again. Argent records no request that the app sends after the stop.
 - On a simulator where Argent uses the socket of a device provider, Argent sends no command to the agent of the app. The provider keeps its own capture setting. Argent records no new request of the app. When the app is connected, the `reason` of the `ios-native` entry says so.
+- On Chromium, the stop marks where the capture window ends. Argent continues to record the requests of the tab, and `view-network-logs` lists them. `total` is the number of requests that Argent keeps for the tab. The stop does not attach to the page. Without a start, or after the CDP session ended, the `reason` is `capture was not started for this app`.
 
-The capture stays stopped, also across reloads and relaunches. A read, `launch-app` and `restart-app` do not start it again. Only `network-capture-start` starts it again. After a stop, the tools give these results:
+On iOS, Android and Mac apps, the capture stays stopped, also across reloads and relaunches. A read, `launch-app` and `restart-app` do not start it again. Only `network-capture-start` starts it again. After a stop, the tools give these results:
 
 | Tool                                            | After a stop                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -434,7 +438,7 @@ The capture stays stopped, also across reloads and relaunches. A read, `launch-a
 | `e2e-execute`                                   | The first `launch` step of the app after the stop shows the `networkCapture` note as a `warning`.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `react-profiler-start`, `native-profiler-start` | The warning does not name the app. If the process of the app did not confirm the stop, the warning names the app until that process ends or confirms a later stop.                                                                                                                                                                                                                                                                                                                                                                                        |
 
-`stop-all-simulator-servers` ends the capture of all apps on the device. Argent removes the requests of the native layers and of the JS runtime layer, and their IDs are not valid after it. The JS runtime layer stops recording. After it, a read gives the result from before a start. If `stop-all-simulator-servers` cannot reach the JS runtime of the app, the capture there can still record, and its requests stay. Then the capture of the JS runtime layer stays stopped, and a read gives the result after a stop. A later `network-capture-stop` that reaches the JS runtime stops the recording. For the files on Android, see [Native network capture on Android](#native-network-capture-on-android). On a Mac app, `stop-all-simulator-servers` also stops the JS runtime layer, as on iOS. `stop-simulator-server` on a Mac app ends only the capture of the `macos-native` layer and removes its requests.
+`stop-all-simulator-servers` ends the capture of all apps on the device. Argent removes the requests of the native layers and of the JS runtime layer, and their IDs are not valid after it. The JS runtime layer stops recording. After it, a read gives the result from before a start. If `stop-all-simulator-servers` cannot reach the JS runtime of the app, the capture there can still record, and its requests stay. Then the capture of the JS runtime layer stays stopped, and a read gives the result after a stop. A later `network-capture-stop` that reaches the JS runtime stops the recording. For the files on Android, see [Native network capture on Android](#native-network-capture-on-android). On a Mac app, `stop-all-simulator-servers` also stops the JS runtime layer, as on iOS. `stop-simulator-server` on a Mac app ends only the capture of the `macos-native` layer and removes its requests. On Chromium, `stop-simulator-server` and `stop-all-simulator-servers` end the CDP session. This also removes the mark of the last start.
 
 A stop of the tool-server, for example at the idle timeout, also stops the recording of the JS runtime layer and removes its requests. This applies to each JS runtime that the tool-server is still connected to and that answers within 1 second. The tool-server does not connect again for this. `stop-all-simulator-servers` does not connect again either. The connection can be down, for example after Metro stopped or restarted, or after React Native DevTools took the JS runtime. Then the JS runtime keeps its capture and its requests until the app reloads or restarts. After the first `network-capture-start` of the next tool-server, `view-network-logs` lists these requests too. A different tool-server can also start the capture in the same JS runtime. Then the capture and its requests stay until the last of these tool-servers stops.
 

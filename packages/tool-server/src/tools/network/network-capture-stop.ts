@@ -28,6 +28,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { localIosHost, remoteIosHost } from "../../utils/ios-host";
 import type { MacosAppApi } from "../../blueprints/macos-app";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../utils/simctl-config";
 import { classifyNotConnected } from "../debugger/not-connected";
 import {
@@ -61,7 +62,7 @@ export function createNetworkCaptureStopTool(
     id: "network-capture-stop",
     description: `Stop network capture for an app on every layer and keep what was captured. Pass layer js or native to stop only that layer; the other layer keeps capturing.
 Use when you have the requests you need, before you profile, or to end capture in an e2e test. Unlike stop-all-simulator-servers, the requests stay listed in native-network-logs and view-network-logs, and their ids keep working in view-network-request-details (a view-network-logs id until the app's JS runtime reloads).
-Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. A request in flight at the stop completes in the list on iOS<flag:macos-apps> and Mac apps</flag:macos-apps> and in the JS runtime. When the stop covers the native layer on Android, the list marks such a request failed, while the app's own request goes on, and a body that view-network-request-details did not read before the stop is no longer available.
+Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. On Chromium, argent still records the tab's requests for view-network-logs; the stop only marks where the capture window ends. A request in flight at the stop completes in the list on iOS<flag:macos-apps> and Mac apps</flag:macos-apps> and in the JS runtime. When the stop covers the native layer on Android, the list marks such a request failed, while the app's own request goes on, and a body that view-network-request-details did not read before the stop is no longer available.
 Returns { status, layers }: per layer the call stopped, armed (false once the layer confirmed the stop), total (the requests it keeps for the app, or 0 when the stop could not count them, as on a JS runtime it did not reach) and a reason when the layer was not reached or was not started.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
@@ -84,6 +85,12 @@ Returns { status, layers }: per layer the call stopped, armed (false once the la
       assertSupported("network-capture-stop", CAPTURE_CAPABILITY, device);
       const port = metroPort({ device_id: params.udid, port: params.port });
       const run = requestedLayers(params.layer);
+      if (device.platform === "chromium") {
+        const layer = await withCaptureLock(params.udid, params.bundleId, () =>
+          stopChromiumLayer(registry, device)
+        );
+        return { status: "ok", layers: [layer] };
+      }
       // A layer the call does not name stays as it is.
       const layers = await withCaptureLock(params.udid, params.bundleId, async () => {
         // A Mac app's service is light and reaches nothing in the app, so the bundle id
@@ -374,6 +381,30 @@ async function stopMacosLayer(app: MacosAppApi, port: number): Promise<StoppedLa
     armed: !confirmed,
     total: app.networkRecords().records(port).length,
     ...(reason ? { reason } : {}),
+  };
+}
+
+/**
+ * A Chromium app's one layer: the tab's requests stay recorded for view-network-logs,
+ * so the stop only marks where the capture window ends.
+ */
+async function stopChromiumLayer(registry: Registry, device: DeviceInfo): Promise<StoppedLayer> {
+  const ref = chromiumCdpRef(device);
+  // A stop must not attach to the app: a session that is gone took its mark with it.
+  if (!isLiveService(registry, ref.urn)) {
+    return { layer: "chromium", armed: false, total: 0, reason: NOT_STARTED };
+  }
+  const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
+  const network = api.server.network;
+  if (!network.stopCapture()) {
+    return { layer: "chromium", armed: false, total: 0, reason: NOT_STARTED };
+  }
+  return {
+    layer: "chromium",
+    armed: false,
+    total: network.requests().length,
+    reason:
+      "view-network-logs keeps listing the tab's requests while argent is attached; the stop marks where the capture window ends",
   };
 }
 
