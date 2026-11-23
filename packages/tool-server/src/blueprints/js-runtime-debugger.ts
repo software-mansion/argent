@@ -246,6 +246,18 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       });
     }
 
+    /**
+     * The device's own id, when the payload names its runtime by the
+     * logicalDeviceId Metro gave it on a Metro several devices share. No
+     * provider claims a logicalDeviceId, so the provider's grant and socket are
+     * looked up by this id, while Metro's target is still picked by the
+     * payload's.
+     */
+    const physicalDeviceId =
+      typeof options?.physicalDeviceId === "string" && options.physicalDeviceId
+        ? options.physicalDeviceId
+        : deviceId;
+
     // A remote (cloud) sim reaches the developer's LOCAL Metro over a sim-remote
     // reverse tunnel: the sim's localhost:<port> is forwarded out to this host.
     // Only the app→Metro hop needs it — discoverMetro below still reaches Metro
@@ -262,14 +274,14 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      * this blueprint, so one check here covers them all. A no-op for every
      * device Argent booted itself.
      */
-    await assertExternalCapability(JS_RUNTIME_DEBUGGER_NAMESPACE, deviceId, "js-debugger");
+    await assertExternalCapability(JS_RUNTIME_DEBUGGER_NAMESPACE, physicalDeviceId, "js-debugger");
 
     const metro = await discoverMetro(port).catch((error: unknown) => {
       /**
        * An explicit `port` outranks the one a provider publishes, so a caller
        * that passed `8081` out of habit lands here with no way to guess why.
        */
-      const published = publishedMetroPort(deviceId, port);
+      const published = publishedMetroPort(physicalDeviceId, port);
 
       if (published !== undefined && error instanceof FailureError) {
         error.message +=
@@ -279,6 +291,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
       throw error;
     });
+
     /**
      * React Native's inspector-proxy keeps one debugger per device and
      * terminates the incumbent to admit a new one. Connecting to Metro's
@@ -301,8 +314,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      * A provider that published a socket but no `metroPort` names no bundler to
      * disagree with, so its socket still stands.
      */
-    const onPublishedBundler = publishedMetroPort(deviceId, port) === undefined;
-    const proxied = onPublishedBundler ? externalJsDebuggerUrl(deviceId) : undefined;
+    const onPublishedBundler = publishedMetroPort(physicalDeviceId, port) === undefined;
+    const proxied = onPublishedBundler ? externalJsDebuggerUrl(physicalDeviceId) : undefined;
 
     // A udid or serial never matches a logicalDeviceId, so on a Metro shared by
     // several devices it is resolved by the device's name. The lookup shells
@@ -337,7 +350,9 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         selectedId === pinnedLogicalDeviceId &&
         selectedId !== deviceId;
 
-      cdp = new CDPClient(proxied ?? selected.webSocketUrl);
+      cdp = new CDPClient(proxied ?? selected.webSocketUrl, {
+        awaitPromisesInApp: !selected.legacyInspector,
+      });
       await cdp.connect();
       if (!selected.matchedByName && !byPin) break;
 
@@ -473,9 +488,9 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       rememberDeviceAlias(api.logicalDeviceId, deviceId);
       // Equal ids mean the caller connected with the logicalDeviceId itself, as
       // `selectTarget` demands when a shared Metro's devices cannot be told apart
-      // by name. Nothing
-      // then joins the session to a udid or serial, so a `list-devices`-scoped
-      // `stop-all-simulator-servers` can only report it, never reach it.
+      // by name. Nothing then joins the session to a udid or serial, so a
+      // `list-devices`-scoped `stop-all-simulator-servers` can only report it,
+      // never reach it.
       rememberLogicalKeyedDevice(api.logicalDeviceId, deviceId);
 
       const events = new TypedEventEmitter<ServiceEvents>();
@@ -503,18 +518,25 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           // — only when there was history, and under both ids, since
           // `forgetDeviceAlias` below drops the only join between them.
           const captured = logWriter.getStats().totalEntries;
-          const keepFile = captured > 0 && !cdp.isConnected();
+          const connectionLost = !cdp.isConnected();
+          // Past a file-size limit or on a full disk the file can exist yet hold nothing.
+          const inFile = logWriter.getFileEntryCount();
+          const stored = logWriter.hasFile() && inFile > 0;
+          const keepFile = captured > 0 && connectionLost && stored;
           if (captured > 0) {
             const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
             const salvage = keepFile
-              ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
-              : `The ${entries} went with it — the log file is deleted on teardown, so this ` +
-                `registry starts empty rather than the app having logged nothing.`;
+              ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}.`
+              : stored
+                ? `The ${entries} went with it — the log file is deleted on teardown, so this ` +
+                  `registry starts empty rather than the app having logged nothing.`
+                : `The ${entries} went with it — no log file held them, so this ` +
+                  `registry starts empty rather than the app having logged nothing.`;
             recordReapedSession(
               "js-runtime-debugger",
               [deviceId, api.logicalDeviceId],
               salvage,
-              keepFile
+              connectionLost
             );
           }
           forgetDeviceAlias(api.logicalDeviceId);

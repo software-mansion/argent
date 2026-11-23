@@ -10,7 +10,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (Metro's own per-connection handle, absent on Vega); you do not switch to it. Forwarding it still resolves here, but the list-devices id is the stable one. On a Metro shared by several devices, a simulator UDID or Android serial is matched by the device's name (a simulator's name; an Android model, release and API level); the app's device log must then confirm it runs there. When another booted simulator or attached device shares that name, or the log does not confirm it, the error asks for the logicalDeviceId instead."
+      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), <flag:macos-apps>Mac app id (macos-app-<bundle id>), </flag:macos-apps>or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (Metro's own per-connection handle, absent on Vega); you do not switch to it. Forwarding it still resolves here, but the list-devices id is the stable one. On a Metro shared by several devices, a simulator UDID or Android serial is matched by the device's name (a simulator's name; an Android model, release and API level); the app's device log must then confirm it runs there. When another booted simulator or attached device shares that name, or the log does not confirm it, the error asks for the logicalDeviceId instead."
     ),
 });
 
@@ -28,10 +28,9 @@ export const debuggerConnectTool: ToolDefinition<
   }
 > = {
   id: "debugger-connect",
-  description: `Connect to a JS runtime CDP debugger.
-iOS / Android / Vega: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device.
-Returns connection info including port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId, and isNewDebugger, plus a note naming the kept log file when the previous session ended because the app crashed. If already connected, returns the existing connection.
-Use when starting a debug session or before calling other debugger-* tools. Fails if the runtime is unreachable (Metro down, or Chromium CDP terminated).`,
+  description: `Connect to an app's JavaScript debugger and start collecting console logs. Reuses an existing connection. React Native apps connect through Metro. Chromium uses the page's existing CDP session.<flag:macos-apps> Mac apps need a Debug build that loads JavaScript from Metro (react-native-macos 0.76+ or React Native for Mac Catalyst). Launch Mac Catalyst through Argent so it can identify the runtime.</flag:macos-apps>
+Use when starting a debug session or before calling other debugger-* tools. Keep the same device_id for later debugger calls. If shared Metro reports an ambiguous iOS simulator or Android target, retry with the intended device's logicalDeviceId from the error.<flag:macos-apps> Keep the Mac app id on shared Metro. If its runtime is missing, check the build and Metro port. The listed IDs belong to other targets.</flag:macos-apps>
+Returns connection details and, after a crash, a note with the previous log path if available. On Chromium or legacy Metro (such as Vega), projectRoot is empty. Fails if the runtime is unreachable.`,
   zodSchema,
   interaction: {
     startedMsg: () => "Connecting JavaScript debugger",

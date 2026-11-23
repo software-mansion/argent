@@ -88,6 +88,16 @@ function describeDevice(target: CDPTarget): string {
     : `${target.deviceName ?? "unknown"} (legacy inspector — no logicalDeviceId)`;
 }
 
+/** Each device Metro lists, keyed by {@link deviceKey}, as it reads for the agent. */
+function metroDevices(pool: CDPTarget[]): Map<string, string> {
+  const devices = new Map<string, string>();
+  for (const t of pool) {
+    const key = deviceKey(t);
+    if (key && !devices.has(key)) devices.set(key, describeDevice(t));
+  }
+  return devices;
+}
+
 /**
  * The runtime of the Mac app a `macos-app-<bundle id>` names. A Mac app's
  * inspector id follows from its bundle id (see `macosAppBundleIdOf`), so the
@@ -98,11 +108,7 @@ function macosAppTargets(pool: CDPTarget[], bundleId: string, port: number): CDP
   // Launch Services treats bundle ids as case-insensitive.
   const own = pool.filter((t) => macosAppBundleIdOf(t)?.toLowerCase() === bundleId.toLowerCase());
   if (own.length) return own;
-  const devices = new Map<string, string>();
-  for (const t of pool) {
-    const key = deviceKey(t);
-    if (key && !devices.has(key)) devices.set(key, describeDevice(t));
-  }
+  const devices = metroDevices(pool);
   const catalyst = trackedMacosAppKind(bundleId) === "catalyst";
   // Without the vendor id argent cannot tell the Mac Catalyst app's runtime
   // from an iOS device's runtime of the same app.
@@ -204,11 +210,7 @@ export function selectTarget(
       // Count via deviceKey, not logicalDeviceId alone: a legacy device has
       // none, so a Vega device_id would count zero devices, look like "nothing
       // to disambiguate" and fall through into another device's runtime.
-      const distinctDevices = new Map<string, string>();
-      for (const t of pool) {
-        const key = deviceKey(t);
-        if (key && !distinctDevices.has(key)) distinctDevices.set(key, describeDevice(t));
-      }
+      const distinctDevices = metroDevices(pool);
       const named =
         distinctDevices.size > 1 || pinned !== undefined
           ? targetsNamedFor(pool, options.deviceNameMatches)

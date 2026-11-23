@@ -75,6 +75,21 @@ describe("deviceNameMatcher", () => {
       expect(await deviceNameMatcher(A)).toBeUndefined();
       expect(await deviceNameMatcher(B)).toBeUndefined();
     });
+
+    // React Native sends the name unescaped in a query string: Metro lists
+    // `Dev&QA` as `Dev` and `Pro+Max` as `Pro Max`.
+    it.each(["Dev&QA", "Pro+Max"])("gives no matcher for a simulator named %s", async (name) => {
+      listIosSimulators.mockResolvedValue([sim(A, name)]);
+      expect(await deviceNameMatcher(A)).toBeUndefined();
+    });
+
+    it.each([
+      ["Dev&QA", "Dev"],
+      ["Pro+Max", "Pro Max"],
+    ])("counts another booted simulator, %s, under the name %s", async (other, listed) => {
+      listIosSimulators.mockResolvedValue([sim(A, listed), sim(B, other)]);
+      expect(await deviceNameMatcher(A)).toBeUndefined();
+    });
   });
 
   describe("on Android", () => {

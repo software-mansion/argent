@@ -13,6 +13,7 @@ interface PipelineOutput {
   bottlenecks: Bottleneck[];
   cpuSamples: CpuSample[];
   uiHangs: UiHang[];
+  hangsRecorded: boolean;
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
   /** CPU time of the libraries argent and Instruments load into the app, which the hotspots leave out. */
@@ -40,13 +41,14 @@ export async function runIosProfilerPipeline(
   files: Record<string, string | null>,
   options: PipelineOptions = {}
 ): Promise<PipelineOutput> {
-  const [cpuSamples, rawHangs, rawLeaks] = await Promise.all([
+  const [cpuSamples, hangsTable, rawLeaks] = await Promise.all([
     parseCpuFile(files.cpu ?? null, options.cpuFilterPid ?? null),
     parseHangsFile(files.hangs ?? null),
     parseLeaksFile(files.leaks ?? null),
   ]);
   for (const sample of cpuSamples) sample.stack = withAppCallsThroughArgent(sample.stack);
 
+  const rawHangs = hangsTable ?? [];
   const suspensions =
     options.appSuspensions != null ? suspendedTimeInHangs(rawHangs, options.appSuspensions) : null;
   const correlated = correlateHangsWithCpu(rawHangs, cpuSamples, suspensions?.suspendedNs);
@@ -66,6 +68,7 @@ export async function runIosProfilerPipeline(
     bottlenecks,
     cpuSamples,
     uiHangs,
+    hangsRecorded: hangsTable !== null,
     cpuHotspots,
     memoryLeaks,
     toolingCpuMs: {

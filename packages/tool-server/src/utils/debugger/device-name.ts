@@ -26,7 +26,8 @@ import { findRuntimeDevices } from "./runtime-device";
  * - An iOS simulator reports `UIDevice.name`, which is the simulator's name.
  *   It must be booted, and no other booted simulator may have its name. A
  *   simulator that is not booted runs no app, so Xcode's one "iPhone 17 Pro"
- *   per runtime does not count against it.
+ *   per runtime does not count against it. A name with `&` or `+` gives no
+ *   match: Metro lists it cut or with a space, as another name may read.
  * - Android reports `getFriendlyDeviceName()`: `Build.MODEL - <release> - API
  *   <sdk>`, or `Build.MODEL` alone on Genymotion. No other attached device may
  *   report the same name. `sdk_gphone64_arm64` is the model of every recent
@@ -57,11 +58,23 @@ export async function deviceNameMatcher(
   return undefined;
 }
 
+/**
+ * The device name Metro lists for an app on a simulator of this name. React
+ * Native sends the name unescaped in a query string, where `&` ends it and `+`
+ * reads as a space.
+ */
+function nameMetroLists(simulatorName: string): string {
+  return simulatorName.split("&")[0]!.replaceAll("+", " ");
+}
+
 async function iosSimulatorMatcher(udid: string): Promise<((name: string) => boolean) | undefined> {
   const booted = (await listIosSimulators()).filter((s) => s.state === "Booted");
   const own = booted.find((s) => s.udid === udid);
   if (!own) return undefined;
-  if (booted.some((s) => s.udid !== udid && s.name === own.name)) return undefined;
+  // Metro lists `Dev&QA` as `Dev` and `Pro+Max` as `Pro Max`, which another
+  // simulator can be named, so such a name tells nothing apart.
+  if (nameMetroLists(own.name) !== own.name) return undefined;
+  if (booted.some((s) => s.udid !== udid && nameMetroLists(s.name) === own.name)) return undefined;
   return (reported) => reported === own.name;
 }
 

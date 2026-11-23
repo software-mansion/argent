@@ -17,7 +17,7 @@ const RUNTIME_EXCEPTION_MESSAGE =
 function makeServices(evaluateImpl: () => Promise<unknown>) {
   return {
     debugger: {
-      cdp: { evaluate: evaluateImpl },
+      cdp: { evaluateAwaited: evaluateImpl },
       deviceName: "MockDevice",
       appName: "MockApp",
       logicalDeviceId: "aaa",
