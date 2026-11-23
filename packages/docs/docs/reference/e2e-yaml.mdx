@@ -73,10 +73,10 @@ On an iOS simulator, local or remote, the version sets how Argent runs the e2e t
 | `1`, or no `version` key | Selectors resolve on the native view hierarchy of the app, as in Argent releases from before version 2                           |
 
 - On other platforms and on a physical iPhone, the version has no effect.
-- A `run:` fragment resolves its selectors on the tree of the e2e test that runs it. An e2e test that a `tool: e2e-execute` step runs uses its own version.
+- A `run:` fragment resolves its selectors on the tree of the e2e test that runs it, with the rules of that e2e test. Only its coordinates follow its own version. An e2e test that a `tool: e2e-execute` step runs uses its own version.
 - When you record `e2e-execute` of a version 1 e2e test on an iOS simulator, the recorder writes a `run:` step. That step replays the e2e test on the accessibility tree. The message of `e2e-add-step` warns about this difference.
 - A selector from `describe` can miss in a version 1 e2e test.
-- On an iOS simulator, a version 1 e2e test does not get the rules that came with version 2. For example, a run of whitespace does not match one space in `id` and `text`, and a toggle does not have the role `AXSwitch`. For text fields, see [Conditions](#conditions).
+- On an iOS simulator, the steps of a version 1 e2e test do not get the rules that came with version 2. For example, a run of whitespace does not match one space in `id` and `text`, and a toggle does not have the role `AXSwitch`. For text fields, see [Conditions](#conditions). A `tool:` step runs the tool itself: for example, `tool: await-ui-element` reads the `describe` tree in a version 1 e2e test too.
 
 To change a version 1 e2e test:
 
