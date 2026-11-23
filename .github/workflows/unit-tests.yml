@@ -59,6 +59,19 @@ jobs:
         if: matrix.shard == 1
         run: npm run test:scripts
 
+  # Branch protection requires a check named "Unit tests"; this reports the
+  # shards' combined result under that name. `always()` keeps it from being
+  # skipped when a shard fails, since a skipped required check counts as passed.
+  unit-tests-result:
+    name: Unit tests
+    needs: unit-tests
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require every shard to pass
+        run: test "${{ needs.unit-tests.result }}" = success
+
   # Typechecking needs the same install and build as the tests but none of their
   # output, so running it alongside them takes its ~60s off the critical path
   # rather than adding to it.
