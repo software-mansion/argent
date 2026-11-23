@@ -237,7 +237,6 @@ async function failureCode(pending: Promise<unknown>): Promise<string | undefine
   try {
     await pending;
   } catch (err) {
-    console.log("DEBUGERR", String(err).slice(0, 300));
     return getFailureSignal(err)?.error_code;
   }
   throw new Error("expected the boot to fail");
@@ -396,6 +395,66 @@ describe("boot-device Android — readOnly and port", () => {
       expect.objectContaining({ serial: "emulator-5578", avdName: "Other_AVD" }),
     ]);
     expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["exits", true],
+    ["keeps running without a console", false],
+  ])(
+    "leaves another read-only emulator of the AVD that takes the port running when ours %s",
+    async (_label, exits) => {
+      // Someone starts the AVD read-only on 5584 while this boot spawns, and
+      // theirs binds the port first. Ours loses it.
+      const theirs = emulator("emulator-5584", { readOnly: true, portArg: true });
+      const ours = Object.assign(new EventEmitter(), {
+        pid: nextPid++,
+        unref: () => {},
+        kill: vi.fn(),
+        exitCode: null,
+        signalCode: null,
+      });
+      spawnMock.mockImplementationOnce(() => {
+        world.push(theirs);
+        if (exits) setTimeout(() => ours.emit("exit", null, "SIGSEGV"), 50);
+        return ours;
+      });
+
+      expect(await failureCode(boot({ readOnly: true, port: 5584 }))).toBe(
+        "BOOT_ANDROID_PORT_IN_USE"
+      );
+      expect(world).toEqual([theirs]);
+      expect(ours.kill).toHaveBeenCalled();
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  describe("where the process table cannot be read (Windows)", () => {
+    const platform = process.platform;
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      return () => Object.defineProperty(process, "platform", { value: platform });
+    });
+
+    it("does not reuse a writable emulator that replaced its read-only one", async () => {
+      const first = await boot({ readOnly: true });
+      const replaced = await boot({ force: true });
+      expect(replaced).toMatchObject({ serial: (first as { serial: string }).serial });
+
+      const again = await boot({ readOnly: true });
+
+      expect(again).not.toMatchObject({ serial: (first as { serial: string }).serial });
+      expect(spawnMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("lets a boot without a port take the serial of a pinned emulator that exited", async () => {
+      world = [emulator("emulator-5554", { avdName: "Other_AVD" })];
+      await boot({ readOnly: true, port: 5556 });
+      world = world.filter((e) => e.serial !== "emulator-5556");
+
+      const result = await boot({});
+
+      expect(result).toMatchObject({ serial: "emulator-5556" });
+    });
   });
 
   it.each([

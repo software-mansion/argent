@@ -893,19 +893,41 @@ function isPortInUse(err: unknown): boolean {
 }
 
 /**
- * Throw `BOOT_ANDROID_PORT_IN_USE` when the console on `serial` names another
- * AVD: another emulator holds the port this boot pinned.
+ * Whether the emulator on the pinned `serial` is the one `child` started:
+ * "own", "none" while nothing this boot can tell holds the port, or the port
+ * error when another emulator holds it.
+ *
+ * The console's AVD name is not enough: read-only instances of one AVD all
+ * name it, and one that binds the pinned port first (a person following the
+ * docs, another tool-server) would be taken for ours, then killed by serial
+ * on a failure path. So the process listening on the console port decides
+ * (see `consoleOwnership`). Only where that cannot be read (Windows) does the
+ * name decide, and then an emulator of this AVD counts as ours only while
+ * ours has not exited early.
  */
-async function assertPortNotTaken(serial: string, avdName: string): Promise<void> {
+async function pinnedPortHolder(
+  serial: string,
+  avdName: string,
+  child: import("node:child_process").ChildProcess,
+  exitedEarly: boolean
+): Promise<"own" | "none"> {
+  const owner = child.pid === undefined ? "unknown" : await consoleOwnership(serial, child.pid);
+  if (owner === "own") return "own";
+  if (owner === "free") return "none";
   const answer = await readEmulatorConsoleAvdName(serial);
-  if (answer.status === "ok" && answer.avdName !== avdName)
-    throw portTakenError(serial, answer.avdName);
+  const holderAvd = answer.status === "ok" ? answer.avdName : undefined;
+  if (owner === "other") throw portTakenError(serial, holderAvd);
+  if (holderAvd === undefined) return "none";
+  if (holderAvd !== avdName || exitedEarly) throw portTakenError(serial, holderAvd);
+  return "own";
 }
 
-function portTakenError(serial: string, holderAvd: string): FailureError {
+function portTakenError(serial: string, holderAvd: string | undefined): FailureError {
+  const holder =
+    holderAvd === undefined ? "another emulator" : `another emulator running AVD "${holderAvd}"`;
   return portInUseError(
-    `Port ${serial.replace(/^emulator-/, "")} was taken by an emulator running AVD ` +
-      `"${holderAvd}" (${serial}) while this boot started. Pick another \`port\`.`
+    `Port ${serial.replace(/^emulator-/, "")} was taken by ${holder} (${serial}) while this ` +
+      `boot started. Pick another \`port\`.`
   );
 }
 
@@ -1025,25 +1047,21 @@ async function attemptBoot(params: {
         // An emulator that exits on a pinned port usually lost the port to
         // another one that bound it after the pre-spawn check.
         if (params.expectedSerial !== undefined) {
-          await assertPortNotTaken(params.expectedSerial, params.avdName);
+          await pinnedPortHolder(params.expectedSerial, params.avdName, child, true);
         }
         throw launchError;
       }
       let newSerials = await listNewEmulatorSerials(params.serialsBefore);
       if (params.expectedSerial !== undefined) {
-        if (newSerials.includes(params.expectedSerial)) {
-          // The serial alone does not make the emulator ours: another emulator
-          // can bind the port first, and ours then exits. Only an emulator
-          // whose console names this AVD counts, so a failure path never kills
-          // somebody else's emulator by serial.
-          const answer = await readEmulatorConsoleAvdName(params.expectedSerial);
-          if (answer.status === "ok") {
-            if (answer.avdName !== params.avdName) {
-              throw portTakenError(params.expectedSerial, answer.avdName);
-            }
-            serial = params.expectedSerial;
-            break;
-          }
+        // The serial alone does not make the emulator ours: another emulator,
+        // of this AVD too, can bind the port first. Only ours is taken, so a
+        // failure path never kills somebody else's emulator by serial.
+        if (
+          newSerials.includes(params.expectedSerial) &&
+          (await pinnedPortHolder(params.expectedSerial, params.avdName, child, false)) === "own"
+        ) {
+          serial = params.expectedSerial;
+          break;
         }
       } else if (newSerials.length >= 1) {
         if (params.pinnedElsewhere) {
@@ -1065,7 +1083,12 @@ async function attemptBoot(params: {
   }
   if (!serial) {
     if (params.expectedSerial !== undefined) {
-      await assertPortNotTaken(params.expectedSerial, params.avdName).catch((err: unknown) => {
+      await pinnedPortHolder(
+        params.expectedSerial,
+        params.avdName,
+        child,
+        readEarlyExitError() !== null
+      ).catch((err: unknown) => {
         killDetachedEmulator(child);
         throw err;
       });
@@ -1239,11 +1262,13 @@ type AvdInstances = {
  * Tell the running instances of `avdName` apart. The process table shows the
  * `-read-only` and `-port` flags; argent's own record covers instances launched
  * without `-port`. When the process table cannot be read (Windows, or `ps`
- * failed), argent's record is trusted as it is: the emulators it lists may well
- * still run, and dropping them would make the next boot take a read-only
- * instance for a writable one.
+ * failed), argent's record is trusted while adb still lists the serial
+ * (`listed`): the emulator may well still run, and dropping it would make the
+ * next boot take a read-only instance for a writable one. A serial adb no
+ * longer lists has no emulator behind it, so its record goes, and an emulator
+ * that later comes up on that serial is not taken for the old one.
  */
-async function avdInstances(avdName: string): Promise<AvdInstances> {
+async function avdInstances(avdName: string, listed?: Set<string>): Promise<AvdInstances> {
   const processes = await readEmulatorProcessesForAvd(avdName);
   const readOnly = new Set<string>();
   const pinned = new Set<string>();
@@ -1257,7 +1282,11 @@ async function avdInstances(avdName: string): Promise<AvdInstances> {
   }
   for (const [serial, boot] of readOnlyBoots) {
     if (boot.avdName !== avdName) continue;
-    if (processes !== null && !processes.some((p) => p.pid === boot.pid && p.readOnly)) {
+    const gone =
+      processes !== null
+        ? !processes.some((p) => p.pid === boot.pid && p.readOnly)
+        : listed !== undefined && !listed.has(serial);
+    if (gone) {
       readOnlyBoots.delete(serial);
       continue;
     }
@@ -1317,7 +1346,7 @@ async function blockersBesides(
       if (p.port !== port) others.push(p);
     } else if (knownPid !== undefined) {
       if (p.pid !== knownPid) others.push(p);
-    } else if ((await consoleOwnership(serial, p.pid)) === "other") {
+    } else if (["other", "free"].includes(await consoleOwnership(serial, p.pid))) {
       others.push(p);
     }
   }
@@ -1463,7 +1492,11 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   // down `adb devices` returns [], every already-connected emulator later looks
   // "new", and the tool could hand back an unrelated emulator as "booted".
   await runAdb(["start-server"], { timeoutMs: 10_000 }).catch(() => {});
-  const existingDevices = await listAndroidDevices().catch(() => []);
+  let listed = true;
+  const existingDevices = await listAndroidDevices().catch(() => {
+    listed = false;
+    return [];
+  });
 
   // This AVD may be alive without being healthy in adb (killed outside argent
   // and shutting down, or still coming up). Wait for its process to exit or for
@@ -1483,6 +1516,7 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   // misleading "Running multiple emulators" error.
   let hotBootFailureReason: string | null;
   const dropKilledEmulator = async (serial: string) => {
+    readOnlyBoots.delete(serial);
     await awaitEmulatorsGone([serial]);
     const refreshed = await listAndroidDevices().catch(() => existingDevices);
     existingDevices.splice(0, existingDevices.length, ...refreshed);
@@ -1497,7 +1531,10 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   // emulator holding the AVD. A writable boot takes any, preferring a writable
   // one: the emulator refuses to start a writable instance next to a read-only
   // one anyway.
-  const instances = await avdInstances(params.avdName);
+  const instances = await avdInstances(
+    params.avdName,
+    listed ? new Set(existingDevices.map((d) => d.serial)) : undefined
+  );
   const candidates = existingDevices.filter(
     (d) =>
       isRunningAvd(d, params.avdName) &&
@@ -1611,9 +1648,13 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   const expectedSerial = portSerial ?? undefined;
   const pinnedElsewhere =
     portSerial === null ? async () => (await avdInstances(params.avdName)).pinned : undefined;
+  // A boot's emulator replaces any record of an earlier one on its serial: a
+  // writable boot that comes up there is not the read-only one that left.
   const rememberReadOnly = (serial: string, pid: number | undefined) => {
     if (params.readOnly && pid !== undefined) {
       readOnlyBoots.set(serial, { avdName: params.avdName, pid, pinned: portSerial !== null });
+    } else {
+      readOnlyBoots.delete(serial);
     }
   };
 

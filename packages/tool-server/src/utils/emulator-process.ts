@@ -109,14 +109,14 @@ const LSOF_BIN = ["/usr/sbin/lsof", "/usr/bin/lsof"].find((p) => existsSync(p)) 
  * consoles of all of them name the same AVD, so the listener is the only proof
  * of which one a spawn started.
  *
- * "other" also covers a serial that nothing listens for, such as a stale
- * `offline` adb entry. "unknown" when it cannot be read: on Windows, without
- * `lsof` or `ps`, or when a probe fails.
+ * "free" when nothing listens on it, as for a stale `offline` adb entry or an
+ * emulator still opening its console. "unknown" when it cannot be read: on
+ * Windows, without `lsof` or `ps`, or when a probe fails.
  */
 export async function consoleOwnership(
   serial: string,
   ownPid: number
-): Promise<"own" | "other" | "unknown"> {
+): Promise<"own" | "other" | "free" | "unknown"> {
   const port = serial.match(/^emulator-(\d+)$/)?.[1];
   if (port === undefined || process.platform === "win32") return "unknown";
   let listener: number;
@@ -133,7 +133,7 @@ export async function consoleOwnership(
   } catch (err) {
     // lsof exits 1 and prints nothing when no process listens on the port.
     const e = err as { code?: unknown; killed?: boolean; stdout?: unknown };
-    return e.code === 1 && !e.killed && !e.stdout ? "other" : "unknown";
+    return e.code === 1 && !e.killed && !e.stdout ? "free" : "unknown";
   }
   if (listener === ownPid) return "own";
   const parents = await readParentPids();
