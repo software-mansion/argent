@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceInfo } from "@argent/registry";
 import type { AXTreeNode } from "../src/blueprints/ax-service";
 import {
+  capitalizedByIos,
   READBACK_MISMATCH_WARNING,
   READBACK_TIMING,
   spreadAcrossInputs,
@@ -192,6 +193,84 @@ describe("typeWithReadback", () => {
     });
   });
 
+  // The tree shows the focused field's text, so it answers before the check,
+  // whose "no" waits out the daemon's 1 s.
+  describe("reading the focused field in the tree", () => {
+    const field = (value: string, extra: Partial<AXTreeNode> = {}): AXTreeNode => ({
+      index: 0,
+      elementType: 49,
+      value,
+      traits: ["isEditing"],
+      ...extra,
+    });
+
+    /** Types `text`; the tree answers from `trees`, one per read, the last one repeating. */
+    async function typeWithTree(text: string, trees: AXTreeNode[][], checkSays = false) {
+      let typed = false;
+      const { api, fill } = fakeAx((asked) => ({
+        focused: true,
+        verified: asked === "" ? !typed : checkSays,
+      }));
+      let reads = 0;
+      const tree = vi.fn(async () => ({
+        alertVisible: false,
+        nodes: trees[Math.min(reads++, trees.length - 1)]!,
+        truncated: false,
+      }));
+      const out = await typeWithReadback(
+        registryWith({ ...api, tree }),
+        IOS_SIM,
+        text,
+        async () => {
+          typed = true;
+          return { typed: text, keys: text.length };
+        }
+      );
+      return { out, fill, tree };
+    }
+
+    it("verifies a capital iOS put at the start of a sentence, without the slow check", async () => {
+      const { out, fill } = await typeWithTree("hello world", [[field("Hello world")]]);
+      expect(out.readback).toEqual({ verified: true });
+      // Only the empty-field check before typing.
+      expect(fill.mock.calls.map((c) => c[0])).toEqual([""]);
+    });
+
+    it("verifies the exact text from the tree as well", async () => {
+      const { out, fill } = await typeWithTree("hello", [[field("hello")]]);
+      expect(out.readback).toEqual({ verified: true });
+      expect(fill).toHaveBeenCalledTimes(1);
+    });
+
+    it("warns for a field that capitalizes every letter: that reads like a held Shift", async () => {
+      const { out } = await typeWithTree("general", [[field("GENERAL")]]);
+      expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
+    });
+
+    it("leaves a field the app has not caught up with to the check", async () => {
+      const { out, fill } = await typeWithTree("hello", [[field("hel")]], true);
+      expect(out.readback).toEqual({ verified: true });
+      expect(fill.mock.calls.map((c) => c[0])).toEqual(["", "hello"]);
+    });
+
+    it("reads the tree again after the check's wait, for an app that capitalizes late", async () => {
+      const { out, tree } = await typeWithTree("hello", [[field("hel")], [field("Hello")]]);
+      expect(out.readback).toEqual({ verified: true });
+      expect(tree).toHaveBeenCalledTimes(2);
+    });
+
+    it("leaves a secure field, which shows bullets, to the check", async () => {
+      const { out, fill } = await typeWithTree("s3cret", [[field("••••••", { elementType: 50 })]]);
+      expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
+      expect(fill).toHaveBeenCalledTimes(2);
+    });
+
+    it("ignores a field that is not the focused one", async () => {
+      const { out } = await typeWithTree("hello", [[field("Hello", { traits: [] })]]);
+      expect(out.readback).toEqual({ verified: false, warning: READBACK_MISMATCH_WARNING });
+    });
+  });
+
   it("does not check text with Return or Tab, which can move focus or submit", async () => {
     const { api, fill } = fakeAx(() => ({ focused: true, verified: true }));
     for (const text of ["a\nb", "a\tb", "a\rb"]) {
@@ -237,6 +316,32 @@ describe("typeWithReadback", () => {
     await typeWithReadback(registry as never, IOS_SIM, "", type);
     expect(type).toHaveBeenCalledTimes(1);
     expect(registry.resolveService).not.toHaveBeenCalled();
+  });
+});
+
+describe("capitalizedByIos", () => {
+  it("accepts capitals at the start of sentences and words", () => {
+    expect(capitalizedByIos("hello world", "Hello world")).toBe(true);
+    expect(capitalizedByIos("hi. there", "Hi. There")).toBe(true);
+    expect(capitalizedByIos("new york", "New York")).toBe(true);
+    expect(capitalizedByIos('say "yes"', 'Say "Yes"')).toBe(true);
+  });
+
+  it("rejects the same text, which is no capitalization", () => {
+    expect(capitalizedByIos("hello", "hello")).toBe(false);
+  });
+
+  it("rejects capitals inside a word, as a held Shift leaves them", () => {
+    expect(capitalizedByIos("general", "GENERAL")).toBe(false);
+    expect(capitalizedByIos("xyz", "xYZ")).toBe(false);
+  });
+
+  it("rejects a dropped, repeated or changed key", () => {
+    expect(capitalizedByIos("hello", "Helo")).toBe(false);
+    expect(capitalizedByIos("hello", "Helllo")).toBe(false);
+    expect(capitalizedByIos("hello", "Jello")).toBe(false);
+    expect(capitalizedByIos("Hello", "hello")).toBe(false);
+    expect(capitalizedByIos("1abc", "!abc")).toBe(false);
   });
 });
 

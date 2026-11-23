@@ -8,12 +8,18 @@ import { axServiceRef, type AXServiceApi, type AXTreeNode } from "../../blueprin
  * a stalled simulator still drops keys, or repeats one whose Up arrived late,
  * and every key was acked. The field is the only witness, so it is read back.
  *
- * The ax-service answers only whether the focused field holds a given text,
- * never the text itself, and `keyboard` inserts at the caret rather than
- * replacing the field. So the check runs only where its answer means
- * something: the field was empty before typing (asked with `""`), and must
- * hold exactly the typed text after. A secure field counts as holding it when
- * it shows as many bullets. Any other case types without a check, as before.
+ * `keyboard` inserts at the caret rather than replacing the field, so the
+ * field is judged only where that means something: it was empty before
+ * typing (the ax-service check, asked with `""`), and must hold the typed
+ * text after. Any other case types without a check, as before.
+ *
+ * After typing, the tree is read first: it answers at once, and it shows the
+ * focused field's text, so a capital iOS put at the start of a word
+ * (auto-capitalization, on by default in a UIKit text field) counts as the
+ * keys landing. Where the tree cannot tell (a secure field shows bullets, or
+ * the app has not applied the last key yet), the ax-service check decides:
+ * it waits for a late app, and counts a secure field as holding the text
+ * when it shows as many bullets.
  *
  * A mismatch is a warning, not a failure: the keys may be fine and the app or
  * iOS may have changed the text on purpose (auto-capitalization, a formatter,
@@ -42,7 +48,7 @@ export const READBACK_TIMING = {
    * needs.
    */
   checkMs: 3_500,
-  /** Budget for the tree read after a "no", which looks for focus that moved. */
+  /** Budget for each tree read after typing; past it, the check decides. */
   treeMs: 1_500,
 };
 
@@ -51,7 +57,10 @@ export const READBACK_TIMING = {
 const FOCUS_MOVING = /[\r\n\t]/;
 
 export interface ReadbackOutcome {
-  /** True when the field holds the typed text, false with `warning` when it does not. */
+  /**
+   * True when the field holds the typed text, apart from a capital iOS put at
+   * the start of a word; false with `warning` when it does not.
+   */
   verified: boolean;
   warning?: string;
 }
@@ -106,16 +115,72 @@ export async function typeWithReadback<T>(
   const result = await type();
   if (!ax || !checkable) return { result };
 
+  const readTree = async () => {
+    const tree = await within(READBACK_TIMING.treeMs, () => ax.tree());
+    return tree ? judgeTree(tree.nodes, text) : undefined;
+  };
+  const verified = { result, readback: { verified: true } };
+
+  const early = await readTree();
+  if (early === "holds") return verified;
+  if (early === "spread") return { result };
+
   const after = await within(READBACK_TIMING.checkMs, () => ax.fill(text, { check: true }));
-  if (after?.verified) return { result, readback: { verified: true } };
+  if (after?.verified) return verified;
   // No answer, or focus left the field (the app moved it): nothing to judge.
   if (!after || !after.focused || after.timedOut) return { result };
-  // Focus can also move to another field while typing, as on a code screen
-  // that advances one box per digit. The check then reads the last box
-  // only, so its "no" says nothing about the keys.
-  const tree = await within(READBACK_TIMING.treeMs, () => ax.tree());
-  if (tree && spreadAcrossInputs(tree.nodes, text)) return { result };
+  // The check waited up to 1 s, so an app that applies input late has done
+  // so by now: read the tree again before calling it a mismatch.
+  const late = await readTree();
+  if (late === "holds") return verified;
+  if (late === "spread") return { result };
   return { result, readback: { verified: false, warning: READBACK_MISMATCH_WARNING } };
+}
+
+/**
+ * What the tree says about the typed text: the focused field holds it (iOS
+ * may have capitalized a word), it sits across inputs that focus moved
+ * through, or neither.
+ */
+function judgeTree(nodes: AXTreeNode[], text: string): "holds" | "spread" | undefined {
+  const focused = nodes.find(
+    (node) => node.traits?.includes("isEditing") && node.elementType !== SECURE_TEXT_FIELD
+  );
+  if (focused && !focused.hintShowing && typeof focused.value === "string") {
+    if (focused.value === text || capitalizedByIos(text, focused.value)) return "holds";
+  }
+  // Focus can also move to another field while typing, as on a code screen
+  // that advances one box per digit. The focused field is then the last box,
+  // so its text says nothing about the keys.
+  if (spreadAcrossInputs(nodes, text)) return "spread";
+  return undefined;
+}
+
+// What may come before the first letter of a word.
+const WORD_OPENER = /[\s"'“‘([{¿¡]/u;
+
+/**
+ * Whether `held` is `typed` with the first letters of some words made
+ * capital, and nothing else changed. iOS does this to a UIKit text field by
+ * default (auto-capitalization, of each sentence or each word). A key fault
+ * does not: a held Shift capitalizes every letter after it, and a dropped or
+ * repeated key changes the length. So a field that capitalizes every letter
+ * still gets the warning: it reads like a held Shift.
+ */
+export function capitalizedByIos(typed: string, held: string): boolean {
+  const a = Array.from(typed);
+  const b = Array.from(held);
+  if (a.length !== b.length) return false;
+  let changed = false;
+  for (let i = 0; i < a.length; i++) {
+    const char = a[i]!;
+    if (char === b[i]) continue;
+    const wordStart = i === 0 || WORD_OPENER.test(a[i - 1]!);
+    const lowercase = char !== char.toUpperCase();
+    if (!wordStart || !lowercase || b[i] !== char.toUpperCase()) return false;
+    changed = true;
+  }
+  return changed;
 }
 
 // XCUIElementType values of the inputs that take typed text.

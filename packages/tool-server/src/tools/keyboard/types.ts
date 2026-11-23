@@ -20,8 +20,9 @@ export interface KeyboardResult {
   reactivated?: true;
   /**
    * iOS simulator only, and only when the focused field was empty before
-   * typing: whether it now holds exactly the typed text (a secure field: as
-   * many bullets). Absent when no such check ran.
+   * typing: whether it now holds the typed text (a secure field: as many
+   * bullets). A capital iOS put at the start of a word still counts as the
+   * typed text. Absent when no such check ran.
    */
   verified?: boolean;
   /** Set with `verified: false`: why the field may not hold what was typed. */
