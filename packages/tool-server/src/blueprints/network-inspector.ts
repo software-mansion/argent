@@ -42,7 +42,11 @@ export interface JsCapture {
   intent: "started" | "stopped";
   /** Set by a start; a stop keeps it. */
   mark?: JsCaptureMark;
-  /** An interceptor was installed in the app's JS context since the last start. */
+  /**
+   * An interceptor may record in the app's JS context since the last start: an install was sent
+   * there, and the runtime did not answer that it has none. An install whose answer is lost can
+   * still take effect, so this holds from the dispatch on.
+   */
   installed: boolean;
   /** A stop paused that interceptor; a start clears it. */
   paused?: true;
@@ -286,6 +290,9 @@ export async function pauseJsCapturesOf(
   return paused;
 }
 
+/** The install script's answer when the app's JS has not set up XMLHttpRequest, so it installed nothing. */
+export const NO_XHR_YET = "no XMLHttpRequest yet";
+
 export type InterceptorInstall = { installed: true } | { installed: false; reason: string };
 
 /**
@@ -312,12 +319,14 @@ export async function installNetworkInterceptor(
   if (runtimeApp?.appId !== undefined && runtimeApp.appId !== capture.bundleId) {
     return { installed: false, reason: `the JS runtime is ${runtimeApp.appId}'s` };
   }
+  const before = capture.installed;
+  // From the dispatch on, the app may record even if its answer never arrives.
+  capture.installed = true;
   await cdp.evaluate(makeNetworkCaptureControlScript(false));
   const install = parseInstall(await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT));
-  if (install.installed || install.reason === "already installed") {
-    capture.installed = true;
-    return { installed: true };
-  }
+  if (install.installed || install.reason === "already installed") return { installed: true };
+  // The runtime answered that the script installed nothing in it.
+  if (install.reason === NO_XHR_YET) capture.installed = before;
   return install;
 }
 

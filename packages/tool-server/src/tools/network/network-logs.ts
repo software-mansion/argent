@@ -42,6 +42,24 @@ const PAUSED_BY_STOP =
   "JS runtime does not record new requests: an earlier stop paused it (network-capture-stop, stop-all-simulator-servers or the exit of a tool-server), and no network-capture-start reached it since";
 
 /**
+ * The Metro port a read uses. An explicit port wins. Otherwise, a capture that a start stored
+ * for this device id on the port its provider publishes for the udid the start gave: a provider
+ * claims no Metro logicalDeviceId, so the id alone finds only the default port.
+ */
+export function jsReadPort(params: { port?: number; device_id?: string }): number {
+  if (params.port !== undefined) return params.port;
+  const device = canonicalDeviceId(params.device_id);
+  const provided = device
+    ? jsCapturesOn(device).find(
+        (capture) =>
+          capture.physicalDeviceId !== undefined &&
+          metroPort({ device_id: capture.physicalDeviceId }) === capture.port
+      )
+    : undefined;
+  return provided?.port ?? metroPort(params);
+}
+
+/**
  * The debugger of a read of the capture. A start or stop opened it with the
  * device's udid, so a read that opens it again, after a disconnect, does too.
  */
@@ -49,7 +67,7 @@ export function jsCaptureDebuggerRef(
   params: { port?: number; device_id?: string },
   capture: JsCapture
 ): ServiceRef {
-  const urn = debuggerServiceRef(params);
+  const urn = debuggerServiceRef({ ...params, port: jsReadPort(params) });
   return capture.physicalDeviceId && typeof urn === "string"
     ? { urn, options: { physicalDeviceId: capture.physicalDeviceId } }
     : urn;
@@ -311,7 +329,7 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
-    const payload = jsCapturePayload(metroPort(params), canonicalDeviceId(params.device_id)!);
+    const payload = jsCapturePayload(jsReadPort(params), canonicalDeviceId(params.device_id)!);
     // Vega has no network-capture-start, so its read still installs the interceptor.
     if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
     // A read never starts capture: before a start it reaches nothing in the app.
@@ -324,7 +342,7 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
       const chromium = services.chromium as ChromiumCdpApi;
       return renderChromiumPage(chromium.server.network.requests(), params.pageIndex);
     }
-    const port = metroPort(params);
+    const port = jsReadPort(params);
 
     if (device.platform === "vega") {
       const api = services.inspector as NetworkInspectorApi;

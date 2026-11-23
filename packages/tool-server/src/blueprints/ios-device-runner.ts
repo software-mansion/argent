@@ -24,7 +24,7 @@ import {
   type RunnerSigningConfig,
 } from "../utils/ios-device/runner-build";
 import * as fs from "node:fs/promises";
-import { createUsbmuxCommandSender } from "../utils/ios-device/runner-route";
+import { createRunnerCommandSender, TunnelConnectError } from "../utils/ios-device/runner-route";
 import { isIosDeviceTransportError } from "../utils/ios-device/usbmux-protocol";
 import { readRunnerCrashSummary } from "../utils/ios-device/runner-crash";
 import {
@@ -167,12 +167,14 @@ const RUNNER_CLEAN_EXIT_TIMEOUT_MS = 10_000;
  */
 async function startRunner(
   udid: string,
-  artifact: RunnerArtifact
+  artifact: RunnerArtifact,
+  tunnelAddress?: string | null
 ): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
   const launched = await launchRunner({
     udid,
     xctestrunPath: artifact.xctestrunPath,
     derivedDataPath: artifact.derivedDataPath,
+    ...(tunnelAddress ? { tunnelAddress } : {}),
   });
 
   // The factory exit listener is not attached yet. Race ready against exit so a dead child does not burn the full ready budget.
@@ -193,7 +195,7 @@ async function startRunner(
   try {
     const expiresAt = Date.now() + RUNNER_READY_TIMEOUT_MS;
 
-    // The runner binds a system-assigned loopback port on the device and logs it.
+    // The runner binds a system-assigned port on the device and logs it.
     // Nothing on the Mac can pick that port, so the client waits for the line.
     const port = await Promise.race([
       waitForRunnerListeningPort(launched.logPath, { timeoutMs: RUNNER_READY_TIMEOUT_MS }),
@@ -203,7 +205,7 @@ async function startRunner(
     client = createRunnerClient({
       udid,
       port,
-      send: createUsbmuxCommandSender().sendCommand,
+      send: createRunnerCommandSender({ tunnelAddress }).sendCommand,
     });
 
     // The rest of the same budget goes to the first envelope.
@@ -259,7 +261,8 @@ async function startRunner(
  */
 async function buildAndStartRunner(
   udid: string,
-  signing: RunnerSigningConfig
+  signing: RunnerSigningConfig,
+  tunnelAddress?: string | null
 ): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
   let artifact: RunnerArtifact;
 
@@ -273,7 +276,7 @@ async function buildAndStartRunner(
   }
 
   try {
-    return await startRunner(udid, artifact);
+    return await startRunner(udid, artifact, tunnelAddress);
   } catch (error) {
     const logText = (error as { runnerLogText?: string }).runnerLogText ?? "";
     if (!isProfileMissingDeviceFailure(logText) && !isProfileExpiredFailure(logText)) throw error;
@@ -281,7 +284,8 @@ async function buildAndStartRunner(
     // automatic signing registers it and mints a fresh profile. Retry once.
     return await startRunner(
       udid,
-      await ensureRunnerArtifact(signing, { destinationUdid: udid, force: true })
+      await ensureRunnerArtifact(signing, { destinationUdid: udid, force: true }),
+      tunnelAddress
     );
   }
 }
@@ -312,9 +316,13 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
     const release = reserveInteractionRunner(udid);
     let runner: Awaited<ReturnType<typeof buildAndStartRunner>>;
     try {
-      await ensureDeviceReady(udid);
+      const tunnelAddress = await ensureDeviceReady(udid);
       await killStaleRunnersForDevice(udid);
-      runner = await buildAndStartRunner(udid, await resolveRunnerSigningConfig(udid));
+      runner = await buildAndStartRunner(
+        udid,
+        await resolveRunnerSigningConfig(udid),
+        tunnelAddress
+      );
     } catch (error) {
       release();
       throw error;
@@ -406,9 +414,14 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
   recoverable(error: unknown): boolean {
     // A confirmed runner death, or a runner that answered only to report its
     // main thread stuck past recovery: both need a fresh runner, so the
-    // registry disposes this one and retries the tool once. Any other answer
-    // from a live runner, or a transport loss with a live child, is not
-    // recoverable here.
-    return isRunnerExitedError(error) || isRunnerWedgedError(error);
+    // registry disposes this one and retries the tool once. So does a runner
+    // that stopped answering on its tunnel address: nothing was sent, and the
+    // new runner binds the current address. Any other answer from a live
+    // runner, or a transport loss with a live child, is not recoverable here.
+    return (
+      isRunnerExitedError(error) ||
+      isRunnerWedgedError(error) ||
+      error instanceof TunnelConnectError
+    );
   },
 };
