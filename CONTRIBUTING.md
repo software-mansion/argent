@@ -17,8 +17,9 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 
 ## Requirements
 
-- **macOS** with Xcode installed for iOS simulator work (`xcrun simctl`). On Linux `npm run dev` skips the iOS dylibs.
+- **macOS** with Xcode installed for iOS simulator work (`xcrun simctl`). On Linux `bun run dev` skips the iOS dylibs.
 - **Node.js 22 (22.22.2+), 24 (24.15+) or 26+** (what the workspace dependencies accept; the published package needs 22.18+, excluding 23.0-23.7)
+- **[Bun](https://bun.com/) 1.4.5**, the `packageManager` pinned in `package.json`
 - The [GitHub CLI](https://cli.github.com/) (`gh`), logged in with `gh auth login`, to download the prebuilt native binaries
 
 ---
@@ -32,30 +33,30 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    cd argent
    ```
 
-2. **Install dependencies** (npm workspaces installs all packages at once):
+2. **Install dependencies** (Bun workspaces install all packages at once):
 
    ```bash
-   npm install
+   bun install
    ```
 
 3. **Download the prebuilt native binaries** (simulator-server, ax-service, the native devtools dylibs and the Perfetto trace-processor, all gitignored):
 
    ```bash
-   npm run download:simulator-server
-   npm run download:native-binaries
-   npm run download:trace-processor
+   bun run download:simulator-server
+   bun run download:native-binaries
+   bun run download:trace-processor
    ```
 
 4. **Build the workspace packages** once, so the dev script can resolve them:
 
    ```bash
-   npm run build
+   bun run build
    ```
 
 5. **Start the dev environment:**
 
    ```bash
-   npm run dev
+   bun run dev
    ```
 
    On macOS this builds the native devtools dylibs from the private `packages/argent-private` submodule if you have SSH access to it, and otherwise uses the ones from step 3. It then builds the dispatcher, points `~/.claude.json`, `~/.cursor/mcp.json` and `~/.argent/cli.json` at the local build, and starts the tool-server from source. Press `Ctrl+C` to stop and restore your global Argent configuration.
@@ -63,22 +64,22 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    To use a different port:
 
    ```bash
-   PORT=4000 npm run dev
+   PORT=4000 bun run dev
    ```
 
-   > **Note:** On a physical iPhone the tool-server builds the on-device XCUITest runner from `packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj`. A packaged tool-server finds that project next to its bundle; one started from source (`npm run dev`, `npm run start`, or `node packages/tool-server/dist/index.js start`) does not, and the first tool that drives the runner (`describe`, a gesture, `screenshot`) fails with "Could not locate the ios-device-runner Xcode project". Point it at the project:
+   > **Note:** On a physical iPhone the tool-server builds the on-device XCUITest runner from `packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj`. A packaged tool-server finds that project next to its bundle; one started from source (`bun run dev`, `bun run start`, or `node packages/tool-server/dist/index.js start`) does not, and the first tool that drives the runner (`describe`, a gesture, `screenshot`) fails with "Could not locate the ios-device-runner Xcode project". Point it at the project:
    >
    > ```bash
-   > ARGENT_IOS_RUNNER_PROJECT="$PWD/packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj" npm run dev
+   > ARGENT_IOS_RUNNER_PROJECT="$PWD/packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj" bun run dev
    > ```
 
-That's it, no separate install steps per package are needed, except `packages/docs`. It is excluded from the workspace glob and keeps its own lockfile, so `npm run lint` from the root needs `npm install` run inside `packages/docs` first.
+That's it, no separate install steps per package are needed, except `packages/docs`. It is excluded from the workspace glob and keeps its own lockfile, so `bun run lint` from the root needs `bun install` run inside `packages/docs` first.
 
 ---
 
 ## Project structure
 
-This is an npm workspaces monorepo. All packages live under `packages/`:
+This is a Bun workspaces monorepo. All packages live under `packages/`:
 
 | Package                           | Path                               | Purpose                                                                                                                                         |
 | --------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -112,7 +113,7 @@ The `tsconfig.json` at the root uses TypeScript project references; `tsconfig.ba
 ### Local development (recommended)
 
 ```bash
-npm run dev
+bun run dev
 ```
 
 Builds everything and starts the tool-server from source. See [Setting up the dev environment](#setting-up-the-dev-environment) for details.
@@ -122,34 +123,34 @@ Builds everything and starts the tool-server from source. See [Setting up the de
 Build all packages at once using TypeScript project references:
 
 ```bash
-npm run build
+bun run build
 ```
 
 To build a specific package:
 
 ```bash
-npm run build -w @argent/registry
-npm run build -w @argent/tool-server
+bun run --filter @argent/registry build
+bun run --filter @argent/tool-server build
 ```
 
 To build and bundle the distributable MCP package:
 
 ```bash
-npm run build -w @swmansion/argent
+bun run --filter @swmansion/argent build
 # or, to also produce a .tgz tarball:
-npm run pack:mcp
+bun run pack:mcp
 ```
 
 ---
 
 ## Running the project
 
-For day-to-day development, use `npm run dev` (see [Setting up the dev environment](#setting-up-the-dev-environment)).
+For day-to-day development, use `bun run dev` (see [Setting up the dev environment](#setting-up-the-dev-environment)).
 
 **Tool-server only** (no MCP or editor config patching):
 
 ```bash
-npm run start
+bun run start
 ```
 
 This builds the registry, then starts the tool-server from source via `ts-node` on port 3001.
@@ -169,26 +170,26 @@ Tests are written with [Vitest](https://vitest.dev/). Each package has its own t
 Run every package's tests in one run:
 
 ```bash
-npm test
+bun run test
 ```
 
 Run tests for a specific package:
 
 ```bash
-npm test -w @argent/registry
-npm test -w @argent/tool-server
+bun run --filter @argent/registry test
+bun run --filter @argent/tool-server test
 ```
 
 Run tests in watch mode during development:
 
 ```bash
-npm run test:watch -w @argent/registry
-npm run test:watch -w @argent/tool-server
+bun run --cwd packages/registry test:watch
+bun run --cwd packages/tool-server test:watch
 ```
 
 ### Checking what coding agents see
 
-`npm run harness-check` runs real coding-agent CLIs (Codex, opencode, Gemini CLI, and
+`bun run harness-check` runs real coding-agent CLIs (Codex, opencode, Gemini CLI, and
 optionally Claude Code and Kiro CLI) against your build. It reports which values from
 Argent's tool schemas reach each one's model. Run it by hand when you change tool schemas,
 tool descriptions or the MCP server's instructions. See
@@ -196,7 +197,7 @@ tool descriptions or the MCP server's instructions. See
 
 ### Seeing what Argent sends to agents
 
-`npm run render:agent-context` renders what the MCP server sends for your checkout: each
+`bun run render:agent-context` renders what the MCP server sends for your checkout: each
 tool's `tools/list` entry and the server instructions, as markdown in
 `packages/tool-server/agent-context/` (not committed). Run it when you change tool
 descriptions, tool schemas or the server instructions. See
@@ -219,16 +220,16 @@ descriptions, tool schemas or the server instructions. See
 2. **Make your changes.** Keep the scope of a PR small and focused — it's easier to review.
 3. **Ensure the build passes:**
    ```bash
-   npm run build
+   bun run build
    ```
 4. **Ensure tests pass** for the packages you touched.
 5. **Check for dead code**, in a tree with no compiled output:
    ```bash
-   npx tsc --build --clean
-   npm run knip
+   bunx tsc --build --clean
+   bun run knip
    ```
-   `--clean` removes what `tsc` emitted; the few non-TypeScript assets `npm run build` copies into `packages/tool-server/dist` are left behind. Knip does not look at them, so the report is the same either way.
-   Run it this way round, not straight after step 3. The gate is counted against an unbuilt tree, because that is what CI analyses; with `packages/*/dist` present knip finds fewer issues, so a built-tree run carries phantom headroom and can pass locally while the Dead Code job fails. This leaves the tree unbuilt, so run `npm run build` again before re-running any test suite. The gate runs at `--max-issues 0`, so the report must come back empty and there is no ceiling to raise: when knip names an export or type you added, drop the `export` keyword if the symbol is still used inside its own file, or delete it if nothing uses it. When the only caller is somewhere knip cannot see — another workspace, because the unbuilt tree breaks cross-workspace edges, or the `argent-private` submodule, which CI does not check out — tag the declaration `/** @public */` and name that caller in the comment. Look for that caller before you delete. This gate stays green on a wrong delete either way, but the two cases differ after that: deleting a symbol another workspace calls turns `npm run build` and that workspace's tests red, so that mistake is caught, while deleting one only `argent-private` reaches breaks nothing here — it `require()`s the built `dist/*.js`, and CI never checks that submodule out.
+   `--clean` removes what `tsc` emitted; the few non-TypeScript assets `bun run build` copies into `packages/tool-server/dist` are left behind. Knip does not look at them, so the report is the same either way.
+   Run it this way round, not straight after step 3. The gate is counted against an unbuilt tree, because that is what CI analyses; with `packages/*/dist` present knip finds fewer issues, so a built-tree run carries phantom headroom and can pass locally while the Dead Code job fails. This leaves the tree unbuilt, so run `bun run build` again before re-running any test suite. The gate runs at `--max-issues 0`, so the report must come back empty and there is no ceiling to raise: when knip names an export or type you added, drop the `export` keyword if the symbol is still used inside its own file, or delete it if nothing uses it. When the only caller is somewhere knip cannot see — another workspace, because the unbuilt tree breaks cross-workspace edges, or the `argent-private` submodule, which CI does not check out — tag the declaration `/** @public */` and name that caller in the comment. Look for that caller before you delete. This gate stays green on a wrong delete either way, but the two cases differ after that: deleting a symbol another workspace calls turns `bun run build` and that workspace's tests red, so that mistake is caught, while deleting one only `argent-private` reaches breaks nothing here — it `require()`s the built `dist/*.js`, and CI never checks that submodule out.
 6. **Write a clear PR title** — it becomes part of the release changelog. Use the same prefix convention as commit messages (`feat:`, `fix:`, etc.).
 7. **Open the PR** against `main` and fill in the description with context on what changed and why.
 8. A maintainer will review and may request changes. Address feedback with new commits (don't force-push after review starts).

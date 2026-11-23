@@ -103,15 +103,15 @@ installed on the machine. Layout, colours and blur live as constants at the top 
 
 ## Checks
 
-Run `npx docusaurus build` after editing docs. It fails on broken internal links, which is
+Run `bunx docusaurus build` after editing docs. It fails on broken internal links, which is
 the main thing to catch after moving or renaming a page (also update any `/docs/...` links
 that pointed at the old path).
 
-Run `npm run format` and `npm run lint` from the repo root after editing docs or `src/`.
+Run `bun run format` and `bun run lint` from the repo root after editing docs or `src/`.
 Prettier and ESLint both run from the root. The root `.prettierrc` and `.prettierignore` cover
 this site together with the packages. The root `eslint.config.mjs` lints `packages/docs/` with
 the same type-aware rules as the packages plus the React hooks rules for `src/`. The root lint
-needs the dependencies of this package installed (`npm install` in this directory) because
+needs the dependencies of this package installed (`bun install` in this directory) because
 `tsconfig.json` extends `@docusaurus/tsconfig`.
 
 The `Docs build` workflow runs `typecheck` and `build` on every pull request that touches
