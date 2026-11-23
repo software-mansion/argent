@@ -15,7 +15,10 @@ import {
   installNetworkInterceptor,
   type JsCaptureMark,
 } from "../../blueprints/network-inspector";
-import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
+import {
+  JS_RUNTIME_DEBUGGER_NAMESPACE,
+  type JsRuntimeDebuggerApi,
+} from "../../blueprints/js-runtime-debugger";
 import type { NetworkRequestRecord } from "../../chromium-server";
 import {
   NOT_RECONNECTED,
@@ -32,6 +35,7 @@ import {
   captureSweepUnderWay,
   lastCaptureStart,
   resolveJsRuntime,
+  withCaptureLock,
 } from "../network/network-capture";
 import type { WaitLayer, WaitRecord } from "./match";
 
@@ -62,6 +66,10 @@ export interface MarkedLayer {
 
 const CAPTURE_ENDED =
   "its capture ended after the start (stop-all-simulator-servers, a stop of the device's services, or a tool-server restart); call network-capture-start again";
+const SWEEP_UNDER_WAY =
+  "stop-all-simulator-servers or the tool-server's exit is ending the app's capture";
+const CAPTURE_CHANGED =
+  "the app's capture changed during the read (a network-capture-start or -stop, or a teardown of the device), so the read left the app's JS runtime as it was";
 
 /** The service behind `ref` while it runs: the wait never creates one. */
 async function liveService<T>(
@@ -392,24 +400,43 @@ function jsLayer(
       let stopped = capture.intent === "stopped";
       const physical = capture.physicalDeviceId ?? device.id;
       // The teardown pauses the interceptor and drops the debugger; a read would undo both.
-      if (captureSweepUnderWay(physical)) {
-        return unreadable("js", "stop-all-simulator-servers is ending the app's capture", stopped);
-      }
-      if (stopped && !isLiveService(registry, `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`)) {
+      if (captureSweepUnderWay(physical)) return unreadable("js", SWEEP_UNDER_WAY, stopped);
+      const urn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`;
+      const live = isLiveService(registry, urn);
+      if (stopped && !live) {
         return unreadable(
           "js",
           "the app's JS runtime is not connected, and a stopped capture does not reconnect to it",
           true
         );
       }
+      /**
+       * Runs `change` (a reconnect, an install or a resume) under the lock that
+       * network-capture-start and -stop take, and only while the capture is
+       * still the started one this read found. A teardown that began first
+       * ends first, and one that begins meanwhile waits for `change`, then
+       * pauses and disposes what it left.
+       */
+      const whileStarted = <T>(change: () => Promise<T>) =>
+        withCaptureLock(physical, bundleId, async (): Promise<{ value: T } | { note: string }> => {
+          if (captureSweepUnderWay(physical)) return { note: SWEEP_UNDER_WAY };
+          const now = findJsCaptureOfDevice(device.id, bundleId);
+          if (!now?.capture.mark) return { note: CAPTURE_ENDED };
+          if (now.capture !== capture || capture.intent !== "started") {
+            return { note: CAPTURE_CHANGED };
+          }
+          return { value: await change() };
+        });
       const target = payload.slice(payload.indexOf(":") + 1);
       try {
-        const dbg = await resolveJsRuntime(
-          registry,
-          physical,
-          target !== physical ? target : undefined,
-          port
-        );
+        // A live debugger is used as it is: resolving it creates nothing.
+        const opened = live
+          ? { value: await registry.resolveService<JsRuntimeDebuggerApi>(urn) }
+          : await whileStarted(() =>
+              resolveJsRuntime(registry, physical, target !== physical ? target : undefined, port)
+            );
+        if ("note" in opened) return unreadable("js", opened.note);
+        const dbg = opened.value;
         const appId = dbg.runtimeApp?.appId;
         if (appId !== undefined && appId !== bundleId) {
           return unreadable(
@@ -444,7 +471,11 @@ function jsLayer(
               note: "the app's JS runtime reloaded since the stop, which cleared its requests",
             };
           }
-          const install = await installNetworkInterceptor(dbg.cdp, payload, dbg.runtimeApp);
+          const installed = await whileStarted(() =>
+            installNetworkInterceptor(dbg.cdp, payload, dbg.runtimeApp)
+          );
+          if ("note" in installed) return unreadable("js", installed.note);
+          const install = installed.value;
           return unreadable(
             "js",
             install.installed
@@ -455,7 +486,11 @@ function jsLayer(
         let note: string | undefined;
         if (resume) {
           // A stop's pause that the start did not reach: the start asked to record.
-          const install = await installNetworkInterceptor(dbg.cdp, payload, dbg.runtimeApp);
+          const resumed = await whileStarted(() =>
+            installNetworkInterceptor(dbg.cdp, payload, dbg.runtimeApp)
+          );
+          if ("note" in resumed) return unreadable("js", resumed.note);
+          const install = resumed.value;
           note = install.installed
             ? "a stop's pause was still in the app's JS runtime, so the wait resumed the capture: requests sent while it was paused are missing"
             : `a stop's pause is still in the app's JS runtime, and the wait could not resume it: ${install.reason}`;
