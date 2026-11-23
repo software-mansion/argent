@@ -185,9 +185,11 @@ Give `debugger-connect` the device ID from `list-devices`. When several devices 
 | Android device | `<model> - <release> - API <level>`, from `ro.product.model` and the build version | The other devices that adb lists               |
 | Other devices  | No name. Use the `logicalDeviceId`.                                                | Not applicable                                 |
 
-When another device has the same name, `debugger-connect` fails. The error lists the `logicalDeviceId` of each device on the Metro. Give that `logicalDeviceId` to `debugger-connect`.
+Then the app writes a marker to its device log, and Argent reads the log of the device to confirm that the app runs there. A device that Argent does not list can report the same name, for example a device on another adb server or on the network.
 
-After Argent finds a device by its name, the device ID stays bound to the app on that device. When that app exits, the `debugger-*` tools fail and do not use the other device. After the app starts again, the tools use it again.
+`debugger-connect` fails when another device has the same name, when the marker is in the log of another device, or when Argent cannot find the marker. The error lists the `logicalDeviceId` of each device on the Metro. Give that `logicalDeviceId` to `debugger-connect`.
+
+After Argent finds a device by its name, the device ID stays bound to the app on that device. When that app exits, the `debugger-*` tools fail and do not use the other device. After the app starts again, the tools use it again. Argent confirms the app on each connect, so when the device ID names another device later, for example an emulator serial after the emulators restart on other ports, Argent finds the device by its name again.
 
 ## Native devtools
 

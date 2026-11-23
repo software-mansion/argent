@@ -8,6 +8,8 @@ import {
 import { resolveDevice } from "../device-info";
 import { externalNativeId } from "../external-devices";
 import { listIosSimulators } from "../ios-devices";
+import type { CDPClient } from "./cdp-client";
+import { findRuntimeDevices } from "./runtime-device";
 
 /**
  * Which device names a Metro target may carry for `deviceId`, or undefined
@@ -30,6 +32,9 @@ import { listIosSimulators } from "../ios-devices";
  *   report the same name. `sdk_gphone64_arm64` is the model of every recent
  *   Google image, so the release and API level are what usually tell two
  *   emulators apart.
+ *
+ * Unique here means among the devices this host lists, so a match is only a
+ * candidate: the connect confirms it with `runtimeRunsOn` before keeping it.
  *
  * A physical iPhone is skipped: since iOS 16 it reports a generic "iPhone".
  * Failing lookups give undefined, which leaves the caller with the usual
@@ -89,7 +94,8 @@ async function androidMatcher(serial: string): Promise<((name: string) => boolea
 }
 
 /**
- * The logicalDeviceId each udid or serial was matched to by name.
+ * The logicalDeviceId each udid or serial was matched to by name, per Metro
+ * port.
  *
  * The match holds only while both devices are on Metro. When the app on the
  * matched device exits, a reconnect sees only the other device, and the
@@ -97,13 +103,52 @@ async function androidMatcher(serial: string): Promise<((name: string) => boolea
  * the app is back. Keeping the id the name led to lets `selectTarget` refuse
  * that, as it refuses a logicalDeviceId that left. A later match by name, after
  * a reinstall gave the app a new id, replaces it.
+ *
+ * A pin is a hint, not proof: an emulator serial is a console port, so the
+ * same serial can name another AVD after a reboot, and the pinned app then
+ * runs somewhere else. So every connect that goes by a pin is confirmed like a
+ * match by name (`runtimeRunsOn`), and a pin that fails is forgotten.
  */
 const nameMatchedLogicalIds = new Map<string, string>();
 
-export function nameMatchedLogicalDeviceId(deviceId: string): string | undefined {
-  return nameMatchedLogicalIds.get(deviceId);
+const pinKey = (deviceId: string, port: number) => `${port}|${deviceId}`;
+
+export function nameMatchedLogicalDeviceId(deviceId: string, port: number): string | undefined {
+  return nameMatchedLogicalIds.get(pinKey(deviceId, port));
 }
 
-export function rememberNameMatch(deviceId: string, logicalDeviceId: string | undefined): void {
-  if (logicalDeviceId) nameMatchedLogicalIds.set(deviceId, logicalDeviceId);
+export function rememberNameMatch(
+  deviceId: string,
+  port: number,
+  logicalDeviceId: string | undefined
+): void {
+  if (logicalDeviceId) nameMatchedLogicalIds.set(pinKey(deviceId, port), logicalDeviceId);
+}
+
+export function forgetNameMatch(deviceId: string, port: number): void {
+  nameMatchedLogicalIds.delete(pinKey(deviceId, port));
+}
+
+/**
+ * Whether the runtime behind `cdp` runs on `deviceId`, by its own log (see
+ * `findRuntimeDevices`): "yes", "elsewhere" with the ids it runs on, or
+ * "unknown" when no log this host reads holds the marker.
+ *
+ * A name is checked only against the devices this host lists, but Metro can
+ * serve apps from others: a device on another adb server or the LAN, one that
+ * was offline at lookup time, a simulator in a device set argent does not
+ * read. Any of them can carry the name. The log tells them apart, and a device
+ * this host cannot read the log of is not the one the caller named, since a
+ * name is only matched for a booted simulator or a device adb lists.
+ */
+export async function runtimeRunsOn(
+  cdp: Pick<CDPClient, "evaluate">,
+  deviceId: string
+): Promise<
+  { verdict: "yes" } | { verdict: "elsewhere"; found: string[] } | { verdict: "unknown" }
+> {
+  const native = externalNativeId(deviceId);
+  const { found } = await findRuntimeDevices(cdp, { waitSerials: [native] });
+  if (found.includes(native)) return { verdict: "yes" };
+  return found.length ? { verdict: "elsewhere", found } : { verdict: "unknown" };
 }
