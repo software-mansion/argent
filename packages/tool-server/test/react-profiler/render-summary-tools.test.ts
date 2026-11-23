@@ -1111,6 +1111,7 @@ describe("profiler-combined-report on a session with no stored commit", () => {
       uiHangs: [],
       cpuHotspots: [],
       memoryLeaks: [],
+      hangsRecorded: true,
       leaksRecorded: true,
       mallocStackLogging: true,
       wallClockStartMs: 1_000_000,

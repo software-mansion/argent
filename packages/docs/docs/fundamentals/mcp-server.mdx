@@ -30,6 +30,15 @@ npx @swmansion/argent@latest init
 
 The wizard detects your editor and writes the MCP server entry to the editor config. See [Installation](/docs/fundamentals/installation) for the prerequisites and the team setup.
 
+In a global config file, the wizard writes the absolute paths of `node` and of the Argent CLI. An editor that starts from the Dock or from another app launcher does not get the `PATH` of your shell. The absolute paths let that editor start the MCP server. The wizard uses the `node` file in the same folder as the `argent` command. The wizard writes the bare `argent` command in these cases:
+
+- on Windows,
+- when the `argent` command is a shim (Volta, pnpm),
+- when the folder of the `argent` command has no `node` file (a custom npm prefix, or `/usr/local` with the Debian and Ubuntu `nodejs` package),
+- in a project config file of a global install.
+
+`argent update` writes the absolute paths again. If the folder of the `argent` command that comes first on your `PATH` has no `node` file, `argent update` writes the bare `argent` command. `nvm uninstall` and `fnm uninstall` also remove the Argent installation of that Node version. After you remove the Node version that runs Argent, install Argent under the new Node version, then run `argent update`.
+
 ## Add the MCP server by hand
 
 Install the package and add the server to the MCP config of your editor:
@@ -49,11 +58,15 @@ npm install -g @swmansion/argent
 }
 ```
 
+If the editor does not start from a terminal, set `command` to the absolute path of `node`. Then put the absolute path of `@swmansion/argent/dist/cli.js` before `mcp` in `args`. `which node` shows the path of `node`. `npm root -g` (`pnpm root -g` for pnpm) shows the folder that contains `@swmansion/argent`.
+
 The key of the top-level object depends on the editor. Claude Code, Cursor and Devin Desktop use `mcpServers`. VS Code uses `servers`. See [Supported editors](/docs/reference/editors) for the config file of each editor.
 
 ## How the MCP server works
 
 The editor starts `argent mcp` as a child process and talks to it over standard input and output. The MCP server does not control the devices itself. The MCP server forwards each tool call to the Argent tool-server. The tool-server owns the simulators, emulators and device sessions.
+
+When the editor cancels a tool call, the MCP server cancels the call on the tool-server. Some tools stop, for example `e2e-execute`, `run-sequence` and `await-ui-element`. Other tools continue to the end. After the cancel, the MCP server does not save the files of the result, except for `screen-recording-stop` and `native-profiler-stop`.
 
 By default, the MCP server starts a local tool-server when the editor starts the MCP server. If that tool-server runs already, the MCP server uses it. All agents that use the same Argent installation share this local tool-server. `argent link` and the `ARGENT_TOOLS_URL` variable send the tool calls to a different tool-server. In this section, both are a link. The MCP server reads the link when it starts. After you run `argent link` or `argent unlink`, restart the editor.
 

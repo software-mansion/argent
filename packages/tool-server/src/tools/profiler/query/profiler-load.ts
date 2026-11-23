@@ -16,7 +16,7 @@ import {
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
@@ -408,15 +408,17 @@ async function loadNativeSession(
     path.join(debugDir, `native-profiler-${sessionId}.trace`)
   );
   const appSuspensions = metadata?.appSuspensions ?? null;
-  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files, {
-    appSuspensions,
-  });
+  const { cpuSamples, uiHangs, hangsRecorded, cpuHotspots, memoryLeaks } =
+    await runIosProfilerPipeline(files, {
+      appSuspensions,
+    });
 
   // raw_*.xml carry no start time, so the frozen anchor is null and the combined
   // report reports a missing native anchor rather than mis-anchoring to residue.
   api.parsedData = {
     cpuSamples,
     uiHangs,
+    hangsRecorded,
     cpuHotspots,
     memoryLeaks,
     // Stop writes no raw_leaks.xml when the trace had no Leaks table.
@@ -442,7 +444,7 @@ async function loadNativeSession(
     `Loaded native profiler session \`${sessionId}\`.`,
     "",
     `- CPU samples: ${cpuSamples.length}`,
-    `- UI hangs: ${files.hangs ? uiHangs.length : "not recorded"}`,
+    `- UI hangs: ${hangsRecorded ? uiHangs.length : "not recorded"}`,
     `- CPU hotspots: ${cpuHotspots.length}`,
     `- Memory leaks: ${files.leaks ? memoryLeaks.length : "not recorded"}`,
     "",
@@ -521,7 +523,7 @@ Fails if the session_id is not found or the session's trace files are missing fr
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
   // Physical iPhones load the xctrace sessions native-profiler-launch-analysis writes.
-  capability: { ...REACT_PROFILER_TOOL_CAPABILITY, apple: { simulator: true, device: true } },
+  capability: { ...RN_ONLY_TOOL_CAPABILITY, apple: { simulator: true, device: true } },
   // load_native re-parses the whole export, which can outlast the 30s MCP fetch
   // timeout; an aborted call is replayed, not cancelled.
   longRunning: true,

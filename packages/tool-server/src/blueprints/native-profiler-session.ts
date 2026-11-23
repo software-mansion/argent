@@ -35,6 +35,8 @@ export interface NativeProfilerParsedData {
   /** xctrace only (iOS and macOS) - on Android `parsedData` stays null and drill-down re-queries the .pftrace. */
   cpuSamples: CpuSample[];
   uiHangs: UiHang[];
+  /** False when this capture has no readable UI hangs export. */
+  hangsRecorded: boolean;
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
   /**

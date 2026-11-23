@@ -26,7 +26,8 @@ When the app crashes, Argent keeps the log file of the session for at least 24 h
 
 ## Code evaluation
 
-The agent runs JavaScript in the runtime of the app. On a device, the runtime is Hermes. In a Chromium or Electron app, the runtime is V8. The agent reads the state of a store, calls a function, or changes a value to test a theory. The app stays open during this work.
+The agent runs JavaScript in the app to read a store, call a function, or change a value while the app stays open.
+React Native apps, including supported [Mac apps](/docs/features/mac-apps#debug-a-react-native-app), use Hermes. Chromium and Electron apps use V8.
 
 ## Component trees
 
