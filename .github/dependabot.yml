@@ -70,11 +70,6 @@ updates:
           - "*"
         update-types:
           - "major"
-      # Group security updates across all directories.
-      npm-security:
-        applies-to: security-updates
-        patterns:
-          - "*"
 
   # GitHub Actions used by workflows under .github/workflows
   - package-ecosystem: "github-actions"
