@@ -1587,28 +1587,12 @@ describe("swipe: pre-dispatch settle", () => {
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass", "swipe:pass"]);
     expect(result.steps[1].warning).toContain("dispatched without settling the screen first");
-    // The tap's warning word for word, and a direction swipe adds that no read
-    // said how the UI lies, so the direction may not be the UI's.
-    expect(result.steps[1].warning!.startsWith(result.steps[0].warning!)).toBe(true);
-    expect(result.steps[1].warning).toContain("No read reported the UI's orientation");
+    // The tap's warning word for word: a direction is the UI's, and the
+    // gesture tools turn it on a landscape iOS UI, so the flow has nothing to add.
+    expect(result.steps[1].warning).toBe(result.steps[0].warning);
   }, 15000);
 
-  it("says no read reported the UI's orientation on a remote iOS simulator", async () => {
-    currentTree = () => {
-      throw new Error("tree source down");
-    };
-    await writeFlow("blind-remote", {
-      executionPrerequisite: "",
-      steps: [{ kind: "swipe", direction: "left" }],
-    });
-
-    const result = await run("blind-remote", `remote:${DEVICE}`);
-
-    expect(result.steps[0].status).toBe("pass");
-    expect(result.steps[0].warning).toContain("No read reported the UI's orientation");
-  }, 15000);
-
-  it.each(["emulator-5554", "chromium-cdp-9222", "00008110-000978540290401E"])(
+  it.each(["emulator-5554", "chromium-cdp-9222", "00008110-000978540290401E", `remote:${DEVICE}`])(
     "says nothing about the UI's orientation on %s, whose touches are on the UI's axes",
     async (device) => {
       currentTree = () => {

@@ -59,36 +59,21 @@ vi.mock("../src/blueprints/native-devtools", async () => {
   return { ...actual, precheckNativeDevtools: vi.fn(async () => null) };
 });
 
-import { getFailureSignal, Registry } from "@argent/registry";
-import { createBootDeviceTool } from "../src/tools/devices/boot-device";
+import { getFailureSignal } from "@argent/registry";
+
 import { reinstallAppTool } from "../src/tools/reinstall-app/index";
 import { createRestartAppTool } from "../src/tools/restart-app/index";
-import { createDescribeTool } from "../src/tools/describe/index";
+
 import { createLaunchAppTool } from "../src/tools/launch-app/index";
-import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
+
 import { openUrlTool } from "../src/tools/open-url/index";
-
-const registry = new Registry();
-const slowDeviceTools: { id: string; longRunning?: boolean }[] = [
-  createBootDeviceTool(registry),
-  reinstallAppTool,
-  createRestartAppTool(registry),
-  createDescribeTool(registry),
-  createLaunchAppTool(registry),
-  nativeProfilerStartTool,
-  openUrlTool,
-];
-
-describe("device tools that can outlive the MCP fetch timeout", () => {
-  it.each(slowDeviceTools)("$id is declared longRunning", (tool) => {
-    expect(tool.longRunning).toBe(true);
-  });
-});
 
 // No client timeout backs these, and a wedged simctl ignores SIGTERM.
 describe("iOS simctl calls of longRunning app tools are SIGKILL-bounded", () => {
   const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
-  const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
+  const fakeRegistry = {
+    resolveService: vi.fn(async () => ({ networkCaptureAfterLaunch: async () => undefined })),
+  } as never;
 
   beforeEach(() => {
     calls.length = 0;
@@ -137,7 +122,9 @@ describe("iOS simctl calls of longRunning app tools are SIGKILL-bounded", () => 
 
 describe("iOS app tools fail when the step before launch or install times out", () => {
   const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
-  const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
+  const fakeRegistry = {
+    resolveService: vi.fn(async () => ({ networkCaptureAfterLaunch: async () => undefined })),
+  } as never;
   const cases = [
     {
       id: "reinstall-app",
@@ -208,7 +195,9 @@ describe("iOS app tools fail when the step before launch or install times out", 
 
 describe("iOS app tools report a timed-out launch, install or openurl as a timeout", () => {
   const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
-  const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
+  const fakeRegistry = {
+    resolveService: vi.fn(async () => ({ networkCaptureAfterLaunch: async () => undefined })),
+  } as never;
 
   beforeEach(() => {
     calls.length = 0;

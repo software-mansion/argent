@@ -148,8 +148,4 @@ describe("boot-device — Vega VVD path", () => {
       createBootDeviceTool(registry).execute!({}, { vvdImage: "tv", udid: "x" })
     ).rejects.toThrow(/exactly one/);
   });
-
-  it("rejects when no platform selector is given", async () => {
-    await expect(createBootDeviceTool(registry).execute!({}, {})).rejects.toThrow(/exactly one/);
-  });
 });

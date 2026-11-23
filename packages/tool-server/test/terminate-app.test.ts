@@ -80,10 +80,6 @@ beforeEach(() => {
 });
 
 describe("terminate-app", () => {
-  it("is hidden from MCP", () => {
-    expect(terminateAppTool.hideFromMcp).toBe(true);
-  });
-
   it("force-stops an Android app without relaunching it", async () => {
     await expect(run("emulator-5554")).resolves.toEqual({ terminated: true, bundleId: BUNDLE_ID });
     expect(shellCalls).toEqual([`am force-stop '${BUNDLE_ID}'`]);

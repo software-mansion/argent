@@ -256,14 +256,17 @@ let root: string;
 async function writeFlow(name: string, version: number | undefined, steps: Step[]) {
   const dir = path.join(root, ".argent", "flows");
   await fs.mkdir(dir, { recursive: true });
-  const flow: FlowFile = { ...(version ? { version } : {}), executionPrerequisite: "", steps };
-  await fs.writeFile(path.join(dir, `${name}.yaml`), fileText(flow), "utf8");
+  await fs.writeFile(
+    path.join(dir, `${name}.yaml`),
+    fileText(version, { executionPrerequisite: "", steps }),
+    "utf8"
+  );
 }
 
-/** The YAML of `flow`; without the `version` line when `flow` has none, as an older Argent wrote it. */
-function fileText(flow: FlowFile): string {
-  const yaml = serializeFlow(flow);
-  return flow.version === undefined ? yaml.replace(/^version: \d+\n/, "") : yaml;
+/** The YAML of `flow` at `version`; without the `version` line when `version` is unset, as an older Argent wrote it. */
+function fileText(version: number | undefined, flow: FlowFile): string {
+  const yaml = serializeFlow(flow).replace(/^version: \d+\n/, "");
+  return version === undefined ? yaml : `version: ${version}\n${yaml}`;
 }
 
 async function run(d: Device, deviceId: string, name = "flow"): Promise<FlowRunResult> {
@@ -461,12 +464,10 @@ describe.concurrent("a selector miss", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-file-version-miss-"));
     try {
       await fs.mkdir(path.join(dir, ".argent", "flows"), { recursive: true });
-      const flow: FlowFile = {
-        ...(version ? { version } : {}),
-        executionPrerequisite: "",
-        steps: [step],
-      };
-      await fs.writeFile(path.join(dir, ".argent", "flows", "miss.yaml"), fileText(flow));
+      await fs.writeFile(
+        path.join(dir, ".argent", "flows", "miss.yaml"),
+        fileText(version, { executionPrerequisite: "", steps: [step] })
+      );
       const r = await createRunFlowTool(device(opts).registry).execute(
         {},
         { name: "miss", project_root: dir, device: deviceId },

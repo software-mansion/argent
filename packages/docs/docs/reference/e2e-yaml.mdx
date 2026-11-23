@@ -73,9 +73,20 @@ On an iOS simulator, local or remote, the version sets how Argent runs the e2e t
 | `1`, or no `version` key | As in Argent releases from before version 2: the same steps, checks and messages, on the native view hierarchy of the app        |
 
 - On other platforms and on a physical iPhone, the version has no effect.
-- A `run:` fragment runs at the version of the e2e test that runs it. An e2e test that a `tool: e2e-execute` step runs uses its own version.
-- When you record `e2e-execute` of a version 1 e2e test on an iOS simulator, the recorder writes a `run:` step. That step replays the e2e test at version 2. The message of `e2e-add-step` warns about this difference.
-- A selector from `describe` can miss in a version 1 e2e test. To change a version 1 e2e test, set `version: 2`, replay the e2e test and replace each selector that fails.
+- A `run:` fragment resolves its selectors on the tree of the e2e test that runs it. An e2e test that a `tool: e2e-execute` step runs uses its own version.
+- When you record `e2e-execute` of a version 1 e2e test on an iOS simulator, the recorder writes a `run:` step. That step replays the e2e test on the accessibility tree. The message of `e2e-add-step` warns about this difference.
+- A selector from `describe` can miss in a version 1 e2e test. To change a version 1 e2e test, set `version: 2`, replay the e2e test and replace each selector that fails. In a landscape or upside-down UI, also replace the coordinates of each `tap`, `swipe` and `tool:` step.
+
+The versions also differ in coordinates on an iOS simulator with a landscape or upside-down UI:
+
+| Version | Coordinates in `tap: { x, y }`, in the `from`, `to` and `by` of `swipe`, and in a `tool:` step |
+| ------- | ---------------------------------------------------------------------------------------------- |
+| `1`     | The portrait axes of the screen. Earlier Argent releases sent them that way                    |
+| `2`     | The UI as the user sees it, like the `describe` frames                                         |
+
+Argent still runs a version 1 file as it was recorded. It turns the coordinates of a `tap` and a `swipe` to the UI. It runs a `tool:` step with the portrait axes of the screen. For coordinates, a fragment keeps its own version: a version 2 e2e test can run a version 1 fragment, and the reverse.
+
+A `snapshot` baseline that an earlier release took of a landscape UI on an iOS simulator is sideways. Its key has the width and the height of the screen swapped. When Argent finds no baseline with the key of the upright capture, it compares against the sideways one, with the capture turned to match. The step has a warning. To store an upright baseline, run the e2e test with `--update-baselines`.
 
 An e2e test has one of two shapes:
 
@@ -102,10 +113,10 @@ steps:
   - launch: com.example.tvapp
 ```
 
-| Key           | Value                                                                                                               |
-| ------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `platform`    | `ios`, `android`, `chromium`, `vega` or `macos`, or a list of them. `ios` also covers a remote simulator            |
-| `runtimeKind` | `tv` for Apple TV, Android TV and Fire TV. `mobile` for all other targets except a Mac app, which satisfies neither |
+| Key           | Value                                                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `platform`    | `ios`, `android`, `chromium`, `vega` or `macos`, or a list of them. `ios` also covers a remote simulator, where the audio tools fail |
+| `runtimeKind` | `tv` for Apple TV, Android TV and Fire TV. `mobile` for all other targets except a Mac app, which satisfies neither                  |
 
 The block must have one key or both keys. A target must satisfy all keys in the block. Parsing rejects an unknown key and an unknown value.
 
@@ -215,7 +226,7 @@ Each step contains one directive. A failed directive stops the e2e test.
 | Directive    | Shape                                                              | Description                                                                                          |
 | ------------ | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `launch`     | `<app id>` or `{ native, ios, android, vega, chromium, macos }`    | Terminate and start the app, then wait until the app is ready                                        |
-| `tap`        | `<selector>`, `{ on: <selector>, times, button }` or `{ x, y }`    | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                          |
+| `tap`        | `<selector>`, `{ x, y }` or `{ on, times, button, modifiers }`     | Tap an element or point. `times: 2` double-taps. `x`, `y` are normalized coordinates                 |
 | `long-press` | `<selector>` or `{ on: <selector>, duration }`                     | Press and hold. `duration` in milliseconds                                                           |
 | `swipe`      | `<direction>` or `{ from, direction, to, by, momentum, duration }` | Move one finger across the screen. `direction` is the travel of the finger. See [Swipe](#swipe)      |
 | `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`                                     |
@@ -235,13 +246,49 @@ Each step contains one directive. A failed directive stops the e2e test.
 
 `tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
 
+On Chromium, when a nested scroller cuts the `scroll-to` target along the scroll direction, Argent scrolls inside that scroller. When the scrolls stop moving the target, the step passes with the target still cut.
+
 The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a right-click, for example to open a context menu. Argent supports it only on a Mac app. On other platforms, the step fails before the runner reads the tree. To open a context menu on iOS or Android, use `long-press`. A recorded `gesture-tap` with `button: "right"` becomes a `tap` with `button: right`.
 
-A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
+With tap options, put the selector or `{ x, y }` under `on`. On a Mac app, `modifiers` can hold any combination of `control`, `option`, `shift`, and `command`. For example, `tap: { on: "Row 2", modifiers: [command] }` Command-clicks the row. You can combine `modifiers` with `times` or `button`.
 
-A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
+An empty list leaves the tap unmodified. On other platforms, a nonempty list makes the step fail before Argent looks for the target. Recording a `gesture-tap` preserves the keys for replay. See [Mac click behavior and troubleshooting](/docs/reference/tools#clicks-with-modifier-keys).
+
+A direction in `swipe` and `scroll-to` is the direction that the user sees. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames, which is the UI as the user sees it. Both are also true for a landscape UI, for example on a rotated device or an unfolded foldable. See [Rotated devices](/docs/reference/tools#rotated-devices).
+
+A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time. The report of the step shows the placeholder, not the value. See [Secrets](/docs/reference/configuration#secrets) and [Typed secrets in a report](#typed-secrets-in-a-report).
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
+
+### Typed secrets in a report
+
+A text field that is not secure shows a typed secret on the screen. The reason of a failed `text` check quotes the text of its element. Argent keeps a typed secret out of the quoted text with two rules.
+
+The first rule applies on each platform. Argent knows each value that a `type` step or the `keyboard`, `fill` or `paste` tool typed on a device. In the quoted text, Argent replaces a value with its placeholder when the screen shows the value exactly as typed. The comparison is case-sensitive:
+
+```
+element matched id="status" but its text was "Signed in with {{secret:API_TOKEN}}" (wanted to contain "Saved")
+```
+
+The second rule applies on an iOS simulator. A text field can change a typed value. For example, the field can capitalize, correct or format the value. Thus, after a tool typed a secret on an iOS simulator, the quoted text does not contain the text of a text field. The quoted text contains a note instead:
+
+```
+element matched id="token" but its text was "Token [text withheld: a secret was typed on this device]" (wanted to contain "Saved")
+```
+
+The second rule applies to each text field on that simulator. It also applies to an empty field, which reads as its placeholder. The label of the field and the text of other elements stay in the quoted text. The check reads the text of the field as before. Only the quoted text changes.
+
+Argent keeps the values in memory, for each device, until the tool-server stops. Thus the two rules also apply in a later e2e test of a directory run, in a nested `e2e-execute` run and in the run around it. The rules also apply after the app starts again.
+
+Argent changes only the text that the reason quotes from the screen. The other words of the reason and the text that the check expects do not change. The first rule also applies to the note of a failed `text` check of the `await-ui-element` tool.
+
+A report can show a typed secret in these cases:
+
+- An element that is not a text field shows a text that the app derives from the secret, for example a capitalized name.
+- A `tool:` step reads the screen, for example with `describe`. The result of the step contains the text of the screen.
+- On a physical iPhone, Android, Chromium or a Mac app, a text field shows the secret in a changed form. The second rule applies only on an iOS simulator.
+- A later e2e test of a directory run fails. That e2e test typed no secret, so Argent takes the screenshot of the failed step.
+- A different tool-server typed the secret, or no Argent tool typed it.
 
 ### Launch map
 
@@ -365,7 +412,18 @@ The `text` comparators:
 | `equals`   | Case-insensitive full match     |
 | `matches`  | Case-sensitive JavaScript regex |
 
+On Chromium, `matches` reads text in the letter case that the page shows. For example, the CSS `text-transform: uppercase` makes `Save` read as `SAVE`.
+
 `matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. A password field is the exception: Argent does not read its typed secret, so `matches` never reads a password field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
+
+On an iOS simulator, a `text` check reads a text field as follows:
+
+- A text field reads as the text that it contains.
+- An empty text field reads as its placeholder.
+- A text field with an accessibility label reads as the label, then a space, then the text or the placeholder. For example, an empty field with the label `Email` and the placeholder `Required` reads as `Email Required`.
+- Argent does not read the text in a secure text field.
+
+On an iOS simulator, Argent does not use the text in a text field as the selector of a recorded tap.
 
 A negative condition passes before the element appears, for a typo, and on the wrong screen. First prove the screen and the same selector with `visible`. Then perform the action and check `hidden`.
 
@@ -620,12 +678,37 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 
 `argent e2e run` replays an e2e test without an agent and exits non-zero on failure. The command sends the e2e test to the tool-server that the CLI uses. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-| Command                      | Description                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist |
-| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                            |
-| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                         |
-| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                     |
+| Command                      | Description                                                                                                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist                      |
+| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                                                 |
+| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                                              |
+| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                                          |
+| `argent e2e list <dir>`      | List the e2e tests that `argent e2e run <dir>` runs. The path must not contain `..`                                   |
+| `argent e2e list <dir> -r`   | List the e2e tests that `argent e2e run <dir> -r` runs                                                                |
+| `argent e2e list --json`     | Print the same list as a JSON document. See [The `argent e2e list` JSON document](#the-argent-e2e-list-json-document) |
+
+`argent e2e list` skips the same subdirectories as `argent e2e run <dir> --recursive`: `__baselines__`, `node_modules` and dot-directories other than `.argent`, at any depth. Argent always reads the directory that you name, also when it is one of these directories.
+
+`argent e2e list` and `argent e2e run <dir>` skip a YAML file that is not an e2e test. Such a file has no top-level `steps` key, for example a `docker-compose.yaml`. Argent does not skip an empty file. Argent does not skip a file that has a YAML syntax error and holds `steps` or a top-level `version:` line. A directory run reports such a file as a failed e2e test. Argent does not skip a file with a newer `version`. `argent e2e run <name>` and `argent e2e run <path>.yaml` always run the file that you name.
+
+`argent e2e list` writes a warning on stderr for an empty file and for a file with a YAML syntax error, for example `warning: <path> is empty`. Stdout holds only the paths.
+
+When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes `warning: no .argent/e2e or .argent/flows directory in the current working directory` on stderr. When the directories hold no e2e test, `argent e2e list` writes `No e2e tests found in .argent/e2e or .argent/flows` on stderr. In both cases, stdout is empty and the exit code is 0. When one of the directories exists but Argent cannot read it, `argent e2e list` writes `Could not read e2e test directory: <dir>` on stderr and gives exit code 2.
+
+`argent e2e list <dir>` prints paths relative to the current directory for a relative `<dir>`, and absolute paths for an absolute `<dir>`. `argent e2e run` accepts each printed path. Argent puts `./` in front of a printed path that starts with `-`, so that `argent e2e run` does not read the path as an option.
+
+Argent writes an error on stderr and gives exit code 2 when `<dir>`:
+
+- does not exist
+- is not a directory
+- cannot be read
+- is empty text
+- has a `..` segment
+
+When you give `-r` without `<dir>`, Argent writes `e2e list --recursive requires a directory path` on stderr and gives exit code 2.
+
+When Argent finds no e2e test in `<dir>`, Argent writes `No e2e tests found in <dir>` on stderr, prints nothing on stdout and gives exit code 0. Without `-r`, Argent writes `Pass -r/--recursive to include subdirectories.` on the next line. With `--json`, Argent prints `{ "e2eTests": [] }`.
 
 | Option               | Description                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -633,7 +716,7 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 | `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either    |
 | `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines` |
 | `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                           |
-| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Dot-directories and `node_modules` are skipped                                                                    |
+| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                             |
 | `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                 |
 | `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                               |
 | `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                     |
@@ -647,7 +730,7 @@ argent e2e run .argent/e2e --recursive
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
 
-When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. With `--output`, Argent writes the screenshot to `<dir>/<test>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
+When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. The rule also counts the steps of nested `tool: e2e-execute` runs and of the runs around them. With `--output`, Argent writes the screenshot to `<dir>/<test>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
 
 Each step line shows the time of the step before the reason, for example `(1.2s)`. A step that did not run shows no time. The time of a `when` or `run` step does not include the steps in its block or fragment. The last line of an e2e test run shows the time of the run. The summary of a directory run shows the time of all e2e tests, for example `(1m 32s)`.
 
@@ -677,7 +760,7 @@ The `Failed e2e tests` section has one entry for each e2e test that failed. Each
 
 - The e2e test path.
 - The first step that failed or errored, with its number. An e2e test without a report gives its outcome line instead.
-- The reason of that step, or the error message of an e2e test without a report.
+- The reason of that step, or the error message of an e2e test without a report. Then each baseline that the CLI could not write, with the path and the reason.
 - A `re-run:` command that runs only that e2e test. The command uses the same `--device`, `--platform` and `--update-baselines` options as the directory run. If the directory run has `--output`, the command writes the images of that e2e test to the same directory as the directory run.
 
 The section does not include the e2e tests that Argent skipped.
@@ -714,6 +797,42 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
+
+### The `argent e2e list` JSON document
+
+`argent e2e list --json` writes one document on stdout. The document holds an `e2eTests` array. The array has the same order as the plain output. Each entry holds these fields:
+
+| Field        | Description                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `path`       | The path that the plain output prints                                                                                            |
+| `name`       | The name that `argent e2e run <name>` accepts. Only for a file directly in `.argent/e2e` or `.argent/flows`                      |
+| `legacy`     | `true` for an e2e test in `.argent/flows`                                                                                        |
+| `shadowedBy` | The path of an earlier entry with the same name. `argent e2e run <name>` runs that entry instead. Only when such an entry exists |
+| `warning`    | The problem in the file, as one of the codes below. Only when the file is empty or has a YAML syntax error                       |
+
+| `warning` code | Meaning                                    |
+| -------------- | ------------------------------------------ |
+| `empty`        | The file is empty or holds only whitespace |
+| `syntax-error` | The file has a YAML syntax error           |
+
+```json
+{
+  "e2eTests": [
+    { "path": ".argent/e2e/login.yaml", "name": "login", "legacy": false },
+    { "path": ".argent/e2e/suite/pay.yaml", "legacy": false },
+    {
+      "path": ".argent/flows/login.yaml",
+      "name": "login",
+      "legacy": true,
+      "shadowedBy": ".argent/e2e/login.yaml"
+    }
+  ]
+}
+```
+
+When Argent finds no e2e test, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. The top-level `warning` field is not the `warning` field of an entry. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
+
+`argent e2e list <dir> --json` gives each entry only the `path` field, and the `warning` field when it applies. With `--json`, Argent writes each `<dir>` error as the JSON error object on stderr.
 
 <a id="flows-over-a-link" />
 
@@ -772,7 +891,7 @@ For an e2e test with `snapshot:` steps, the CLI also uploads baselines from the 
 
 When a run that compares and a run that updates use the same directory, the CLI uploads the content of each baseline that the run that compares reads. It uploads the name of each other baseline.
 
-When a run updates baselines, the tool-server returns each new baseline in the result, also the baselines of nested runs. The CLI writes each one into the directory of its run after the run, and into no other directory. When the CLI cannot write a baseline, it prints the path and the reason. The run then fails with exit code 1. When the connection closes before the result, the CLI writes no baseline.
+When a run updates baselines, the tool-server returns each new baseline in the result, also the baselines of nested runs. The CLI writes each one into the directory of its run after the run, and into no other directory. When the CLI cannot write a baseline, it prints the path and the reason. The run then fails with `FAIL`, `"ok": false` and exit code 1. When the connection closes before the result, the CLI writes no baseline.
 
 The CLI does not upload a baseline that links out of the directories above, or a `.png` name that links to a file that is not a PNG file. A `snapshot:` step that reads or writes such a baseline reports `error`. When the `__baselines__/<test>/` directory itself links out of these directories, the CLI uploads no baseline and writes none.
 
@@ -815,7 +934,7 @@ Over a link, both sources send these files with the call, and the tool-server ru
 - the snapshot baselines of each run
 - the file arguments of the `tool:` steps
 
-The client sends these files with the rules of [E2E tests over a link](#e2e-tests-over-a-link). The `project_root` argument is the project root. When a run of the call updates baselines, the client writes each new baseline into the `__baselines__/<test>/` directory of its e2e test when the run ends. When the client cannot write a baseline, the report shows `baseline not written` with the path and the reason. When the call sets `updateBaselines`, a `tool: e2e-execute` step in the e2e test also updates the baselines of its e2e test, unless the step sets `updateBaselines` itself.
+The client sends these files with the rules of [E2E tests over a link](#e2e-tests-over-a-link). The `project_root` argument is the project root. When a run of the call updates baselines, the client writes each new baseline into the `__baselines__/<test>/` directory of its e2e test when the run ends. When the client cannot write a baseline, the report shows `baseline not written` with the path and the reason, and the run fails. When the call sets `updateBaselines`, a `tool: e2e-execute` step in the e2e test also updates the baselines of its e2e test, unless the step sets `updateBaselines` itself.
 
 Before the first step, Argent checks the e2e test and each fragment and nested e2e test that the client sends, at any depth. Argent rejects these:
 

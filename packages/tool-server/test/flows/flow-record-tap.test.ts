@@ -242,6 +242,84 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Volume" } }]);
   });
 
+  // The simulator tree as the runner reads it: the real adapters over a raw
+  // accessibility tree, so the text a field holds is marked as the adapter marks it.
+  function setSimulatorFields(...fields: Array<Partial<AXTreeNode>>) {
+    const nodes: AXTreeNode[] = [
+      { index: 0, label: "App", bundleId: "com.example.app" },
+      { index: 1, parentIndex: 0, elementType: 26, frame: { x: 0, y: 0, width: 1, height: 1 } },
+      ...fields.map((field, i) => ({
+        index: i + 2,
+        parentIndex: 1,
+        traits: ["textEntry"],
+        elementType: 49,
+        frame: { x: 0.1, y: 0.125 + i * 0.125, width: 0.8, height: 0.055 },
+        ...field,
+      })),
+    ];
+    const tree = adaptIosUiTreeForFlows(
+      adaptAxTree({
+        alertVisible: false,
+        nodes,
+        truncated: false,
+        foregroundApp: "com.example.app",
+        interfaceOrientation: "portrait",
+        treeVersion: 3,
+      })
+    );
+    currentTreeData = () => ({ tree, source: "ax-service" });
+  }
+
+  it("does not record the text an iOS simulator text field holds as its selector", async () => {
+    // What a field holds is what a step typed into it: no name for the field,
+    // and the value of a `{{secret:…}}` placeholder when the step typed one.
+    setSimulatorFields({ value: "tok-REVIEW-4242" });
+
+    const result = await recordTap({ x: 0.5, y: 0.15 });
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { role: "AXTextField" } }]);
+    expect(JSON.stringify(result)).not.toContain("tok-REVIEW-4242");
+    const yaml = await fs.readFile(path.join(tmpDir, ".argent", "e2e", `${FLOW}.yaml`), "utf8");
+    expect(yaml).not.toContain("tok-REVIEW-4242");
+  });
+
+  it("still records the text a text field holds on a tree that is not the simulator's", async () => {
+    // The same node from the runner of a physical iPhone or from a Mac app:
+    // only the simulator tree gained this text, so only there is it left out.
+    const filled = n({
+      role: "AXTextField",
+      value: "linda",
+      frame: { x: 0.1, y: 0.125, width: 0.8, height: 0.055 },
+    });
+    for (const source of ["xcuitest-runner", "macos-devtools"] as const) {
+      setTree([filled], source);
+      await recordTap({ x: 0.5, y: 0.15 });
+    }
+
+    const tap = { kind: "tap", selector: { text: "linda" } };
+    expect(await recordedSteps()).toEqual([tap, tap]);
+  });
+
+  it("records an iOS simulator text field that holds text by its label", async () => {
+    setSimulatorFields({ label: "Token", value: "tok-REVIEW-4242" });
+
+    await recordTap({ x: 0.5, y: 0.15 });
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Token" } }]);
+  });
+
+  it("keeps coordinates when only the text in them tells two simulator text fields apart", async () => {
+    setSimulatorFields({ value: "first" }, { value: "second" });
+
+    const result = await recordTap({ x: 0.5, y: 0.28 });
+
+    // The role matches both fields, and no scope names one: a field's text is
+    // no anchor either.
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.28 }]);
+    expect(result.message).toContain("also matches other elements on this screen");
+    expect(JSON.stringify(result)).not.toContain("second");
+  });
+
   it("carries a recorded clickCount into the tap step's times", async () => {
     // A recorded double-tap must not silently replay as a single tap.
     setTree([n({ label: "Photo", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]);

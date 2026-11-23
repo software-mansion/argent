@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
-import type { AXTreeNode, AXTreeResponse } from "../../src/blueprints/ax-service";
+import {
+  axDaemonExitError,
+  type AXTreeNode,
+  type AXTreeResponse,
+} from "../../src/blueprints/ax-service";
 import type { DescribeNode } from "../../src/tools/describe/contract";
 import { adaptAxTree } from "../../src/tools/ui-tree/ios";
 import {
@@ -9,7 +13,22 @@ import {
   queryIosSimulatorFlowTree,
   readIosSimulatorUiTree,
 } from "../../src/tools/flows/flow-ios-tree";
-import { evaluateCondition, findAll, selectorToFrame } from "../../src/utils/ui-tree-match";
+import {
+  evaluateCondition,
+  findAll,
+  nodeText,
+  selectorToFrame,
+} from "../../src/utils/ui-tree-match";
+import {
+  __resetTypedSecretsForTesting,
+  noteTypedSecrets,
+  quotedText,
+  WITHHELD_INPUT_TEXT,
+} from "../../src/utils/typed-secrets";
+import {
+  __resetUiOrientationForTests,
+  readUiOrientation,
+} from "../../src/utils/ios-ui-orientation";
 
 const UDID = "00000000-0000-0000-0000-0000000000AB";
 const device = { platform: "ios", id: UDID, udid: UDID, kind: "simulator" } as DeviceInfo;
@@ -311,9 +330,7 @@ describe("iOS simulator flow tree projection", () => {
     expect(slider!.typedValue).toBeUndefined();
     // The row gets the tap; a type step's into still finds the field.
     expect(selectorToFrame(tree, { text: "Paris" })).toEqual(frame(0.05, 0.4, 0.9, 0.064));
-    expect(selectorToFrame(tree, { text: "Paris" }, undefined, true)).toEqual(
-      frame(0.05, 0.12, 0.9, 0.04)
-    );
+    expect(selectorToFrame(tree, { text: "Paris" }, true)).toEqual(frame(0.05, 0.12, 0.9, 0.04));
     // Its placeholder still names an empty field; a value that is not typed still matches.
     expect(selectorToFrame(tree, { text: "Search" })).toEqual(frame(0.05, 0.2, 0.9, 0.04));
     expect(findAll(tree, { text: "50%" })).toEqual([slider]);
@@ -540,17 +557,36 @@ describe("queryIosSimulatorFlowTree", () => {
     const data = await queryIosSimulatorFlowTree(registryWith(screen()), device);
     expect(data.source).toBe("ax-service");
     expect(data.screen).toEqual({ width: 402, height: 874 });
-    expect(data.uiOrientation).toBe("portrait");
     expect(data.tree.children.map((c) => c.label)).toEqual(["Continue"]);
   });
 
-  it("reports the interface orientation and leaves the frames in the portrait-native space", async () => {
+  it("turns the frames and the screen size into the UI's upright space", async () => {
+    // landscapeRight: the native point (x, y) is the UI point (y, 1 - x).
     const data = await queryIosSimulatorFlowTree(
       registryWith(screen({ interfaceOrientation: "landscapeRight" })),
       device
     );
-    expect(data.uiOrientation).toBe("landscapeRight");
-    expect(data.tree.children[0]!.frame).toEqual(frame(0, 0.5, 1, 0.1));
+    expect(data.tree.children[0]!.frame).toEqual(frame(0.5, 0, 0.1, 1));
+    expect(data.screen).toEqual({ width: 874, height: 402 });
+    // Nothing downstream turns the frames again.
+    expect(data).not.toHaveProperty("uiOrientation");
+  });
+
+  it("notes the interface orientation it read, so the next touch need not ask", async () => {
+    __resetUiOrientationForTests();
+    try {
+      await queryIosSimulatorFlowTree(
+        registryWith(screen({ interfaceOrientation: "landscapeLeft" })),
+        device
+      );
+      // No orientation source is wired in a unit test: only the note answers.
+      expect(await readUiOrientation(UDID)).toEqual({
+        orientation: "landscapeLeft",
+        nativeScreen: { width: 402, height: 874 },
+      });
+    } finally {
+      __resetUiOrientationForTests();
+    }
   });
 
   it("fails a pinned read when another app is in the foreground", async () => {
@@ -633,6 +669,18 @@ describe("queryIosSimulatorFlowTree", () => {
     );
   });
 
+  it("does not prescribe a reboot when the accessibility service crashed", async () => {
+    // A reboot starts the same binary into the same crash.
+    const crash = axDaemonExitError({ code: null, signal: "SIGSEGV" }, "connected");
+    const err = await queryIosSimulatorFlowTree(registryWith(crash), device).catch(
+      (e: unknown) => e
+    );
+    expect((err as Error).message).toContain("could not be read: ax-service crashed with SIGSEGV.");
+    expect((err as Error).message).toContain("run the e2e test again");
+    expect((err as Error).message).toContain("rebooting the simulator");
+    expect((err as Error).message).not.toContain("Boot the simulator");
+  });
+
   it("returns a walk the service cut short, flagged truncated", async () => {
     const data = await queryIosSimulatorFlowTree(registryWith(screen({ truncated: true })), device);
     expect(data.truncated).toBe(true);
@@ -650,5 +698,81 @@ describe("queryIosSimulatorFlowTree", () => {
     await expect(queryIosSimulatorFlowTree(registryWith(empty), device)).rejects.toThrow(
       /is empty: the foreground app \(com\.example\.app\) exposes no accessible elements.*restart-app/
     );
+  });
+});
+
+describe("the quotable projection of the accessibility tree", () => {
+  afterEach(() => __resetTypedSecretsForTesting());
+
+  // A token field that capitalized what was typed, a label that shows the
+  // token as typed, a read-only text view that shows it in its value, and an
+  // empty field that shows its placeholder.
+  const form = () =>
+    reply([
+      { index: 0, label: "App", bundleId: "com.example.app" },
+      {
+        index: 1,
+        parentIndex: 0,
+        identifier: "token",
+        label: "Token",
+        value: "Tok-review-4242",
+        traits: ["textEntry"],
+        elementType: 49,
+        frame: frame(0.05, 0.1, 0.9, 0.05),
+      },
+      {
+        index: 2,
+        parentIndex: 0,
+        identifier: "status",
+        label: "Signed in with tok-review-4242",
+        traits: ["staticText"],
+        elementType: 48,
+        frame: frame(0.05, 0.2, 0.9, 0.05),
+      },
+      {
+        index: 3,
+        parentIndex: 0,
+        identifier: "echo",
+        value: "tok-review-4242",
+        traits: ["staticText"],
+        elementType: 52,
+        frame: frame(0.05, 0.3, 0.9, 0.05),
+      },
+      {
+        index: 4,
+        parentIndex: 0,
+        identifier: "note",
+        placeholder: "Required",
+        value: "Required",
+        hintShowing: true,
+        traits: ["textEntry"],
+        elementType: 49,
+        frame: frame(0.05, 0.4, 0.9, 0.05),
+      },
+    ]);
+
+  it("is absent on a device no secret was typed on", async () => {
+    const data = await queryIosSimulatorFlowTree(registryWith(form()), device);
+    expect(data.quotableTree).toBeUndefined();
+  });
+
+  it("withholds the text of every text input and names each typed value elsewhere", async () => {
+    noteTypedSecrets(UDID, [{ name: "TOKEN", value: "tok-review-4242" }]);
+    const data = await queryIosSimulatorFlowTree(registryWith(form()), device);
+    const [field, status, echo, note] = data.tree.children;
+
+    // The checks read the tree as it is.
+    expect(field).toMatchObject({ label: "Token", value: "Tok-review-4242" });
+    expect(status!.label).toBe("Signed in with tok-review-4242");
+    // A quote reads a projection of the same shape, with no typed text in it.
+    expect(data.quotableTree!.children).toHaveLength(data.tree.children.length);
+    const quote = (node: DescribeNode | undefined) => quotedText(data, UDID, node!, nodeText);
+    expect(quote(field)).toBe(`Token ${WITHHELD_INPUT_TEXT}`);
+    expect(quote(status)).toBe("Signed in with {{secret:TOKEN}}");
+    expect(quote(echo)).toBe("{{secret:TOKEN}}");
+    // An empty field reads as its placeholder, which is withheld as well.
+    expect(nodeText(note!)).toBe("Required");
+    expect(quote(note)).toBe(WITHHELD_INPUT_TEXT);
+    expect(JSON.stringify(data.quotableTree)).not.toMatch(/tok-review-4242/i);
   });
 });

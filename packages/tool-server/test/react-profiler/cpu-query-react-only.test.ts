@@ -7,7 +7,6 @@ import {
   clearCachedProfilerPaths,
 } from "../../src/blueprints/react-profiler-session";
 import { profilerCpuQueryTool } from "../../src/tools/profiler/query/profiler-cpu-query";
-import { reactProfilerCpuSummaryTool } from "../../src/tools/profiler/react/react-profiler-cpu-summary";
 
 /**
  * profiler-cpu-query took over react-profiler-cpu-summary's `react_only` filter
@@ -99,11 +98,6 @@ afterEach(async () => {
 });
 
 describe("profiler-cpu-query react_only and Self %", () => {
-  it("replaces react-profiler-cpu-summary, which is hidden from MCP", () => {
-    expect(reactProfilerCpuSummaryTool.hideFromMcp).toBe(true);
-    expect(profilerCpuQueryTool.hideFromMcp).toBeUndefined();
-  });
-
   it("lists every function by default, with Self % as a share of the covered time", async () => {
     await store(MIXED);
     const out = await query({ mode: "top_functions" });

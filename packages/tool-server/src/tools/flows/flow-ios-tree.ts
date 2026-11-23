@@ -1,7 +1,9 @@
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
-import { axServiceRef, type AXServiceApi } from "../../blueprints/ax-service";
+import { axDaemonCrashSignal, axServiceRef, type AXServiceApi } from "../../blueprints/ax-service";
 import { nodeText } from "../../utils/ui-tree-match";
+import { redactTypedSecrets, secretTypedOn, WITHHELD_INPUT_TEXT } from "../../utils/typed-secrets";
+import { noteUiOrientation } from "../../utils/ios-ui-orientation";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import { adaptAxTree } from "../ui-tree/ios";
 import type { UiTree, UiTreeNode } from "../ui-tree";
@@ -21,10 +23,8 @@ import {
  * ax-service daemon walks — the tree `describe` shows, with the hidden and
  * covered elements describe drops and the unlabelled containers it does not
  * print. Recording and replay therefore read one tree, so a selector copied
- * from `describe` (id, text, role) resolves at replay. Frames are normalized
- * to the screen's fixed (portrait-native) panel, the space touches are taken
- * in; the daemon reports the interface orientation, which turns the flow's
- * directions and reading order on a landscape UI (`flow-orientation.ts`).
+ * from `describe` (id, text, role) resolves at replay. Frames are in the UI's
+ * upright space, as `describe` frames them (`adaptAxTree`).
  *
  * Physical devices (`queryIosDeviceFlowTree`): the XCUITest runner accessibility
  * snapshot, the same tree `describe` serves, reshaped into the flow contract.
@@ -94,8 +94,16 @@ function onScreenFrame(frame: DescribeFrame): DescribeFrame | undefined {
  * describe would print — an id, a label, a value, a non-group role, input
  * focus — and for a scrolling container. An identifier shields hoisted text
  * to the nearest identified ancestor; a password never contributes its value.
+ *
+ * With `quoted` the node is projected as a result may quote it, on a device a
+ * secret was typed on (see `utils/typed-secrets`): a text input's value is the
+ * note that it is withheld, since the field can hold the secret in a form no
+ * typed value matches (capitalized, corrected, formatted), and every other
+ * label and value is what `quoted` makes of it. Which nodes become leaves does
+ * not depend on either text, so the two projections of one tree give the same
+ * nodes in the same order.
  */
-function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
+function projectAxNode(node: UiTreeNode, quoted?: (text: string) => string): FlatNode<UiTreeNode> {
   if (node.covered) {
     return { skip: true, children: [], ownText: "", leaf: null, shield: false };
   }
@@ -106,14 +114,17 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
     Boolean(node.identifier || node.label || node.value || node.placeholder || node.focused) ||
     node.role !== "AXGroup";
   // An empty input reports its placeholder as its value, as `describe` prints it.
-  const value = node.value ?? (node.hintShowing ? node.placeholder : undefined);
+  const read = node.value ?? (node.hintShowing ? node.placeholder : undefined);
+  const value =
+    quoted && read !== undefined ? (node.editable ? WITHHELD_INPUT_TEXT : quoted(read)) : read;
+  const label = quoted && node.label !== undefined ? quoted(node.label) : node.label;
   let leaf: DescribeNode | null = null;
   if (frame && addressable) {
     leaf = {
       role: node.role,
       frame,
       children: [],
-      ...(node.label !== undefined ? { label: node.label } : {}),
+      ...(label !== undefined ? { label } : {}),
       // A secure field's placeholder is not its secret.
       ...(value !== undefined && (!node.password || node.hintShowing) ? { value } : {}),
       // The text a filled field holds names no element (see `resolveSelector`).
@@ -150,13 +161,18 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
  * Flatten the accessibility tree into the flow contract: flat leaves under one
  * synthetic root, descendant text hoisted onto container leaves. Each app root
  * (the daemon lists the system app first while an alert shows) contributes its
- * children; the Application nodes themselves are not leaves.
+ * children; the Application nodes themselves are not leaves. `quoted` builds
+ * the projection a result may quote (see {@link projectAxNode}).
  */
-export function adaptIosUiTreeForFlows(tree: UiTree): DescribeNode {
+export function adaptIosUiTreeForFlows(
+  tree: UiTree,
+  quoted?: (text: string) => string
+): DescribeNode {
   const children: DescribeNode[] = [];
+  const project = (node: UiTreeNode): FlatNode<UiTreeNode> => projectAxNode(node, quoted);
   for (const root of tree.roots) {
     if (root.covered) continue;
-    for (const child of root.children) flattenHoisting(child, projectAxNode, children);
+    for (const child of root.children) flattenHoisting(child, project, children);
   }
   return parseDescribeResult({
     role: "AXGroup",
@@ -173,6 +189,14 @@ const UPDATE_REMEDY =
 const BOOT_REMEDY =
   "Boot the simulator with `boot-device` (`force: true` when it is already booted), then " +
   "run the e2e test again.";
+
+// A crash says nothing about how the simulator was booted, and on a host where
+// the service crashes every time, a reboot or a tool-server restart starts the
+// same binary into the same crash (see `axCrashHint` in describe).
+const CRASH_REMEDY =
+  "Every read starts the accessibility service again, so run the e2e test again. If it " +
+  "crashes again, the crash is in the service on this host: rebooting the simulator or " +
+  "restarting the tool-server starts the same binary and does not fix it.";
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -197,10 +221,12 @@ function treeUnavailable(device: DeviceInfo, err: unknown): Error {
     );
   }
   const remedy =
-    code === FAILURE_CODES.AX_QUERY_TIMEOUT
-      ? "The screen took too long to read: wait for the app to settle, or scroll a long list or " +
-        "web page out of view, then run the e2e test again."
-      : BOOT_REMEDY;
+    axDaemonCrashSignal(err) !== undefined
+      ? CRASH_REMEDY
+      : code === FAILURE_CODES.AX_QUERY_TIMEOUT
+        ? "The screen took too long to read: wait for the app to settle, or scroll a long list or " +
+          "web page out of view, then run the e2e test again."
+        : BOOT_REMEDY;
   return new Error(
     `the accessibility tree of ${device.id} could not be read: ${errMsg(err)}. ${remedy}`
   );
@@ -222,7 +248,10 @@ export async function readIosSimulatorUiTree(
   let tree: UiTree;
   try {
     ax = await registry.resolveService<AXServiceApi>(ref.urn, ref.options);
-    tree = adaptAxTree(await ax.tree());
+    const response = await ax.tree();
+    // As `readIosUiTree` does: the next touch need not ask for the orientation.
+    noteUiOrientation(device.id, response.interfaceOrientation, response.screenFrame);
+    tree = adaptAxTree(response);
   } catch (err) {
     throw treeUnavailable(device, err);
   }
@@ -269,11 +298,17 @@ export async function queryIosSimulatorFlowTree(
             `draw, or relaunch it with \`restart-app\`, then run the e2e test again.`
     );
   }
+  // A field can hold a typed secret in a form no value matches, so once a
+  // secret was typed on the device a quote reads a second projection, in which
+  // that text is never present (see `utils/typed-secrets`).
+  const quotableTree = secretTypedOn(device.id)
+    ? adaptIosUiTreeForFlows(tree, (text) => redactTypedSecrets(device.id, text))
+    : undefined;
   return {
     tree: adaptIosUiTreeForFlows(tree),
+    ...(quotableTree ? { quotableTree } : {}),
     source: "ax-service",
     screen: tree.screen,
-    uiOrientation: tree.interfaceOrientation,
     ...(tree.truncated ? { truncated: true } : {}),
   };
 }

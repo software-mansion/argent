@@ -123,9 +123,14 @@ describe("ui-tree iOS adapter", () => {
   });
 
   it("reads the interface orientation as UIKit names it, and drops an unknown name", () => {
+    // The blueprint already drops an unknown name; the adapter does not trust its input either.
     const orientation = (interfaceOrientation?: string) =>
-      adaptAxTree(reply([{ index: 0 }], { treeVersion: 3, interfaceOrientation }))
-        .interfaceOrientation;
+      adaptAxTree(
+        reply([{ index: 0 }], {
+          treeVersion: 3,
+          interfaceOrientation: interfaceOrientation as AXTreeResponse["interfaceOrientation"],
+        })
+      ).interfaceOrientation;
     expect(orientation("portrait")).toBe("portrait");
     expect(orientation("portraitUpsideDown")).toBe("portraitUpsideDown");
     expect(orientation("landscapeLeft")).toBe("landscapeLeft");

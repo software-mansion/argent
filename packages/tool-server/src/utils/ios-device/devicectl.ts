@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { isIPv6 } from "node:net";
 import {
   FAILURE_CODES,
   subprocessFailureMetadata,
@@ -36,7 +37,7 @@ interface IosPhysicalDevice {
   /** CoreDevice pairing state, e.g. "paired". */
   pairingState: string | null;
   /**
-   * How CoreDevice currently reaches the device. "wired" while cabled, "localNetwork" once unplugged.
+   * How CoreDevice currently reaches the device: USB or a network tunnel.
    */
   transportType: string | null;
   tunnelState: string | null;
@@ -57,6 +58,10 @@ class IosDeviceControlError extends Error {
     }
   }
 }
+
+/** The hint for a devicectl failure that matches no specific cause. */
+export const GENERIC_DEVICECTL_HINT =
+  "Ensure the device is unlocked, trusted, and visible in Xcode > Devices, then retry.";
 
 /**
  * Map devicectl failure output to an actionable hint. `bundleId` is the app a
@@ -108,7 +113,7 @@ function resolveDevicectlHint(output: string, bundleId?: string): string {
     return "Reconnect the cable, unlock the device, and retry; restarting Xcode's device services can help.";
   }
 
-  return "Ensure the device is unlocked, trusted, and visible in Xcode > Devices, then retry.";
+  return GENERIC_DEVICECTL_HINT;
 }
 
 interface RunDevicectlOptions {
@@ -299,6 +304,21 @@ export async function installApp(udid: string, installablePath: string): Promise
   );
 }
 
+/** The file URL of the installed app's bundle, or null when the app is not installed. */
+export async function installedAppUrl(udid: string, bundleId: string): Promise<string | null> {
+  const { json } = await runDevicectl(
+    ["device", "info", "apps", "--device", udid, "--bundle-id", bundleId],
+    `look up ${bundleId}`,
+    { json: true }
+  );
+  const result = (
+    json as { result?: { apps?: Array<{ bundleIdentifier?: string; url?: string }> } } | null
+  )?.result;
+  // A list with no match means not installed; no list at all is not a verdict.
+  if (!result?.apps) throw new Error(`devicectl returned no app list for ${bundleId}.`);
+  return result.apps.find((app) => app.bundleIdentifier === bundleId)?.url ?? null;
+}
+
 /** Uninstall by bundle id. Missing apps count as success. */
 export async function uninstallApp(udid: string, bundleId: string): Promise<void> {
   try {
@@ -359,12 +379,30 @@ export async function launchApp(
 interface DeviceConnectionInfo {
   transportType: string | null;
   tunnelState: string | null;
+  tunnelAddress: string | null;
+}
+
+interface ConnectionProperties {
+  transportType?: string;
+  tunnelState?: string;
+  tunnelIPAddress?: string;
+}
+
+function coreDeviceTunnelAddress(connection: ConnectionProperties | undefined): string | null {
+  const address = connection?.tunnelIPAddress;
+  return connection?.transportType === "localNetwork" &&
+    connection.tunnelState === "connected" &&
+    typeof address === "string" &&
+    isIPv6(address) &&
+    /^f[cd]/i.test(address)
+    ? address
+    : null;
 }
 
 interface DevicectlDetailsPayload {
   result?: {
-    connectionProperties?: { transportType?: string; tunnelState?: string };
-    device?: { connectionProperties?: { transportType?: string; tunnelState?: string } };
+    connectionProperties?: ConnectionProperties;
+    device?: { connectionProperties?: ConnectionProperties };
   };
 }
 
@@ -391,11 +429,9 @@ async function deviceInfoDetails(
   return {
     transportType: conn?.transportType ?? null,
     tunnelState: conn?.tunnelState ?? null,
+    tunnelAddress: coreDeviceTunnelAddress(conn),
   };
 }
-
-const READY_MEMO_TTL_MS = 5_000;
-const readyMemo = new Map<string, number>();
 
 /** Signal for a readiness verdict devicectl answered without itself failing. */
 function readyFailureSignal(error_kind: FailureKind): FailureSignal {
@@ -409,20 +445,26 @@ function readyFailureSignal(error_kind: FailureKind): FailureSignal {
 }
 
 /**
- * Ensure the device is on USB and its CoreDevice tunnel is ready.
+ * Ensure USB or a connected CoreDevice tunnel is available.
+ * Return the tunnel address for network devices, or null for USB.
  */
-export async function ensureDeviceReady(udid: string): Promise<void> {
-  // Memoized for 5s. Callers hit this on the hot path.
-  const at = readyMemo.get(udid);
-
-  if (at != null && Date.now() - at < READY_MEMO_TTL_MS) {
-    return;
-  }
-
-  // An unplugged paired device can keep a network tunnel. usbmux still needs the cable.
+export async function ensureDeviceReady(udid: string): Promise<string | null> {
   const info = await deviceInfoDetails(udid, { timeoutSeconds: 15 });
 
-  // Older toolchains omit transportType. Only an explicit non-wired value rejects.
+  if (info.tunnelAddress) {
+    return info.tunnelAddress;
+  }
+
+  if (info.transportType === "localNetwork") {
+    throw withFailureSignal(
+      new IosDeviceControlError("The device has no connected CoreDevice IPv6 tunnel", {
+        hint: "Keep the device unlocked and connected in Xcode, then retry.",
+      }),
+      readyFailureSignal("network")
+    );
+  }
+
+  // Older toolchains omit transportType; they retain the USB path.
   if (info.transportType != null && info.transportType !== "wired") {
     throw withFailureSignal(
       new IosDeviceControlError(`Device transport is ${info.transportType}, not wired`, {
@@ -441,5 +483,5 @@ export async function ensureDeviceReady(udid: string): Promise<void> {
     );
   }
 
-  readyMemo.set(udid, Date.now());
+  return null;
 }
