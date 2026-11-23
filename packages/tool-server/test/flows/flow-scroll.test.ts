@@ -1639,4 +1639,20 @@ describe("scroll-to with the on-screen keyboard up", () => {
     expect(result.steps[0].status).toBe("pass");
     expect(swipes).toHaveLength(1);
   });
+
+  it("fails when the end of the scroll leaves its target under the keyboard", async () => {
+    // The last row: the list cannot scroll it above the keys.
+    const row = n({ label: "Order #9", frame: { x: 0, y: 0.8, width: 1, height: 0.1 } });
+    currentTree = () => screen([row, ...keys]);
+    const swipes: SwipeCall[] = [];
+    const step = {
+      kind: "scroll-to" as const,
+      target: { text: "Order #9" },
+      direction: "down" as const,
+    };
+    const result = await runScroll(step, swipes);
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toContain("did not bring it above the keyboard");
+    expect(swipes).toHaveLength(1);
+  });
 });

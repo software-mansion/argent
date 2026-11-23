@@ -221,7 +221,7 @@ The runner applies these rules to the elements of the keyboard:
 - A condition (`await`, `assert`, `when:`) does not see the keyboard. Thus `assert: { hidden: { text: Done } }` passes when only the return key shows `done`.
 - An action does not press an app element under the keyboard. An element is under the keyboard when its center is in the area of the keys, gaps included.
 - `tap`, `long-press`, `type`, `pinch`, `rotate` and the `from` end of `swipe` wait until the keyboard does not cover their element. Then the step fails. It does not use a different match.
-- `scroll-to` does not stop on a key or on a covered target. It fails when its swipe point, the center of the screen or of `within`, is under the keyboard.
+- `scroll-to` does not stop on a key or on a covered target. It fails when its swipe point, the center of the screen or of `within`, is under the keyboard. It also fails when the scroll ends and the keyboard still covers the target.
 - `any: true` takes an app element before a key.
 
 To wait for the keyboard, use a `tool: await-ui-element` step. That tool reads the `describe` tree, which shows the keys.

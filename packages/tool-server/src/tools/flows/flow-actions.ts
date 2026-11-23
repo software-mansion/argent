@@ -1010,8 +1010,9 @@ async function scrollToVisible(
     const fp = treeFingerprint(tree, (node) => scope.some((r) => framesOverlap(node.frame, r)));
     // A wheel taker the tree cannot see leaves the fingerprint as it was too.
     if (!spentNow && prevFp !== undefined && fp === prevFp) {
-      // End of the scroll — accept the target wherever it landed (best effort).
-      if (frame) return { frame, ...warnedBy(warning) };
+      // End of the scroll — accept the target wherever it landed (best effort),
+      // unless the keyboard still covers it.
+      if (frame && !covered) return { frame, ...warnedBy(warning) };
       return missed(`reached the end of the scroll without finding ${describeSelector(target)}`);
     }
     prevFp = fp;
