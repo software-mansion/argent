@@ -115,6 +115,37 @@ describe("view-network-request-details: Mac app IDs", () => {
     expect(findMacosNativeRecord).toHaveBeenCalledWith(ID);
   });
 
+  it("masks a password in a macos- request body", async () => {
+    const signIn = record();
+    signIn.request = {
+      ...signIn.request,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      hasPostData: true,
+    };
+    const records: IosNetworkRecords = {
+      ...store,
+      requestPostData: async () => ({
+        available: true,
+        body: '{"email":"a","password":"hunter2"}',
+        base64Encoded: false,
+        truncated: false,
+      }),
+    };
+    vi.mocked(findMacosNativeRecord).mockReturnValue({ records, record: signIn });
+    responseBody.mockResolvedValue({
+      available: true,
+      body: '{"access_token":"tok"}',
+      base64Encoded: false,
+      truncated: false,
+    });
+
+    expect(await details(ID)).toMatchObject({
+      request: { postData: '{"email":"a","password":"[REDACTED]"}' },
+      response: { body: '{"access_token":"tok"}' },
+    });
+  });
+
   it("says where a macos- ID comes from, and what to call when no capture recorded it", async () => {
     vi.mocked(findMacosNativeRecord).mockReturnValue(undefined);
     expect(await details(ID, "chromium-cdp-9222")).toBe(
