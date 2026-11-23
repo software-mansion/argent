@@ -49,6 +49,7 @@ import {
 } from "../../utils/adb";
 import { ensureDep } from "../../utils/check-deps";
 import {
+  consoleOwnership,
   listEmulatorPidsForAvd,
   listEmulatorProcessesForAvd,
   readEmulatorProcessesForAvd,
@@ -415,10 +416,17 @@ async function awaitFirstRealFrame(serial: string, timeoutMs: number): Promise<v
   );
 }
 
-async function findSerialByAvdName(avdName: string, deadline: number): Promise<string | null> {
+/** The first of `among` that adb lists as a healthy emulator running `avdName`. */
+async function findSerialByAvdName(
+  avdName: string,
+  among: string[],
+  deadline: number
+): Promise<string | null> {
   while (Date.now() < deadline) {
     const devices = await listAndroidDevices().catch(() => []);
-    const match = devices.find((d) => d.isEmulator && d.avdName === avdName);
+    const match = devices.find(
+      (d) => d.isEmulator && d.avdName === avdName && among.includes(d.serial)
+    );
     if (match) return match.serial;
     await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.serialByAvd));
   }
@@ -557,18 +565,37 @@ async function dropUnreachableSerials(
  * freed port, which the snapshot no longer holds. When no console names this
  * AVD, fall back to the before/after diff: a single unnamed serial is ours,
  * several are told apart by getprop.
+ *
+ * The AVD name alone does not settle it: read-only instances of one AVD run
+ * side by side, so another one can register during this boot. So first the
+ * process listening on each serial's console port is asked: a serial the
+ * spawned emulator listens on is ours, one another process (or nothing)
+ * listens on is not. Only serials whose listener cannot be read (Windows, no
+ * `lsof`) go through the name and getprop checks.
  */
-async function pickOwnSerial(avdName: string, newSerials: string[]): Promise<string | null> {
-  const names = await Promise.all(newSerials.map((s) => readEmulatorConsoleAvdName(s)));
-  const own = newSerials.find((_, i) => {
+async function pickOwnSerial(
+  avdName: string,
+  newSerials: string[],
+  ownPid: number | undefined
+): Promise<string | null> {
+  let candidates = newSerials;
+  if (ownPid !== undefined) {
+    const owners = await Promise.all(newSerials.map((s) => consoleOwnership(s, ownPid)));
+    const own = newSerials.find((_, i) => owners[i] === "own");
+    if (own) return own;
+    candidates = newSerials.filter((_, i) => owners[i] === "unknown");
+    if (candidates.length === 0) return null;
+  }
+  const names = await Promise.all(candidates.map((s) => readEmulatorConsoleAvdName(s)));
+  const own = candidates.find((_, i) => {
     const answer = names[i]!;
     return answer.status === "ok" && answer.avdName === avdName;
   });
   if (own) return own;
-  const unnamed = newSerials.filter((_, i) => names[i]!.status !== "ok");
+  const unnamed = candidates.filter((_, i) => names[i]!.status !== "ok");
   if (unnamed.length === 0) return null;
   if (unnamed.length === 1) return unnamed[0]!;
-  return findSerialByAvdName(avdName, Date.now() + 3_000);
+  return findSerialByAvdName(avdName, unnamed, Date.now() + 3_000);
 }
 
 async function bootSimctl(
@@ -1023,7 +1050,8 @@ async function attemptBoot(params: {
           const pinned = await params.pinnedElsewhere();
           newSerials = newSerials.filter((s) => !pinned.has(s));
         }
-        const own = newSerials.length > 0 ? await pickOwnSerial(params.avdName, newSerials) : null;
+        const own =
+          newSerials.length > 0 ? await pickOwnSerial(params.avdName, newSerials, child.pid) : null;
         if (own) {
           serial = own;
           break;
@@ -1420,18 +1448,21 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   if (params.readOnly && portSerial !== null && !alreadyRunning && candidates[0]) {
     // This AVD runs on the requested port, launched in a way argent does not
     // recognise as read-only (without `-port`, by someone else). With no
-    // writable instance of the AVD in the process table it is read-only.
+    // writable instance of the AVD in the process table it is read-only. With
+    // no process of the AVD found at all, the table does not show how it was
+    // launched, so it cannot tell.
     const processes = await readEmulatorProcessesForAvd(params.avdName);
-    if (processes !== null && processes.every((p) => p.readOnly)) {
+    const known = processes !== null && processes.length > 0;
+    if (known && processes.every((p) => p.readOnly)) {
       alreadyRunning = candidates[0];
     } else if (!params.force) {
       throw portInUseError(
-        processes !== null
+        known
           ? `${portSerial} already runs AVD "${params.avdName}" writable. Pass \`force: true\` to ` +
               `shut it down and boot it read-only, or pick another \`port\`.`
           : `${portSerial} already runs AVD "${params.avdName}", and Argent cannot tell whether it ` +
-              `runs read-only: the process list of this host is not available. Use that emulator ` +
-              `as it is, or pick another \`port\`.`
+              `runs read-only: ${processes === null ? "the process list of this host is not available" : "its process is not in the process list"}. ` +
+              `Use that emulator as it is, or pick another \`port\`.`
       );
     } else {
       alreadyRunning = candidates[0];
@@ -2609,11 +2640,13 @@ const zodSchema = z.object({
     .number()
     .int()
     .min(5554)
-    .max(5682)
+    // The emulator's own range for `-port`, and the range adb scans: an
+    // emulator above 5584 drops out of adb when the adb server restarts.
+    .max(5584)
     .multipleOf(2)
     .optional()
     .describe(
-      "Android only: the emulator's console port, an even number from 5554 to 5682 (`emulator -port`); its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. The gRPC server Argent needs for screenshots and gestures goes on the port plus 3000, which must be free too. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there writable on a read-only boot and `force` is not set. An emulator started with `-port` belongs to the calls that give that port: a call without `port` never reuses or shuts it down. Ignored on other platforms."
+      "Android only: the emulator's console port, an even number from 5554 to 5584 (`emulator -port`), the range adb finds emulators in; its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. The gRPC server Argent needs for screenshots and gestures goes on the port plus 3000, which must be free too. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there writable on a read-only boot and `force` is not set. An emulator started with `-port` belongs to the calls that give that port: a call without `port` never reuses or shuts it down. Ignored on other platforms."
     ),
   headless: z
     .boolean()

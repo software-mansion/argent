@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 import { PS_ARGS_WITH_PID, PS_BIN } from "./vega-process";
 
@@ -8,7 +9,7 @@ const execFileAsync = promisify(execFile);
  * Running Android emulators from the OS process table, by AVD. adb cannot name
  * the AVD of an emulator that is shutting down or still coming up (getprop fails
  * and the console does not answer), but the process keeps its `-avd <name>`
- * argument until it exits.
+ * (or `@<name>`) argument until it exits.
  */
 
 // The qemu binary the `emulator` launcher execs into
@@ -23,8 +24,9 @@ function escapeRegExp(value: string): string {
 
 /**
  * PIDs of the emulator processes running `avdName`, from `ps -o pid=,command=`
- * output. `-avd <name>` has to match as a whole argument: `Pixel_7` must not
- * match an emulator running `Pixel_7_API_34`.
+ * output. The AVD is named by `-avd <name>` or by the short `@<name>` form,
+ * which the qemu process keeps in its argv as given. Either has to match as a
+ * whole argument: `Pixel_7` must not match an emulator running `Pixel_7_API_34`.
  */
 export function parseEmulatorPidsForAvd(psOutput: string, avdName: string): number[] {
   return parseEmulatorProcessesForAvd(psOutput, avdName).map((p) => p.pid);
@@ -41,7 +43,7 @@ export interface EmulatorProcess {
 
 /** Like {@link parseEmulatorPidsForAvd}, with each process's `-read-only` and `-port` flags. */
 export function parseEmulatorProcessesForAvd(psOutput: string, avdName: string): EmulatorProcess[] {
-  const avdArg = new RegExp(`(?:^|\\s)-avd\\s+${escapeRegExp(avdName)}(?:\\s|$)`);
+  const avdArg = new RegExp(`(?:^|\\s)(?:-avd\\s+|@)${escapeRegExp(avdName)}(?:\\s|$)`);
   const processes: EmulatorProcess[] = [];
   for (const line of psOutput.split("\n")) {
     const m = line.match(/^\s*(\d+)\s+(.*)$/);
@@ -93,6 +95,85 @@ export async function readEmulatorProcessesForAvd(
     process.stderr.write(
       `[emulator-process] ps probe failed; cannot list the emulators of "${avdName}": ${String(err)}\n`
     );
+    return null;
+  }
+}
+
+// `lsof` lives in `/usr/sbin` on macOS, outside a launchd PATH, as `ps` can be.
+const LSOF_BIN = ["/usr/sbin/lsof", "/usr/bin/lsof"].find((p) => existsSync(p)) ?? "lsof";
+
+/**
+ * Whether the emulator behind `serial` is the process `ownPid` or one of its
+ * descendants. An emulator listens on its console port, the number in its
+ * serial. Several instances of one read-only AVD can come up at once, and the
+ * consoles of all of them name the same AVD, so the listener is the only proof
+ * of which one a spawn started.
+ *
+ * "other" also covers a serial that nothing listens for, such as a stale
+ * `offline` adb entry. "unknown" when it cannot be read: on Windows, without
+ * `lsof` or `ps`, or when a probe fails.
+ */
+export async function consoleOwnership(
+  serial: string,
+  ownPid: number
+): Promise<"own" | "other" | "unknown"> {
+  const port = serial.match(/^emulator-(\d+)$/)?.[1];
+  if (port === undefined || process.platform === "win32") return "unknown";
+  let listener: number;
+  try {
+    const { stdout } = await execFileAsync(
+      LSOF_BIN,
+      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"],
+      { timeout: 3_000 }
+    );
+    const pid = stdout.match(/^p(\d+)$/m)?.[1];
+    // A zero exit names a listener; output without one is no answer.
+    if (pid === undefined) return "unknown";
+    listener = parseInt(pid, 10);
+  } catch (err) {
+    // lsof exits 1 and prints nothing when no process listens on the port.
+    const e = err as { code?: unknown; killed?: boolean; stdout?: unknown };
+    return e.code === 1 && !e.killed && !e.stdout ? "other" : "unknown";
+  }
+  if (listener === ownPid) return "own";
+  const parents = await readParentPids();
+  if (parents === null) return "unknown";
+  return isDescendantOf(listener, ownPid, parents) ? "own" : "other";
+}
+
+/** Each process's parent, from `ps -o pid=,ppid=` output. */
+export function parseParentPids(psOutput: string): Map<number, number> {
+  const parents = new Map<number, number>();
+  for (const line of psOutput.split("\n")) {
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s*$/);
+    if (m) parents.set(parseInt(m[1]!, 10), parseInt(m[2]!, 10));
+  }
+  return parents;
+}
+
+/** Whether `pid` is `ancestor` or below it in the process tree. */
+export function isDescendantOf(
+  pid: number,
+  ancestor: number,
+  parents: Map<number, number>
+): boolean {
+  const seen = new Set<number>();
+  for (let p: number | undefined = pid; p !== undefined && p > 1 && !seen.has(p);) {
+    if (p === ancestor) return true;
+    seen.add(p);
+    p = parents.get(p);
+  }
+  return false;
+}
+
+async function readParentPids(): Promise<Map<number, number> | null> {
+  try {
+    const { stdout } = await execFileAsync(PS_BIN, ["-A", "-o", "pid=,ppid="], {
+      timeout: 5_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return parseParentPids(stdout);
+  } catch {
     return null;
   }
 }

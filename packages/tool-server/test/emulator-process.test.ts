@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import {
+  isDescendantOf,
   listEmulatorPidsForAvd,
+  parseParentPids,
   parseEmulatorPidsForAvd,
   parseEmulatorProcessesForAvd,
 } from "../src/utils/emulator-process";
@@ -50,6 +52,51 @@ describe("parseEmulatorPidsForAvd", () => {
 
   it("returns empty for empty output", () => {
     expect(parseEmulatorPidsForAvd("", "Pixel_7")).toEqual([]);
+  });
+
+  it("finds an emulator launched as `emulator @<avd>`, as a whole argument only", () => {
+    // The launcher execs into qemu with the `@<avd>` argument unchanged.
+    const short = (avd: string) =>
+      `/Users/me/Library/Android/sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64-headless @${avd} -read-only -no-window`;
+    const out = ps([601, short("Pixel_7")], [602, short("Pixel_7_API_34")]);
+    expect(parseEmulatorPidsForAvd(out, "Pixel_7")).toEqual([601]);
+    expect(parseEmulatorProcessesForAvd(out, "Pixel_7_API_34")).toEqual([
+      { pid: 602, readOnly: true, port: null },
+    ]);
+  });
+});
+
+describe("isDescendantOf", () => {
+  const parents = parseParentPids("  700     1\n  701   700\n  702   701\n  800     1\n");
+
+  it("follows the process tree up from a pid", () => {
+    expect(isDescendantOf(700, 700, parents)).toBe(true);
+    expect(isDescendantOf(702, 700, parents)).toBe(true);
+    expect(isDescendantOf(800, 700, parents)).toBe(false);
+    expect(isDescendantOf(999, 700, parents)).toBe(false);
+  });
+
+  it("stops on a cycle", () => {
+    expect(
+      isDescendantOf(
+        1,
+        2,
+        new Map([
+          [3, 4],
+          [4, 3],
+        ])
+      )
+    ).toBe(false);
+    expect(
+      isDescendantOf(
+        3,
+        2,
+        new Map([
+          [3, 4],
+          [4, 3],
+        ])
+      )
+    ).toBe(false);
   });
 });
 

@@ -66,10 +66,10 @@ On Chromium, `open-url` fails when the URL does not load a page, start a downloa
 
 On Android, `boot-device` accepts two parameters that let several emulators run one AVD at the same time, for example one for each agent:
 
-| `boot-device` parameter | Description                                                                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `readOnly`              | Boot the emulator with `-read-only`. Defaults to `false`. The emulator saves no snapshot, and it loses its changes when it exits.                 |
-| `port`                  | The console port of the emulator, an even number from 5554 to 5682. The serial is `emulator-<port>`. Without `port`, the emulator selects a port. |
+| `boot-device` parameter | Description                                                                                                                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `readOnly`              | Boot the emulator with `-read-only`. Defaults to `false`. The emulator saves no snapshot, and it loses its changes when it exits.                                                         |
+| `port`                  | The console port of the emulator, an even number from 5554 to 5584. adb finds emulators only in that range. The serial is `emulator-<port>`. Without `port`, the emulator selects a port. |
 
 With `port`, Argent also starts the gRPC server of the emulator on the console port plus 3000, for example 8584 for port 5584. Argent needs that server for screenshots and gestures. The boot fails with `BOOT_ANDROID_PORT_IN_USE` when the gRPC port is in use.
 

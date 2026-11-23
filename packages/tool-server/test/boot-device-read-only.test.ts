@@ -91,6 +91,15 @@ interface FakeEmulator {
   readOnly: boolean;
   /** Launched with `-port`, so `ps` shows it. */
   portArg: boolean;
+  /** Launched as `emulator @<avd>`: the argv names the AVD with `@`, not `-avd`. */
+  shortForm: boolean;
+  /**
+   * A stale adb entry: adb lists it `offline`, and no emulator process, console
+   * or listener stands behind it.
+   */
+  stale: boolean;
+  /** False: running, but `ps` shows no process that names the AVD. */
+  inPs: boolean;
 }
 
 let world: FakeEmulator[] = [];
@@ -105,15 +114,28 @@ function emulator(serial: string, opts: Partial<Omit<FakeEmulator, "serial">> = 
     pid: opts.pid ?? nextPid++,
     readOnly: opts.readOnly ?? false,
     portArg: opts.portArg ?? false,
+    shortForm: opts.shortForm ?? false,
+    stale: opts.stale ?? false,
+    inPs: opts.inPs ?? true,
   };
 }
 
 function psLine(e: FakeEmulator): string {
+  if (e.stale || !e.inPs) return "";
   const flags = [
     ...(e.readOnly ? ["-read-only"] : []),
     ...(e.portArg ? ["-port", e.serial.slice("emulator-".length)] : []),
   ];
-  return `${e.pid} /Users/me/Library/Android/sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64 -avd ${e.avdName} ${flags.join(" ")} -gpu auto\n`;
+  const avd = e.shortForm ? `@${e.avdName}` : `-avd ${e.avdName}`;
+  return `${e.pid} /Users/me/Library/Android/sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64 ${avd} ${flags.join(" ")} -gpu auto\n`;
+}
+
+/** What `lsof -iTCP:<port> -sTCP:LISTEN -Fp` answers: the emulator on that console port. */
+function lsof(args: string[]) {
+  const port = args.find((a) => a.startsWith("-iTCP:"))!.slice("-iTCP:".length);
+  const emu = world.find((e) => e.serial === `emulator-${port}` && !e.stale);
+  if (!emu) return Object.assign(new Error("lsof: no match"), { code: 1 });
+  return { stdout: `p${emu.pid}\nf43\n`, stderr: "" };
 }
 
 function shell(shellCmd: string, avdName: string) {
@@ -136,13 +158,18 @@ function installWorld() {
       if (!psAvailable) return new Error("ps: timed out");
       return { stdout: world.map(psLine).join(""), stderr: "" };
     }
+    if (args.includes("pid=,ppid=")) {
+      if (!psAvailable) return new Error("ps: timed out");
+      return { stdout: world.map((e) => `${e.pid} 1\n`).join(""), stderr: "" };
+    }
+    if (cmd.endsWith("lsof")) return lsof(args);
     if (cmd === "adb" && args[0] === "devices") {
-      const lines = world.map((e) => `${e.serial}\tdevice\n`).join("");
+      const lines = world.map((e) => `${e.serial}\t${e.stale ? "offline" : "device"}\n`).join("");
       return { stdout: `List of devices attached\n${lines}`, stderr: "" };
     }
     if (cmd === "adb" && args[0] === "-s") {
       const serial = args[1]!;
-      const emu = world.find((e) => e.serial === serial);
+      const emu = world.find((e) => e.serial === serial && !e.stale);
       if (args[2] === "emu" && args[3] === "kill") {
         world = world.filter((e) => e.serial !== serial);
         return { stdout: "OK\n", stderr: "" };
@@ -317,23 +344,23 @@ describe("boot-device Android — readOnly and port", () => {
   });
 
   it("leaves a read-only emulator pinned with -port to the calls that name its port", async () => {
-    world = [emulator("emulator-5590", { readOnly: true, portArg: true })];
+    world = [emulator("emulator-5576", { readOnly: true, portArg: true })];
 
     const unpinned = await boot({ readOnly: true });
-    expect(unpinned).not.toMatchObject({ serial: "emulator-5590" });
+    expect(unpinned).not.toMatchObject({ serial: "emulator-5576" });
     expect(spawnMock).toHaveBeenCalledTimes(1);
 
-    const pinned = await boot({ readOnly: true, port: 5590 });
-    expect(pinned).toMatchObject({ serial: "emulator-5590" });
+    const pinned = await boot({ readOnly: true, port: 5576 });
+    expect(pinned).toMatchObject({ serial: "emulator-5576" });
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not shut down another agent's pinned read-only emulator on force without a port", async () => {
-    world = [emulator("emulator-5590", { readOnly: true, portArg: true })];
+    world = [emulator("emulator-5576", { readOnly: true, portArg: true })];
 
     await boot({ readOnly: true, force: true });
 
-    expect(world.map((e) => e.serial)).toContain("emulator-5590");
+    expect(world.map((e) => e.serial)).toContain("emulator-5576");
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
@@ -349,9 +376,9 @@ describe("boot-device Android — readOnly and port", () => {
   });
 
   it("fails with the port code, and kills no other emulator, when another one takes the port", async () => {
-    // Another AVD binds 5604 after the pre-spawn check, and ours never comes up.
+    // Another AVD binds 5578 after the pre-spawn check, and ours never comes up.
     spawnMock.mockImplementationOnce(() => {
-      world.push(emulator("emulator-5604", { avdName: "Other_AVD" }));
+      world.push(emulator("emulator-5578", { avdName: "Other_AVD" }));
       return Object.assign(new EventEmitter(), {
         pid: nextPid++,
         unref: () => {},
@@ -361,11 +388,11 @@ describe("boot-device Android — readOnly and port", () => {
       });
     });
 
-    expect(await failureCode(boot({ readOnly: true, port: 5604 }))).toBe(
+    expect(await failureCode(boot({ readOnly: true, port: 5578 }))).toBe(
       "BOOT_ANDROID_PORT_IN_USE"
     );
     expect(world).toEqual([
-      expect.objectContaining({ serial: "emulator-5604", avdName: "Other_AVD" }),
+      expect.objectContaining({ serial: "emulator-5578", avdName: "Other_AVD" }),
     ]);
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
@@ -474,7 +501,63 @@ describe("boot-device Android — readOnly and port", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([5555, 5552, 5684])("rejects port %i in the schema", (port) => {
+  it("sees a writable emulator launched as `emulator @<avd>`", async () => {
+    world = [emulator("emulator-5554", { shortForm: true })];
+
+    expect(await failureCode(boot({ readOnly: true }))).toBe("BOOT_ANDROID_READ_ONLY_CONFLICT");
+    expect(await failureCode(boot({ readOnly: true, port: 5554 }))).toBe(
+      "BOOT_ANDROID_PORT_IN_USE"
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not take an emulator on the port for read-only when no process of the AVD shows", async () => {
+    // Launched in a way the process table does not name the AVD in.
+    world = [emulator("emulator-5554", { inPs: false })];
+
+    expect(await failureCode(boot({ readOnly: true, port: 5554 }))).toBe(
+      "BOOT_ANDROID_PORT_IN_USE"
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns its own emulator when another instance of the AVD registers during the boot", async () => {
+    // Someone starts the same AVD read-only from a terminal while this boot
+    // spawns, and theirs takes 5554 first.
+    spawnMock.mockImplementationOnce((cmd: string, args: string[]) => {
+      world.push(emulator("emulator-5554", { readOnly: true }));
+      installSpawn();
+      return spawnMock(cmd, args);
+    });
+
+    const result = await boot({ readOnly: true });
+
+    expect(result).toMatchObject({ serial: "emulator-5556" });
+  });
+
+  it("never returns an emulator that ran before the boot, past stale adb entries", async () => {
+    // Another agent's pinned emulator, and two `offline` entries whose console
+    // does not answer, so they count as new. Ours registers a moment later.
+    world = [
+      emulator("emulator-5582", { readOnly: true, portArg: true }),
+      emulator("emulator-5570", { stale: true }),
+      emulator("emulator-5572", { stale: true }),
+    ];
+    const spawnNow = spawnMock.getMockImplementation()!;
+    spawnMock.mockImplementationOnce((cmd: string, args: string[]) => {
+      const proc = spawnNow(cmd, args);
+      const ours = world.pop()!;
+      setTimeout(() => world.push(ours), 200);
+      return proc;
+    });
+
+    const result = await boot({ readOnly: true });
+
+    expect(result).toMatchObject({ serial: "emulator-5554" });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([5555, 5552, 5586])("rejects port %i in the schema", (port) => {
     const tool = createBootDeviceTool(registry);
     expect(tool.zodSchema!.safeParse({ avdName: AVD, port }).success).toBe(false);
   });
