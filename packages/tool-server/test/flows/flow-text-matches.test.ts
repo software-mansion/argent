@@ -14,6 +14,9 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
 import { createFlowTestHarness, label, n, screen } from "./harness";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const { run, writeFlow } = createFlowTestHarness({
   tempDirectoryPrefix: "flow-matches-",
