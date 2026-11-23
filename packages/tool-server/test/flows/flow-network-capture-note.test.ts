@@ -19,9 +19,6 @@ import { useAutoAdvancingClock } from "../helpers/auto-clock";
 
 useAutoAdvancingClock();
 
-// Each launch waits out the runner's real post-launch settle (1.5 s).
-vi.setConfig({ testTimeout: 30_000 });
-
 const SERIAL = "emulator-5554";
 const APP = "com.example.networktest";
 const NOTE = "native network capture is attached to com.example.networktest";
