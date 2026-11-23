@@ -49,7 +49,7 @@ A top-level `requires:` block limits the targets a test runs on: `platform` (`io
 
 ### Old e2e tests
 
-A file without `version`, or with `version: 1`, is an old e2e test. On an iOS simulator, an old e2e test resolves its selectors on the view hierarchy of the app, not on the `describe` tree. A selector that you record or copy from `describe` can miss there. With a landscape or upside-down UI, its `tap`, `long-press`, `swipe` and `tool:` coordinates also use the portrait axes of the screen, not the UI as the user sees it. The other rules that came with `version: 2` do not apply there either, for example the whitespace rule for `id` and `text`, the `AXSwitch` role of a toggle and the text-field rules of `matches`. As a `run:` fragment of a `version: 2` e2e test, an old e2e test resolves its selectors on the tree of that test, but keeps its own coordinates.
+A file without `version`, or with `version: 1`, is an old e2e test. On an iOS simulator, an old e2e test resolves its selectors on the view hierarchy of the app, not on the `describe` tree. A selector that you record or copy from `describe` can miss there. With a landscape or upside-down UI, its `tap`, `long-press`, `swipe` and `tool:` coordinates also use the portrait axes of the screen, not the UI as the user sees it. The other rules that came with `version: 2` do not apply there either, for example the whitespace rule for `id` and `text`, the `AXSwitch` role of a toggle, the text-field rules of `matches` and the on-screen keyboard rules. As a `run:` fragment of a `version: 2` e2e test, an old e2e test resolves its selectors on the tree of that test, but keeps its own coordinates.
 
 To replay an old e2e test, do not change it. To change an old e2e test, edit the YAML manually:
 
