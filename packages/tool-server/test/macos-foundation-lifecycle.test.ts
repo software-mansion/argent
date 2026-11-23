@@ -2144,6 +2144,59 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(layer!.reason).toContain("Quit that copy if it is yours");
     });
 
+    /** A Release build with the hardened runtime, which argent refuses to start. */
+    const hardenedRelease = (name: string): string => {
+      const release = writeBundle(path.join(root, `${name}-${Date.now()}`), BUNDLE_ID);
+      execFileSync("codesign", ["--force", "--sign", "-", "--options", "runtime", release], {
+        stdio: "ignore",
+      });
+      return release;
+    };
+    const executableOf = (app: string) => path.join(app, "Contents", "MacOS", "FakeApp");
+
+    // In these tests argent has started no build of the app, so the copy that runs is the build to judge.
+    it("reports the layer unavailable, not to quit first, when the copy that argent did not start is a hardened Release build", async () => {
+      const release = hardenedRelease("release");
+      searched.spotlight[BUNDLE_ID] = release;
+      await startOutsideCopyOf(executableOf(release));
+      const refusal = hardenedRuntimeRefusal(await inspectMacosApp(release));
+      expect(refusal).toContain("release build with the hardened runtime");
+
+      // The JS layer still starts, so a start without layer succeeds.
+      const all = await run("network-capture-start", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      expect(all.layers).toContainEqual({
+        layer: "macos-native",
+        armed: false,
+        reason: refusal,
+        unavailable: true,
+      });
+      expect((await readLog()).header).toBe(`macos-native: unavailable, 0 requests (${refusal})`);
+      // With the native layer alone, no layer can capture the app.
+      const err = await start().catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect((err as Error).message).toContain(`macos-native: ${refusal}`);
+    });
+
+    it("judges the build of a copy from another path than Spotlight's", async () => {
+      searched.spotlight[BUNDLE_ID] = appPath;
+      const release = hardenedRelease("installed");
+      await startOutsideCopyOf(executableOf(release));
+      const err = await start().catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect((err as Error).message).toContain(
+        `macos-native: ${hardenedRuntimeRefusal(await inspectMacosApp(release))}`
+      );
+    });
+
+    it("says to quit a Debug copy that argent did not start while Spotlight's build is a hardened Release build", async () => {
+      searched.spotlight[BUNDLE_ID] = hardenedRelease("release");
+      const outside = await startOutsideCopy();
+      const [layer] = (await start()).layers;
+      expect(layer).toMatchObject({ layer: "macos-native", armed: false });
+      expect(layer).not.toHaveProperty("unavailable");
+      expect(layer!.reason).toContain(`${appPath} (pid ${outside.pid}) without the argent library`);
+    });
+
     it("does not say that the app is not running when argent cannot find its build to look for a copy", async () => {
       // A build that argent did not start and that Spotlight does not know.
       const unknownBuild = writeBundle(path.join(root, `unknown-${Date.now()}`), BUNDLE_ID);

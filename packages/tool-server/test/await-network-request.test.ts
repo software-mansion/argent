@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { createContext, runInContext, type Context } from "node:vm";
 import {
   FAILURE_CODES,
+  FailureError,
   Registry,
   TypedEventEmitter,
   getFailureSignal,
@@ -24,6 +25,10 @@ import {
   type JsCaptureMark,
 } from "../src/blueprints/network-inspector";
 import { nativeDevtoolsRef } from "../src/blueprints/native-devtools";
+import {
+  createIosNetworkRecords,
+  lastIosRecordNumber,
+} from "../src/blueprints/ios-network-records";
 import { STOPPED_BEFORE_FINISH } from "../src/blueprints/android-network-inspector";
 import { chromiumCdpRef } from "../src/blueprints/chromium-cdp";
 import { createNetworkManager } from "../src/chromium-server/network";
@@ -228,7 +233,15 @@ beforeEach(() => {
     fakeBlueprint("JsRuntimeDebugger", (payload, options) => {
       debuggerFactoryCalls++;
       debuggerOptions.push(options);
-      const runtime = metro.get(payload)!;
+      const runtime = metro.get(payload);
+      if (!runtime) {
+        throw new FailureError(`nothing answers at ${payload}`, {
+          error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
+          failure_stage: "test_metro",
+          failure_area: "tool_server",
+          error_kind: "network",
+        });
+      }
       const cdp = {
         evaluate: (expr: string) => runtime.evaluate(expr),
         events: new EventEmitter(),
@@ -533,6 +546,43 @@ describe("await-network-request", () => {
 
     // Without a mark, the request logged before the start does not match.
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_NOT_STARTED);
+  });
+
+  it("keeps the window of the last start when a later start fails", async () => {
+    const udid = "33333333-4444-5555-6666-000000000004";
+    registry.registerTool(createNetworkCaptureStartTool(registry));
+    const runtime = new FakeRuntime();
+    await startIos(udid);
+    await startJs(runtime, { install: runtime.token, lastId: 0 }, { udid });
+    // A start of both layers, after the last native record of the tool-server.
+    const floor = lastIosRecordNumber();
+    ios.mark = { lastRecord: floor, metroPort: MARK_PORT };
+    noteCaptureStart(
+      udid,
+      APP,
+      [
+        { layer: "js", armed: true },
+        { layer: "ios-native", armed: true },
+      ],
+      floor
+    );
+    // The app sends a request, which takes the next native record number of the tool-server.
+    const link = { liveConnection: () => 1, request: () => Promise.reject(new Error("no app")) };
+    createIosNetworkRecords(() => ({ armed: true }), link).fold(1, "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { url: `${API}/v1/login` },
+    });
+    const sent = lastIosRecordNumber();
+    ios.add(sent, { url: "/v1/login", status: 200 });
+    // A start of the JS layer on a port where no Metro runs.
+    const err = await registry
+      .invokeTool("network-capture-start", { udid, bundleId: APP, layer: "js", port: PORT + 1 })
+      .catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+
+    const result = await wait({ url: "/v1/login" }, udid);
+
+    expect(result.match?.id).toBe(`ios-t7-${sent}`);
   });
 
   it("keeps a JS layer armed at the timeout when the deadline cut its last read short", async () => {

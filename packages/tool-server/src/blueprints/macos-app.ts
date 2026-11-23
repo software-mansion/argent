@@ -397,24 +397,30 @@ async function noLaunchedCopyError(bundleId: string): Promise<FailureError> {
 
 /**
  * Why argent refuses to start the app, so that no launch arms its capture: an
- * Electron app or a build that the hardened runtime keeps the library out of. Undefined while argent's own copy runs, and when argent
- * cannot tell, for example when Spotlight does not know the app. Before argent
- * started the app, Spotlight's copy is only a guess at the build that runs
- * next, so its hardened runtime does not refuse: a Debug build can still run.
+ * Electron app or a build that the hardened runtime keeps the library out of.
+ * Undefined while argent's own copy runs, and when argent cannot tell, for
+ * example when Spotlight does not know the app. The build is the one argent
+ * started last. Before argent started the app, it is the build of a copy that
+ * runs without the library (the user's, or one that Xcode Run started), which
+ * is the app under test. With no such copy, Spotlight's build is only a guess
+ * at the build that runs next, so its hardened runtime does not refuse: a Debug
+ * build can still run.
  */
 export async function macosLaunchRefusal(bundleId: string): Promise<string | undefined> {
   if (await runningTrackedApp(bundleId)) return undefined;
   const tracked = getTrackedMacosApp(bundleId)?.appPath;
   const appPath = tracked ?? (await findMacosAppByBundleId(bundleId));
   if (!appPath) return undefined;
-  let info: MacosAppInfo;
-  try {
-    info = await inspectMacosApp(appPath);
-  } catch {
-    return undefined;
-  }
-  if (info.bundleId !== bundleId) return undefined;
-  return chromiumRefusal(info) ?? (tracked ? hardenedRuntimeRefusal(info) : undefined) ?? undefined;
+  const inspect = (at: string) => inspectMacosApp(at).catch(() => undefined);
+  const info = await inspect(appPath);
+  if (info?.bundleId !== bundleId) return undefined;
+  const refusal = chromiumRefusal(info);
+  if (refusal || tracked) return refusal ?? hardenedRuntimeRefusal(info) ?? undefined;
+  const copies = await findRunningCopies(bundleId, info.executable);
+  const other = copies.otherBuilds[0];
+  const running = copies.same.length > 0 ? info : other && (await inspect(other.appPath));
+  if (!running) return undefined;
+  return chromiumRefusal(running) ?? hardenedRuntimeRefusal(running) ?? undefined;
 }
 
 function errorMessage(err: unknown): string {
