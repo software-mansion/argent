@@ -3892,6 +3892,7 @@ describe("a Mac app", () => {
     | "isConnected"
     | "startNetworkCapture"
     | "stopNetworkCapture"
+    | "forgetNetworkCaptureStart"
     | "isNetworkCaptureStarted"
     | "isNetworkCaptureStopped"
     | "isNetworkCaptureStopUnconfirmed"
@@ -3928,6 +3929,7 @@ describe("a Mac app", () => {
       this.stopped = true;
       return { confirmed: true };
     }
+    forgetNetworkCaptureStart(): void {}
     isNetworkCaptureStarted(): boolean {
       return this.started;
     }
