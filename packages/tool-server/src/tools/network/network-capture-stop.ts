@@ -27,20 +27,21 @@ import { metroPort } from "../../utils/debugger/metro-port";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { localIosHost, remoteIosHost } from "../../utils/ios-host";
-import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
-import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
+import type { MacosAppApi } from "../../blueprints/macos-app";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../utils/simctl-config";
 import { classifyNotConnected } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
+  appleAppNoJs,
   captureName,
   captureSchema,
   errorMessage,
   isLiveService,
   jsNotReached,
+  macosAppOfCall,
   resolveJsRuntime,
   otherPortHint,
-  MACOS_NO_JS,
   requestedLayers,
   runLayers,
   withLayerInRetries,
@@ -59,10 +60,10 @@ export function createNetworkCaptureStopTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StoppedLayer>> {
   return {
     id: "network-capture-stop",
-    description: `Stop network capture for an app on every layer and keep what was captured. Pass layer js or native to stop only that layer; the other layer keeps capturing.
-Use when you have the requests you need, before you profile, or to end capture in an e2e test. Unlike stop-all-simulator-servers, the requests stay listed in native-network-logs and view-network-logs, and their ids keep working in view-network-request-details (a view-network-logs id until the app's JS runtime reloads).
-Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. A request in flight at the stop completes in the list on iOS<flag:macos-apps> and Mac apps</flag:macos-apps> and in the JS runtime. When the stop covers the native layer on Android, the list marks such a request failed, while the app's own request goes on, and a body that view-network-request-details did not read before the stop is no longer available.
-Returns { status, layers }: per layer the call stopped, armed (false once the layer confirmed the stop), total (the requests it keeps for the app, or 0 when the stop could not count them, as on a JS runtime it did not reach) and a reason when the layer was not reached or was not started.`,
+    description: `Stop network capture and keep the recorded requests. Use when you have the requests you need, before profiling, or to end capture in an e2e test.
+On Chromium, mark the end of the window for await-network-request. The existing connection keeps recording for view-network-logs. If no window was started, call network-capture-start before reproducing the request.
+On other supported targets, read the retained requests with native-network-logs or view-network-logs. Use view-network-request-details with an ID from the log. JS request IDs expire on reload. Capture stays off until network-capture-start, including after relaunch. In-flight requests can finish in the log. Stopping Android native capture marks them failed in the log without interrupting the app's requests. Only bodies read before that stop remain available.
+Returns { status, layers }. Check armed and reason to confirm the stop. If the stop fails to reach the JS runtime, retry once the app reconnects to Metro. total counts the retained requests, or is 0 when the stop cannot count them.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
     interaction: {
@@ -84,29 +85,21 @@ Returns { status, layers }: per layer the call stopped, armed (false once the la
       assertSupported("network-capture-stop", CAPTURE_CAPABILITY, device);
       const port = metroPort({ device_id: params.udid, port: params.port });
       const run = requestedLayers(params.layer);
-      if (device.platform === "macos") {
-        // A Mac app's capture is native only, so a JS stop leaves it as it is.
-        if (!run.native) {
-          return {
-            status: "ok",
-            layers: [
-              {
-                layer: "js",
-                armed: false,
-                total: 0,
-                reason: `${MACOS_NO_JS}; its native capture stays as it is`,
-              },
-            ],
-          };
-        }
+      if (device.platform === "chromium") {
         const layer = await withCaptureLock(params.udid, params.bundleId, () =>
-          stopMacosLayer(registry, device, params.bundleId, port)
+          stopChromiumLayer(registry, device)
         );
         return { status: "ok", layers: [layer] };
       }
       // A layer the call does not name stays as it is.
-      const layers = await withCaptureLock(params.udid, params.bundleId, () =>
-        runLayers([
+      const layers = await withCaptureLock(params.udid, params.bundleId, async () => {
+        // A Mac app's service is light and reaches nothing in the app, so the bundle id
+        // is checked also before any tool reached the app, and before any layer stops.
+        const app =
+          device.platform === "macos"
+            ? await macosAppOfCall(registry, device, "network-capture-stop", params.bundleId)
+            : undefined;
+        return runLayers([
           ...(run.js
             ? [
                 device.platform !== "android" && !isInjectableBundleId(params.bundleId)
@@ -114,7 +107,7 @@ Returns { status, layers }: per layer the call stopped, armed (false once the la
                       layer: "js",
                       armed: false,
                       total: 0,
-                      reason: `${params.bundleId} is an Apple system app, which runs no React Native JS`,
+                      reason: appleAppNoJs(params.bundleId, app !== undefined),
                     })
                   : stopJsLayer(
                       registry,
@@ -127,13 +120,15 @@ Returns { status, layers }: per layer the call stopped, armed (false once the la
             : []),
           ...(run.native
             ? [
-                device.platform === "android"
-                  ? stopAndroidLayer(registry, device, params.bundleId, port)
-                  : stopIosLayer(registry, device, params.bundleId, port),
+                app
+                  ? stopMacosLayer(app, port)
+                  : device.platform === "android"
+                    ? stopAndroidLayer(registry, device, params.bundleId, port)
+                    : stopIosLayer(registry, device, params.bundleId, port),
               ]
             : []),
-        ])
-      );
+        ]);
+      });
       return { status: "ok", layers: withLayerInRetries(layers, params.layer) };
     },
   };
@@ -375,22 +370,8 @@ async function stopIosLayer(
   };
 }
 
-/** A Mac app has one layer, in the app's own service. */
-async function stopMacosLayer(
-  registry: Registry,
-  device: DeviceInfo,
-  bundleId: string,
-  port: number
-): Promise<StoppedLayer> {
-  // The service is light and reaches nothing in the app, so the bundle id is
-  // checked also before any tool reached the app.
-  const ref = macosAppRef(device);
-  const app = requireMacosAppOfBundle(
-    { macosApp: await registry.resolveService<MacosAppApi>(ref.urn, ref.options) },
-    device,
-    "network-capture-stop",
-    bundleId
-  );
+/** A Mac app's native layer, in the app's own service. */
+async function stopMacosLayer(app: MacosAppApi, port: number): Promise<StoppedLayer> {
   if (!app.isNetworkCaptureStarted() && !app.isNetworkCaptureStopped()) {
     return { layer: "macos-native", armed: false, total: 0, reason: NOT_STARTED };
   }
@@ -400,6 +381,30 @@ async function stopMacosLayer(
     armed: !confirmed,
     total: app.networkRecords().records(port).length,
     ...(reason ? { reason } : {}),
+  };
+}
+
+/**
+ * A Chromium app's one layer: the tab's requests stay recorded for view-network-logs,
+ * so the stop only marks where the requests that await-network-request reads end.
+ */
+async function stopChromiumLayer(registry: Registry, device: DeviceInfo): Promise<StoppedLayer> {
+  const ref = chromiumCdpRef(device);
+  // A stop must not attach to the app: a session that is gone took its mark with it.
+  if (!isLiveService(registry, ref.urn)) {
+    return { layer: "chromium", armed: false, total: 0, reason: NOT_STARTED };
+  }
+  const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
+  const network = api.server.network;
+  if (!network.stopCapture()) {
+    return { layer: "chromium", armed: false, total: 0, reason: NOT_STARTED };
+  }
+  return {
+    layer: "chromium",
+    armed: false,
+    total: network.requests().length,
+    reason:
+      "view-network-logs keeps listing the tab's requests while argent is attached; await-network-request reads only the requests up to this stop",
   };
 }
 

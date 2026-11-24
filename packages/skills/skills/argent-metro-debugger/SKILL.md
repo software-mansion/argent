@@ -16,27 +16,37 @@ Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`
 
 Use the `device_id` from `list-devices` and keep the same ID and Metro port across calls. On shared Metro, if `debugger-connect` cannot match an iOS simulator UDID or Android serial, it lists logical IDs. Choose the requested device's `logicalDeviceId` for subsequent debugger calls. If you later tear down this session, include that ID in `stop-all-simulator-servers`'s `devices`.
 
-On iOS and Android, use the `list-devices` ID as `udid` for `network-capture-start` and `network-capture-stop`. If shared Metro requires a logical ID, pass it as `logicalDeviceId`, then use it as `device_id` when reading the JS capture.
-
-| Tool                                                 | Use for                                                                                                                                                                                    |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `debugger-status`                                    | Diagnosing the connection. Call it first when anything fails                                                                                                                               |
-| `debugger-connect`                                   | Opening the session and starting console capture                                                                                                                                           |
-| `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                                                                                                 |
-| `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                                                                                      |
-| `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                                                                                    |
-| `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1                                                                     |
-| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                                                                                             |
-| `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                                                                                                 |
-| `view-network-logs` → `view-network-request-details` | JS-level HTTP traffic, then the headers and body of one request. On iOS and Android, call `network-capture-start` before the action, and `network-capture-stop` when you have the requests |
+| Tool                                                 | Use for                                                                                                                |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `debugger-status`                                    | Diagnosing the connection. Call it first when anything fails                                                           |
+| `debugger-connect`                                   | Opening the session and starting console capture                                                                       |
+| `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                             |
+| `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                  |
+| `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                |
+| `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
+| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                         |
+| `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                             |
+| `view-network-logs` → `view-network-request-details` | Find a request and inspect its headers, timing, or body                                                                |
 
 A component missing from `debugger-component-tree`? `includeSkipped` only adds counts of what was pruned. Use `onScreenOnly: false` for one off screen, or `debugger-inspect-element` at its point for one on screen.
+
+### Inspect HTTP requests
+
+On iOS simulators, Android, and Mac apps, call `network-capture-start` before reproducing the request and check that `js` reports `armed: true`. Start again once JavaScript is ready after a reload or relaunch.
+
+After the action, use `await-network-request` if you know which request to check. Use `view-network-logs` to explore the traffic. Open the details with `view-network-request-details` when needed. Stop capture when you have what you need. If the stop still reports `armed: true`, follow its `reason`.
+
+Use the device ID as `udid` for start, stop, and the wait. On shared Metro, pass the logical ID as `logicalDeviceId` for start and stop, or `device_id` for the log tools. The wait reuses the Metro target from the start. Keep the Metro port consistent across the other calls.
+
+On Vega, call `view-network-logs` before reproducing the request and again after a reload.
+
+On Chromium and Electron, call `view-network-logs` before reproducing the request so Argent connects to the page. Use `network-capture-start` and `network-capture-stop` to mark a capture window when needed. The log includes requests outside that window.
 
 ### React Native Mac apps
 
 1. Start Metro before launching a Debug Hermes build of react-native-macos 0.76+ or React Native for Mac Catalyst. Launch Mac Catalyst through Argent so it can identify its runtime. If `boot-device` refuses a hardened react-native-macos build, have the user start it from Xcode. JavaScript tools still work. UI inspection and gestures require a build Argent can control.
 2. Keep `macos-app-<bundle id>` as `device_id`, even on shared Metro. If a call returns `device_mismatch`, check that the Debug bundle loaded from the requested Metro port. The IDs in the error identify other targets.
-3. Call `view-network-logs` before reproducing a JavaScript request and again after a reload. For native traffic, use `network-capture-start` and read with `native-network-logs`. The two logs can show the same `fetch()` request.
+3. For a build started from Xcode, use `macos-app-<bundle id>` as `udid` and set `layer: "js"` for start and stop. `list-devices` only lists Mac apps launched through Argent. To inspect native `URLSession` requests, launch a supported build through Argent and read with `native-network-logs`.
 
 Use `describe` for tap targets. The React tools use the root with the most components, which can be in a different window. Before using a point, verify that both tools are looking at the same window. To inspect a tap point from the React tree, multiply its fractions by the width and height in `Screen: WxH`. The resulting points include the title bar. On the old architecture (Paper), native views around the React root can shift those points. Check the returned component against the intended control.
 
