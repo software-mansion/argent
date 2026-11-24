@@ -13,10 +13,13 @@
  * Drives the real Registry → JsRuntimeDebugger → debugger-log-registry path
  * against a mock Metro, disposing the service exactly as the teardown does.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
+import * as fs from "node:fs";
 import * as http from "node:http";
-import { Registry } from "@argent/registry";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Registry, ServiceState } from "@argent/registry";
 import {
   jsRuntimeDebuggerBlueprint,
   type JsRuntimeDebuggerApi,
@@ -25,6 +28,11 @@ import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
 import { __resetReapedSessionsForTesting } from "../../src/utils/reaped-sessions";
 import { scopeTempHome } from "../helpers/temp-home";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, writeSync: vi.fn(actual.writeSync), openSync: vi.fn(actual.openSync) };
+});
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
@@ -35,6 +43,7 @@ let mockServer: http.Server;
 let wss: WebSocketServer;
 let mockPort: number;
 let registry: Registry;
+let appRunning = true;
 
 const LOGICAL_ID = "logical-only-device";
 
@@ -54,19 +63,23 @@ beforeAll(async () => {
       if (req.url === "/json/list") {
         res.setHeader("Content-Type", "application/json");
         res.end(
-          JSON.stringify([
-            {
-              id: "page-0",
-              title: "app (Test Device)",
-              description: "[C++ connection]",
-              webSocketDebuggerUrl: `ws://localhost:${mockPort}/inspector/debug?device=${LOGICAL_ID}&page=1`,
-              deviceName: "Test Device",
-              reactNative: {
-                logicalDeviceId: LOGICAL_ID,
-                capabilities: { prefersFuseboxFrontend: true },
-              },
-            },
-          ])
+          JSON.stringify(
+            appRunning
+              ? [
+                  {
+                    id: "page-0",
+                    title: "app (Test Device)",
+                    description: "[C++ connection]",
+                    webSocketDebuggerUrl: `ws://localhost:${mockPort}/inspector/debug?device=${LOGICAL_ID}&page=1`,
+                    deviceName: "Test Device",
+                    reactNative: {
+                      logicalDeviceId: LOGICAL_ID,
+                      capabilities: { prefersFuseboxFrontend: true },
+                    },
+                  },
+                ]
+              : []
+          )
         );
         return;
       }
@@ -99,6 +112,7 @@ beforeEach(async () => {
   // connected would be reused — carrying its entry count into the next case.
   await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${LOGICAL_ID}`).catch(() => {});
   __resetReapedSessionsForTesting();
+  appRunning = true;
 });
 
 async function connectAndCapture(deviceId: string, entries: number): Promise<string> {
@@ -120,9 +134,11 @@ async function connectAndCapture(deviceId: string, entries: number): Promise<str
 describe("a debugger session reaped by stop-all-simulator-servers", () => {
   it("says the console history was deleted rather than reporting a silent app", async () => {
     const urn = await connectAndCapture(LOGICAL_ID, 60);
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
 
     // Exactly what the teardown does to this device's debugger.
     await registry.disposeService(urn);
+    expect(fs.existsSync(api.logWriter.getFilePath())).toBe(false);
 
     // The registry reconnects transparently — a brand new writer over a new
     // file. The count really is 0; the question is whether anything says why.
@@ -134,6 +150,8 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
     expect(result.totalEntries).toBe(0);
     expect(result.note).toBeDefined();
     expect(result.note).toContain("60 captured console entries");
+    expect(result.note).toContain("the log file is deleted on teardown");
+    expect(result.note).not.toContain("no log file held them");
     expect(result.note).toContain("stop-all-simulator-servers");
     expect(result.note).toContain("torn down");
   });
@@ -186,37 +204,44 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
   });
 
   it("is dropped by an explicit debugger-connect, which starts a capture of its own", async () => {
-    // The consumer is gated on an EMPTY registry, so a breadcrumb survives every
-    // read that finds entries — and would then attach "a teardown ate your logs"
-    // to some later, unrelated empty read. An explicit connect makes it wrong
-    // anyway: from there the capture is this session's own, so empty honestly
-    // means nothing has been logged since. Same discipline as the
-    // screen-recording and native-profiler starts.
+    // The consumer is gated on an empty or not-connected read, so a breadcrumb
+    // survives every read that finds entries — and would then attach "a teardown
+    // ate your logs" to some later, unrelated empty read. An explicit connect
+    // makes it wrong anyway: from there the capture is this session's own, so
+    // empty honestly means nothing has been logged since. Same discipline as
+    // the screen-recording and native-profiler starts.
     const urn = await connectAndCapture(LOGICAL_ID, 40);
     await registry.disposeService(urn);
 
-    await registry.invokeTool("debugger-connect", { port: mockPort, device_id: LOGICAL_ID });
+    const connect = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { note?: string };
 
     const result = (await registry.invokeTool("debugger-log-registry", {
       port: mockPort,
       device_id: LOGICAL_ID,
     })) as { totalEntries: number; note?: string };
 
+    expect(connect.note).toBeUndefined();
     expect(result.totalEntries).toBe(0);
     expect(result.note).toBeUndefined();
   });
 
   describe("when the connect id and the logicalDeviceId differ", () => {
-    // Every case above connects with LOGICAL_ID, so `api.logicalDeviceId ===
-    // deviceId` and the disposer's SECOND recordReapedSession never fires —
-    // that is the Chromium/Vega shape. On iOS/Android the caller connects with
-    // a udid/serial and Metro echoes its own logical id, so one teardown writes
-    // two breadcrumbs. They describe one event and must be spent as one.
+    // Every case above connects with LOGICAL_ID (the Chromium/Vega shape). On
+    // iOS/Android the caller connects with a udid/serial and Metro echoes its
+    // own logical id, so the disposer files one breadcrumb under both ids.
     const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
 
     beforeEach(async () => {
       await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
       __resetReapedSessionsForTesting();
+    });
+
+    // A live CONNECT_ID session keeps LOGICAL_ID aliased onto it for later cases.
+    afterEach(async () => {
+      await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
     });
 
     it("explains the loss whichever of the two ids the read uses", async () => {
@@ -278,5 +303,340 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
         expect(result.note).toBeUndefined();
       }
     });
+  });
+});
+
+describe("a debugger session whose app crashed", () => {
+  async function crash(urn: string): Promise<string> {
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    appRunning = false;
+    for (const ws of wss.clients) ws.terminate();
+    await vi.waitFor(() =>
+      expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.ERROR)
+    );
+    return api.logWriter.getFilePath();
+  }
+
+  it("keeps the log file and names it on the not-connected read", async () => {
+    const file = await crash(await connectAndCapture(LOGICAL_ID, 3));
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { status: string; note?: string };
+
+    expect(result.status).toBe("not_connected");
+    expect(fs.readFileSync(file, "utf-8")).toContain("captured 2");
+    expect(result.note).toContain(`kept at ${file}`);
+    expect(result.note).not.toContain("stop-all-simulator-servers");
+  });
+
+  it("names no log file when its file was removed before the crash", async () => {
+    const urn = await connectAndCapture(LOGICAL_ID, 3);
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    fs.rmSync(api.logWriter.getFilePath(), { force: true });
+    await crash(urn);
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { status: string; note?: string };
+
+    expect(result.status).toBe("not_connected");
+    expect(result.note).toContain("3 captured console entries went with it — no log file");
+    expect(result.note).not.toContain("kept at");
+  });
+
+  it("names the kept file on the next debugger-connect", async () => {
+    const file = await crash(await connectAndCapture(LOGICAL_ID, 3));
+    appRunning = true;
+
+    const result = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { note?: string };
+
+    expect(result.note).toContain(`kept at ${file}`);
+  });
+
+  it("names the kept file to a read by the logicalDeviceId of a udid connect", async () => {
+    const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
+    const file = await crash(await connectAndCapture(CONNECT_ID, 3));
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { status: string; note?: string };
+
+    expect(result.status).toBe("not_connected");
+    expect(result.note).toContain(`kept at ${file}`);
+  });
+
+  it("reports the crash once when the connect id and the logicalDeviceId differ", async () => {
+    const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
+    const file = await crash(await connectAndCapture(CONNECT_ID, 3));
+
+    const first = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: CONNECT_ID,
+    })) as { status: string; note?: string };
+    expect(first.status).toBe("not_connected");
+    expect(first.note).toContain(`kept at ${file}`);
+
+    appRunning = true;
+    const emptyRead = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: CONNECT_ID,
+    })) as { status: string; note?: string };
+    const reconnect = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: CONNECT_ID,
+    })) as { note?: string };
+
+    expect(emptyRead.status).toBe("connected");
+    expect(emptyRead.note).toBeUndefined();
+    expect(reconnect.note).toBeUndefined();
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`);
+  });
+});
+
+describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "a debugger session that cannot write its log file",
+  () => {
+    const argentDir = () => path.join(os.homedir(), ".argent");
+
+    function makeArgentUnwritable() {
+      fs.rmSync(path.join(argentDir(), "tmp"), { recursive: true, force: true });
+      fs.mkdirSync(argentDir(), { recursive: true });
+      fs.chmodSync(argentDir(), 0o500);
+    }
+
+    afterEach(() => {
+      fs.chmodSync(argentDir(), 0o700);
+    });
+
+    async function readRegistry() {
+      return (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: LOGICAL_ID,
+      })) as { status: string; file: string; totalEntries: number; note?: string };
+    }
+
+    it("connects, and the registry says its log file does not exist and how to get one", async () => {
+      makeArgentUnwritable();
+      await connectAndCapture(LOGICAL_ID, 2);
+
+      const result = await readRegistry();
+
+      expect(result.status).toBe("connected");
+      expect(result.totalEntries).toBe(2);
+      expect(fs.existsSync(result.file)).toBe(false);
+      expect(result.note).toContain(`No log file exists at ${result.file}`);
+      expect(result.note).toContain(`stop-all-simulator-servers with devices: ["${LOGICAL_ID}"]`);
+    });
+
+    it("names a full disk alongside permissions when the log file could not be created", async () => {
+      // A full APFS disk refuses the open itself with ENOSPC.
+      vi.mocked(fs.openSync).mockImplementation(() => {
+        throw Object.assign(new Error("ENOSPC: no space left on device, open"), {
+          code: "ENOSPC",
+        });
+      });
+      try {
+        await connectAndCapture(LOGICAL_ID, 2);
+      } finally {
+        vi.mocked(fs.openSync).mockReset();
+      }
+
+      const result = await readRegistry();
+
+      expect(fs.existsSync(result.file)).toBe(false);
+      expect(result.note).toBe(
+        `No log file exists at ${result.file}, so there is nothing to grep: the counts, clusters and { entries } are all that was captured. ` +
+          `Usually the disk was full or ~/.argent/tmp was not writable when this session started (if root owns ~/.argent: sudo chown -R "$USER" ~/.argent). ` +
+          `Only a new debugger session gets a file: once that is fixed, call stop-all-simulator-servers with devices: ["${LOGICAL_ID}"], then debugger-connect again.`
+      );
+    });
+
+    it("names the session's connect id in the recovery scope when read by its logical id", async () => {
+      const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
+      makeArgentUnwritable();
+      const urn = await connectAndCapture(CONNECT_ID, 2);
+
+      const result = await readRegistry();
+
+      expect(result.note).toContain(`stop-all-simulator-servers with devices: ["${CONNECT_ID}"]`);
+      await registry.disposeService(urn);
+    });
+
+    it("says a crashed session's entries were in no log file, not that one was kept", async () => {
+      makeArgentUnwritable();
+      const urn = await connectAndCapture(LOGICAL_ID, 3);
+      appRunning = false;
+      for (const ws of wss.clients) ws.terminate();
+      await vi.waitFor(() =>
+        expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.ERROR)
+      );
+
+      const result = await readRegistry();
+
+      expect(result.status).toBe("not_connected");
+      expect(result.note).toContain("lost its connection");
+      expect(result.note).toContain("3 captured console entries went with it — no log file");
+      expect(result.note).not.toContain("kept at");
+    });
+
+    it("says a crashed session whose log writes all failed kept no log file", async () => {
+      // A full disk: the file opens, then every write throws.
+      vi.mocked(fs.writeSync).mockImplementation(() => {
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
+      });
+      const urn = await connectAndCapture(LOGICAL_ID, 3);
+      appRunning = false;
+      for (const ws of wss.clients) ws.terminate();
+      await vi.waitFor(() =>
+        expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.ERROR)
+      );
+      vi.mocked(fs.writeSync).mockReset();
+
+      const result = await readRegistry();
+
+      expect(result.note).toContain("3 captured console entries went with it — no log file");
+      expect(result.note).not.toContain("kept at");
+    });
+
+    it("says a live session's log file holds none of its entries when every write failed", async () => {
+      vi.mocked(fs.writeSync).mockImplementation(() => {
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
+      });
+      try {
+        await connectAndCapture(LOGICAL_ID, 3);
+      } finally {
+        vi.mocked(fs.writeSync).mockReset();
+      }
+
+      const result = await readRegistry();
+
+      expect(result.status).toBe("connected");
+      expect(fs.statSync(result.file).size).toBe(0);
+      expect(result.note).toContain(
+        `The log file at ${result.file} holds none of the 3 captured entries`
+      );
+    });
+
+    /** The disk fills partway: entries before `captured <from>` reach the file, the rest throw. */
+    async function failWritesFrom(from: number) {
+      const real = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.mocked(fs.writeSync).mockImplementation(((fd: number, buf: Buffer) => {
+        if (Number(/captured (\d+)/.exec(String(buf))?.[1]) >= from) {
+          throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+            code: "ENOSPC",
+          });
+        }
+        return real.writeSync(fd, buf);
+      }) as typeof fs.writeSync);
+    }
+
+    it("says a live session's log file holds only the entries written before writes failed", async () => {
+      await failWritesFrom(2);
+      try {
+        await connectAndCapture(LOGICAL_ID, 3);
+      } finally {
+        vi.mocked(fs.writeSync).mockReset();
+      }
+
+      const result = await readRegistry();
+
+      expect(result.status).toBe("connected");
+      expect(result.totalEntries).toBe(3);
+      expect(fs.readFileSync(result.file, "utf-8").trim().split("\n")).toHaveLength(2);
+      expect(result.note).toContain(
+        `The log file at ${result.file} holds only 2 of the 3 captured entries`
+      );
+    });
+
+    it("says a crashed session's kept log file holds only the entries written to it", async () => {
+      await failWritesFrom(2);
+      const urn = await connectAndCapture(LOGICAL_ID, 3);
+      appRunning = false;
+      for (const ws of wss.clients) ws.terminate();
+      await vi.waitFor(() =>
+        expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.ERROR)
+      );
+      vi.mocked(fs.writeSync).mockReset();
+
+      const result = await readRegistry();
+
+      expect(result.note).toMatch(
+        /The log file with 2 of its 3 captured console entries is kept at/
+      );
+    });
+
+    it("adds no file note once every entry reached the log file", async () => {
+      await connectAndCapture(LOGICAL_ID, 3);
+
+      const result = await readRegistry();
+
+      expect(fs.statSync(result.file).size).toBeGreaterThan(0);
+      expect(result.note).toBeUndefined();
+    });
+
+    it("keeps the reaped-session explanation alongside the missing-file one", async () => {
+      const urn = await connectAndCapture(LOGICAL_ID, 7);
+      await registry.disposeService(urn);
+      makeArgentUnwritable();
+
+      const result = await readRegistry();
+
+      expect(result.totalEntries).toBe(0);
+      expect(result.note).toContain("7 captured console entries");
+      expect(result.note).toContain(`No log file exists at ${result.file}`);
+    });
+  }
+);
+
+describe("debugger-log-registry entries", () => {
+  type EntriesResult = { entries: Array<{ id: number; level: string }> };
+  const readEntries = async (params: object) =>
+    (
+      (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: LOGICAL_ID,
+        ...params,
+      })) as EntriesResult
+    ).entries.map((e) => e.id);
+
+  it("returns no entries for a connected session that has logged nothing", async () => {
+    await connectAndCapture(LOGICAL_ID, 0);
+
+    expect(await readEntries({})).toEqual([]);
+  });
+
+  it("returns the newest entries, honouring tail and levels", async () => {
+    const urn = await connectAndCapture(LOGICAL_ID, 30);
+
+    expect(await readEntries({})).toEqual(Array.from({ length: 20 }, (_, i) => i + 10));
+    expect(await readEntries({ tail: "3" })).toEqual([27, 28, 29]);
+
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    api.logWriter.write({
+      id: 30,
+      timestamp: new Date(1710000030000).toISOString(),
+      level: "error",
+      message: "boom",
+    });
+    api.logWriter.write({
+      id: 31,
+      timestamp: new Date(1710000031000).toISOString(),
+      level: "log",
+      message: "after",
+    });
+    expect(await readEntries({ levels: ["error"] })).toEqual([30]);
   });
 });

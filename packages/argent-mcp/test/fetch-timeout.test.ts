@@ -4,7 +4,7 @@
 // configurable timeout (ARGENT_FETCH_TIMEOUT_MS, default 30s).
 //
 // This test uses an in-process replica of fetchWithReconnect rather than
-// spawning the built CLI binary, so it doesn't require `npm run build`.
+// spawning the built CLI binary, so it doesn't require `bun run build`.
 
 import { describe, it, expect } from "vitest";
 import http from "node:http";

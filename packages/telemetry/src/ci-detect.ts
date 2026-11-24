@@ -1,10 +1,7 @@
 import vendors from "ci-info/vendors.json";
 
 type VendorEnv =
-  | string
-  | { env: string; includes: string }
-  | { any: string[] }
-  | Record<string, string>;
+  string | { env: string; includes: string } | { any: string[] } | Record<string, string>;
 
 interface VendorDefinition {
   env: VendorEnv | VendorEnv[];
@@ -53,5 +50,3 @@ export function isCi(env: NodeJS.ProcessEnv = process.env): boolean {
   if (GENERIC_CI_ENV_VARS.some((name) => Boolean(env[name]))) return true;
   return isKnownVendorCi(env);
 }
-
-export const _CI_VENDOR_COUNT_FOR_TEST: number = (vendors as VendorDefinition[]).length;

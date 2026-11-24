@@ -11,14 +11,22 @@ interface CaptureRecoveryState {
   profilingActive: boolean;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
+  /** xctrace only: the stop that is ending the recording and exporting its trace. */
+  stopInProgress?: Promise<unknown> | null;
 }
 
 /**
- * True while a capture holds the session: recording, or ended (10-min cap /
- * unexpected exit) with a partial trace still awaiting stop's recovery export.
+ * True while a capture holds the session: recording, being stopped and exported,
+ * or ended (10-min cap / unexpected exit) with a partial trace still awaiting
+ * stop's recovery export.
  */
 export function isCaptureInFlight(state: CaptureRecoveryState): boolean {
-  return state.profilingActive || state.recordingTimedOut || state.recordingExitedUnexpectedly;
+  return (
+    state.profilingActive ||
+    state.recordingTimedOut ||
+    state.recordingExitedUnexpectedly ||
+    Boolean(state.stopInProgress)
+  );
 }
 
 /**
@@ -28,6 +36,12 @@ export function isCaptureInFlight(state: CaptureRecoveryState): boolean {
  * stop, e.g. `"analyze"`.
  */
 export function inFlightGuardMessage(state: CaptureRecoveryState, retryAction: string): string {
+  if (state.stopInProgress) {
+    return (
+      `native-profiler-stop is still ending the recording on this device and exporting its ` +
+      `trace. Wait for it to return, then ${retryAction}.`
+    );
+  }
   if (state.profilingActive) {
     return `A native profiling session is recording on this device. Run native-profiler-stop first, then ${retryAction}.`;
   }

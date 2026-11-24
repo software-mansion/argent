@@ -1,6 +1,7 @@
 import { resolve as resolvePath } from "node:path";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlInstall, simctlUninstall } from "../../../utils/sim-remote";
+import { assertIosAppBundle } from "../validate-app";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 /**
@@ -16,6 +17,8 @@ export const iosRemoteImpl: PlatformImpl<
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
+    // The tool-server may run on Linux here, with no plutil to read the bundle id.
+    await assertIosAppBundle(absolute, bundleId, { readBundleId: false });
     try {
       await simctlUninstall(udid, bundleId);
     } catch {

@@ -12,11 +12,17 @@ import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
 import { simctlTargetForUdidSync } from "../utils/ios-device-sets";
+import { firstSimulatorPoll } from "../utils/simulator-watcher";
 import { UnsupportedOperationError } from "../utils/capability";
-import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
+import type {
+  TvControlApi,
+  TvDescribeResponse,
+  TvDirection,
+  TvHierarchyResponse,
+} from "./tv-control-types";
 
 // Re-exported so existing importers of `tv-control` keep working.
-export type { TvControlApi, TvDescribeResponse, TvDirection, TvElement };
+export type { TvControlApi, TvDescribeResponse };
 
 export const TV_CONTROL_NAMESPACE = "TvControl";
 
@@ -40,12 +46,14 @@ export function tvControlRef(device: DeviceInfo): {
   };
 }
 
+// Per tool-server process, so neither a reap nor a dispose touches another
+// server's daemon.
 function axSocketPath(udid: string): string {
-  return `/tmp/argent-tv-ax-${udid.slice(0, 8)}.sock`;
+  return `/tmp/argent-tv-ax-${udid.slice(0, 8)}-${process.pid}.sock`;
 }
 
 function hidSocketPath(udid: string): string {
-  return `/tmp/argent-tv-hid-${udid.slice(0, 8)}.sock`;
+  return `/tmp/argent-tv-hid-${udid.slice(0, 8)}-${process.pid}.sock`;
 }
 
 /**
@@ -94,7 +102,10 @@ export function typeTimeoutMs(textLength: number): number {
 }
 
 async function sendJson(socketPath: string, command: string, timeoutMs?: number): Promise<unknown> {
-  const raw = (await sendLine(socketPath, command, timeoutMs)).trim();
+  return parseReply((await sendLine(socketPath, command, timeoutMs)).trim(), command);
+}
+
+function parseReply(raw: string, command: string): unknown {
   if (!raw) return {};
   try {
     return JSON.parse(raw);
@@ -105,11 +116,11 @@ async function sendJson(socketPath: string, command: string, timeoutMs?: number)
 
 // Spawn the AX reader *inside* the simulator. It binds its own unix socket on
 // the host-shared /tmp, so the host connects to that path directly.
-function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
-  // The factory's device-list validation already learned this UDID's device
-  // set, so the synchronous cached lookup is warm here. Spawning the AX reader
-  // is the ax-service mechanism, so a provider's device needs that grant.
-  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
+function spawnAxDaemon(
+  udid: string,
+  socketPath: string,
+  axTarget: ReturnType<typeof simctlTargetForUdidSync>
+): ChildProcess {
   const proc = execFile(
     "xcrun",
     [
@@ -127,6 +138,16 @@ function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
   const tag = udid.slice(0, 8);
   proc.stderr?.on("data", (data: string) => process.stderr.write(`[tvos-ax ${tag}] ${data}`));
   return proc;
+}
+
+// Kills every daemon (in-sim reader or host HID daemon) bound to `socketPath`.
+// SIGKILLing `simctl spawn` does not reach its reader, and a daemon left
+// running unlinks the path when its idle `--timeout` fires (or on SIGTERM),
+// even after a newer daemon has bound it. SIGKILL, so it never runs that unlink.
+function reapDaemons(socketPath: string): Promise<void> {
+  const pattern = `tvos-.* --socket ${socketPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`;
+  // pkill exits 1 when nothing matched, the common case.
+  return new Promise((resolve) => execFile("pkill", ["-KILL", "-f", pattern], () => resolve()));
 }
 
 // Run the HID injector on the host. It loads SimulatorKit and holds one
@@ -251,9 +272,18 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     const hidSock = hidSocketPath(udid);
     let disposed = false;
 
-    await ensureAutomationEnabled(udid);
+    // A select could open an app from the home screen, which must not launch
+    // before the watcher has armed native-devtools injection.
+    await Promise.all([ensureAutomationEnabled(udid), firstSimulatorPoll()]);
+    // Daemons of a dead tool-server that had this pid would read as ready, then
+    // unlink our sockets when they idle out.
+    await Promise.all([reapDaemons(axSock), reapDaemons(hidSock)]);
 
-    let axProc = spawnAxDaemon(udid, axSock);
+    // The device-list validation above already learned this UDID's device set,
+    // so the synchronous cached lookup is warm. Spawning the AX reader is the
+    // ax-service mechanism, so a provider's device needs that grant.
+    const axTarget = () => simctlTargetForUdidSync(udid, { granted: "ax-service" });
+    let axProc = spawnAxDaemon(udid, axSock, axTarget());
     const hidProc = spawnHidDaemon(udid, hidSock);
 
     // Spawned via `simctl spawn`, not as a child of the app, so it survives
@@ -302,11 +332,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       axProc.removeListener("error", onAxError);
       hidProc.removeListener("exit", onHidExit);
       hidProc.removeListener("error", onHidError);
-      // SIGKILL the ax daemon: under `simctl spawn` SIGTERM doesn't reliably
-      // reach the in-sim process, which would orphan it. The hid daemon is a
-      // direct host process, so SIGTERM reaps it.
+      // The ax reader is reaped by `reapDaemons`. The hid daemon is a direct
+      // host process, so SIGTERM reaps it.
       if (!axProc.killed) axProc.kill("SIGKILL");
       if (!hidProc.killed) hidProc.kill("SIGTERM");
+      await reapDaemons(axSock);
       // Drop any socket a daemon already bound, so a stale file can't make the
       // next factory's accept-probe read as "ready" against a dead socket.
       for (const p of [axSock, hidSock]) {
@@ -323,6 +353,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     // half-spawned daemon or double-spawn.
     let axRespawn: Promise<void> | null = null;
     async function spawnFreshAx(): Promise<void> {
+      // Built before the old daemon is killed, so a respawn that is refused
+      // (Xcode's component install is pending) leaves a working daemon in place.
+      const target = axTarget();
       if (axProc && !axProc.killed) {
         axProc.removeListener("exit", onAxExit);
         axProc.removeListener("error", onAxError);
@@ -334,16 +367,18 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       } catch {
         /* no stale socket to remove */
       }
-      axProc = spawnAxDaemon(udid, axSock);
-      axProc.on("exit", onAxExit);
-      axProc.on("error", onAxError);
+      await reapDaemons(axSock);
       try {
+        axProc = spawnAxDaemon(udid, axSock, target);
+        axProc.on("exit", onAxExit);
+        axProc.on("error", onAxError);
         await waitForSocket(axSock, axProc, 15_000);
       } catch (err) {
         // The socket never came up (a bind that timed out, not a clean exit —
         // `onAxExit` only fires for the latter). Mark the daemon dead so the
         // next `ensureAxAlive` respawns instead of connecting to a socket that
-        // was unlinked and never rebound, and reap the half-spawned process.
+        // was unlinked and never rebound. Its reader is reaped by the next
+        // respawn or by dispose.
         axExited = true;
         if (!axProc.killed) {
           axProc.removeListener("exit", onAxExit);
@@ -352,9 +387,8 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         }
         throw err;
       }
-      // dispose() may have run while we awaited the new socket: it kills only
-      // the axProc current at *its* moment and doesn't wait for an in-flight
-      // respawn, so reap what we spawned or it outlives teardown.
+      // dispose() may have run while we awaited the new socket. It reaps the
+      // reader once this respawn settles; drop the spawn process and socket.
       if (disposed) {
         if (!axProc.killed) {
           axProc.removeListener("exit", onAxExit);
@@ -408,7 +442,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       for (let attempt = 0; ; attempt++) {
         await ensureAxAlive();
         try {
-          return await sendJson(axSock, command, timeoutMs);
+          const raw = (await sendLine(axSock, command, timeoutMs)).trim();
+          // The reader answers every command, so no reply means it died
+          // mid-request, as a concurrent recycle's reap does.
+          if (!raw && axRespawn) throw new Error(`tvOS AX reader was reaped during "${command}"`);
+          return parseReply(raw, command);
         } catch (err) {
           // `axRespawn` is set synchronously (kill + unlink precede
           // spawnFreshAx's first await), so it is non-null here exactly when a
@@ -430,6 +468,10 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
           focused: r.focused ?? null,
           focusable: r.focusable ?? [],
         };
+      },
+
+      async hierarchy(): Promise<TvHierarchyResponse> {
+        return (await sendAx("hierarchy", 10_000)) as TvHierarchyResponse;
       },
 
       async navigate(direction: TvDirection): Promise<void> {
@@ -465,11 +507,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
             /* respawn failed — nothing extra to kill beyond the current axProc */
           }
         }
-        // SIGKILL for the same reason as spawnFreshAx: under `simctl spawn`
-        // SIGTERM doesn't reliably reach the in-sim process, which would leave
-        // it orphaned. The hid daemon is a direct host process, so SIGTERM does.
+        // The ax reader is reaped by `reapDaemons`. The hid daemon is a
+        // direct host process, so SIGTERM reaps it.
         if (!axProc.killed) axProc.kill("SIGKILL");
         if (!hidProc.killed) hidProc.kill("SIGTERM");
+        await reapDaemons(axSock);
         for (const p of [axSock, hidSock]) {
           try {
             fs.unlinkSync(p);

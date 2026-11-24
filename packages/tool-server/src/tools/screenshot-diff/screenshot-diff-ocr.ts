@@ -32,7 +32,7 @@ const REQUIRED_TSV_HEADERS = [
   "text",
 ] as const;
 
-export interface OcrWord {
+interface OcrWord {
   text: string;
   confidence: number;
   bounds: DiffBounds;
@@ -42,7 +42,7 @@ export interface OcrWord {
   wordNum: number;
 }
 
-export interface OcrTextBlock {
+interface OcrTextBlock {
   text: string;
   confidence: number;
   bounds: DiffBounds;

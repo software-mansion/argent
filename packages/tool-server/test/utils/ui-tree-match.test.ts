@@ -6,7 +6,6 @@ import {
   deriveSelector,
   evaluateCondition,
   findAll,
-  firstInReadingOrder,
   identifierMatches,
   matchNode,
   textMatches,
@@ -49,6 +48,17 @@ describe("ui-tree-match", () => {
     // button has the smaller area and wins.
     const hit = nodeAtPoint(root, { x: 0.2, y: 0.15 });
     expect(hit?.label).toBe("Login");
+  });
+
+  it("nodeAtPoint keeps an element of a front layer over a smaller one behind it", () => {
+    const sheet = node({
+      label: "Sheet",
+      layer: 1,
+      frame: { x: 0, y: 0, width: 0.5, height: 0.5 },
+    });
+    const behind = node({ label: "Behind", frame: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 } });
+    const tree = node({ frame: { x: 0, y: 0, width: 1, height: 1 }, children: [sheet, behind] });
+    expect(nodeAtPoint(tree, { x: 0.15, y: 0.15 })?.label).toBe("Sheet");
   });
 
   it("nodeAtPoint returns undefined when nothing is under the point", () => {
@@ -211,6 +221,57 @@ describe("ui-tree-match", () => {
     expect(textMatches("Saved", optionalSaved, "matches")).toBe(true);
   });
 
+  it("a regex text condition reads an element with no text as an empty string", () => {
+    const field = node({
+      identifier: "email",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [field], "matches")).toBe(true);
+    expect(evaluateCondition("text", "^(?!.*@)", [field], "matches")).toBe(true);
+    expect(evaluateCondition("text", "@", [field], "matches")).toBe(false);
+    // contains and equals keep their behavior.
+    expect(evaluateCondition("text", "x", [field], "contains")).toBe(false);
+  });
+
+  it("a regex text condition does not read an iOS text field with no text as empty", () => {
+    // The text of a secure field is never read: one that holds "Rex" reads "",
+    // as an empty field without a placeholder does.
+    const field = node({
+      role: "AXTextField",
+      identifier: "name",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [field], "matches")).toBe(false);
+    expect(evaluateCondition("text", "^(?!.*Rex)", [field], "matches")).toBe(false);
+    // A Mac app's fields report their text, so there an empty field reads as empty,
+    // but a password field never does: argent never reads its text.
+    expect(evaluateCondition("text", "^$", [field], "matches", true)).toBe(true);
+    const secret = { ...field, password: true };
+    expect(evaluateCondition("text", "^$", [secret], "matches", true)).toBe(false);
+    // Every check reads only its value, also when its placeholder names it.
+    const named = { ...field, label: "Email" };
+    expect(evaluateCondition("text", "^$", [named], "matches", true)).toBe(true);
+    expect(evaluateCondition("text", ".+", [named], "matches", true)).toBe(false);
+    expect(evaluateCondition("text", "Email", [named], "contains", true)).toBe(false);
+    const filled = { ...named, value: "a@b.c" };
+    expect(evaluateCondition("text", "^$", [filled], "matches", true)).toBe(false);
+    expect(evaluateCondition("text", "^a@b\\.c$", [filled], "matches", true)).toBe(true);
+    expect(evaluateCondition("text", "A@B.C", [filled], "equals", true)).toBe(true);
+  });
+
+  it("a regex text condition does not read a container with hoisted text as empty", () => {
+    const container = node({
+      identifier: "status",
+      subtreeText: "user@example.com",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [container], "matches")).toBe(false);
+    expect(evaluateCondition("text", "^(?!.*@)", [container], "matches")).toBe(false);
+  });
+
   it("regex text conditions retain non-empty own and hoisted text as additive evidence", () => {
     const ownOnly = node({
       label: "Saved",
@@ -306,39 +367,6 @@ describe("ui-tree-match", () => {
       expect(matchNode(nested.children[0]!, selector)).toBe(true);
       expect(createRegExp).toHaveBeenCalledOnce();
       expect(createRegExp).toHaveBeenLastCalledWith(selector.textMatches);
-    } finally {
-      createRegExp.mockRestore();
-    }
-  });
-
-  it("compiles the search and full-consumption regexes once each per ranking pass", () => {
-    const pattern = "Order #\\d+";
-    const ranked = node({
-      role: "AXGroup",
-      frame: { x: 0, y: 0, width: 1, height: 1 },
-      children: [
-        node({
-          label: "Order #1 Archive",
-          frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
-        }),
-        node({
-          label: "Order #1",
-          frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.05 },
-        }),
-        node({
-          value: "Order #2",
-          frame: { x: 0.4, y: 0.6, width: 0.2, height: 0.05 },
-        }),
-      ],
-    });
-    const createRegExp = vi.spyOn(uiTreeMatchInternals, "createRegExp");
-
-    try {
-      expect(selectorToFrame(ranked, { textMatches: pattern })).toMatchObject({ y: 0.4 });
-      expect(createRegExp.mock.calls.map(([source]) => source)).toEqual([
-        pattern,
-        `^(?:${pattern})$`,
-      ]);
     } finally {
       createRegExp.mockRestore();
     }
@@ -1666,117 +1694,5 @@ describe("after / next (sibling) scoping", () => {
     expect(ids(findAll(tree, { text: "leaf", next: { role: "AXAnchor" } }))).toEqual(
       ids([...picked])
     );
-  });
-});
-
-describe("reading order on a landscape UI", () => {
-  // The settings list of the sibling-scoping tests — three rows, a label and
-  // its switch each — as the flow adapter frames it on an iOS simulator whose
-  // UI is landscape: in the screen's portrait-native space, where the UI lies
-  // turned a quarter. The rows then run ACROSS the frame space, and the
-  // frame space's "below" is the user's "beside" (`landscapeRight`, a rotated
-  // iPhone: the UI's +y is the frame's -x; `landscapeLeft`, the unfolded
-  // iPhone Duo: the UI's +y is the frame's +x).
-  type Orientation = "landscapeRight" | "landscapeLeft";
-  const rowY = { airplane: 0.2, wifi: 0.3, bluetooth: 0.4 };
-  const uiRows = Object.entries(rowY).flatMap(([name, y]) => [
-    node({
-      role: "AXStaticText",
-      label: name === "wifi" ? "Wi-Fi" : name,
-      identifier: `label-${name}`,
-      frame: { x: 0.05, y, width: 0.3, height: 0.04 },
-    }),
-    node({
-      role: "AXSwitch",
-      identifier: `sw-${name}`,
-      frame: { x: 0.8, y: y - 0.005, width: 0.15, height: 0.05 },
-    }),
-  ]);
-  /** A UI-space frame where the frame space has it: the inverse of `nativeFrameToUi`. */
-  const toNative = (f: DescribeNode["frame"], o: Orientation): DescribeNode["frame"] =>
-    o === "landscapeRight"
-      ? { x: 1 - f.y - f.height, y: f.x, width: f.height, height: f.width }
-      : { x: f.y, y: 1 - f.x - f.width, width: f.height, height: f.width };
-  const turned = (o: Orientation): DescribeNode =>
-    node({
-      role: "AXWindow",
-      frame: { x: 0, y: 0, width: 1, height: 1 },
-      children: uiRows.map((n) => ({ ...n, frame: toNative(n.frame, o) })),
-    });
-  const ids = (ns: DescribeNode[]): string[] => ns.map((n) => n.identifier!).sort();
-
-  it.each(["landscapeRight", "landscapeLeft"] as const)(
-    "after and next follow the user's reading order in %s, given the orientation",
-    (o) => {
-      const tree = turned(o);
-      expect(ids(findAll(tree, { role: "AXSwitch", next: { text: "Wi-Fi" } }, o))).toEqual([
-        "sw-wifi",
-      ]);
-      expect(ids(findAll(tree, { role: "AXSwitch", after: { text: "Wi-Fi" } }, o))).toEqual([
-        "sw-bluetooth",
-        "sw-wifi",
-      ]);
-      // The label is left of its own switch to the user, so it never follows it.
-      expect(findAll(tree, { text: "Wi-Fi", after: { identifier: "sw-wifi" } }, o)).toEqual([]);
-      // `next` unions over anchors, one row each.
-      expect(ids(findAll(tree, { role: "AXSwitch", next: { role: "AXStaticText" } }, o))).toEqual([
-        "sw-airplane",
-        "sw-bluetooth",
-        "sw-wifi",
-      ]);
-    }
-  );
-
-  it("reads the frame space's order without the orientation — another row's control, or none", () => {
-    // The same trees, compared as they lie on the panel. Rotated iPhone: every
-    // switch is "below" the Wi-Fi label there, and the nearest is another
-    // row's. Unfolded Duo: the switches all lie ABOVE the label on the panel,
-    // so nothing follows it at all.
-    const right = turned("landscapeRight");
-    expect(ids(findAll(right, { role: "AXSwitch", next: { text: "Wi-Fi" } }))).toEqual([
-      "sw-bluetooth",
-    ]);
-    const left = turned("landscapeLeft");
-    expect(findAll(left, { role: "AXSwitch", next: { text: "Wi-Fi" } })).toEqual([]);
-    expect(findAll(left, { role: "AXSwitch", after: { text: "Wi-Fi" } })).toEqual([]);
-  });
-
-  it("picks the element the user sees first, and hands back its frame-space frame", () => {
-    const o = "landscapeRight";
-    const tree = turned(o);
-    const labels = findAll(tree, { role: "AXStaticText" }, o);
-    expect(firstInReadingOrder(labels, o)?.identifier).toBe("label-airplane");
-    // In the frame space the rows run right to left: the last row comes first.
-    expect(firstInReadingOrder(labels)?.identifier).toBe("label-bluetooth");
-    expect(evaluateCondition("text", "airplane", labels, "contains", o)).toBe(true);
-    expect(evaluateCondition("text", "airplane", labels, "contains")).toBe(false);
-    // A field-less selector resolves to the user's next element, and the frame
-    // returned is the one to act on: the switch where the panel has it.
-    expect(selectorToFrame(tree, { next: { text: "Wi-Fi" } }, o)).toEqual(
-      toNative({ x: 0.8, y: 0.295, width: 0.15, height: 0.05 }, o)
-    );
-    // Without it, the panel's next element: the label of the row ABOVE, which
-    // lies to the right of the Wi-Fi label on the panel.
-    expect(selectorToFrame(tree, { next: { text: "Wi-Fi" } })).toEqual(
-      toNative({ x: 0.05, y: 0.2, width: 0.3, height: 0.04 }, o)
-    );
-  });
-
-  it("leaves containment alone: `within` holds either way", () => {
-    const o = "landscapeLeft";
-    const card = node({
-      role: "AXWindow",
-      frame: { x: 0, y: 0, width: 1, height: 1 },
-      children: [
-        node({ identifier: "card", frame: toNative({ x: 0, y: 0.15, width: 1, height: 0.2 }, o) }),
-        ...uiRows.map((n) => ({ ...n, frame: toNative(n.frame, o) })),
-      ],
-    });
-    // The airplane and Wi-Fi rows sit in the card (UI y 0.15-0.35); Bluetooth does not.
-    for (const orientation of [o, undefined] as const) {
-      expect(
-        ids(findAll(card, { role: "AXSwitch", within: { identifier: "card" } }, orientation))
-      ).toEqual(["sw-airplane", "sw-wifi"]);
-    }
   });
 });

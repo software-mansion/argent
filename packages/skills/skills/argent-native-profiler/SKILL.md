@@ -1,108 +1,61 @@
 ---
 name: argent-native-profiler
-description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via xctrace; Android via Perfetto. Use when diagnosing native-level performance issues.
+description: Diagnose native CPU hotspots, UI hangs, memory issues, and iOS app launch time. Use Instruments (xctrace) on iOS simulators, iPhones (launch time only) and Mac apps, or Perfetto on Android. Use when diagnosing native-level performance issues.
 ---
 
-## 1. Tools
+## 1. Tools and platforms
 
-- `native-profiler-start` — start profiling on a booted device. iOS: xctrace recording for CPU, hangs, and leaks.
-- `native-profiler-stop` — stop the profiler and export trace data to timestamped XML files.
-- `native-profiler-analyze` — parse exported trace data and return a structured bottleneck payload.
-- `profiler-stack-query` — drill into parsed data: hang stacks, function callers, thread breakdown, leak details.
-- `profiler-load` — list and reload previous trace sessions from disk for re-investigation.
-- Physical iPhone: not supported; use a simulator.
+- `native-profiler-start` → `native-profiler-stop` → `native-profiler-analyze`: record, export, and report.
+- `profiler-stack-query`: drill into the analyzed data (hang stacks, function callers, thread breakdown, leaks).
+- `profiler-load`: reload an earlier session from disk.
 
----
+**iOS** (Instruments via `xctrace`): the profiling session (`native-profiler-start`) runs on a simulator only; `native-profiler-launch-analysis` (§4) also runs on a physical iPhone. Needs full Xcode (`xcrun xctrace version`). Reports CPU hotspots, UI hangs and memory leaks.
 
-## 2. Platform Support
+**Android** (Perfetto): emulator or physical device. Reports CPU hotspots and UI hangs (with jank reasons and the main thread's blocking function), plus an RSS-growth signal for memory pressure: treat it as a hint to confirm, not a confirmed leak. The app must be debuggable or declare `<profileable android:shell="true"/>` in its manifest, or no `perf_sample` callstacks are captured.
 
-- **iOS**: Backend: Xcode Instruments via `xctrace` on a booted simulator or connected device. Requires Xcode command-line tools on PATH. Surfaces CPU hotspots, UI hangs, and memory leaks (instruments `Leaks` table).
-- **Android**: Backend: Perfetto via `adb shell perfetto` + an in-process WASM trace-processor engine. Surfaces CPU hotspots and UI hangs, with per-hang jank reason codes, a main-thread state breakdown with `blocked_function` attribution, and a GC overlap annotation. Also reports an RSS-growth signal for memory pressure; treat it as a hint to confirm manually, not a confirmed leak. The target app must be debuggable or include `<profileable android:shell="true"/>` in its manifest for `perf_sample` callstacks to be captured.
+For **Mac apps** (`platform: "macos"`), use Instruments with full Xcode. If start returns `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`, use a development-signed build. In a background session such as SSH, `template_path: "Time Profiler"` also works for CPU and hangs on a signed build without the debugging entitlement. Do not sign files or add entitlements.
 
----
+If `native-profiler-start` returns `NATIVE_PROFILER_APP_HAS_WEBKIT_HEAP` or `NATIVE_PROFILER_APP_HEAP_CHECK_FAILED` on a Mac app, choose the retry based on what you need to measure.
 
-## 3. Investigation Patterns
+- For CPU and hangs, use `template_path: "Time Profiler"` to keep the app running in its current state.
+- For leaks, use the bundled template with `malloc_stack_logging: true`, even for allocations made during the recording. Save any state you need before retrying because this restarts the app.
 
-After `native-profiler-analyze` surfaces findings, use `profiler-stack-query` to drill into root causes:
+While logging is off, avoid `Leaks`, `Allocations`, and other templates that use the Allocations instrument on these apps. They can freeze the app.
 
-- **Hang detected** → `profiler-stack-query` mode=`hang_stacks` for full native call chains → mode=`function_callers` for the suspected function → read native source.
-- **CPU hotspot** → `profiler-stack-query` mode=`thread_breakdown` for per-thread distribution → mode=`function_callers` for the dominant function.
-- **Memory leak** → `profiler-stack-query` mode=`leak_stacks` filtered by `object_type` for responsible frames and libraries.
-  - iOS: if leaks come back unattributed (responsible frame `<Call stack limit reached>`), re-run `native-profiler-start` with `malloc_stack_logging: true`. This cold-launches the app with Malloc Stack Logging so leaks carry a real allocation backtrace (responsible frame + library). It restarts the app and adds overhead, so use it only when you need leak attribution — not for CPU/hang passes.
+`argent-react-native-profiler` starts native profiling alongside React profiling by default; this skill's workflow and investigation patterns apply in both cases.
 
-After presenting findings, ask the user whether to investigate further, implement fixes, or stop. After applying fixes, always re-profile the same scenario and compare with `profiler-load`. Report honestly whether the target metric improved, regressed, or stayed flat. If the fix showed no net benefit or introduced regressions elsewhere, say so and reconsider.
+## 2. Workflow
 
-**Tip:** For reproducible before/after comparisons, record the interaction sequence as a flow using the `argent-create-flow` skill before the first profiling run. Replay with `flow-execute` on subsequent runs to eliminate interaction variance.
+**Complete all steps in order; do not break mid-flow.**
 
-> **Note:** The `argent-react-native-profiler` instructs to start native profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
+1. **Start.** Launch the app through Argent if needed, then call `native-profiler-start`. On iOS and Android, use `app_process` if auto-detection is ambiguous or selects the wrong app. On a Mac, the device ID identifies the app. Then let the user interact, or follow `argent-device-interact` on mobile and `argent-macos-app-interact` on Mac. During recording, use `screenshot` or `describe` when needed because interaction tools omit the automatic screenshot and tree. Actions still wait for the screen to settle. On Android emulators, screenshots capture one frame in about 100 ms. On physical Android devices, they briefly wake screen capture and take about 150–200 ms, so use them sparingly.
+2. **Stop.** Keep the app running through `native-profiler-stop`. For Instruments, read `warning` and `exportDiagnostics` before interpreting the report. If the app ended, Instruments stalled, or exports were skipped, repeat the recording when you need the missing data.
+3. **Analyze.** `native-profiler-analyze`. Findings are 🔴 RED (act on it) or 🟡 YELLOW (worth investigating, may be acceptable).
+4. **Present and ask.** Summarize the key findings, then ask the user whether to investigate further, implement fixes, or stop. Do not move on silently.
+5. **Drill down** with `profiler-stack-query` (patterns below).
+6. **Fix and re-profile** the same scenario; compare with the earlier session via `profiler-load` (`list`, then `load_native` with its `session_id` and the `device_id`). Report honestly whether the target metric improved, regressed, or stayed flat; if there is no net benefit or something else regressed, say so and reconsider. For reproducible before/after runs, record the interaction as an e2e test (`argent-create-e2e` skill) before the first run and replay it with `e2e-execute`.
 
----
+### Investigation patterns
 
-## 4. Workflow
+- **Hang** → mode `hang_stacks` for the native call chain → `function_callers` for the suspected function → read the native source. If a Mac hang overlaps a leak-check pause, repeat the scenario with `template_path: "Time Profiler"` to measure the hang without leak checks.
+- **CPU hotspot** → `thread_breakdown` for the per-thread split → `function_callers` for the dominant function.
+- **Memory leak** (iOS simulator or Mac app). Keep recording about 25 seconds after the suspected leak so Instruments has time to finish a check. If the report warns that the capture was too short, repeat the recording before drawing conclusions about leaks. Use `leak_stacks` with `object_type` to find allocation stacks. For missing stacks such as `<Call stack limit reached>`, save any needed app state and use `malloc_stack_logging: true` on a separate leak pass. On Mac, reserve it for allocations that predate recording and use `restart-app` to clear the overhead before measuring CPU or hangs.
 
-**Complete all steps in order — do not break mid-flow.**
+## 3. Caveats
 
-### Step 0: Ensure the target app is running
+- **Simulator and emulator timings reflect the host machine**, not device hardware. Compare runs against each other rather than trusting absolute numbers; a physical Android device gives real-hardware numbers.
+- **Profiler overhead:** if `JSLexer`, `JSONEmitter` or Hermes internals dominate the JS thread, that is instrumentation cost, not app work. Discount those entries.
+- **Run-to-run variance:** treat only consistent, directional changes (across 2+ runs, or a >15% delta) as signal.
+- **Live data:** if the app fetches live API data, different responses change the workload independently of code changes. Note when data-dependent screens vary.
 
-The `native-profiler-start` tool **auto-detects** the running app on the device.
-You do not need to derive `app_process` manually — just make sure the app is launched.
+## 4. App Launch (iOS)
 
-1. If the app is already running on the device, skip to Step 1 (do not pass `app_process`).
-2. If the app is not running, use `launch-app` with the correct bundle ID first.
-3. Only pass `app_process` explicitly if the tool reports multiple running user apps and you need to disambiguate.
+For any iOS app (Swift, Objective-C, React Native, Flutter) when the user asks about launch or startup time.
 
-> **Note**: If multiple build flavors are installed (dev, staging, prod), the tool will detect whichever one is currently running. If both are running, it will ask you to specify.
+1. Build a Release build and install it yourself with the project's own scripts or build setup (for React Native, find them as `argent-react-native-app-workflow` describes); the tool only measures an installed build. Debug-build timings are not meaningful.
+2. Target a physical iPhone on USB. Ask the user before you use a booted simulator: its timings reflect the Mac hardware.
+3. Run `native-profiler-launch-analysis`: `mode: "measure"` for the baseline and to verify fixes, `mode: "profile"` to find the cause of a slow launch. On an iPhone, `measure` runs on Argent's on-device runner (see `argent-ios-device-setup`); `profile` does not need it. If the runner cannot be signed, tell the user how to fix it. A profile still shows the cause, but it does not replace the five-launch baseline.
+4. For a profile, run `profiler-stack-query` `thread_breakdown` on the main thread, then `function_callers` for the dominant function. Typical causes: static initializers, dylib loading, heavy `didFinishLaunching` work.
+5. Rebuild and reinstall the Release build after each native or JS change, before you measure again.
 
-### Step 1: Start recording
-
-Call `native-profiler-start` with `device_id` (iOS UDID or Android serial). The tool auto-detects the running app and saves the trace to `/tmp/argent-profiler-cwd/` with a timestamped filename.
-Let the user interact with the app or drive interaction via simulator tools (see `argent-device-interact` skill).
-
-### Step 2: Stop and export
-
-Call `native-profiler-stop` with `device_id`. iOS sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML — check `exportDiagnostics` for any export warnings. Android sends SIGTERM to the on-device perfetto daemon, polls `/proc/<pid>` until it exits, then `adb pull`s the `.pftrace` to the host.
-
-### Step 3: Analyze
-
-Call `native-profiler-analyze` with `device_id`. Returns a markdown report with bottlenecks categorized as CPU hotspots, UI hangs, or memory leaks, sorted by severity.
-
-### Step 4: Present findings and ask about next steps
-
-Present a concise summary of the key findings. Then follow the "After analysis" guideline — ask whether to investigate further with query tools, implement fixes, or stop.
-
-### Step 5: Drill-down investigation
-
-Use `profiler-stack-query` to investigate specific findings. See §3 Investigation Patterns for chaining guidance.
-
-### Step 6: Reload previous sessions
-
-To revisit a previous trace:
-
-1. Call `profiler-load` mode=`list` to see available sessions.
-2. Call `profiler-load` mode=`load_native` session_id=`<timestamp>` device_id=`<UDID>` to re-parse the XML files.
-3. Use `profiler-stack-query` to investigate the reloaded data.
-
----
-
-## 5. Understanding Results
-
-Bottlenecks are categorized by severity:
-
-- **RED**: CPU functions taking >15% of total time, all UI hangs, and **attributed** memory leaks (those with a resolved responsible frame). These require immediate attention.
-- **YELLOW**: CPU functions taking 3-15% of total time, and **unattributed** memory leaks (`<Call stack limit reached>`, no library — see the memory-leaks caveat below). Worth investigating but may be acceptable.
-
-Each bottleneck type indicates a different class of problem:
-
-- **CPU hotspots**: Native functions consuming excessive CPU time. Look for tight loops, expensive computations, or redundant work.
-- **UI hangs**: Main thread blocked long enough to cause visible jank or unresponsiveness. Often caused by synchronous I/O, heavy layout passes, or lock contention.
-- **Memory leaks**: Objects allocated but never freed. Common causes include retain cycles, unclosed resources, or forgotten observers. Argent records via `xctrace --attach`, which has no malloc-stack history, so on the simulator most leaks come back **unattributed** (`<Call stack limit reached>`, no library) and are dominated by benign system allocations — these are reported as a low-confidence YELLOW summary, not confirmed RED leaks. For attributed stacks, capture with malloc stack logging enabled at launch.
-
----
-
-## 6. Important Caveats
-
-- **Simulator vs device**: Simulator profiling reflects host Mac performance, not real device hardware. Use device profiling for accurate CPU timings and memory behavior.
-- **xctrace availability (iOS)**: Requires Xcode command-line tools installed. Verify with `xcrun xctrace version`.
-- **Profiler overhead**: xctrace instrumentation adds CPU load. If `JSLexer`, `JSONEmitter`, or Hermes runtime internals dominate the JS thread in CPU hotspot results, those reflect profiler overhead — not app work. Discount those entries when evaluating findings.
-- **Run-to-run variance**: Small fluctuations in CPU percentages between runs are normal. Treat only consistent directional changes (across 2+ runs or >15% delta) as actionable signal.
-- **Live data variability**: If the app fetches live API data, different responses between runs change rendering workload independently of code changes. Note when data-dependent screens show variance.
+`native-profiler-launch-analysis` ends at the first frame. Framework work before it (e.g. React Native runtime creation) appears in the launch profile. Work after it (e.g. a JS bundle, startup data loading, the first screen's render) is not in the result, and the first frame is often only a splash screen. For the time until the app is usable, investigate that work separately; for React Native, see Startup time in `argent-react-native-optimization`.

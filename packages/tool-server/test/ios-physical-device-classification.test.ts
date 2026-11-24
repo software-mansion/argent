@@ -55,9 +55,12 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   "keyboard",
   "gesture-tap",
   "gesture-swipe",
-  // Press-hold / straight drags via the runner's longPress + drag; two-finger
-  // trains and Move waypoints are rejected with authoring guidance.
+  // Press-hold / straight drags via the runner's longPress + drag; every other
+  // Down/Move/Up train, a second finger included, plays through touchPaths.
   "gesture-custom",
+  // Two fingers as timed paths through the runner's touch synthesizer.
+  "gesture-pinch",
+  "gesture-rotate",
   // home / volumeUp / volumeDown / actionButton via XCUIDevice.press; power
   // and appSwitch have no public XCUIDevice API and stay rejected.
   "button",
@@ -73,6 +76,18 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   // devicectl launches the named receiving app with the URL as its payload.
   // Web URLs default to Safari and any other scheme must name the app.
   "open-url",
+  // The keyboard backend's XCTest typeText: Delete presses, then the text.
+  "fill",
+  // A host-side CoreMediaIO helper captures a cabled phone's screen into the
+  // same MJPEG pipeline simulator-server feeds; nothing runs on the phone.
+  "screen-recording-start",
+  "screen-recording-stop",
+  // Build and launch through xcodebuild / xctrace --device, which target hardware directly.
+  "native-profiler-launch-analysis",
+  // Host-side readers of the xctrace session native-profiler-launch-analysis
+  // writes in profile mode; the native-profiler capture tools stay simulator-only.
+  "profiler-load",
+  "profiler-stack-query",
 ];
 
 describe("apple.device capability ratchet", () => {
@@ -83,5 +98,15 @@ describe("apple.device capability ratchet", () => {
       .tools.filter((id) => registry.getTool(id)?.capability?.apple?.device === true)
       .filter((id) => !PHYSICAL_IOS_PORTED_TOOLS.includes(id));
     expect(offenders).toEqual([]);
+  });
+
+  it("every ported tool keeps apple.device", () => {
+    // The other direction: dropping apple.device from a listed tool must fail too,
+    // or e.g. the profiler-load step after a launch profile on an iPhone breaks unnoticed.
+    const registry = createRegistry();
+    const lost = PHYSICAL_IOS_PORTED_TOOLS.filter(
+      (id) => registry.getTool(id) && registry.getTool(id)?.capability?.apple?.device !== true
+    );
+    expect(lost).toEqual([]);
   });
 });

@@ -29,7 +29,7 @@ run_phase() {
   # Blanket-skipped with one reason whenever the tier is gated.
   local RN_TOOLS="debugger-connect debugger-status debugger-evaluate debugger-log-registry \
     debugger-component-tree debugger-inspect-element debugger-reload-metro \
-    view-network-logs view-network-request-details \
+    network-capture-start network-capture-stop await-network-request view-network-logs view-network-request-details \
     react-profiler-start react-profiler-stop react-profiler-status react-profiler-analyze \
     react-profiler-renders react-profiler-fiber-tree react-profiler-cpu-summary react-profiler-component-source \
     profiler-load profiler-cpu-query profiler-commit-query profiler-stack-query profiler-combined-report \
@@ -69,7 +69,7 @@ run_phase() {
     if [ "$STARTED_METRO" -ne 1 ]; then
       skip "$P" stop-metro stop "Metro was already running on :$MPORT; left as found"
     elif _metro_ready "$MPORT"; then
-      assert_ok "$P" stop-metro stop "{}"
+      assert_ok "$P" stop-metro stop "{\"port\":$MPORT}"
     else
       # The pid is still held in E2E_METRO_PID, which 90-cleanup kills.
       skip "$P" stop-metro stop "the Metro this tier started is not serving :$MPORT; pid reaped in cleanup"
@@ -111,7 +111,14 @@ run_phase() {
   assert_ok    "$P" debugger-reload-metro reload "{$D}"
   sleep 4  # reload drops the runtime; let it re-register
 
+  # The network reads only read: capture starts here, before the request they list.
+  # status is "ok" also when no layer armed, so check the JS layer that
+  # view-network-logs reads.
+  local CAP="\"udid\":\"$DEV\",\"bundleId\":\"$PKG\",\"port\":$MPORT"
+  assert_true "$P" network-capture-start capture-start "{$CAP}" 'any(.layers[]; .layer == "js" and .armed == true)'
   run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
+  assert_true "$P" await-network-request await-net \
+    "{\"udid\":\"$DEV\",\"bundleId\":\"$PKG\",\"url\":\"example.com\",\"outcome\":\"any\",\"timeoutMs\":15000}" '.success == true'
   sleep 2
   assert_ok "$P" view-network-logs netlogs "{$D,\"pageIndex\":\"latest\"}"
   local RID; RID="$(printf '%s' "$RT_JSON" | jq -r '(.requests // .entries // [])[0].requestId // empty' 2>/dev/null)"
@@ -120,6 +127,7 @@ run_phase() {
   else
     skip "$P" view-network-request-details netdetails "no captured request id"
   fi
+  assert_true "$P" network-capture-stop capture-stop "{$CAP}" 'all(.layers[]; .armed == false)'
 
   run_tool react-profiler-start "{$D}"
   if [ "$RT_RC" -eq 0 ]; then

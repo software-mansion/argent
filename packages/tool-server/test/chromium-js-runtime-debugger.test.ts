@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import * as fs from "node:fs";
 import { TypedEventEmitter } from "@argent/registry";
 import {
   chromiumJsRuntimeDebuggerBlueprint,
@@ -10,6 +11,11 @@ import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import type { CDPClientEvents } from "../src/utils/debugger/cdp-client";
 import { takeReapedSession, __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
 import { scopeTempHome } from "./helpers/temp-home";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, writeSync: vi.fn(actual.writeSync) };
+});
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
@@ -166,6 +172,114 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
     expect(reaped).toBeDefined();
     expect(reaped!.salvage).toContain("18 captured console entries");
+    expect(reaped!.salvage).toContain("the log file is deleted on teardown");
+    expect(reaped!.salvage).not.toContain("no log file held them");
+    expect(fs.existsSync(instance.api.logWriter.getFilePath())).toBe(false);
+  });
+
+  it("dispose after the CDP socket dropped keeps the log file and names it", async () => {
+    __resetReapedSessionsForTesting();
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    instance.api.logWriter.write({
+      id: 0,
+      timestamp: new Date(1710000000000).toISOString(),
+      level: "error",
+      message: "before the crash",
+    });
+    (fake.api.cdp as { isConnected: () => boolean }).isConnected = () => false;
+    await instance.dispose();
+
+    const file = instance.api.logWriter.getFilePath();
+    expect(fs.readFileSync(file, "utf-8")).toContain("before the crash");
+    const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
+    expect(reaped!.connectionLost).toBe(true);
+    expect(reaped!.salvage).toContain(`kept at ${file}`);
+  });
+
+  it("dispose after the CDP socket dropped names no log file when there is none", async () => {
+    __resetReapedSessionsForTesting();
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    instance.api.logWriter.write({
+      id: 0,
+      timestamp: new Date(1710000000000).toISOString(),
+      level: "error",
+      message: "before the crash",
+    });
+    fs.rmSync(instance.api.logWriter.getFilePath(), { force: true });
+    (fake.api.cdp as { isConnected: () => boolean }).isConnected = () => false;
+    await instance.dispose();
+
+    const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
+    expect(reaped!.connectionLost).toBe(true);
+    expect(reaped!.salvage).toContain("no log file held them");
+    expect(reaped!.salvage).not.toContain("kept at");
+  });
+
+  it("dispose after the CDP socket dropped keeps no file that every write failed to fill", async () => {
+    __resetReapedSessionsForTesting();
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    vi.mocked(fs.writeSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    });
+    instance.api.logWriter.write({
+      id: 0,
+      timestamp: new Date(1710000000000).toISOString(),
+      level: "error",
+      message: "before the crash",
+    });
+    (fake.api.cdp as { isConnected: () => boolean }).isConnected = () => false;
+    await instance.dispose();
+
+    const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
+    expect(reaped!.salvage).toContain("no log file held them");
+    expect(reaped!.salvage).not.toContain("kept at");
+  });
+
+  it("dispose after the CDP socket dropped says how many entries the kept file holds", async () => {
+    __resetReapedSessionsForTesting();
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    for (let id = 0; id < 3; id++) {
+      if (id > 0) {
+        vi.mocked(fs.writeSync).mockImplementationOnce(() => {
+          throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+            code: "ENOSPC",
+          });
+        });
+      }
+      instance.api.logWriter.write({
+        id,
+        timestamp: new Date(1710000000000).toISOString(),
+        level: "error",
+        message: `entry ${id}`,
+      });
+    }
+    (fake.api.cdp as { isConnected: () => boolean }).isConnected = () => false;
+    await instance.dispose();
+
+    const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
+    expect(reaped!.salvage).toContain(
+      `The log file with 1 of its 3 captured console entries is kept at ${instance.api.logWriter.getFilePath()}`
+    );
   });
 
   it("dispose leaves NO breadcrumb when there was no history to lose", async () => {

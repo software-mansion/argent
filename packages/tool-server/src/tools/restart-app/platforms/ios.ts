@@ -14,6 +14,9 @@ import {
 import { externalClaimForAnyId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
+import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
+import { settleWithin } from "../../../utils/timing";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -26,7 +29,7 @@ export function makeIosImpl(
 ): PlatformImpl<Record<string, unknown>, RestartAppParams, RestartAppResult> {
   return {
     requires: ["xcrun"],
-    handler: async (_services, params, device) => {
+    handler: async (_services, params, device, options) => {
       const { udid, bundleId } = params;
       /**
        * Same reasoning as launch-app. native-devtools is a granted mechanism,
@@ -38,36 +41,69 @@ export function makeIosImpl(
        * fail on a grant the provider withheld, so one device would launch or
        * not depending only on which of its names was used.
        */
+      let nativeDevtools: NativeDevtoolsApi | undefined;
       if (!externalClaimForAnyId(device.id)) {
         const ndRef = nativeDevtoolsRef(device);
-        const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
-          ndRef.urn,
-          ndRef.options
-        );
+        nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
         const blocked = await precheckNativeDevtools(nativeDevtools, udid);
         if (blocked) return blocked;
       }
       try {
-        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]));
-      } catch {
-        // App may not be running
+        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]), {
+          timeout: 15_000,
+          killSignal: SIMCTL_KILL_SIGNAL,
+        });
+      } catch (err) {
+        // Not running is fine; a timed-out terminate may have left the old process up.
+        if ((err as { killed?: boolean }).killed) {
+          throw new FailureError(
+            `Terminating iOS app ${bundleId} on ${udid} did not finish within 15s, so it was not restarted.`,
+            {
+              error_code: FAILURE_CODES.IOS_RESTART_TERMINATE_FAILED,
+              failure_stage: "ios_restart_app_simctl_terminate",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              ...subprocessFailureMetadata(err, "xcrun_simctl"),
+            },
+            { cause: err as Error }
+          );
+        }
       }
       try {
-        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["launch", udid, bundleId]));
+        await execFileAsync(
+          "xcrun",
+          await simctlArgsForUdid(udid, ["launch", udid, bundleId, ...(params.launchArgs ?? [])]),
+          { timeout: 30_000, killSignal: SIMCTL_KILL_SIGNAL }
+        );
       } catch (err) {
+        // Its message says what to do, and a flow step reports only the thrown message.
+        if (err instanceof XcodeFirstLaunchPendingError) throw err;
+        const timedOut = (err as { killed?: boolean }).killed === true;
         throw new FailureError(
-          `Failed to restart iOS app ${bundleId} on ${udid}.`,
+          timedOut
+            ? `Relaunching iOS app ${bundleId} on ${udid} did not finish within 30s.`
+            : `Failed to restart iOS app ${bundleId} on ${udid}.`,
           {
             error_code: FAILURE_CODES.IOS_RESTART_LAUNCH_FAILED,
             failure_stage: "ios_restart_app_simctl_launch",
             failure_area: "tool_server",
-            error_kind: "subprocess",
+            error_kind: timedOut ? "timeout" : "subprocess",
             ...subprocessFailureMetadata(err, "xcrun_simctl"),
           },
           { cause: err instanceof Error ? err : new Error(String(err)) }
         );
       }
-      return { restarted: true, bundleId };
+      // A cancelled call stops waiting for the new process to be armed.
+      const capture = nativeDevtools
+        ? await settleWithin(
+            nativeDevtools.networkCaptureAfterLaunch(bundleId),
+            undefined,
+            options?.signal
+          )
+        : undefined;
+      if (capture?.type === "error") throw capture.cause;
+      const networkCapture = capture?.type === "value" ? capture.value : undefined;
+      return { restarted: true, bundleId, ...(networkCapture ? { networkCapture } : {}) };
     },
   };
 }

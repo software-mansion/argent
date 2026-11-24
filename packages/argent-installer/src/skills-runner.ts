@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { withNpmForce } from "./utils.js";
+import { npxChildEnv, withNpmForce } from "./utils.js";
 
 // How the `skills` CLI gets run. `bin` is what's spawned/exec'd — the
 // absolute path the PATH scan found, so a same-named shim in the working
@@ -113,9 +113,11 @@ export function skillsCommand(
 const OFFLINE_PROBE_TIMEOUT_MS = 3_000;
 
 // Whether the skills CLI can run offline from the npx cache. Only npx has an
-// offline mode (`--no-install`); pnpm dlx has none.
+// offline mode (`--no-install`); pnpm dlx has none. `cwd`: where the `skills`
+// command will run - `npx --no-install` resolves a project-local bin from it.
 export function isSkillsCliCached(
   runner: SkillsRunner,
+  cwd?: string,
   platform: NodeJS.Platform = process.platform
 ): boolean {
   if (runner.kind !== "npx") return false;
@@ -123,9 +125,11 @@ export function isSkillsCliCached(
     // Inside the try: skillsCommand throws for a path cmd.exe cannot take.
     const command = skillsCommand(runner, ["--no-install", "skills", "--version"], platform);
     execFileSync(command.file, command.args, {
+      env: npxChildEnv(),
       stdio: ["ignore", "ignore", "ignore"],
       timeout: OFFLINE_PROBE_TIMEOUT_MS,
       shell: command.shell,
+      ...(cwd ? { cwd } : {}),
     });
     return true;
   } catch {

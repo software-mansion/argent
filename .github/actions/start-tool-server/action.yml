@@ -9,7 +9,7 @@ inputs:
   node-version:
     description: Node.js version to set up.
     required: false
-    default: "20"
+    default: "22"
   port:
     description: Port the tool-server binds to (ARGENT_PORT) and the readiness poll hits.
     required: false
@@ -18,24 +18,19 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v6
+    - uses: actions/setup-node@v7
       with:
         node-version: ${{ inputs.node-version }}
+
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version-file: package.json
 
     - name: Install deps + build
       shell: bash
       run: |
-        npm ci
-        # Rollup's native binary ships as an optional dep that npm can skip
-        # (npm/cli#4828); install the one matching this runner explicitly so the
-        # tsc bundling step doesn't fail with "Cannot find module @rollup/rollup-*".
-        # RUNNER_OS is provided by GitHub Actions (Linux / macOS / Windows).
-        case "$RUNNER_OS" in
-          macOS) npm install @rollup/rollup-darwin-arm64 --no-save ;;
-          Linux) npm install @rollup/rollup-linux-x64-gnu --no-save ;;
-          *) echo "::error::start-tool-server: unsupported runner OS '$RUNNER_OS'"; exit 1 ;;
-        esac
-        npm run build
+        bun install --frozen-lockfile
+        bun run build
 
     - name: Start tool-server
       shell: bash
@@ -47,10 +42,10 @@ runs:
         cd packages/tool-server
         # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
         # typecheck job already enforces types). Without it a cold start on a
-        # loaded CI runner can take >60s to bind and flakily times out.
-        nohup env ARGENT_PORT="$ARGENT_PORT" TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
+        # loaded CI runner can take >60s to bind.
+        nohup env ARGENT_PORT="$ARGENT_PORT" TS_NODE_TRANSPILE_ONLY=1 bunx ts-node src/index.ts start \
           > ~/.argent/tool-server.log 2>&1 &
-        for i in $(seq 1 60); do
+        for i in $(seq 1 180); do
           curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${ARGENT_PORT}/tools" | grep -q 200 \
             && { echo "tool-server up t+${i}s"; exit 0; }
           sleep 1

@@ -1,17 +1,12 @@
 import { z } from "zod";
-import { canonicalDeviceId, isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
+import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import * as crypto from "node:crypto";
-import type { DeviceInfo, Registry, ToolDefinition } from "@argent/registry";
+import type { ToolDefinition } from "@argent/registry";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { makeComponentTreeScript } from "../../utils/debugger/scripts/component-tree";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
-import { resolveDevice } from "../../utils/device-info";
-import { listIosSimulators } from "../../utils/ios-devices";
-import { resolveNativeTargetApp } from "../../utils/native-target-app";
-import { asUiOrientation, type UiOrientation } from "../describe/contract";
-import { uiPointToNative } from "../flows/flow-orientation";
+import { MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 
 export interface RawEntry {
   id: number;
@@ -44,24 +39,12 @@ function rectsOverlap(
   );
 }
 
-/**
- * How the UI lies on the axes the gesture tools take. The layout rects are in
- * the app window's axes. An iOS simulator takes touches on the screen's fixed
- * (portrait-native) axes, and a landscape UI — a rotated device, or an unfolded
- * foldable — is turned on them. `unknown` is an iOS simulator whose orientation
- * could not be read; `ambiguous` a session that two booted simulators of one
- * name could run, with no `udid` to tell them apart; absent is a device whose
- * touches use the window's axes.
- */
-type TapAxes = UiOrientation | "unknown" | "ambiguous";
-
 export function buildTextTree(
   data: RawResult,
   opts: {
     onScreenOnly: boolean;
     maxNodes?: number;
     includeSkipped?: boolean;
-    uiOrientation?: TapAxes;
   }
 ): string {
   const { screenW, screenH, components } = data;
@@ -354,28 +337,7 @@ export function buildTextTree(
 
   const lines: string[] = [];
 
-  const turn =
-    opts.uiOrientation && opts.uiOrientation !== "unknown" && opts.uiOrientation !== "ambiguous"
-      ? opts.uiOrientation
-      : undefined;
-
-  if (canNormalize) {
-    lines.push(`Screen: ${screenW}x${screenH}`);
-    if (turn && turn !== "portrait") {
-      lines.push(
-        `The UI is ${turn} on the screen. The tap points are on the screen's axes, which the gesture tools use.`
-      );
-    } else if (opts.uiOrientation === "ambiguous" && screenW > screenH) {
-      lines.push(
-        "Note: the UI is landscape, and two booted simulators have this device's name, so its orientation could not be read. The tap points are on the UI's axes, so a tap can miss. Call again with the simulator's udid, or use describe for tap points."
-      );
-    } else if (opts.uiOrientation === "unknown" && screenW > screenH) {
-      lines.push(
-        "Note: the UI is landscape, and its orientation could not be read. The tap points are on the UI's axes, so a tap can miss. Use describe for tap points."
-      );
-    }
-    lines.push("");
-  }
+  if (canNormalize) lines.push(`Screen: ${screenW}x${screenH}`, "");
 
   function formatLabel(c: RawEntry): string {
     let label = c.name;
@@ -383,11 +345,9 @@ export function buildTextTree(
     if (displayText) label += ` "${displayText}"`;
     if (c.testID) label += ` [testID=${c.testID}]`;
     if (c.rect && canNormalize) {
-      const tap = uiPointToNative(
-        { x: (c.rect.x + c.rect.w / 2) / screenW, y: (c.rect.y + c.rect.h / 2) / screenH },
-        turn
-      );
-      label += ` (tap: ${tap.x.toFixed(2)},${tap.y.toFixed(2)})`;
+      const tapX = (c.rect.x + c.rect.w / 2) / screenW;
+      const tapY = (c.rect.y + c.rect.h / 2) / screenH;
+      label += ` (tap: ${tapX.toFixed(2)},${tapY.toFixed(2)})`;
     }
     return label;
   }
@@ -501,134 +461,20 @@ export function buildTextTree(
   return lines.join("\n");
 }
 
-/** Past this the tree prints without the orientation rather than wait longer. */
-const ORIENTATION_READ_TIMEOUT_MS = 3_000;
-
-/**
- * The bundle id of the app the debugger is attached to, on the simulator `api`
- * serves. Its Metro target is named after it ("com.example.app (iPhone 16)").
- * A target named after a bundle id that is not connected here is another
- * simulator's app, or an app this simulator cannot read: undefined, never a
- * stand-in. Only a target named some other way falls back to the frontmost
- * connected app.
- */
-async function debuggedBundleId(
-  api: NativeDevtoolsApi,
-  appName: string
-): Promise<string | undefined> {
-  const named = api
-    .listConnectedBundleIds()
-    .filter((id) => appName === id || appName.startsWith(`${id} `));
-  if (named.length === 1) return named[0]!;
-  if (BUNDLE_ID_NAMED_TARGET.test(appName)) return undefined;
-  return (await resolveNativeTargetApp(api)).bundleId;
-}
-
-/** A Metro target named after a bundle id: "com.example.app (iPhone 16)". */
-const BUNDLE_ID_NAMED_TARGET = /^[\w-]+(\.[\w-]+)+( \(|$)/;
-
-/** What the tree's debugger session is attached to, as the debugger knows it. */
-interface DebuggedApp {
-  /** The `device_id` the tool was called with. */
-  deviceId: string;
-  /** The simulator the caller names, for a session its `device_id` cannot place. */
-  udid?: string;
-  /** The Metro target's name, `<bundle id> (<device name>)`. */
-  appName: string;
-  deviceName: string;
-  logicalDeviceId: string | undefined;
-}
-
-const AMBIGUOUS_SIMULATOR = "ambiguous-simulator";
-
-function isIosSimulator(device: DeviceInfo): boolean {
-  return (
-    (device.platform === "ios" && device.kind === "simulator") || device.platform === "ios-remote"
-  );
-}
-
-/**
- * The iOS simulator the session runs on; undefined for any other device. The
- * caller's `udid` decides when given. Otherwise a session keyed by a Metro
- * logicalDeviceId (two devices share one Metro) names no device, so it is found
- * by name among the booted simulators; a name two of them share leaves it
- * ambiguous.
- */
-async function iosSimulatorOf(
-  app: DebuggedApp
-): Promise<DeviceInfo | typeof AMBIGUOUS_SIMULATOR | undefined> {
-  if (app.udid) {
-    const named = resolveDevice(app.udid);
-    return isIosSimulator(named) ? named : undefined;
-  }
-  const device = resolveDevice(canonicalDeviceId(app.deviceId) ?? app.deviceId);
-  if (isIosSimulator(device)) return device;
-  const logicalKeyed = app.deviceId === app.logicalDeviceId || isLogicalKeyedDevice(app.deviceId);
-  if (!logicalKeyed) return undefined;
-  const named = (await listIosSimulators()).filter(
-    (sim) => sim.state === "Booted" && sim.runtimeKind === "mobile" && sim.name === app.deviceName
-  );
-  if (named.length === 1) return resolveDevice(named[0]!.udid);
-  return named.length > 1 ? AMBIGUOUS_SIMULATOR : undefined;
-}
-
-/**
- * How the UI of the debugged app lies on the axes the gesture tools take (see
- * {@link TapAxes}), read from the app's view hierarchy as flows read it. Only an
- * iOS simulator needs it: an Android device takes touches on the rotated
- * display's axes, the same axes as the layout rects. Never fails the tree: a
- * read that errors or takes too long is `unknown`.
- */
-export async function readTapAxes(
-  registry: Pick<Registry, "resolveService">,
-  app: DebuggedApp
-): Promise<TapAxes | undefined> {
-  const read = (async (): Promise<TapAxes | undefined> => {
-    const device = await iosSimulatorOf(app);
-    if (device === undefined) return undefined;
-    if (device === AMBIGUOUS_SIMULATOR) return "ambiguous";
-    const ref = nativeDevtoolsRef(device);
-    const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
-    const bundleId = await debuggedBundleId(api, app.appName);
-    if (!bundleId) return "unknown";
-    const raw = (await api.queryViewHierarchy(bundleId, "ViewHierarchy.getFullHierarchy", {
-      fields: ["className"],
-      maxDepth: 1,
-    })) as { screen?: { interfaceOrientation?: unknown } } | null;
-    return asUiOrientation(raw?.screen?.interfaceOrientation) ?? "unknown";
-  })().catch((): TapAxes => "unknown");
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<TapAxes>((resolve) => {
-    timer = setTimeout(() => resolve("unknown"), ORIENTATION_READ_TIMEOUT_MS);
-  });
-  try {
-    return await Promise.race([read, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 const zodSchema = z.object({
   port: metroPortField,
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
-    ),
-  udid: z
-    .string()
-    .optional()
-    .describe(
-      "iOS simulator UDID from list-devices. Pass it when device_id is a logicalDeviceId (two or more devices share one Metro), so that the tap coordinates of a landscape UI are on the screen's axes."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   onScreenOnly: z
     .boolean()
     .default(true)
     .describe(
-      "When true (default), only components visible on screen are returned. " +
-        "Set to false to include all mounted components including those scrolled " +
-        "off-screen. Useful when you need to understand the full page structure."
+      "When true, only components visible on screen are returned. " +
+        "Set to false to include all mounted components, including those scrolled " +
+        "off-screen, e.g. to understand the full page structure."
     ),
   maxNodes: z.coerce
     .number()
@@ -642,47 +488,37 @@ const zodSchema = z.object({
     .boolean()
     .default(false)
     .describe(
-      "When true, appends a summary of all filtered components: total fiber count, " +
-        "JS-side skip counts by name, and TS-side filter pass removals. " +
-        "Useful for understanding what was pruned from the tree."
+      "When true, appends a summary of all filtered components: total fiber count " +
+        "and skip counts by component name and by filter."
     ),
 });
 
-export function createDebuggerComponentTreeTool(
-  registry: Registry
-): ToolDefinition<z.infer<typeof zodSchema>, string> {
+export function createDebuggerComponentTreeTool(): ToolDefinition<
+  z.infer<typeof zodSchema>,
+  string
+> {
   return {
     id: "debugger-component-tree",
+    description: `Fetch the current screen of a running React Native app as a compact tree of React components.
+Each on-screen component is listed with its name, its text (or accessibilityLabel when it has no
+text), [testID=…] and its center as (tap: x,y) fractions of the screen<flag:macos-apps> or Mac app window, including the title bar</flag:macos-apps>.
+Full-screen transparent wrappers and implementation-detail components are pruned. Wrappers the size
+of their parent are pruned too, so a missing name proves nothing: check with debugger-inspect-element.
+
+Use when you need what describe does not show: a testID for a selector (on Android, describe omits
+the testID of a view that has no label and is not tappable), or the component names and nesting
+behind the screen before editing code. To find what to tap, use describe.
+
+Returns a compact text tree; call again after navigation. Fails if the Metro debugger is disconnected.<flag:macos-apps> On Mac apps with several React Native windows, the tool uses the root with the most components. With the old architecture (Paper), native views around the React root can shift tap points. Use describe for tap targets.</flag:macos-apps>`,
+    zodSchema,
+    searchHint: "react native component tree testID testIDs selector component names hierarchy",
+    readOnly: true,
     interaction: {
       startedMsg: () => "Reading React component tree",
       completedMsg: () => "Read React component tree",
       failedMsg: ({ failureSignal }) =>
         `Failed to read React component tree: ${failureSignal.error_code}`,
     },
-    description: `Fetch the current screen of a running React Native app as a compact component text tree.
-Only shows on-screen components with unique positions — off-screen (scrolled) content,
-full-screen transparent wrappers, and implementation-detail components are pruned.
-
-Each visible component is listed with its name, text content, and normalized
-tap coordinates in [0,1] space (fractions of the screen, not pixels — same space as tap/swipe/gesture).
-On an iOS simulator with a landscape UI (a rotated device, or an unfolded foldable), the tap
-coordinates are on the screen's axes, which the gesture tools use. When two or more devices share
-one Metro, pass the simulator's udid too. If the result says that the orientation could not be
-read, take tap coordinates from describe.
-
-This is the preferred element discovery tool for React Native apps. More information in argent-react-native-app-workflow skill.
-
-Workflow:
-  1. Call this tool to get the component tree.
-  2. Find the desired element by name, text, testID, or accessibilityLabel.
-  3. Use the (tap: x,y) coordinates directly with the tap tool.
-
-Call again after navigation or state changes since positions may shift.
-Set includeSkipped=true to see a summary of all filtered components.
-Use when you need tap coordinates for a React Native UI element. Returns a compact text tree with (tap: x,y) coords. Fails if Metro debugger is not connected.`,
-    alwaysLoad: true,
-    searchHint: "react native component tree discovery tap coordinates",
-    zodSchema,
     // RN-only: needs the React DevTools backend from the dev JS bundle. Chromium has
     // no equivalent — use `describe` there.
     capability: RN_ONLY_TOOL_CAPABILITY,
@@ -691,18 +527,11 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
     }),
     async execute(services, params) {
       const api = services.debugger as JsRuntimeDebuggerApi;
-      // Read alongside the tree; it never fails, so it never fails the tree.
-      const tapAxes = readTapAxes(registry, {
-        deviceId: params.device_id,
-        udid: params.udid,
-        appName: api.appName,
-        deviceName: api.deviceName,
-        logicalDeviceId: api.logicalDeviceId,
-      });
       const requestId = crypto.randomUUID();
       const script = makeComponentTreeScript({
         includeSkipped: params.includeSkipped,
         requestId,
+        addRootOffset: !!canonicalDeviceId(params.device_id)?.startsWith(MACOS_APP_ID_PREFIX),
       });
       const response = await api.cdp.evaluateWithBinding(script, requestId, {
         timeout: 15_000,
@@ -722,7 +551,6 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
         onScreenOnly: params.onScreenOnly,
         maxNodes: params.maxNodes,
         includeSkipped: params.includeSkipped,
-        uiOrientation: await tapAxes,
       });
 
       const deviceLine = [

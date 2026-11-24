@@ -11,7 +11,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Max seconds to block this call before returning a re-awaitable { status: 'pending' } " +
-        "result (default 1800). The user's proposals stay live across timeouts — on 'pending' " +
+        "result (default 1800). The user's proposals stay live across timeouts; on 'pending' " +
         "just call await_user_selection again. Lower this if your MCP client enforces a short " +
         "request timeout."
     ),
@@ -21,42 +21,42 @@ type Params = z.infer<typeof zodSchema>;
 
 export const awaitUserSelectionTool: ToolDefinition<Params> = {
   id: "await_user_selection",
-  interaction: {
-    startedMsg: () => "Waiting for variant selection",
-    completedMsg: () => "Received variant selection",
-    failedMsg: ({ failureSignal }) =>
-      `Failed while waiting for variant selection: ${failureSignal.error_code}`,
-  },
+  description: `Block until the human finishes picking among the variants you proposed (the ONE blocking call).
+
+Call this exactly once, AFTER you have staged every variant for every element via \`propose_variant\`.
+It parks until the user presses "Complete" in the Argent Lens window (a native window
+that opens automatically on the user's screen), then returns their choices and any comments.
+
+Returns one of:
+  • { status: "completed", round, selections: [{ element, chosenVariant, comment? }], unselected,
+      annotations: [{ target, match, comment }], globalComment, morePending? }
+        The user finished this round; apply chosenVariant for each element (skip ones in
+        \`unselected\`). \`annotations\` are free-form comments the user pinned to specific on-screen
+        elements via the inspector; treat each as a change request for that element.
+        If \`morePending\` is true, another already-decided round or a freshly-staged round is
+        still waiting. Call await_user_selection AGAIN (repeat until you get a completed result
+        without \`morePending\`, a \`pending\`, or \`no_proposals\`); do not stop on this result alone.
+  • { status: "pending", message, proposedElements }: timeoutSeconds elapsed with no submission.
+        Expected, not an error: the proposals are still live; call await_user_selection AGAIN.
+  • { status: "no_proposals" }: you called this before propose_variant.
+
+This tool is long-running; it intentionally holds the request open. It honors client
+disconnects (aborts cleanly).`,
+  zodSchema,
+  searchHint: "await wait user selection choice variant blocking confirm picks complete",
   featureFlag: "argent-lens",
   // Hidden while an `argent lens` CLI session owns the preview window: there the
   // user's picks are relayed into the agent's terminal as a normal message (see
   // `argent-cli/src/lens.ts`), so the agent ends its turn after propose_variant
   // instead of blocking.
   hideWhen: () => variantProposalStore.isCliSession(),
-  description: `Block until the human finishes picking among the variants you proposed (the ONE blocking call).
-
-Call this exactly once, AFTER you have staged every variant for every element via \`propose_variant\`.
-It parks until the user presses "Complete selection" in the Argent Lens window (a native window
-that opens automatically on the user's screen), then returns their choices and any comments.
-
-Returns one of:
-  • { status: "completed", round, selections: [{ element, chosenVariant, comment? }], unselected,
-      annotations: [{ target, match, comment }], globalComment, morePending? }
-        — the user finished this round; apply chosenVariant for each element (skip ones in
-        \`unselected\`). \`annotations\` are free-form comments the user pinned to specific on-screen
-        elements via the inspector — treat each as a change request for that element.
-        If \`morePending\` is true, another already-decided round or a freshly-staged round is
-        still waiting — call await_user_selection AGAIN (repeat until you get a completed result
-        without \`morePending\`, a \`pending\`, or \`no_proposals\`); do not stop on this result alone.
-  • { status: "pending", message, proposedElements } — timeoutSeconds elapsed with no submission.
-        Expected, not an error: the proposals are still live; call await_user_selection AGAIN.
-  • { status: "no_proposals" } — you called this before propose_variant.
-
-This tool is long-running; it intentionally holds the request open. It honors client
-disconnects (aborts cleanly).`,
-  searchHint: "await wait user selection choice variant blocking confirm picks complete",
+  interaction: {
+    startedMsg: () => "Waiting for variant selection",
+    completedMsg: () => "Received variant selection",
+    failedMsg: ({ failureSignal }) =>
+      `Failed while waiting for variant selection: ${failureSignal.error_code}`,
+  },
   longRunning: true,
-  zodSchema,
   services: () => ({}),
   async execute(_services, params, options) {
     const timeoutMs = (params.timeoutSeconds ?? 1800) * 1000;

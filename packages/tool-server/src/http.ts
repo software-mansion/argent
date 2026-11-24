@@ -4,12 +4,19 @@ import { createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
+import { ARCHIVE_FORMATS } from "@argent/archive";
 import {
   FAILURE_CODES,
+  CLIENT_SECRETS_HEADER,
+  E2E_DIR_CLIENT_HEADER,
+  LINKED_CALL_HEADER,
+  ToolParamAliasError,
+  canonicalToolArgs,
   describeParamIssues,
   getFailureSignal,
+  withFormerParamSpecs,
   type FailureSignal,
   type FileInputSpec,
   type Registry,
@@ -38,6 +45,7 @@ import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inpu
 import {
   assertSupported,
   InvalidToolInputError,
+  isFlagOffered,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
@@ -49,6 +57,7 @@ import {
   isExternalId,
 } from "./utils/external-devices";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "./utils/debugger/device-alias";
+import { isProfiling } from "./utils/profiling-devices";
 import { attributeDeviceForTelemetry, type DeviceAttribution } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
@@ -63,6 +72,8 @@ import {
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
+import { renderFlagGated } from "./utils/flag-gated-text";
+import { directCallFailure } from "./utils/tool-result-verdict";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -95,7 +106,7 @@ function isToolExposed(
   def: { featureFlag?: string; hideWhen?: () => boolean } | undefined
 ): boolean {
   if (!def) return false;
-  if (def.featureFlag && !isFlagEnabled(def.featureFlag)) return false;
+  if (def.featureFlag && !isFlagOffered(def.featureFlag)) return false;
   if (def.hideWhen?.()) return false;
   return true;
 }
@@ -168,16 +179,18 @@ function extractDeviceArg(data: unknown): string | null {
 }
 
 /**
- * Whether the call names a physical iPhone as the device it acts on. Reads
+ * The physical iPhone the call names as the device it acts on, if any. Reads
  * `device` as well as the three spellings above: `flow-execute` names its
  * target that way, and a session that only replays flows on the phone must
  * still be handed the signing note.
  */
-function targetsIosPhysicalDevice(data: unknown): boolean {
+function targetedIosPhysicalDevice(data: unknown): string | null {
   const record = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
   const flowDevice = typeof record?.device === "string" ? record.device : null;
   const deviceArg = extractDeviceArg(data) ?? flowDevice;
-  return deviceArg !== null && isIosPhysicalDevice(resolveDevice(deviceArg));
+  if (deviceArg === null) return null;
+  const device = resolveDevice(deviceArg);
+  return isIosPhysicalDevice(device) ? device.id : null;
 }
 
 type InvocationMeta = {
@@ -190,6 +203,8 @@ type InvocationMeta = {
 // never stored or forwarded; invalid_params carries schema-declared parameter
 // NAMES only (see deriveInvalidParams), never values or user-typed keys.
 type HttpFailureMeta = {
+  /** The call named the tool by a former id; `toolId` is the current one. */
+  alias_used?: boolean;
   device_provider?: string;
   platform?: TelemetryPlatform;
   device_kind?: TelemetryDeviceKind;
@@ -266,6 +281,10 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
   // `device_id` calls refine an Android TV AVD once the cache is warm.
   if (typeof (data as Record<string, unknown>).avdName === "string") {
     return { platform: "android" };
+  }
+  // HarmonyOS twin: an instance is named, not addressed.
+  if (typeof (data as Record<string, unknown>).harmonyInstance === "string") {
+    return { platform: "harmony" };
   }
   return null;
 }
@@ -491,12 +510,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   });
 
   // Snapshotted at startup; the launcher generates it and passes it in via env
-  // (see ensureToolsServer). Empty string ⇒ auth disabled, supported only for
-  // local dev (`npm run dev`), which is why stderr gets a one-shot warning.
+  // (see ensureToolsServer). Empty or absent ⇒ auth disabled (`--no-auth`,
+  // `bun run dev`), hence the one-shot stderr warning.
   const expectedToken = process.env[AUTH_TOKEN_ENV] ?? "";
   if (!expectedToken) {
     process.stderr.write(
-      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is not set; running with authentication disabled. ` +
+      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is empty or not set; running with authentication disabled. ` +
         `Any local process can drive the tool-server. This is only safe for development.\n`
     );
   }
@@ -584,7 +603,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   });
 
   // The client tars a file or dir and streams it here before the tool call.
-  // express.json() ignores the body (application/gzip), so we pipe it to disk.
+  // express.json() ignores the body (a compressed tar), so we pipe it to disk.
   app.post("/upload", (req: Request, res: Response) => {
     idleTimer.touch();
     if (pendingUploadBytes() >= maxPendingUploadBytes) {
@@ -665,7 +684,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     const tools = snapshot.tools
       .map((id) => registry.getTool(id))
       .filter((def): def is NonNullable<typeof def> => isToolExposed(def))
-      .map((def) => {
+      .flatMap((def) => {
         const entry: {
           name: string;
           description: string;
@@ -675,19 +694,38 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           alwaysLoad?: boolean;
           searchHint?: string;
           longRunning?: boolean;
+          hideFromMcp?: boolean;
+          readOnly?: boolean;
+          aliasOf?: string;
         } = {
           name: def.id,
-          description: def.description ?? "",
-          inputSchema: def.inputSchema ?? { type: "object", properties: {} },
+          description: renderFlagGated(def.description ?? "", isFlagOffered),
+          inputSchema: renderFlagGated(
+            def.inputSchema ?? { type: "object", properties: {} },
+            isFlagOffered
+          ),
         };
-        if (def.outputHint) entry.outputHint = def.outputHint;
-        if (def.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
+        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagOffered);
+        if (def.fileInputs && def.fileInputs.length > 0) {
+          entry.fileInputs = withFormerParamSpecs(def.id, def.fileInputs);
+        }
         if (def.alwaysLoad) entry.alwaysLoad = true;
-        if (def.searchHint) entry.searchHint = def.searchHint;
+        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagOffered);
         if (def.longRunning) entry.longRunning = true;
-        return entry;
+        if (def.hideFromMcp) entry.hideFromMcp = true;
+        if (def.readOnly) entry.readOnly = true;
+        // A former id is listed too, so a client that calls by it finds the
+        // tool's file inputs. Hidden from MCP, so agents see one name.
+        const aliases = (def.aliases ?? []).map((alias) => ({
+          ...entry,
+          name: alias,
+          hideFromMcp: true,
+          aliasOf: def.id,
+        }));
+        return [entry, ...aliases];
       });
-    res.json({ tools });
+    // Formats `POST /upload` reads; a client sends zstd only when listed.
+    res.json({ tools, uploadFormats: ARCHIVE_FORMATS });
   });
 
   app.post(
@@ -700,6 +738,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const name = req.params.name as string;
       const requestStartedAt = performance.now();
       const aiMeta = extractAiTelemetryMeta(req);
+      // "close" fires once. A caller that hangs up during the awaits below
+      // (file inputs, the device grant, the dependency preflight) is gone
+      // before the listeners further down exist, so it is noted from here.
+      let callerGone = false;
+      res.once("close", () => {
+        if (!res.writableFinished) callerGone = true;
+      });
 
       const emitHttpFailure = (
         signal: FailureSignal,
@@ -710,9 +755,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
         const provider = failedDeviceArg ? externalProviderLabel(failedDeviceArg) : undefined;
         const attribution = inferDeviceAttribution(failedDeviceArg);
+        const toolId = registry.getTool(name)?.id ?? name;
         options.recordFailure(
-          name,
+          toolId,
           {
+            ...(toolId !== name ? { alias_used: true } : {}),
             ...(provider ? { device_provider: provider } : {}),
             ...attribution,
             ...(extraMeta?.invalid_params?.length
@@ -743,15 +790,48 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         return;
       }
 
+      let clientSecrets: Map<string, string> | undefined;
+      const clientSecretsHeader = firstHeader(req.headers[CLIENT_SECRETS_HEADER]);
+      if (clientSecretsHeader !== undefined) {
+        try {
+          clientSecrets = decodeClientSecrets(clientSecretsHeader);
+        } catch (err) {
+          res.status(400).json({
+            error: `The ${CLIENT_SECRETS_HEADER} header ${err instanceof Error ? err.message : String(err)}.`,
+          });
+          return;
+        }
+      }
+
       // File boundary: turn client file-input wrappers back into plain
       // server-readable paths BEFORE schema validation, so the tool's zod schema
       // only ever sees the string params it declares. 422 on a file reachable
       // neither in place nor via uploaded content.
+      let body: unknown;
+      try {
+        body = canonicalToolArgs(def.id, req.body);
+      } catch (err) {
+        if (!(err instanceof ToolParamAliasError)) throw err;
+        emitHttpFailure(
+          {
+            error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+            failure_stage: "http_param_alias",
+            failure_area: "http",
+            error_kind: "validation",
+          },
+          req.body
+        );
+        // `error` in the zod issue shape: older CLIs `JSON.parse` it (see below).
+        const issues = [{ code: "custom", path: [], message: err.message }];
+        res.status(400).json({ error: JSON.stringify(issues), message: err.message, issues });
+        return;
+      }
+
       let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
       let derivedTargets: string[];
       try {
-        const resolved = await resolveFileInputs(def, req.body, (id) => {
+        const resolved = await resolveFileInputs(def, body, (id) => {
           const entry = uploads.get(id);
           if (entry) uploads.delete(id);
           return entry;
@@ -761,7 +841,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         derivedTargets = resolved.derivedTargets;
         // Materialized uploads are call-scoped: remove them once the response
         // settles, however it ends.
-        res.once("close", () => void resolved.cleanup());
+        if (callerGone) void resolved.cleanup();
+        else res.once("close", () => void resolved.cleanup());
       } catch (err) {
         if (err instanceof FileInputError) {
           res.status(422).json({ error: err.message });
@@ -912,6 +993,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
       }
 
+      // Nobody is left to read the result.
+      if (callerGone) return;
+
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
@@ -934,8 +1018,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // through the registry inherit the same ai_client / platform instead of being
       // recorded as anonymous.
       let recordChildInvocation:
-        | ((childInvocationId: string, childArgs?: unknown) => () => void)
-        | undefined;
+        ((childInvocationId: string, childArgs?: unknown) => () => void) | undefined;
       const recordInvocation = options?.recordInvocation;
       if (recordInvocation) {
         const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
@@ -958,9 +1041,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         res.write(`${JSON.stringify(payload)}\n`);
       };
       if (wantsStream) {
+        // Every line must reach the client as soon as it is written.
+        // `no-transform` asks intermediaries not to compress the stream, and
+        // `X-Accel-Buffering: no` makes nginx pass each chunk through instead
+        // of holding it in its buffers.
         res.writeHead(200, {
           "Content-Type": "application/x-ndjson",
-          "Cache-Control": "no-cache",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
         });
       }
 
@@ -968,6 +1056,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
+          // The argent client marks every call it sends over a link. A false
+          // mark makes the recorder stricter for that caller and keeps its
+          // recording in memory, sent back in client-file directives.
+          ...(firstHeader(req.headers[LINKED_CALL_HEADER]) === "1" ? { linked: true } : {}),
+          // A client released before the rename writes client files only under
+          // `.argent/flows/`, so the recorder keeps its recordings there.
+          ...(firstHeader(req.headers[E2E_DIR_CLIENT_HEADER]) === "1"
+            ? {}
+            : { legacyE2eDir: true }),
+          ...(clientSecrets ? { clientSecrets } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream
@@ -979,13 +1077,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
         const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
         if (shouldNotify) {
-          // A persistence failure must not fail the user's tool call; worst case the
-          // note appears again on the next request.
-          try {
-            suppressUpdateNote(AUTO_SUPPRESS_MS);
-          } catch {
-            // ignore
-          }
+          suppressUpdateNote(AUTO_SUPPRESS_MS);
         }
         const notes: string[] = shouldNotify
           ? [buildUpdateNote(currentVersion, installableVersion ?? "unknown")]
@@ -996,13 +1088,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (activeRecordings.length > 0) {
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
         }
-        // Staged once when keychain team detection first signs the on-device
-        // runner (utils/ios-device/team-detect); drained here into the first
-        // completed call that targets a physical iPhone, so the agent driving
-        // the hardware learns which team was picked and how to override, and a
-        // caller on another platform sharing this tool-server never does.
-        const signingNote = targetsIosPhysicalDevice(parsedData)
-          ? consumePendingSigningDetectionNote()
+        // Staged once per phone and team when keychain team detection signs the
+        // on-device runner (utils/ios-device/team-detect); drained here into the
+        // first completed call that targets that phone, so the agent driving it
+        // learns which team was picked and how to override, and a caller on
+        // another phone or platform sharing this tool-server never does.
+        const targetedPhone = targetedIosPhysicalDevice(parsedData);
+        const signingNote = targetedPhone
+          ? consumePendingSigningDetectionNote(targetedPhone)
           : null;
         if (signingNote) {
           notes.push(signingNote);
@@ -1014,11 +1107,27 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const toolNote = takeToolNote(data);
         if (toolNote) notes.push(toolNote);
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
+        // For the MCP adapter: its post-action capture would load the app a
+        // profiler is recording on this device. Read at completion.
+        const profilingPayload =
+          deviceArg && isProfiling(canonicalDeviceId(deviceArg) ?? deviceArg)
+            ? { profiling: true }
+            : {};
+        // A failure the tool returned rather than threw, so a client that only
+        // checks for an error (`argent run`'s exit status) still sees it.
+        const failure = directCallFailure(name, data);
+        const failurePayload = failure !== undefined ? { failure } : {};
         if (wantsStream) {
-          writeLine({ event: "result", data, ...notePayload });
+          writeLine({
+            event: "result",
+            data,
+            ...notePayload,
+            ...profilingPayload,
+            ...failurePayload,
+          });
           res.end();
         } else {
-          res.json({ data, ...notePayload });
+          res.json({ data, ...notePayload, ...profilingPayload, ...failurePayload });
         }
       } catch (err: unknown) {
         /**

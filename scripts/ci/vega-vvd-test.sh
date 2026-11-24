@@ -14,10 +14,9 @@
 #   - restart-app / reinstall-app
 #                        → the `vega`/`kepler` CLI
 #
-# Prereq: the workspace is already built (`npm ci` + `npm run build` on the
-# runner, bind-mounted in at /workspace), so `packages/tool-server/dist/index.js`
-# exists. `npm run build`, not a bare `tsc --build`: only the build script copies
-# the assets tsc never sees.
+# Prereq: the package bundle is already built (`bun run --filter
+# @swmansion/argent build` on the runner, bind-mounted in at /workspace), so
+# `packages/argent/dist/tool-server.cjs` exists. It is the tool-server that ships.
 #
 # NOT `set -e`: gated checks are captured for a per-tool summary, then we exit
 # non-zero if any failed.
@@ -27,6 +26,8 @@ PORT="${ARGENT_PORT:-3033}"
 OUT_DIR="${OUT_DIR:-artifacts}"
 mkdir -p "$OUT_DIR"
 KEPLER_VPKG="${KEPLER_VPKG:-fixtures/keplervideoapp_aarch64.vpkg}"
+# The container's own node is the Vega SDK's (20.x), older than argent supports.
+ARGENT_NODE="${ARGENT_NODE:-node}"
 APP_PKG="${APP_PKG:-com.amazondeveloper.keplervideoapp}"
 APP_ID="${APP_ID:-${APP_PKG}.main}"
 TOOLS_URL="http://127.0.0.1:${PORT}"
@@ -94,23 +95,24 @@ PY
 }
 
 group "Environment"
-echo "node $(node -v 2>/dev/null || echo '<none>')"
+echo "node $("$ARGENT_NODE" -v 2>/dev/null || echo '<none>')"
+# The engines floor (22.18 / 23.8) is the first Node with both: TypeScript with
+# no flag (22.18 / 23.6) and zstd in node:zlib (22.15 / 23.8).
+if ! "$ARGENT_NODE" -e 'process.exit(process.features.typescript && typeof require("node:zlib").zstdCompressSync === "function" ? 0 : 1)' 2>/dev/null; then
+  echo "ERROR: ARGENT_NODE=$ARGENT_NODE is missing, does not run TypeScript, or has no zstd in node:zlib (needs 22.18+ or 23.8+)"; exit 1
+fi
 adb version 2>/dev/null | head -1 || echo "adb <none>"
 echo "vega $(vega -v 2>/dev/null | tr '\n' ' ' || echo '<none>')"
-if test -f packages/tool-server/dist/index.js; then
-  echo "tool-server dist: present"
+if test -f packages/argent/dist/tool-server.cjs; then
+  echo "tool-server bundle: present"
 else
-  echo "ERROR: packages/tool-server/dist/index.js missing — build the workspace first"; exit 1
+  echo "ERROR: packages/argent/dist/tool-server.cjs missing — build the package first"; exit 1
 fi
 endg
 
-# The CommonJS `tsc` dist requires the ESM-only `@argent/configuration-core`, so
-# on the container's Node 20 it needs `--experimental-require-module`; that flag
-# is implicit only from Node 22.12. The production esbuild bundle inlines the dep
-# and doesn't need it.
 group "Start tool-server"
 : > /tmp/tool-server.log
-setsid env ARGENT_PORT="$PORT" node --experimental-require-module packages/tool-server/dist/index.js start \
+setsid env ARGENT_PORT="$PORT" "$ARGENT_NODE" packages/argent/dist/tool-server.cjs start \
   </dev/null >/tmp/tool-server.log 2>&1 &
 ready=""
 for _ in $(seq 1 30); do

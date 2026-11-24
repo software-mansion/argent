@@ -21,6 +21,9 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const SCREEN_W = 1080;
@@ -40,6 +43,8 @@ function mockRegistry(calls: Array<{ tool: string; args: Record<string, unknown>
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
+      // A failed step's screenshot (flow-failure-screen.test.ts) is not a step's action.
+      if (id === "screenshot") return {};
       calls.push({ tool: id, args });
       return { ok: true };
     }),
@@ -270,9 +275,7 @@ describe("rotate: execution", () => {
     const args = result.calls[0]!.args;
     expect(args.radius).toBeGreaterThan(0);
     expect(args.durationMs).toBe(300); // max(1, 45/90) floors at one 90° unit
-    // Generous budget: this is the run's first settle, so it pays the whole
-    // window before giving up and dispatching anyway.
-  }, 15_000);
+  });
 
   it("fails only when no on-screen orbit radius exists — and never blames target size", async () => {
     // Target centered inside the 2% screen inset: no circle fits around it.
@@ -339,30 +342,17 @@ describe("rotate: gating", () => {
     expect(result.calls).toHaveLength(0);
   });
 
-  it("rejects rotate on a physical iOS device without paying the settle or the selector auto-wait", async () => {
-    // Selector against an empty tree: without the upfront guard this step
-    // would burn waitForFrame's full auto-wait before failing. Counting tree
-    // reads proves neither that wait, a gesture settle, nor the aspect read
-    // ran.
-    let reads = 0;
-    currentTree = () => {
-      reads += 1;
-      return screen([]);
-    };
+  it("dispatches rotate on a physical iOS device — the runner plays both fingers as one event stream", async () => {
     await writeFlow("rotate-ios-device", {
       executionPrerequisite: "",
-      steps: [{ kind: "rotate", selector: { text: "Dial", loose: true }, by: 90 }],
+      steps: [{ kind: "rotate", by: 90 }],
     });
 
     const result = await run("rotate-ios-device", "00008110-000978540290401E");
 
-    expect(result.steps[0]).toMatchObject({ kind: "rotate", status: "fail" });
-    expect(result.steps[0].reason).toMatch(/rotate is unsupported on a physical iOS device/);
-    expect(result.steps[0].reason).toMatch(/no two-finger coordinate API on hardware/);
-    expect(result.steps[0].reason).toMatch(/run this flow on a simulator/);
-    expect(result.steps[0].reason).not.toMatch(/simulator-server/);
-    expect(result.calls).toHaveLength(0);
-    expect(reads).toBe(0);
+    expect(result.steps[0]).toMatchObject({ kind: "rotate", status: "pass" });
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-rotate"]);
+    expect(result.calls[0].args).toMatchObject({ udid: "00008110-000978540290401E" });
   });
 });
 

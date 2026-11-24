@@ -158,6 +158,36 @@ describe("resolveFileInputs", () => {
     expect(fileInputs!.input).toMatchObject({ presentOnHost: false, viaUpload: true });
   });
 
+  it("uses uploaded content even when a host file at that path matches the client's stat", async () => {
+    // A mirrored copy (cp -p, tar) keeps size and mtime, so a matching stat
+    // does not prove the bytes are the client's.
+    const filePath = path.join(tmpDir, "input.yaml");
+    await fs.writeFile(filePath, "stale!");
+    const st = await fs.stat(filePath);
+    const content = Buffer.from("fresh!");
+
+    const { args, fileInputs, cleanup } = await resolveFileInputs(
+      { fileInputs: FILE_SPEC },
+      {
+        input: wire({
+          path: filePath,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+          content: content.toString("base64"),
+        }),
+      }
+    );
+    cleanups.push(cleanup);
+
+    expect(args.input).not.toBe(filePath);
+    expect(await fs.readFile(args.input as string, "utf8")).toBe("fresh!");
+    expect(fileInputs!.input).toEqual({
+      clientPath: filePath,
+      presentOnHost: true,
+      viaUpload: true,
+    });
+  });
+
   it("materializes uploaded content for a path that does not exist here", async () => {
     const clientPath = path.join(tmpDir, "not-here", "flow.yaml");
     const content = Buffer.from("steps: []\n");
@@ -332,6 +362,29 @@ describe("resolveFileInputs", () => {
       resolveFileInputs({ fileInputs: spec }, { root: wire({ path: path.join(tmpDir, "nope") }) })
     ).rejects.toThrow(/does not exist on the tool-server host/);
   });
+
+  it.each(["file", "directory"] as const)(
+    "%s kind says a path with ~ is not an absolute path",
+    async (kind) => {
+      const spec: FileInputSpec[] = [{ target: "p", path: "${p}", kind }];
+      await expect(
+        resolveFileInputs({ fileInputs: spec }, { p: wire({ path: "~/shots/a.png" }) })
+      ).rejects.toThrow('Path "~/shots/a.png" is not an absolute path.');
+    }
+  );
+
+  it.each(["file", "directory", "tar-upload"] as const)(
+    "%s kind says a missing Windows absolute path is not on this host",
+    async (kind) => {
+      const spec: FileInputSpec[] = [{ target: "p", path: "${p}", kind }];
+      const err = await resolveFileInputs(
+        { fileInputs: spec },
+        { p: wire({ path: "C:\\Users\\me\\App.app" }) }
+      ).catch((e: unknown) => e);
+      expect((err as Error).message).toMatch(/not found|does not exist/);
+      expect((err as Error).message).not.toContain("not an absolute path");
+    }
+  );
 
   it("probe kind never fails and reports presence via metadata", async () => {
     const spec: FileInputSpec[] = [{ target: "dir", path: "${dir}", kind: "probe" }];

@@ -30,6 +30,32 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// Whether CoreDevice's own devicectl binary exists decides between it and the
+// `xcrun devicectl` wrapper. Null leaves the host's answer.
+const coreDeviceBinary = vi.hoisted(() => ({ present: null as boolean | null }));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    existsSync: (p: string) =>
+      coreDeviceBinary.present !== null &&
+      p.endsWith("/CoreDevice.framework/Versions/A/Resources/bin/devicectl")
+        ? coreDeviceBinary.present
+        : actual.existsSync(p),
+  };
+});
+
+const devicectlPending = vi.hoisted(() => ({ value: false }));
+vi.mock("../src/utils/xcode-first-launch", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
+    "../src/utils/xcode-first-launch"
+  );
+  return {
+    ...actual,
+    xcodeFirstLaunchPending: (wrapper: string) => wrapper === "devicectl" && devicectlPending.value,
+  };
+});
+
 const isFoldableSimulatorMock = vi.fn(async (_udid: string) => true);
 vi.mock("../src/utils/ios-devices", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/ios-devices")>(
@@ -259,6 +285,49 @@ describe("readCoreDeviceDisplays", () => {
     const call = execFileMock.mock.calls.find(([c, a]) => isDevicectl(c, a))!;
     expect(call[1] as string[]).toContain(DUO);
     expect(call[1] as string[]).not.toContain(`ext:acme-3f2a9c:${DUO}`);
+  });
+
+  // Without CoreDevice's binary the fallback is Xcode's wrapper, which would start
+  // the component install and wait for a password.
+  it("does not fall back to xcrun devicectl while Xcode's component install is pending", async () => {
+    mockDevicectl([duoPayload(3)]);
+    coreDeviceBinary.present = false;
+    devicectlPending.value = true;
+    try {
+      const { displays, reason } = await readCoreDeviceDisplays(DUO);
+      expect(displays).toBeNull();
+      expect(reason).toMatch(/administrator password/);
+      expect(execFileMock.mock.calls.filter(([c]) => c === "xcrun")).toEqual([]);
+
+      devicectlPending.value = false;
+      expect((await readCoreDeviceDisplays(DUO)).displays?.activeScreen).toBe(3);
+      expect(execFileMock.mock.calls.filter(([c]) => c === "xcrun")).toHaveLength(1);
+    } finally {
+      coreDeviceBinary.present = null;
+      devicectlPending.value = false;
+    }
+  });
+
+  // CoreDevice's own binary has no wrapper, so it cannot start the install. Right
+  // after an Xcode update CoreDevice is installed but older than expected, and
+  // panel reads must keep working through it.
+  it("keeps reading through CoreDevice's own binary while the install is pending", async () => {
+    mockDevicectl([duoPayload(3)]);
+    coreDeviceBinary.present = true;
+    devicectlPending.value = true;
+    try {
+      const { displays, reason } = await readCoreDeviceDisplays(DUO);
+      expect(displays?.activeScreen).toBe(3);
+      expect(reason).toBeUndefined();
+      const commands = execFileMock.mock.calls.map(([c]) => c as string);
+      expect(commands).toContainEqual(
+        expect.stringMatching(/\/CoreDevice\.framework\/Versions\/A\/Resources\/bin\/devicectl$/)
+      );
+      expect(commands).not.toContain("xcrun");
+    } finally {
+      coreDeviceBinary.present = null;
+      devicectlPending.value = false;
+    }
   });
 
   it("says why when CoreDevice fails, times out, or answers something else", async () => {
@@ -507,17 +576,33 @@ describe("foldablePostureHint", () => {
     expect(hint).toContain("699x1017 is the cover panel (closed)");
   });
 
+  it("says nothing for one panel at two scales", async () => {
+    mockDevicectl([duoPayload(1)]);
+    expect(
+      await foldablePostureHint(DUO, { width: 350, height: 509 }, { width: 1398, height: 2034 })
+    ).toBeUndefined();
+    expect(devicectlCalls()).toBe(0);
+  });
+
+  it("says nothing for one panel rotated", async () => {
+    mockDevicectl([duoPayload(1)]);
+    expect(
+      await foldablePostureHint(DUO, { width: 2853, height: 2007 }, { width: 2007, height: 2853 })
+    ).toBeUndefined();
+    expect(devicectlCalls()).toBe(0);
+  });
+
   it("says nothing for a device that is not foldable", async () => {
     isFoldableSimulatorMock.mockResolvedValue(false);
     expect(
-      await foldablePostureHint(DUO, { width: 1, height: 2 }, { width: 2, height: 1 })
+      await foldablePostureHint(DUO, { width: 1, height: 2 }, { width: 3, height: 2 })
     ).toBeUndefined();
     expect(devicectlCalls()).toBe(0);
   });
 
   it("still says baselines are per posture when the panels cannot be read", async () => {
     mockDevicectl([new Error("no")]);
-    const hint = await foldablePostureHint(DUO, { width: 1, height: 2 }, { width: 2, height: 1 });
+    const hint = await foldablePostureHint(DUO, { width: 1, height: 2 }, { width: 3, height: 2 });
     expect(hint).toContain("baseline belongs to the posture that produced it");
     expect(hint).toContain("Take the baseline in the posture under test");
   });

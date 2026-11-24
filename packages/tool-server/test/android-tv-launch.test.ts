@@ -77,8 +77,11 @@ describe("resolveLauncherActivity — leanback (Android TV)", () => {
       return { stdout: "", stderr: "" };
     });
 
-    const component = await resolveLauncherActivity("emulator-5556", "com.example.tv", true);
-    expect(component).toBe("com.example.tv/com.example.tv.LeanbackActivity");
+    const resolved = await resolveLauncherActivity("emulator-5556", "com.example.tv", true);
+    expect(resolved).toEqual({
+      component: "com.example.tv/com.example.tv.LeanbackActivity",
+      category: "android.intent.category.LEANBACK_LAUNCHER",
+    });
     // The resolve query must have carried the leanback category.
     const calls = execFileMock.mock.calls.map((c) => shellCmd(c[1] as string[]));
     expect(calls.some((s) => s.includes("LEANBACK_LAUNCHER"))).toBe(true);
@@ -98,8 +101,11 @@ describe("resolveLauncherActivity — leanback (Android TV)", () => {
       return { stdout: "", stderr: "" };
     });
 
-    const component = await resolveLauncherActivity("emulator-5556", "com.example.tv", true);
-    expect(component).toBe("com.example.tv/com.example.tv.MainActivity");
+    const resolved = await resolveLauncherActivity("emulator-5556", "com.example.tv", true);
+    expect(resolved).toEqual({
+      component: "com.example.tv/com.example.tv.MainActivity",
+      category: "android.intent.category.LAUNCHER",
+    });
   });
 
   it("does NOT query leanback for a non-TV target", async () => {
@@ -111,8 +117,11 @@ describe("resolveLauncherActivity — leanback (Android TV)", () => {
       return { stdout: "", stderr: "" };
     });
 
-    const component = await resolveLauncherActivity("emulator-5554", "com.example.app", false);
-    expect(component).toBe("com.example.app/com.example.app.MainActivity");
+    const resolved = await resolveLauncherActivity("emulator-5554", "com.example.app", false);
+    expect(resolved).toEqual({
+      component: "com.example.app/com.example.app.MainActivity",
+      category: "android.intent.category.LAUNCHER",
+    });
     const calls = execFileMock.mock.calls.map((c) => shellCmd(c[1] as string[]));
     expect(calls.some((s) => s.includes("LEANBACK_LAUNCHER"))).toBe(false);
   });
@@ -136,8 +145,11 @@ describe("resolveLauncherActivity — leanback (Android TV)", () => {
       return { stdout: "", stderr: "" };
     });
 
-    const component = await resolveLauncherActivity("emulator-5556", "com.example.tv", true);
-    expect(component).toBe("com.example.tv/com.example.tv.MainActivity");
+    const resolved = await resolveLauncherActivity("emulator-5556", "com.example.tv", true);
+    expect(resolved).toEqual({
+      component: "com.example.tv/com.example.tv.MainActivity",
+      category: "android.intent.category.LAUNCHER",
+    });
   });
 
   it("throws (not launches the chooser) when only the system ResolverActivity resolves", async () => {
@@ -154,6 +166,21 @@ describe("resolveLauncherActivity — leanback (Android TV)", () => {
     execFileMock.mockImplementation(() => ({ stdout: "", stderr: "" }));
     await expect(resolveLauncherActivity("emulator-5556", "com.example.tv", true)).rejects.toThrow(
       /LEANBACK_LAUNCHER or LAUNCHER/
+    );
+  });
+});
+
+describe("resolveLauncherActivity — failure message", () => {
+  it.each([
+    ["package:/data/app/base.apk\n", /It is installed but declares no such activity/],
+    ["", /It is not installed on emulator-5554: install it with `reinstall-app`/],
+  ])("names the remedy from `pm path` output %j", async (pmPath, message) => {
+    execFileMock.mockImplementation((_cmd: string, args: string[]) => ({
+      stdout: shellCmd(args).startsWith("pm path ") ? pmPath : "No activity found\n",
+      stderr: "",
+    }));
+    await expect(resolveLauncherActivity("emulator-5554", "com.example.app")).rejects.toThrow(
+      message
     );
   });
 });

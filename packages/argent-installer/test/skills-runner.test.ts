@@ -204,7 +204,7 @@ describe("isSkillsCliCached", () => {
   it("probes the resolved npx with --force --no-install and returns true on success", () => {
     execFileSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
 
-    expect(isSkillsCliCached(npx, "linux")).toBe(true);
+    expect(isSkillsCliCached(npx, undefined, "linux")).toBe(true);
     const [file, args, opts] = execFileSyncMock.mock.calls[0]! as [
       string,
       string[],
@@ -219,18 +219,46 @@ describe("isSkillsCliCached", () => {
     expect(opts.shell).toBe(false);
   });
 
+  it("probes without an inherited npm_config_package", () => {
+    execFileSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
+    const original = process.env.npm_config_package;
+    process.env.npm_config_package = "@swmansion/argent@latest";
+    try {
+      isSkillsCliCached(npx, undefined, "linux");
+    } finally {
+      if (original === undefined) delete process.env.npm_config_package;
+      else process.env.npm_config_package = original;
+    }
+
+    const opts = execFileSyncMock.mock.calls[0]![2] as { env?: NodeJS.ProcessEnv };
+    expect(opts.env).toBeDefined();
+    expect(opts.env).not.toHaveProperty("npm_config_package");
+  });
+
+  it("probes from the given cwd, where the `skills` command will run", () => {
+    execFileSyncMock.mockReturnValue(Buffer.from(""));
+
+    isSkillsCliCached(npx, "/work/repo", "linux");
+    isSkillsCliCached(npx, undefined, "linux");
+
+    const pinned = execFileSyncMock.mock.calls[0]![2] as { cwd?: string };
+    const unpinned = execFileSyncMock.mock.calls[1]![2] as { cwd?: string };
+    expect(pinned.cwd).toBe("/work/repo");
+    expect(unpinned).not.toHaveProperty("cwd");
+  });
+
   it("returns false when the probe fails (skills CLI not in the npx cache)", () => {
     execFileSyncMock.mockImplementation(() => {
       throw new Error("command failed");
     });
 
-    expect(isSkillsCliCached(npx, "linux")).toBe(false);
+    expect(isSkillsCliCached(npx, undefined, "linux")).toBe(false);
   });
 
   it("returns false, without spawning, for an npx path cmd.exe cannot take on win32", () => {
     const oddNpx = { ...npx, bin: "C:\\Users\\100%\\npm\\npx.cmd" };
 
-    expect(isSkillsCliCached(oddNpx, "win32")).toBe(false);
+    expect(isSkillsCliCached(oddNpx, undefined, "win32")).toBe(false);
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
@@ -242,7 +270,7 @@ describe("isSkillsCliCached", () => {
       label: "pnpm dlx",
     };
 
-    expect(isSkillsCliCached(pnpmDlx, "linux")).toBe(false);
+    expect(isSkillsCliCached(pnpmDlx, undefined, "linux")).toBe(false);
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 });

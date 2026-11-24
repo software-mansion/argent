@@ -2,6 +2,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../contract";
 import { adbExecOutBinary, isAndroidTv } from "../../../../utils/adb";
+import { uiautomatorKilledMessage, withUiautomatorLock } from "../../../../utils/uiautomator-lock";
 import { resolveDevice } from "../../../../utils/device-info";
 import {
   getAndroidScreenSize,
@@ -91,7 +92,7 @@ async function awaitWebViewPublished(
   read: () => Promise<DescribeNode>
 ): Promise<DescribeNode> {
   let tree = first;
-  for (let waited = 0; waited < WEBVIEW_PUBLISH_BUDGET_MS && hasUnreadWebView(tree); ) {
+  for (let waited = 0; waited < WEBVIEW_PUBLISH_BUDGET_MS && hasUnreadWebView(tree);) {
     await new Promise((r) => setTimeout(r, WEBVIEW_PUBLISH_STEP_MS));
     waited += WEBVIEW_PUBLISH_STEP_MS;
     tree = await read();
@@ -108,13 +109,26 @@ async function uiautomatorDump(serial: string): Promise<string> {
   // wrappers, RN SVG sub-paths, bounds-less Compose containers) while keeping the
   // text, content-desc, clickable and resource-id the agent contract uses.
   // `;` rather than `&&` before `rm -f` so cleanup fires even when dump/cat fails.
-  const rawBuf = await adbExecOutBinary(
-    serial,
-    `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
-    { timeoutMs: 20_000 }
+  const rawBuf = await withUiautomatorLock(serial, () =>
+    adbExecOutBinary(
+      serial,
+      `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
+      { timeoutMs: 20_000 }
+    )
   );
   const raw = rawBuf.toString("utf-8");
   const trimmed = raw.trim();
+  const killed = trimmed.includes("<hierarchy")
+    ? undefined
+    : uiautomatorKilledMessage(trimmed.slice(0, 200), serial);
+  if (killed) {
+    throw new FailureError(killed, {
+      error_code: FAILURE_CODES.ANDROID_UIAUTOMATOR_CAPTURE_FAILED,
+      failure_stage: "android_uiautomator_capture",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+    });
+  }
   if (/^ERROR:/i.test(trimmed) || (!trimmed.includes("<hierarchy") && /error/i.test(trimmed))) {
     throw new FailureError(
       `uiautomator could not capture the screen: ${trimmed}. ` +

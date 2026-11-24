@@ -229,23 +229,35 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         cdp.events.off("consoleAPICalled", onConsoleAPI);
         cdp.events.off("disconnected", onDisconnected);
         await consoleServer.close();
-        // `logWriter.close()` below unlinks the log file, and this dispose is
-        // routinely triggered by another agent's `stop-all-simulator-servers`
+        // `logWriter.close()` below unlinks the log file unless the socket
+        // dropped (likely an app crash), and this dispose is routinely
+        // triggered by another agent's `stop-all-simulator-servers`
         // (`ChromiumJsRuntimeDebugger` is in `DEVICE_OWNED_NAMESPACES`). The
         // breadcrumb is what keeps `debugger-log-registry`'s promise that an
         // empty result with no note means the app logged nothing. Only one key
         // to write, unlike Hermes: here `logicalDeviceId` IS `device.id`.
         const captured = logWriter.getStats().totalEntries;
+        const connectionLost = !cdp.isConnected();
+        // Past a file-size limit or on a full disk the file can exist yet hold nothing.
+        const inFile = logWriter.getFileEntryCount();
+        const stored = logWriter.hasFile() && inFile > 0;
+        const keepFile = captured > 0 && connectionLost && stored;
         if (captured > 0) {
+          const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
           recordReapedSession(
             "js-runtime-debugger",
             device.id,
-            `The ${captured} captured console ${captured === 1 ? "entry" : "entries"} went with ` +
-              `it — the log file is deleted on teardown, so this registry starts empty rather ` +
-              `than the app having logged nothing.`
+            keepFile
+              ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}.`
+              : stored
+                ? `The ${entries} went with it — the log file is deleted on teardown, so this ` +
+                  `registry starts empty rather than the app having logged nothing.`
+                : `The ${entries} went with it — no log file held them, so this ` +
+                  `registry starts empty rather than the app having logged nothing.`,
+            connectionLost
           );
         }
-        logWriter.close();
+        logWriter.close({ keepFile });
         // Deliberately no `cdp.disconnect()` (unlike the Hermes blueprint): the
         // session belongs to ChromiumCdp and its other consumers — screenshot,
         // describe, gesture-tap, ...

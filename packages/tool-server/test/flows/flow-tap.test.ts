@@ -11,16 +11,15 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "native-devtools",
-    })
-  ),
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => ({
+    tree: currentTree(),
+    source: "native-devtools",
+  })),
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { useMacosAppsFlag } from "../helpers/macos-apps-flag";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -57,11 +56,12 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
 }
 
 async function run(
-  name: string
+  name: string,
+  device = DEVICE
 ): Promise<FlowRunResult & { calls: Array<{ tool: string; args: Record<string, unknown> }> }> {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const tool = createRunFlowTool(mockRegistry(calls));
-  const result = asRun(await tool.execute({}, { name, project_root: tmpDir, device: DEVICE }));
+  const result = asRun(await tool.execute({}, { name, project_root: tmpDir, device }));
   return Object.assign(result, { calls });
 }
 
@@ -154,7 +154,7 @@ describe("tap times: parse/serialize", () => {
   it("rejects malformed options forms", () => {
     expect(() => parseFlow("steps:\n  - tap: { times: 2 }\n")).toThrow(/needs a target/i);
     expect(() => parseFlow("steps:\n  - tap: { on: A, foo: 1 }\n")).toThrow(
-      /accepts only \{ on, times \}/i
+      /accepts only \{ on, times, button, modifiers \}/i
     );
     // Coordinates never sit next to option keys — the old mixed spelling and
     // stray x/y both get the nested-point hint.
@@ -173,6 +173,128 @@ describe("tap times: parse/serialize", () => {
     }
     expect(() => parseFlow("steps:\n  - tap: { on: { x: 0.5, y: 0.5 }, times: 0 }\n")).toThrow(
       /times must be an integer between 1 and 10/i
+    );
+  });
+});
+
+describe("tap button: parse/serialize", () => {
+  it("round-trips a right tap on a selector and on a point, alone and with times", () => {
+    const flow = {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap" as const, selector: { identifier: "box.context" }, button: "right" as const },
+        { kind: "tap" as const, x: 0.3, y: 0.4, button: "right" as const },
+        {
+          kind: "tap" as const,
+          selector: { text: "Row", loose: true },
+          times: 2,
+          button: "right" as const,
+        },
+      ],
+    };
+    const yaml = serializeFlow(flow);
+    expect(yaml).toContain("button: right");
+    expect(parseFlow(yaml).steps).toEqual(flow.steps);
+  });
+
+  it("parses the options form with a button, and normalizes button: left to absent", () => {
+    const steps = parseFlow(
+      "steps:\n" +
+        "  - tap: { on: { id: box.context }, button: right }\n" +
+        "  - tap: { on: { x: 0.5, y: 0.5 }, button: right, times: 2 }\n" +
+        '  - tap: { on: "Photo", button: left }\n'
+    ).steps;
+    expect(steps).toEqual([
+      { kind: "tap", selector: { identifier: "box.context" }, button: "right" },
+      { kind: "tap", x: 0.5, y: 0.5, times: 2, button: "right" },
+      { kind: "tap", selector: { text: "Photo", loose: true } },
+    ]);
+    expect(serializeFlow({ executionPrerequisite: "", steps: [steps[2]!] })).toContain(
+      "- tap: Photo"
+    );
+  });
+
+  it("rejects an unknown button, a button with no target, and a button beside selector fields", () => {
+    for (const bad of ["middle", "Right", "2", "true"]) {
+      expect(() => parseFlow(`steps:\n  - tap: { on: A, button: ${bad} }\n`)).toThrow(
+        /tap\.button must be left or right/i
+      );
+    }
+    expect(() => parseFlow("steps:\n  - tap: { button: right }\n")).toThrow(/needs a target/i);
+    // zod would silently STRIP the button from a selector map, replaying a left click.
+    expect(() => parseFlow("steps:\n  - tap: { id: box.context, button: right }\n")).toThrow(
+      /options form takes a nested selector/i
+    );
+    expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, button: right }\n")).toThrow(
+      /options form takes a nested point/i
+    );
+  });
+});
+
+describe("tap modifiers: parse/serialize", () => {
+  it("round-trips held keys on a selector and on a point, alone and with times and button", () => {
+    const flow = {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "tap" as const,
+          selector: { identifier: "row" },
+          modifiers: ["command" as const],
+        },
+        { kind: "tap" as const, x: 0.3, y: 0.4, modifiers: ["shift" as const, "command" as const] },
+        {
+          kind: "tap" as const,
+          selector: { text: "Row", loose: true },
+          times: 2,
+          button: "right" as const,
+          modifiers: ["control" as const, "option" as const, "shift" as const, "command" as const],
+        },
+      ],
+    };
+    const yaml = serializeFlow(flow);
+    expect(yaml).toContain("modifiers:");
+    expect(parseFlow(yaml).steps).toEqual(flow.steps);
+  });
+
+  it("normalizes the keys to canonical order without repeats, and an empty list to absent", () => {
+    const steps = parseFlow(
+      "steps:\n" +
+        "  - tap: { on: { id: row }, modifiers: [command, shift, shift] }\n" +
+        "  - tap: { on: { x: 0.5, y: 0.5 }, modifiers: [option, control], times: 2 }\n" +
+        '  - tap: { on: "Photo", modifiers: [] }\n'
+    ).steps;
+    expect(steps).toEqual([
+      { kind: "tap", selector: { identifier: "row" }, modifiers: ["shift", "command"] },
+      { kind: "tap", x: 0.5, y: 0.5, times: 2, modifiers: ["control", "option"] },
+      { kind: "tap", selector: { text: "Photo", loose: true } },
+    ]);
+    expect(serializeFlow({ executionPrerequisite: "", steps: [steps[2]!] })).toContain(
+      "- tap: Photo"
+    );
+  });
+
+  it("rejects keys that are not a list of modifier names, keys with no target, and keys beside target fields", () => {
+    for (const bad of [
+      "command",
+      "[cmd]",
+      "[Command]",
+      "[command, fn]",
+      "[1]",
+      "{ command: true }",
+    ]) {
+      expect(() => parseFlow(`steps:\n  - tap: { on: A, modifiers: ${bad} }\n`)).toThrow(
+        /tap\.modifiers must be a list of control, option, shift, command/i
+      );
+    }
+    expect(() => parseFlow("steps:\n  - tap: { modifiers: [command] }\n")).toThrow(
+      /tap with times, button or modifiers needs a target/i
+    );
+    // zod would silently STRIP the keys from a selector map, replaying a plain click.
+    expect(() => parseFlow("steps:\n  - tap: { id: row, modifiers: [command] }\n")).toThrow(
+      /options form takes a nested selector/i
+    );
+    expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, modifiers: [command] }\n")).toThrow(
+      /options form takes a nested point/i
     );
   });
 });
@@ -252,6 +374,65 @@ describe("tap times: execution", () => {
     expect(result.calls[0]!.args).not.toHaveProperty("clickCount");
   });
 
+  it.each([
+    ["a touch device", undefined, /is a mouse right-click.*takes none\. .*long-press$/],
+    // HarmonyOS refuses long-press too, and Chromium is a mouse platform.
+    ["HarmonyOS", "harmony-127.0.0.1:5555", /is a mouse right-click.*harmony takes none$/],
+    ["a Chromium app", "chromium-cdp-9222", /does not support it on chromium yet$/],
+  ])("fails a right tap on %s before it reads the tree or taps", async (_name, device, reason) => {
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      return screen([n({ label: "Photo", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } })]);
+    };
+    await writeFlow("right-click", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Photo", loose: true }, button: "right" }],
+    });
+
+    const result = await run("right-click", device);
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]!.reason).toMatch(reason);
+    // Only the screenshot every failed step attaches; no tap went out.
+    expect(result.calls.map((c) => c.tool)).toEqual(["screenshot"]);
+    expect(reads).toBe(0);
+  });
+
+  it.each([
+    ["a touch device", undefined, /holds keyboard keys through a mouse click.*ios takes none$/],
+    [
+      "an Android device",
+      "emulator-5554",
+      /holds keyboard keys through a mouse click.*android takes none$/,
+    ],
+    [
+      "a Chromium app",
+      "chromium-cdp-9222",
+      /holds keyboard keys.*does not support it on chromium yet$/,
+    ],
+  ])(
+    "fails a tap holding keys on %s before it reads the tree or taps",
+    async (_name, device, reason) => {
+      let reads = 0;
+      currentTree = () => {
+        reads++;
+        return screen([n({ label: "Photo", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } })]);
+      };
+      await writeFlow("held", {
+        executionPrerequisite: "",
+        steps: [{ kind: "tap", selector: { text: "Photo", loose: true }, modifiers: ["command"] }],
+      });
+
+      const result = await run("held", device);
+
+      expect(result.ok).toBe(false);
+      expect(result.steps[0]!.reason).toMatch(reason);
+      expect(result.calls.map((c) => c.tool)).toEqual(["screenshot"]);
+      expect(reads).toBe(0);
+    }
+  );
+
   it("dispatches clickCount on a coordinate multi-tap", async () => {
     await writeFlow("coord", {
       executionPrerequisite: "",
@@ -263,6 +444,34 @@ describe("tap times: execution", () => {
     expect(result.ok).toBe(true);
     expect(result.calls).toEqual([
       { tool: "gesture-tap", args: { udid: DEVICE, x: 0.3, y: 0.7, clickCount: 3 } },
+    ]);
+  });
+});
+
+describe("tap modifiers: execution on a Mac app", () => {
+  useMacosAppsFlag();
+  const MAC = "macos-app-com.example.app";
+
+  it("passes the held keys to gesture-tap beside clickCount and button", async () => {
+    await writeFlow("mac-held", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap", x: 0.3, y: 0.7, modifiers: ["shift", "command"] },
+        { kind: "tap", x: 0.5, y: 0.5, times: 2, button: "right", modifiers: ["option"] },
+        { kind: "tap", x: 0.2, y: 0.2 },
+      ],
+    });
+
+    const result = await run("mac-held", MAC);
+
+    expect(result.ok).toBe(true);
+    expect(result.calls).toEqual([
+      { tool: "gesture-tap", args: { udid: MAC, x: 0.3, y: 0.7, modifiers: ["shift", "command"] } },
+      {
+        tool: "gesture-tap",
+        args: { udid: MAC, x: 0.5, y: 0.5, clickCount: 2, button: "right", modifiers: ["option"] },
+      },
+      { tool: "gesture-tap", args: { udid: MAC, x: 0.2, y: 0.2 } },
     ]);
   });
 });

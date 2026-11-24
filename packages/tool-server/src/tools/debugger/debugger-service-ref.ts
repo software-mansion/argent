@@ -6,13 +6,14 @@ import { metroPort } from "../../utils/debugger/metro-port";
 
 /**
  * For tools that work on every platform including Chromium: iOS / Android /
- * Vega go through Metro, Chromium goes direct over CDP.
+ * Vega / Mac apps go through Metro, Chromium goes direct over CDP.
  *
  * Vega (Fire TV) works because everything in this matrix needs only
  * `Runtime.evaluate`, which the legacy Hermes inspector in its RN 0.72 fork
- * serves — the network inspector included, since it monkey-patches `fetch`
- * rather than using the CDP `Network` domain. Requires a Debug `.vpkg` + Metro
- * reachable from the device; see the argent-tv-interact skill.
+ * serves — the network inspector included, since it patches `XMLHttpRequest`
+ * (React Native's `fetch` runs over it) in the JS runtime rather than using the
+ * CDP `Network` domain. Requires a Debug `.vpkg` + Metro reachable from the
+ * device; see the argent-tv-interact skill.
  */
 export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true },
@@ -20,6 +21,7 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  macos: { app: true, catalyst: true },
 };
 
 /**
@@ -31,6 +33,12 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
  * Remote (cloud) sims ARE supported: the JsRuntimeDebugger blueprint opens a
  * sim-remote reverse tunnel to the developer's local Metro lazily, so no
  * per-tool transport plumbing is needed here.
+ *
+ * Mac apps are supported: a Debug build of a react-native-macos app, or of
+ * React Native built for Mac Catalyst, serves the same Hermes runtime through
+ * Metro, and `selectTarget` finds it by the bundle id in the Mac app id (and a
+ * Mac Catalyst app's identifierForVendor). The React profiler tools and the
+ * `profiler-*` tools that read their data use this capability too.
  *
  * Vega is deliberately absent even though the plain debugger-* tools do work
  * there (see DEBUGGER_TOOL_CAPABILITY), for two different reasons:
@@ -48,7 +56,13 @@ export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  macos: { app: true, catalyst: true },
 };
+
+/** Whether a debugger tool's device id names a Chromium app rather than a Metro runtime. */
+export function isChromiumDebuggerTarget(deviceId: string | undefined): boolean {
+  return !!canonicalDeviceId(deviceId)?.startsWith(CHROMIUM_ID_PREFIX);
+}
 
 /**
  * Debugger service ref for a tool's `services()` callback. `port` is irrelevant
@@ -63,7 +77,7 @@ export function debuggerServiceRef(params: { port?: number; device_id?: string }
   // The Metro path is the default, and has to tolerate undefined / empty /
   // malformed ids: pre-chromium tests and older callers expect a Metro URN back
   // even when device_id is missing.
-  if (deviceId && deviceId.startsWith(CHROMIUM_ID_PREFIX)) {
+  if (deviceId && isChromiumDebuggerTarget(deviceId)) {
     const device = resolveDevice(deviceId);
     return chromiumJsRuntimeDebuggerRef(device);
   }

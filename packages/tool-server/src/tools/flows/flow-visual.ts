@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
-import type { DescribeFrame } from "../describe/contract";
+import { FailureError, getFailureSignal } from "@argent/registry";
+import type { DescribeFrame, UiOrientation } from "../describe/contract";
+import { isIosSimulator } from "../../utils/device-info";
+import { readUiOrientation } from "../../utils/ios-ui-orientation";
+import { nativePointToUi } from "../../utils/ui-orientation";
 import {
   settleTree,
   invokeOnDevice,
@@ -11,10 +15,17 @@ import {
   offscreenHint,
   type ActionEnv,
 } from "./flow-actions";
-import { authoringPlatform, describeSelector, type FlowSelector } from "./flow-utils";
+import {
+  authoringPlatform,
+  describeSelector,
+  SELECTOR_RELATIONS,
+  type FlowSelector,
+} from "./flow-utils";
+import { supportsFlowTree } from "./flow-tree";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 import { foldablePostureHint } from "../../utils/foldable";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
+import { clientBaselinePath, type ProjectAccess } from "./project-access";
 
 /** Default visual tolerance (percent of pixels) when a step sets none. */
 export const DEFAULT_MAX_MISMATCH = 0.5;
@@ -64,18 +75,31 @@ async function pngDimensions(file: string): Promise<{ w: number; h: number }> {
 }
 
 /**
- * Crop identity for a selector's own fields, in fixed order: the key is immune
- * to YAML key order, and to describeSelector's format (owned by failure prose).
- * `loose` counts — it changes resolution (identifier-first fallback).
+ * Crop identity for a selector, in fixed order: the key is immune to YAML key
+ * order, and to describeSelector's format (owned by failure prose). `loose`
+ * counts — it changes resolution (identifier-first fallback). A scoped
+ * selector appends `any` and its whole relation tree, so two crops differing
+ * only by `within`/`after`/`next` select different elements and key apart; a
+ * relation-free selector keeps the flat five-field tuple, so baselines
+ * committed for unscoped crops keep their filenames.
  */
-function cropIdentity(s: FlowSelector): string {
-  return JSON.stringify([
+function cropIdentityParts(s: FlowSelector): unknown[] {
+  const own = [
     s.text ?? null,
     s.textMatches ?? null,
     s.identifier ?? null,
     s.role ?? null,
     s.loose ?? false,
-  ]);
+  ];
+  const scopes = SELECTOR_RELATIONS.map((relation) => {
+    const nested = s[relation];
+    return nested === undefined ? null : cropIdentityParts(nested);
+  });
+  return scopes.every((scope) => scope === null) ? own : [...own, s.any ?? false, ...scopes];
+}
+
+function cropIdentity(s: FlowSelector): string {
+  return JSON.stringify(cropIdentityParts(s));
 }
 
 function baselineDir(flowsDir: string, flowName: string): string {
@@ -100,6 +124,18 @@ async function cleanupDiffDir(dir: string, keep?: string): Promise<void> {
   } catch {
     // best-effort cleanup
   }
+}
+
+/**
+ * The differ names a PNG it cannot decode by its path on this host. For a
+ * client baseline that path is the scratch copy, which is gone once the step
+ * ends, so the error names the client's file instead and keeps the differ's
+ * failure signal. Any other error passes through as it is.
+ */
+function namingClientBaseline(err: unknown, copy: string, clientPath: string): unknown {
+  const signal = getFailureSignal(err);
+  if (!(err instanceof Error) || signal === null || !err.message.includes(copy)) return err;
+  return new FailureError(err.message.split(copy).join(clientPath), signal);
 }
 
 /**
@@ -142,10 +178,17 @@ async function cropPngFile(
  * resolves to a frame before the capture (settle + auto-wait, like the
  * directives), and the CROPPED image is what gets compared, stored as the
  * baseline, and registered as the `current` artifact.
+ *
+ * The baseline is read and written through `project`: on this host beside the
+ * root flow, or, for an upload whose client sent the run's baselines with it,
+ * in those files, keyed beside the root flow's real file on the client, and a
+ * new one goes back to the client with the result. The capture, the differ
+ * and every artifact stay on this host.
  */
 export async function runSnapshot(
   env: ActionEnv,
   opts: {
+    /** The root flow's canonical directory on this host; the baselines' anchor in host mode. */
     flowsDir: string;
     /**
      * The `__baselines__/<segment>` key, NOT necessarily the name the run
@@ -154,6 +197,14 @@ export async function runSnapshot(
      * disagreement lets two distinct flows share a store.
      */
     flowName: string;
+    /** Where the baseline is read and written. */
+    project: ProjectAccess;
+    /**
+     * The real CLIENT path of the root flow, set exactly when `project` is the
+     * client: the baseline then lives beside it, and `flowsDir` is only the
+     * temp dir the upload landed in.
+     */
+    clientFlowPath?: string;
     name: string;
     maxMismatch: number;
     updateBaselines: boolean;
@@ -172,7 +223,8 @@ export async function runSnapshot(
   // outage on `ActionEnv.treeOutage` for a later gesture to spend. A gesture
   // that swallows one warns; a capture has no `warning` channel, which makes
   // this the one settle that passes silently.
-  if (opts.cropOn === undefined) {
+  // Skipped where no flow tree source exists: every read would fail.
+  if (opts.cropOn === undefined && supportsFlowTree(env.device.platform)) {
     try {
       await settleTree(env);
     } catch {
@@ -213,13 +265,14 @@ export async function runSnapshot(
   })) as { image: ArtifactHandle; warning?: string };
   // The screenshot tool's warning (a foldable whose panel could not be
   // resolved) rides every outcome built on this capture.
-  const captureWarned = shot.warning !== undefined ? { warning: shot.warning } : {};
+  let captureWarned: { warning?: string } =
+    shot.warning !== undefined ? { warning: shot.warning } : {};
 
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
   // cropped dimensions — a function of layout — would destroy. A cropOn key
-  // additionally hashes the selector's own fields, so same-name snapshots
-  // cropping different elements do not share a baseline file.
+  // additionally hashes the selector, so same-name snapshots cropping
+  // different elements do not share a baseline file.
   const { w, h } = await pngDimensions(shot.image.hostPath);
   const cropSuffix =
     opts.cropOn === undefined
@@ -230,10 +283,15 @@ export async function runSnapshot(
   // geometry, so it must reuse the baseline a local run committed rather than
   // demand a second copy that can drift. `WxH` still separates genuinely
   // different device classes, which is the check the key exists for.
-  const snapshotKey = `${opts.name}__${authoringPlatform(env.device.platform)}-${w}x${h}${cropSuffix}`;
-  const key = `${snapshotKey}.png`;
-  const dir = baselineDir(opts.flowsDir, opts.flowName);
-  const baselinePath = path.join(dir, key);
+  const keyFor = (width: number, height: number) =>
+    `${opts.name}__${authoringPlatform(env.device.platform)}-${width}x${height}${cropSuffix}`;
+  const baselineFor = (file: string) =>
+    opts.clientFlowPath === undefined
+      ? path.join(baselineDir(opts.flowsDir, opts.flowName), file)
+      : clientBaselinePath(opts.clientFlowPath, opts.flowName, file);
+  const snapshotKey = keyFor(w, h);
+  let key = `${snapshotKey}.png`;
+  let baselinePath = baselineFor(key);
 
   // The key carries no app component (it names a committed, machine-portable
   // baseline file), so a run that moved onto another app can recompute a key it
@@ -276,9 +334,28 @@ export async function runSnapshot(
     });
   };
 
+  // The differ and the artifact store read files on THIS host, so a client
+  // baseline being compared gets a copy here, under its own key filename. Not
+  // in the diff scratch dir: that one keeps only the context diff, and a
+  // registered baseline must outlive this call for a client to download it.
+  // On the host the baseline file itself serves both.
+  let baselineCopyDir: string | undefined;
+  let keepBaselineCopy = false;
+  const hostBaseline = async (bytes: Buffer): Promise<string> => {
+    if (opts.clientFlowPath === undefined) return baselinePath;
+    baselineCopyDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-baseline-"));
+    const copy = path.join(baselineCopyDir, key);
+    await fs.writeFile(copy, bytes);
+    return copy;
+  };
+  const baselineArtifact = (hostPath: string): Promise<ArtifactHandle> => {
+    keepBaselineCopy = true;
+    return store.register({ hostPath, kind: "screenshot", mimeType: "image/png" });
+  };
+
   try {
     if (cropFrame !== undefined) {
-      cropDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-crop-"));
+      cropDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-crop-"));
       const croppedPath = path.join(cropDir, key);
       const cropped = await cropPngFile(shot.image.hostPath, croppedPath, cropFrame);
       if (cropped === null) {
@@ -296,35 +373,84 @@ export async function runSnapshot(
       currentPath = croppedPath;
     }
 
-    const exists = await fs
-      .access(baselinePath)
-      .then(() => true)
-      .catch(() => false);
-
     if (opts.updateBaselines) {
-      await fs.mkdir(dir, { recursive: true });
-      await fs.copyFile(currentPath, baselinePath);
-      const baseline = await store.register({
-        hostPath: baselinePath,
-        kind: "screenshot",
-        mimeType: "image/png",
-      });
+      const { replaced } = await opts.project.writeBaseline(
+        baselinePath,
+        await fs.readFile(currentPath)
+      );
       // The folded key makes this the file a local run compares against, so a
       // remote capture replacing it says so. Otherwise a cloud refresh of a
       // committed baseline reads exactly like a local one.
       const source = env.device.platform === "ios-remote" ? " from a remote simulator" : "";
+      // A client's new baseline is on the client, and no file on this host is
+      // it: a host path in the report would name the wrong machine. The reason
+      // names the client path instead, and a crop file is swept like any
+      // other scratch file. The client writes the file only once the result
+      // reaches it, so the reason does not say it is written yet.
+      if (opts.clientFlowPath !== undefined) {
+        const write = replaced ? "updates" : "writes";
+        return {
+          ...captureWarned,
+          status: "pass",
+          reason: `baseline captured${source}; the client ${write} it when the run ends (${baselinePath})`,
+          snapshotKey,
+        };
+      }
+      const written = replaced ? `baseline updated${source}` : `baseline written${source}`;
+      const baseline = await store.register({
+        hostPath: baselinePath,
+        kind: "screenshot",
+        mimeType: "image/png",
+        filename: key,
+      });
       return {
         ...captureWarned,
         status: "pass",
-        reason: exists
-          ? `baseline updated${source} (${key})`
-          : `baseline written${source} (${key})`,
+        reason: `${written} (${key})`,
         snapshotKey,
         artifacts: { baseline },
       };
     }
 
-    if (!exists) {
+    // A read error from this host's disk does not always say which file it hit
+    // (a directory at the baseline path fails the read with a bare EISDIR), so
+    // it names the baseline as the differ names a file it cannot decode. A
+    // client's refusal names its file already.
+    const readBaseline = (file: string) =>
+      opts.project.readFile(file).catch((err: unknown) => {
+        if (opts.project.mode !== "host" || !(err instanceof Error) || err.message.includes(file)) {
+          throw err;
+        }
+        throw new Error(`Could not read PNG at ${file}: ${err.message}`, { cause: err });
+      });
+    let stored = await readBaseline(baselinePath);
+    // A baseline an older Argent took of a landscape UI on an iOS simulator is
+    // in the screen's portrait-native space: sideways, and keyed by the
+    // transposed size. Compared against the capture turned back the same way,
+    // so the e2e test keeps passing until its baselines are taken again.
+    const sideways = stored === null ? await sidewaysOrientation(env) : undefined;
+    if (sideways !== undefined) {
+      const legacyKey = `${keyFor(h, w)}.png`;
+      const legacyPath = baselineFor(legacyKey);
+      const legacy = await readBaseline(legacyPath);
+      if (legacy !== null) {
+        cropDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-crop-"));
+        const turnedPath = path.join(cropDir, `native-${legacyKey}`);
+        await turnPngToNative(currentPath, turnedPath, sideways);
+        currentPath = turnedPath;
+        stored = legacy;
+        key = legacyKey;
+        baselinePath = legacyPath;
+        const note =
+          `compared against ${legacyKey}, a baseline an older Argent took in the screen's ` +
+          `portrait-native space, with the capture turned to match. Run with ` +
+          `updateBaselines (--update-baselines) to store an upright one as ${snapshotKey}.png`;
+        captureWarned = {
+          warning: captureWarned.warning ? `${captureWarned.warning} ${note}` : note,
+        };
+      }
+    }
+    if (stored === null) {
       // Fail WITHOUT seeding: writing here would make this unreviewed capture
       // the truth a re-run silently passes against, and a workspace that never
       // persists baselines (ephemeral CI) would gate nothing forever.
@@ -344,30 +470,33 @@ export async function runSnapshot(
     // Nothing in it may outlive this call except a file registered as an
     // artifact below (its host path is materialized later) — the finally sweeps
     // the rest, or a long-lived tool-server running snapshot flows would
-    // accrete argent-flow-diff-* directories forever.
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-diff-"));
+    // accrete argent-e2e-diff-* directories forever.
+    const localBaseline = await hostBaseline(stored);
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-diff-"));
     let keepInOutputDir: string | undefined;
     try {
       const result = await diffPngFiles({
-        baselinePath,
+        baselinePath: localBaseline,
         currentPath,
         outputDir,
         // A crop compares EVERY pixel of the element's region, wherever it
         // sits. Masking a crop's overlap with the screen's top status-bar band
         // would degenerate into comparing nothing for an element inside the
         // band (a vacuous pass); a crop overlapping the band leans on the run's
-        // best-effort pinStatusBar instead.
-        topMask: cropFrame === undefined ? "status-bar" : "none",
-        // Crop dimensions track the element — size drift must hard-fail below
-        // instead of being resampled away like a full-screen scale difference.
-        ...(cropFrame !== undefined && { normalizeSizes: false }),
+        // best-effort pinStatusBar instead. A Mac window has no status bar: its
+        // top band is the title bar and toolbar, compared like the rest.
+        topMask: cropFrame === undefined && env.device.platform !== "macos" ? "status-bar" : "none",
+      }).catch((err: unknown) => {
+        // A client baseline that is not a PNG (empty, truncated, a Git LFS
+        // pointer): name the client's file, not the copy the finally deletes.
+        throw opts.clientFlowPath === undefined
+          ? err
+          : namingClientBaseline(err, localBaseline, baselinePath);
       });
 
       // The differ reports a dimension bail as mismatchPercentage 0, which the
       // threshold below would read as a clean pass — but nothing was compared.
-      // Under cropOn the differ hard-fails ANY size difference (normalizeSizes:
-      // false), so proportional element drift lands here too; full-screen
-      // snapshots keep normalization and only reach this on an aspect change.
+      // Under cropOn, element size drift lands here too.
       if (result.dimensionMismatch) {
         const { expected, actual } = result.dimensionMismatch;
         // A full-screen mismatch on a foldable is usually a posture mismatch:
@@ -389,28 +518,22 @@ export async function runSnapshot(
             (posture ? `. ${posture}` : ""),
           snapshotKey,
           artifacts: {
-            baseline: await store.register({
-              hostPath: baselinePath,
-              kind: "screenshot",
-              mimeType: "image/png",
-            }),
+            baseline: await baselineArtifact(localBaseline),
             current: await currentArtifact(),
           },
         };
       }
 
-      const within = result.mismatchPercentage <= opts.maxMismatch;
+      // Relative slack absorbs float error (7 of 1000 pixels computes
+      // 0.7000000000000001%) while staying under one pixel.
+      const within = result.mismatchPercentage <= opts.maxMismatch * (1 + 1e-14);
       const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
       if (within) {
         return { status: "pass", reason, ...captureWarned };
       }
 
       const artifacts: SnapshotArtifacts = {
-        baseline: await store.register({
-          hostPath: baselinePath,
-          kind: "screenshot",
-          mimeType: "image/png",
-        }),
+        baseline: await baselineArtifact(localBaseline),
         current: await currentArtifact(),
       };
       // The annotated context diff — the image a client renders inline so the
@@ -424,7 +547,7 @@ export async function runSnapshot(
         });
         keepInOutputDir = result.contextDiffPath;
       }
-      return { status: "fail", reason, snapshotKey, artifacts };
+      return { ...captureWarned, status: "fail", reason, snapshotKey, artifacts };
     } finally {
       await cleanupDiffDir(outputDir, keepInOutputDir);
     }
@@ -432,5 +555,52 @@ export async function runSnapshot(
     if (cropDir !== undefined) {
       await cleanupDiffDir(cropDir, keepCropped ? currentPath : undefined);
     }
+    if (baselineCopyDir !== undefined) {
+      await cleanupDiffDir(
+        baselineCopyDir,
+        keepBaselineCopy ? path.join(baselineCopyDir, key) : undefined
+      );
+    }
   }
+}
+
+/**
+ * The quarter-turned interface orientation of an iOS simulator's UI, under
+ * which a capture is upright but an older Argent's baseline is not. Undefined
+ * on any other target, and when the orientation is not known.
+ */
+async function sidewaysOrientation(env: ActionEnv): Promise<UiOrientation | undefined> {
+  if (!isIosSimulator(env.device)) return undefined;
+  const { orientation } = await readUiOrientation(env.device.id);
+  return orientation === "landscapeLeft" || orientation === "landscapeRight"
+    ? orientation
+    : undefined;
+}
+
+/** Write `src`, an upright image of a UI in `orientation`, in the screen's portrait-native space. */
+async function turnPngToNative(
+  src: string,
+  dest: string,
+  orientation: UiOrientation
+): Promise<void> {
+  const upright = PNG.sync.read(await fs.readFile(src));
+  const native = new PNG({ width: upright.height, height: upright.width });
+  for (let y = 0; y < native.height; y++) {
+    for (let x = 0; x < native.width; x++) {
+      // Pixel centres, so a quarter turn lands on a pixel and never between two.
+      const p = nativePointToUi(
+        { x: (x + 0.5) / native.width, y: (y + 0.5) / native.height },
+        orientation
+      );
+      const ux = Math.min(upright.width - 1, Math.floor(p.x * upright.width));
+      const uy = Math.min(upright.height - 1, Math.floor(p.y * upright.height));
+      upright.data.copy(
+        native.data,
+        (y * native.width + x) * 4,
+        (uy * upright.width + ux) * 4,
+        (uy * upright.width + ux) * 4 + 4
+      );
+    }
+  }
+  await fs.writeFile(dest, PNG.sync.write(native));
 }

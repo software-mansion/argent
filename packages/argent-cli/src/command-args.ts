@@ -15,7 +15,7 @@
 // a tool's JSON Schema into a payload in flag-parser.ts, with `--args`/stdin
 // escape hatches that make no sense for a fixed command surface.
 
-export type OptionSpec =
+type OptionSpec =
   | {
       readonly kind: "boolean";
       /** Single-letter short form, e.g. `"y"` for `-y`. */
@@ -55,7 +55,8 @@ function listChoices(choices: readonly string[]): string {
 }
 
 function resolveName(tok: string, specs: OptionSpecs): string | null {
-  if (tok.startsWith("--")) return tok.slice(2) in specs ? tok.slice(2) : null;
+  // hasOwn, not `in`: `in` takes Object.prototype names (`--toString`) for options.
+  if (tok.startsWith("--")) return Object.hasOwn(specs, tok.slice(2)) ? tok.slice(2) : null;
   // `-x`: a declared single-letter alias.
   const short = tok.slice(1);
   for (const [name, spec] of Object.entries(specs)) {

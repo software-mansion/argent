@@ -2,17 +2,26 @@ import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../blueprints/ios-device-runner";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
+import { ANDROID_NETWORK_SHAPER_NAMESPACE } from "../../blueprints/android-network-shaper";
 import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
 import { CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/chromium-js-runtime-debugger";
 import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
 import { ANDROID_TV_CONTROL_NAMESPACE } from "../../blueprints/android-tv-control";
 import { AX_SERVICE_NAMESPACE } from "../../blueprints/ax-service";
 import { SCREEN_RECORDING_SESSION_NAMESPACE } from "../../blueprints/screen-recording-session";
+import { IOS_AUDIO_SESSION_NAMESPACE } from "../../blueprints/ios-audio-session";
 import { NATIVE_PROFILER_SESSION_NAMESPACE } from "../../blueprints/native-profiler-session";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
+import { MACOS_APP_NAMESPACE } from "../../blueprints/macos-app";
+import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
+import {
+  externalClaimForNativeId,
+  externalNativeId,
+  isExternalDeviceUrn,
+} from "../../utils/external-devices";
 
 /**
  * The one URN matcher both `stop-simulator-server` and
@@ -56,6 +65,26 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
 ];
 
 /**
+ * Namespaces whose URN appends the app after the device id:
+ * `<Namespace>:<deviceId>:<package>`. The LAST colon separates them: an
+ * Android package name cannot contain one, while a wireless adb serial
+ * (`AndroidNetworkInspector:192.168.1.5:5555:com.example`) can. Their device
+ * id is the adb serial even when the service was asked for with an `ext:` id,
+ * so either spelling of the device matches.
+ */
+const APP_KEYED_NAMESPACES: readonly string[] = [ANDROID_NETWORK_INSPECTOR_NAMESPACE];
+
+/**
+ * Namespaces whose URN holds the device's native id (udid or adb serial) also
+ * when the service was asked for with its `ext:` id, so either spelling of the
+ * device matches.
+ */
+const NATIVE_ID_KEYED_NAMESPACES: readonly string[] = [
+  ...APP_KEYED_NAMESPACES,
+  NATIVE_DEVTOOLS_NAMESPACE,
+];
+
+/**
  * Every namespace whose service belongs to exactly one device. Membership is
  * "does `dispose()` reap a resource that outlives the call", with two
  * exceptions: `AndroidTvControl` is stateless adb shell-outs with a no-op
@@ -78,14 +107,18 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   IOS_DEVICE_RUNNER_NAMESPACE,
   NATIVE_DEVTOOLS_NAMESPACE,
   ANDROID_DEVTOOLS_NAMESPACE,
+  ANDROID_NETWORK_SHAPER_NAMESPACE,
   CHROMIUM_CDP_NAMESPACE,
   CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE,
   TV_CONTROL_NAMESPACE,
   ANDROID_TV_CONTROL_NAMESPACE,
   AX_SERVICE_NAMESPACE,
   SCREEN_RECORDING_SESSION_NAMESPACE,
+  IOS_AUDIO_SESSION_NAMESPACE,
   NATIVE_PROFILER_SESSION_NAMESPACE,
+  MACOS_APP_NAMESPACE,
   ...PORT_KEYED_NAMESPACES,
+  ...APP_KEYED_NAMESPACES,
 ];
 
 /**
@@ -107,6 +140,7 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
  */
 export function transportNamespacesForPlatform(platform: string): readonly string[] {
   if (platform === "chromium") return [CHROMIUM_CDP_NAMESPACE];
+  if (platform === "macos") return [MACOS_APP_NAMESPACE];
   if (platform === "android") return [SIMULATOR_SERVER_NAMESPACE, ANDROID_TV_CONTROL_NAMESPACE];
   // Shape cannot tell tvOS from iOS or a simulator from a physical device here. Cover all three namespaces.
   return [SIMULATOR_SERVER_NAMESPACE, IOS_DEVICE_RUNNER_NAMESPACE, TV_CONTROL_NAMESPACE];
@@ -114,11 +148,16 @@ export function transportNamespacesForPlatform(platform: string): readonly strin
 
 /**
  * The device-id portion of `urn` if it belongs to `namespace`, else undefined.
- * Accounts for the two URN shapes (see {@link PORT_KEYED_NAMESPACES}).
+ * Accounts for the three URN shapes (see {@link PORT_KEYED_NAMESPACES} and
+ * {@link APP_KEYED_NAMESPACES}).
  */
 function deviceIdPortion(urn: string, namespace: string): string | undefined {
   if (!urn.startsWith(`${namespace}:`)) return undefined;
   const tail = urn.slice(namespace.length + 1);
+  if (APP_KEYED_NAMESPACES.includes(namespace)) {
+    const beforeApp = tail.lastIndexOf(":");
+    return beforeApp < 0 ? undefined : tail.slice(0, beforeApp);
+  }
   if (!PORT_KEYED_NAMESPACES.includes(namespace)) return tail;
   const afterPort = tail.indexOf(":");
   return afterPort < 0 ? undefined : tail.slice(afterPort + 1);
@@ -147,8 +186,13 @@ export function deviceIdOwningUrn(
     if (portion === undefined) continue;
     const tail = portion.toLowerCase();
     const owner = deviceIds.find((id) => {
-      const lower = id.toLowerCase();
-      return URN_SUFFIXES.some((suffix) => tail === `${lower}${suffix}`);
+      const spellings = NATIVE_ID_KEYED_NAMESPACES.includes(namespace)
+        ? [id, externalNativeId(id)]
+        : [id];
+      return spellings.some((spelling) => {
+        const lower = spelling.toLowerCase();
+        return URN_SUFFIXES.some((suffix) => tail === `${lower}${suffix}`);
+      });
     });
     // Namespaces contain no ":", so at most one can prefix a given URN — a
     // miss here is a miss outright, not a reason to keep scanning.
@@ -176,12 +220,26 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
 }
 
 /**
+ * Whether `urn` is a device provider's service, which a teardown drops without
+ * shutting anything down. An `ext:`-keyed URN is one. A native devtools URN holds
+ * the udid under both of the device's names, and on a device a provider claims,
+ * that service only attaches to the agent the provider lends.
+ */
+export function isProviderOwnedUrn(urn: string): boolean {
+  if (isExternalDeviceUrn(urn)) return true;
+  const portion = deviceIdOfUrn(urn, [NATIVE_DEVTOOLS_NAMESPACE]);
+  if (portion === undefined) return false;
+  const suffix = URN_SUFFIXES.find((s) => s !== "" && portion.endsWith(s)) ?? "";
+  return externalClaimForNativeId(portion.slice(0, portion.length - suffix.length)) !== undefined;
+}
+
+/**
  * Of `urns`, the port-keyed sessions no device-scoped teardown could ever name,
  * whatever ids it was given.
  *
- * On a Metro serving two or more devices, `selectTarget` refuses to guess which
- * target a udid or serial means and makes the caller re-target with the
- * `logicalDeviceId` Metro echoed — an opaque per-connection handle
+ * On a Metro serving two or more devices, `selectTarget` refuses a udid or
+ * serial it cannot match to one Metro device by name, and makes the caller
+ * re-target with the `logicalDeviceId` Metro echoed — an opaque per-connection handle
  * `list-devices` never mints, which the debugger URN then embeds. A teardown
  * scoped to real device ids leaves that session holding its CDP socket, a bound
  * loopback server and a log file handle, while the caller's serial still

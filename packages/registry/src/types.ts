@@ -13,6 +13,28 @@ export enum ServiceState {
 }
 
 /**
+ * The request header the argent tools client sets to `1` on every call it
+ * sends over `argent link` or `ARGENT_TOOLS_URL`, a link to 127.0.0.1
+ * included. The tool-server reads it as {@link InvokeToolOptions.linked}.
+ */
+export const LINKED_CALL_HEADER = "x-argent-linked";
+
+/**
+ * The request header the argent tools client sets to `1` on every call, to say
+ * it writes client files under `.argent/e2e/`. The tool-server reads its absence
+ * as {@link InvokeToolOptions.legacyE2eDir}. Remove one release after the rename,
+ * together with the CLI's `flow-execute` call.
+ */
+export const E2E_DIR_CLIENT_HEADER = "x-argent-e2e-dir";
+
+/**
+ * The request header that carries the secrets an argent client sends with a
+ * call: base64 of a JSON object of secret name to value. The tool-server reads
+ * it as {@link InvokeToolOptions.clientSecrets}.
+ */
+export const CLIENT_SECRETS_HEADER = "x-argent-client-secrets";
+
+/**
  * True when a node holds (or is acquiring) a real process to tear down. ERROR
  * and TERMINATING nodes hold none — a start that threw (e.g. a tvOS UDID the
  * SimulatorServer blueprint rejects) leaves an ERROR node behind — so the stop
@@ -102,6 +124,36 @@ export interface InvokeToolOptions {
    * authoritative result.
    */
   emitProgress?: (event: unknown) => void;
+  /**
+   * True when the call came over HTTP with the header `x-argent-linked: 1`,
+   * which the argent client sends on every call over `argent link` or
+   * `ARGENT_TOOLS_URL`. Absent for a direct invocation and for a sub-tool call.
+   */
+  linked?: boolean;
+  /**
+   * True when an HTTP call lacks the header `x-argent-e2e-dir: 1`: the client
+   * predates the rename and writes client files only under `.argent/flows/`.
+   * Absent for a direct invocation and for a sub-tool call.
+   */
+  legacyE2eDir?: boolean;
+  /**
+   * Secret values by name from the header `x-argent-client-secrets`, which
+   * `{{secret:NAME}}` resolves against ahead of the tool-server's own sources.
+   * Forwarded to every sub-tool call.
+   */
+  clientSecrets?: ReadonlyMap<string, string>;
+  /**
+   * Internal: the run-stack entries of the flow runs that enclose this call,
+   * outermost first, which a sub-tool call passes on to a nested
+   * `flow-execute`. The HTTP route never sets it.
+   */
+  flowStack?: readonly { canonical: string; display: string }[];
+  /**
+   * Internal: one holder shared by a flow run and every run nested in it, set
+   * once a step of any of them types a `{{secret:…}}` value. A sub-tool call
+   * passes it on as it does {@link flowStack}. The HTTP route never sets it.
+   */
+  flowSecret?: { typed?: boolean };
 }
 
 /**
@@ -115,9 +167,14 @@ export interface ToolContext extends InvokeToolOptions {
   artifacts: ArtifactStore;
 }
 
-export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega";
+export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega" | "harmony" | "macos";
 
-export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
+/**
+ * `catalyst` is a Mac Catalyst app, an iPad (UIKit) app built for the Mac. It is
+ * a `macos` device with a `macos-app-` id, as an AppKit app (`app`) is.
+ */
+export type DeviceKind =
+  "simulator" | "emulator" | "vvd" | "device" | "app" | "catalyst" | "unknown";
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
@@ -158,8 +215,22 @@ export interface ToolCapability {
   chromium?: {
     app?: boolean;
   };
+  /**
+   * A native Mac app that argent drives from inside the app. Behind the macos-apps
+   * flag. `app` is an AppKit app (also SwiftUI for macOS and react-native-macos),
+   * `catalyst` a Mac Catalyst app. A tool with a `macos` block names both.
+   */
+  macos?: {
+    app?: boolean;
+    catalyst?: boolean;
+  };
   vega?: {
     vvd?: boolean;
+    device?: boolean;
+  };
+  /** `emulator` is a DevEco instance only `boot-device` addresses; interaction tools drive `device`. */
+  harmony?: {
+    emulator?: boolean;
     device?: boolean;
   };
   supports?: (device: DeviceInfo) => boolean;
@@ -177,10 +248,18 @@ export interface ToolCapability {
  * A missing binary answers 424 Failed Dependency with an install hint the agent
  * can surface verbatim.
  */
-export type ToolDependency = "adb" | "xcrun" | "emulator" | "sim-remote" | "vega";
+export type ToolDependency =
+  "adb" | "xcrun" | "emulator" | "sim-remote" | "vega" | "harmony-emulator" | "hdc";
 
 export interface ToolDefinition<TParams = void, TResult = unknown> {
   id: string;
+  /**
+   * Former ids of this tool. Each resolves to this tool in `getTool` and
+   * `invokeTool`, and `GET /tools` lists it hidden from MCP, so callers and
+   * saved steps that use an old id keep working. Registry events and telemetry
+   * name the tool by `id`.
+   */
+  aliases?: string[];
   interaction?: {
     startedMsg?: (context: { params: TParams }) => string;
     completedMsg?: (context: { params: TParams; result: TResult }) => string;
@@ -225,6 +304,18 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * warm for the call's duration.
    */
   longRunning?: boolean;
+  /**
+   * Leaves the tool out of the MCP adapter's tool list, so it costs agents no
+   * context. It stays in `GET /tools` and callable over HTTP, for programmatic
+   * callers such as the Node client and `argent run`.
+   */
+  hideFromMcp?: boolean;
+  /**
+   * Sets the MCP `readOnlyHint` annotation. Only for tools that observe state
+   * without changing the device, app, files or server in a user-visible way:
+   * Claude Code runs them without a prompt in plan mode.
+   */
+  readOnly?: boolean;
   /**
    * Gates this tool behind a flag name in @argent/configuration-core's
    * FLAG_REGISTRY. Enforced in TWO places, both re-checked per request so
@@ -273,18 +364,22 @@ export type RegistryEvents = {
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
-  toolInvoked: (toolId: string, toolInvocationId: string, msg: string) => void;
+  // `toolId` is the tool's own id; `calledAs` is set to the alias when the
+  // caller named the tool by one (see `ToolDefinition.aliases`).
+  toolInvoked: (toolId: string, toolInvocationId: string, msg: string, calledAs?: string) => void;
   toolCompleted: (
     toolId: string,
     toolInvocationId: string,
     durationMs: number,
-    msg: string
+    msg: string,
+    calledAs?: string
   ) => void;
   toolFailed: (
     toolId: string,
     toolInvocationId: string,
     error: Error,
     durationMs: number | undefined,
-    msg: string
+    msg: string,
+    calledAs?: string
   ) => void;
 };

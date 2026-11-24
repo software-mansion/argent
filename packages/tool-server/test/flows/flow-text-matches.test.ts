@@ -6,16 +6,17 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // these unit tests stub the tree fetch itself.
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "native-devtools",
-    })
-  ),
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => ({
+    tree: currentTree(),
+    source: "native-devtools",
+  })),
 }));
 
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
 import { createFlowTestHarness, label, n, screen } from "./harness";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const { run, writeFlow } = createFlowTestHarness({
   tempDirectoryPrefix: "flow-matches-",
@@ -95,8 +96,6 @@ describe("text matches: parse/serialize", () => {
 });
 
 describe("text matches: execution", () => {
-  // The three deliberate failures run serially and each consumes the 1s
-  // assertion grace window before its report can be inspected.
   it("renders every text mode consistently in failing report targets and reasons", async () => {
     currentTree = () => screen([label("Actual", { identifier: "status" })]);
     const cases = [
@@ -145,9 +144,10 @@ describe("text matches: execution", () => {
       });
       expect(result.steps[0]?.reason).toContain(`wanted to ${testCase.reasonExpectation}`);
     }
-  }, 10_000);
+  });
 
-  it("does not pass an empty-matchable pattern before the selected element has text", async () => {
+  // An element with no text reads as "", so `'^$'` can check an empty field.
+  it("passes an empty-matchable pattern on an element with no text", async () => {
     currentTree = () =>
       screen([
         n({
@@ -170,7 +170,7 @@ describe("text matches: execution", () => {
 
     const result = await run("empty-status");
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
   });
 
   it("passes unanchored on a partial match (the contains analog)", async () => {

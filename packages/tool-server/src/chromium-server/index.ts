@@ -25,21 +25,12 @@ import type {
 import { readViewport } from "./viewport";
 
 export type {
-  ButtonType,
-  DownscalerType,
   ChromiumServer,
-  FpsReport,
-  KeyDirection,
   MediaReady,
-  Point,
-  Rotation,
   ScreencastFrame,
   ScreencastOpts,
   ScreencastSession,
   ScreenshotOpts,
-  ServerEvents,
-  TouchType,
-  ViewportSize,
 } from "./types";
 
 interface CreateChromiumServerOpts {
@@ -47,6 +38,12 @@ interface CreateChromiumServerOpts {
   deviceId: string;
   /** CDP port from the Chromium process's --remote-debugging-port. */
   port: number;
+  /**
+   * Fail the connect when the page does not answer a no-op within this many
+   * ms. A page under a JavaScript dialog answers no command, so each setup
+   * step would otherwise wait out its own timeout.
+   */
+  answerTimeoutMs?: number;
 }
 
 /** Compose the per-device ChromiumServer; every subsystem shares one CDP session. */
@@ -54,9 +51,17 @@ export async function createChromiumServer(
   opts: CreateChromiumServerOpts
 ): Promise<ChromiumServer> {
   const { cdp, wsUrl, target } = await connectCdp(opts.port);
-  await primePageSession(cdp);
-
-  let viewport: ViewportSize = await readViewport(cdp);
+  let viewport: ViewportSize;
+  try {
+    if (opts.answerTimeoutMs !== undefined) {
+      await cdp.send("Runtime.evaluate", { expression: "0" }, opts.answerTimeoutMs);
+    }
+    await primePageSession(cdp);
+    viewport = await readViewport(cdp);
+  } catch (err) {
+    await cdp.disconnect();
+    throw err;
+  }
   const events = new TypedEventEmitter<ServerEvents>();
   const fps = new FpsTracker(events);
   const screencast = new ScreencastManager(cdp, events, fps);
@@ -80,6 +85,7 @@ export async function createChromiumServer(
       viewport = await readViewport(cdp);
       await network.reattach();
     },
+    networkThrottled: () => network.throttled(),
   });
 
   // Also the initial attach: starts recording on the active page.
@@ -169,7 +175,5 @@ export async function createChromiumServer(
 
 // Consumed by the chromium-cdp blueprint.
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
-export type { TabInfo, TabsManager } from "./tabs";
-export type { NetworkManager, NetworkRequestRecord } from "./network";
-
-export { setClipboardText } from "./clipboard";
+export type { TabInfo } from "./tabs";
+export type { NetworkRequestRecord } from "./network";

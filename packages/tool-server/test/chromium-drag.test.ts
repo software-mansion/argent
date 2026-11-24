@@ -600,3 +600,72 @@ describe("gesture-drag retired `settle` param", () => {
     expect("settle" in parsed.data!).toBe(false);
   });
 });
+
+// A `cdp.send` that times out rejects without closing the socket, so the session
+// outlives the failed drag with the left button still held - and the renderer
+// reads every later click on that page as a drag.
+describe("gesture-drag mid-drag dispatch failure", () => {
+  const params = {
+    udid: "chromium-cdp-19222",
+    fromX: 0.25,
+    fromY: 0.5,
+    toX: 0.75,
+    toY: 0.5,
+    durationMs: 64,
+  };
+
+  it("releases at the last dispatched position and rethrows the transport error", async () => {
+    const api = fakeChromiumApi();
+    const timeout = new Error("CDP request Input.dispatchMouseEvent timed out after 10000ms");
+    let dispatched = 0;
+    api.dispatchMouseEvent.mockImplementation(async () => {
+      if (++dispatched === 3) throw timeout;
+    });
+
+    await expect(gestureDragTool.execute({ chromium: api } as never, params as never)).rejects.toBe(
+      timeout
+    );
+
+    const calls = api.dispatchMouseEvent.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(calls.map((c) => c.type)).toEqual([
+      "mousePressed",
+      "mouseMoved",
+      "mouseMoved",
+      "mouseReleased",
+    ]);
+    // The failed move never moved the pointer, so the release lands on the last
+    // one that was delivered.
+    expect(calls[3]).toMatchObject({ x: calls[1]!.x, y: calls[1]!.y });
+  });
+
+  it("keeps the transport error when the recovery release fails too", async () => {
+    const api = fakeChromiumApi();
+    const timeout = new Error("CDP request Input.dispatchMouseEvent timed out after 10000ms");
+    let dispatched = 0;
+    api.dispatchMouseEvent.mockImplementation(async (event: Record<string, unknown>) => {
+      if (++dispatched === 3) throw timeout;
+      if (event.type === "mouseReleased") throw new Error("CDP session closed");
+    });
+
+    await expect(gestureDragTool.execute({ chromium: api } as never, params as never)).rejects.toBe(
+      timeout
+    );
+  });
+
+  it("does not re-dispatch a release when the final release is what failed", async () => {
+    const api = fakeChromiumApi();
+    const closed = new Error("CDP session closed");
+    api.dispatchMouseEvent.mockImplementation(async (event: Record<string, unknown>) => {
+      if (event.type === "mouseReleased") throw closed;
+    });
+
+    await expect(gestureDragTool.execute({ chromium: api } as never, params as never)).rejects.toBe(
+      closed
+    );
+
+    const types = api.dispatchMouseEvent.mock.calls.map(
+      (c) => (c[0] as Record<string, unknown>).type
+    );
+    expect(types.filter((t) => t === "mouseReleased")).toHaveLength(1);
+  });
+});

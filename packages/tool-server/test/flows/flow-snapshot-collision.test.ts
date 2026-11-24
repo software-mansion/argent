@@ -5,6 +5,9 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { ArtifactStore } from "../../src/artifacts";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // The baseline key has no app component, so one run capturing the same
 // snapshot name from two different apps must fail the colliding step instead
@@ -94,15 +97,15 @@ async function runFlow(
   registry: Registry,
   params: Record<string, unknown>
 ): Promise<FlowRunResult> {
-  // A co-located explicit flow_path (the flow file lives outside project_root),
+  // A co-located explicit e2e_test_path (the flow file lives outside project_root),
   // plus the artifact store runSnapshot requires from ctx. Not the upload
   // route: assertUploadSelfContained refuses a snapshot step there, since an
   // uploaded flow's baselines land in a temp dir no later run can read.
-  const flowPath = String(params.flow_file);
-  const { name: _name, flow_file: _flowFile, ...rest } = params;
+  const flowPath = String(params.e2e_test_file);
+  const { name: _name, e2e_test_file: _flowFile, ...rest } = params;
   const ctx = {
     fileInputs: {
-      flow_path: {
+      e2e_test_path: {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
@@ -114,7 +117,7 @@ async function runFlow(
   return asRun(
     await createRunFlowTool(registry).execute(
       {},
-      { ...rest, flow_path: flowPath } as never,
+      { ...rest, e2e_test_path: flowPath } as never,
       ctx as never
     )
   );
@@ -155,7 +158,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(makeRegistry(), {
       name: "cross-app",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       updateBaselines: true,
     });
 
@@ -193,7 +196,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(makeRegistry(), {
       name: "same-app",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       updateBaselines: true,
     });
 
@@ -228,7 +231,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(registry, {
       name: "pinned-same-app",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-21456",
       updateBaselines: true,
     });
@@ -267,7 +270,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(registry, {
       name: "pinned-cross-app",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-21456",
       updateBaselines: true,
     });
@@ -302,7 +305,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(registry, {
       name: "pre-launch",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-21456",
       updateBaselines: true,
     });
@@ -324,7 +327,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(makeRegistry(), {
       name: "repeat",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       updateBaselines: true,
     });
 
@@ -344,7 +347,7 @@ describe("one snapshot key reported from two hosts", () => {
       runFlow(makeRegistry(), {
         name: "hosts",
         project_root: PROJECT_ROOT,
-        flow_file: flowFile,
+        e2e_test_file: flowFile,
         device,
       });
 

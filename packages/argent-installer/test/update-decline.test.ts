@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { update } from "../src/update.js";
+import { hashBundledContent } from "../src/utils.js";
+import { resolveInstallableUpdateTarget } from "../src/update-target.js";
 
 // Declining the update prompt must cancel + exit 0 without the config refresh
 // (entry rewrites, allowlists, stale-config sweep, rules/agents, skills)
@@ -15,7 +17,7 @@ const telemetryMock = vi.hoisted(() => ({
 }));
 
 const childProcessMock = vi.hoisted(() => ({
-  execSync: vi.fn(() => "/usr/local/bin/argent\n"),
+  which: vi.fn((..._args: unknown[]) => "/usr/local/bin/argent\n"),
   execFileSync: vi.fn(),
   spawn: vi.fn(),
 }));
@@ -40,7 +42,23 @@ const promptsMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@argent/telemetry", () => telemetryMock);
-vi.mock("node:child_process", () => childProcessMock);
+// The PATH probe (`which -a argent` / `where argent`) goes to its own mock so the
+// execFileSync assertions below only see package-manager runs. Like `which -a`,
+// it lists only the paths that exist.
+vi.mock("node:child_process", async () => {
+  const { existsSync } = await import("node:fs");
+  return {
+    ...childProcessMock,
+    execFileSync: (bin: string, ...rest: unknown[]) =>
+      bin === "which" || bin === "where"
+        ? String(childProcessMock.which(bin, ...rest))
+            .split("\n")
+            .filter((line) => line && existsSync(line))
+            .map((line) => line + "\n")
+            .join("")
+        : childProcessMock.execFileSync(bin, ...rest),
+  };
+});
 vi.mock("@clack/prompts", () => promptsMock);
 vi.mock("@argent/tools-client", () => ({
   killToolServer: vi.fn().mockResolvedValue(undefined),
@@ -62,6 +80,12 @@ vi.mock("../src/update-target.js", () => ({
 // Mutable install topology read through the utils mock — tests flip these to
 // stage "the global install landed at v99" or "no global install at all".
 const topologyState = vi.hoisted(() => ({ globalInstalled: true, globalVersion: "1.0.0" }));
+// A release whose agents bundle dropped a file, with a retired list whose hash
+// matches the test's own copy.
+const bundleOverride = vi.hoisted(() => ({
+  agentsDir: undefined as string | undefined,
+  retired: undefined as import("../src/utils.js").RetiredBundledPath[] | undefined,
+}));
 
 vi.mock("../src/utils.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/utils.js")>();
@@ -69,8 +93,27 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     ...original,
     isGloballyInstalled: vi.fn(() => topologyState.globalInstalled),
     getGloballyInstalledVersion: vi.fn(() => topologyState.globalVersion),
+    get AGENTS_DIR() {
+      return bundleOverride.agentsDir ?? original.AGENTS_DIR;
+    },
+    get RETIRED_BUNDLED_PATHS() {
+      return bundleOverride.retired
+        ? { agents: bundleOverride.retired, rules: [] }
+        : original.RETIRED_BUNDLED_PATHS;
+    },
   };
 });
+
+const launchPaths = vi.hoisted(() => ({
+  value: null as { node: string; cli: string } | null,
+  globalFirstOnPath: true,
+}));
+
+vi.mock("../src/topology.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/topology.js")>()),
+  getGloballyInstalledLaunchPaths: () => launchPaths.value,
+  isGlobalInstallFirstOnPath: () => launchPaths.globalFirstOnPath,
+}));
 
 class ExitSentinel extends Error {
   constructor(public readonly code: number | undefined) {
@@ -87,7 +130,7 @@ let savedAgent: string | undefined;
 let exitSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  // detectPackageManager() reads npm_config_user_agent, so the install/update
+  // detectGlobalPackageManager() reads npm_config_user_agent, so the install/update
   // commands these tests assert on are whichever package manager runs the
   // suite. Unset it to pin the npm shape.
   savedAgent = process.env.npm_config_user_agent;
@@ -95,6 +138,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   topologyState.globalInstalled = true;
   topologyState.globalVersion = "1.0.0";
+  launchPaths.value = null;
+  launchPaths.globalFirstOnPath = true;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-update-decline-"));
   originalCwd = process.cwd();
   // Sandbox HOME: the accepted-update path runs the real config refresh, which
@@ -117,6 +162,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  bundleOverride.agentsDir = undefined;
+  bundleOverride.retired = undefined;
   exitSpy.mockRestore();
   process.chdir(originalCwd);
   if (savedAgent === undefined) delete process.env.npm_config_user_agent;
@@ -174,6 +221,100 @@ describe("update — interactive decline", () => {
       expect.anything()
     );
   });
+
+  it("updates the global package with npm when launched from Yarn 2+", async () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    promptsMock.confirm.mockResolvedValueOnce(true);
+    childProcessMock.execFileSync.mockImplementationOnce((() => {
+      topologyState.globalVersion = "99.0.0";
+      return undefined;
+    }) as never);
+
+    await update([]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "-g", "@swmansion/argent@99.0.0"],
+      expect.not.objectContaining({ cwd: expect.anything() })
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "says a failed yarn global add needs Yarn classic under Yarn 2+",
+    async () => {
+      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+      const pkg = path.join(tmpDir, "yarn-global", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.mkdirSync(path.join(tmpDir, "yarn-bin"));
+      fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(tmpDir, "yarn-bin", "argent"));
+      childProcessMock.which.mockImplementation(
+        () => path.join(tmpDir, "yarn-bin", "argent") + "\n"
+      );
+      promptsMock.confirm.mockResolvedValueOnce(true);
+      childProcessMock.execFileSync.mockImplementation((() => {
+        throw new Error("Usage Error: The 'yarn global' commands have been removed");
+      }) as never);
+
+      await expect(update([])).rejects.toThrow(ExitSentinel);
+
+      // The release-age policy is read where the install runs.
+      expect(resolveInstallableUpdateTarget).toHaveBeenCalledWith("yarn", "1.0.0", os.homedir());
+      expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+        "yarn",
+        ["global", "add", "@swmansion/argent@99.0.0"],
+        expect.objectContaining({ cwd: os.homedir() })
+      );
+      const esc = String.fromCharCode(27);
+      const info = promptsMock.log.info.mock.calls.map((c: unknown[]) =>
+        String(c[0])
+          .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+          .join("")
+      );
+      expect(info).toContain(
+        "Run yarn global add @swmansion/argent@99.0.0 (with Yarn classic, outside this Yarn 2+ project)."
+      );
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "drops the prefix npm exec exports from yarn's env for a Yarn classic global",
+    async () => {
+      process.env.npm_config_user_agent = "npm/11.6.2 node/v24.14.1 darwin arm64";
+      const savedPrefix = process.env.npm_config_prefix;
+      process.env.npm_config_prefix = "/opt/homebrew";
+      const pkg = path.join(tmpDir, "yarn-global", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.mkdirSync(path.join(tmpDir, "yarn-bin"));
+      fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(tmpDir, "yarn-bin", "argent"));
+      childProcessMock.which.mockImplementation(
+        () => path.join(tmpDir, "yarn-bin", "argent") + "\n"
+      );
+      promptsMock.confirm.mockResolvedValueOnce(true);
+      childProcessMock.execFileSync.mockImplementationOnce((() => {
+        topologyState.globalVersion = "99.0.0";
+        return undefined;
+      }) as never);
+
+      try {
+        await update([]);
+      } finally {
+        if (savedPrefix === undefined) delete process.env.npm_config_prefix;
+        else process.env.npm_config_prefix = savedPrefix;
+      }
+
+      expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+        "yarn",
+        ["global", "add", "@swmansion/argent@99.0.0"],
+        expect.objectContaining({
+          env: expect.not.objectContaining({ npm_config_prefix: expect.anything() }),
+        })
+      );
+    }
+  );
 
   it("fails a zero-exit install whose target version never landed on disk", async () => {
     promptsMock.confirm.mockResolvedValueOnce(true);
@@ -307,6 +448,103 @@ describe("update — record-only local project stays updatable", () => {
   });
 });
 
+describe("update — local mode uses the project's package manager", () => {
+  it("updates a yarn project with yarn, not the launcher's npm", async () => {
+    topologyState.globalInstalled = false;
+    fs.writeFileSync(
+      path.join(projDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    fs.writeFileSync(path.join(projDir, "yarn.lock"), "");
+    const pkgDir = path.join(projDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    const localPkgJson = path.join(pkgDir, "package.json");
+    fs.writeFileSync(localPkgJson, JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" }));
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.some((a) => a.includes("@swmansion/argent"))) {
+        fs.writeFileSync(
+          localPkgJson,
+          JSON.stringify({ name: "@swmansion/argent", version: "99.0.0" })
+        );
+      }
+      return undefined;
+    }) as never);
+
+    await update(["--yes", "--local"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "yarn",
+      ["add", "--dev", "@swmansion/argent@99.0.0"],
+      expect.anything()
+    );
+  });
+});
+
+describe("update — local pnpm project", () => {
+  // Both cases start outside the project root, so a command run in
+  // process.cwd() and not in the project root fails them.
+  it.each([
+    {
+      name: "from a workspace package",
+      startDir: (): string => path.join(projDir, "apps", "web"),
+      args: (): string[] => ["--yes"],
+    },
+    {
+      name: "with --project-root from outside the project",
+      startDir: (): string => tmpDir,
+      args: (): string[] => ["--yes", "--project-root", projDir],
+    },
+  ])(
+    "skips pnpm's workspace-root check and runs in the project root, $name",
+    async ({ startDir, args }) => {
+      // At a workspace root a bare `pnpm add -D` fails with ERR_PNPM_ADDING_TO_ROOT.
+      topologyState.globalInstalled = false;
+      fs.writeFileSync(
+        path.join(projDir, "package.json"),
+        JSON.stringify({ name: "root", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+      );
+      fs.writeFileSync(path.join(projDir, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n");
+      const pkgDir = path.join(projDir, "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(pkgDir, { recursive: true });
+      const localPkgJson = path.join(pkgDir, "package.json");
+      fs.writeFileSync(
+        localPkgJson,
+        JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+      );
+
+      childProcessMock.execFileSync.mockImplementation(((bin: string) => {
+        if (bin === "pnpm") {
+          fs.writeFileSync(
+            localPkgJson,
+            JSON.stringify({ name: "@swmansion/argent", version: "99.0.0" })
+          );
+        }
+        return undefined;
+      }) as never);
+
+      const webDir = path.join(projDir, "apps", "web");
+      fs.mkdirSync(webDir, { recursive: true });
+      fs.writeFileSync(path.join(webDir, "package.json"), JSON.stringify({ name: "web" }));
+      process.chdir(startDir());
+
+      await update(args());
+
+      const pnpmCalls = (
+        childProcessMock.execFileSync.mock.calls as Array<[string, string[], { cwd?: string }]>
+      ).filter(([bin]) => bin === "pnpm");
+      expect(pnpmCalls).toHaveLength(1);
+      expect(pnpmCalls[0]![1]).toEqual([
+        "add",
+        "-D",
+        "--ignore-workspace-root-check",
+        "@swmansion/argent@99.0.0",
+      ]);
+      // realpath: os.tmpdir() is a symlink on macOS, and process.cwd() resolves it.
+      expect(fs.realpathSync(pnpmCalls[0]![2].cwd!)).toBe(fs.realpathSync(projDir));
+    }
+  );
+});
+
 describe("update — customized MCP entries survive the refresh and the sweep", () => {
   it("never rewrites (or sweeps away) a customized global-scope entry", async () => {
     // Local-mode project, no global argent on PATH — the exact setup where the
@@ -363,6 +601,98 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
     );
   });
 
+  function stagePinnedPaths(prefixName = "prefix"): { node: string; cli: string } {
+    const prefix = path.join(tmpDir, prefixName);
+    const node = path.join(prefix, "bin", "node");
+    const cli = path.join(prefix, "lib", "node_modules", "@swmansion", "argent", "dist", "cli.js");
+    fs.mkdirSync(path.dirname(node), { recursive: true });
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.writeFileSync(node, "");
+    fs.writeFileSync(cli, "");
+    return { node, cli };
+  }
+
+  async function updateWithCursorEntry(entry: object): Promise<unknown> {
+    const cursorGlobal = path.join(tmpDir, ".cursor", "mcp.json");
+    fs.mkdirSync(path.dirname(cursorGlobal), { recursive: true });
+    fs.writeFileSync(cursorGlobal, JSON.stringify({ mcpServers: { argent: entry } }));
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.some((a) => a.includes("@swmansion/argent"))) {
+        topologyState.globalVersion = "99.0.0";
+      }
+      return undefined;
+    }) as never);
+
+    await update(["--yes"]);
+
+    return (
+      JSON.parse(fs.readFileSync(cursorGlobal, "utf8")) as { mcpServers: { argent: unknown } }
+    ).mcpServers.argent;
+  }
+
+  it("rewrites a bare global entry to the absolute paths of the global install", async () => {
+    launchPaths.value = stagePinnedPaths();
+
+    const entry = await updateWithCursorEntry({ command: "argent", args: ["mcp"] });
+
+    expect(entry).toEqual({
+      command: launchPaths.value.node,
+      args: [launchPaths.value.cli, "mcp"],
+    });
+  });
+
+  it("keeps a live absolute-path entry when no global install is first on PATH", async () => {
+    const { node, cli } = stagePinnedPaths();
+    launchPaths.globalFirstOnPath = false;
+
+    const entry = await updateWithCursorEntry({ command: node, args: [cli, "mcp"] });
+
+    expect(entry).toEqual({ command: node, args: [cli, "mcp"] });
+  });
+
+  it("moves a live absolute-path entry to the global install this run resolves", async () => {
+    const old = stagePinnedPaths("v22");
+    launchPaths.value = stagePinnedPaths("v24");
+
+    const entry = await updateWithCursorEntry({ command: old.node, args: [old.cli, "mcp"] });
+
+    expect(entry).toEqual({
+      command: launchPaths.value.node,
+      args: [launchPaths.value.cli, "mcp"],
+    });
+  });
+
+  it("moves a live absolute-path entry to bare argent when the install on PATH cannot be pinned", async () => {
+    const { node, cli } = stagePinnedPaths();
+
+    const entry = await updateWithCursorEntry({ command: node, args: [cli, "mcp"] });
+
+    const notes = promptsMock.note.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(notes).toContain("now runs the bare argent command");
+    expect(entry).toEqual({ command: "argent", args: ["mcp"] });
+  });
+
+  it("reports nothing kept when run from $HOME, where Cursor's project file is its global file", async () => {
+    launchPaths.value = stagePinnedPaths();
+    const pinned = { command: launchPaths.value.node, args: [launchPaths.value.cli, "mcp"] };
+    process.chdir(tmpDir);
+
+    const entry = await updateWithCursorEntry(pinned);
+
+    const notes = promptsMock.note.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(notes).not.toContain("kept its absolute-path entry");
+    expect(entry).toEqual(pinned);
+  });
+
+  it("replaces a dead absolute-path entry when this run cannot resolve the global install", async () => {
+    const { node, cli } = stagePinnedPaths();
+    fs.rmSync(node);
+
+    const entry = await updateWithCursorEntry({ command: node, args: [cli, "mcp"] });
+
+    expect(entry).toEqual({ command: "argent", args: ["mcp"] });
+  });
+
   it("repairs a corrupted (unparseable) argent entry instead of skipping it as customized", async () => {
     // A mangled entry (merge-conflict remnant, url form) normalizes to
     // getArgentEntry's { command: "" } sentinel — the classification must
@@ -390,5 +720,87 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
     ).mcpServers.argent;
     expect(entry.command).toBe("argent");
     expect(entry.args).toEqual(["mcp"]);
+  });
+});
+
+describe("update — retired agents", () => {
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n";
+
+  // Claude Code configured globally, holding the inspector an older version
+  // installed; the update lands a release that no longer ships it.
+  function stage(): string {
+    const bundle = path.join(tmpDir, "bundle-agents");
+    fs.mkdirSync(bundle, { recursive: true });
+    fs.writeFileSync(path.join(bundle, "argent-current.md"), "current");
+    bundleOverride.agentsDir = bundle;
+    bundleOverride.retired = [
+      {
+        path: "argent-environment-inspector.md",
+        shipped: [hashBundledContent(INSPECTOR)],
+      },
+    ];
+    fs.writeFileSync(
+      path.join(tmpDir, ".claude.json"),
+      JSON.stringify({ mcpServers: { argent: { command: "argent", args: ["mcp"] } } })
+    );
+    const inspector = path.join(tmpDir, ".claude", "agents", "argent-environment-inspector.md");
+    fs.mkdirSync(path.dirname(inspector), { recursive: true });
+    fs.writeFileSync(inspector, INSPECTOR);
+    childProcessMock.execFileSync.mockImplementationOnce((() => {
+      topologyState.globalVersion = "99.0.0";
+      return undefined;
+    }) as never);
+    return inspector;
+  }
+
+  function notes(): string[] {
+    return promptsMock.note.mock.calls.map((call) => String((call as unknown[])[0]));
+  }
+
+  it.each(["--yes", "-y"])(
+    "%s removes an unedited retired agent unasked and reports it",
+    async (flag) => {
+      const inspector = stage();
+
+      await update([flag]);
+
+      expect(promptsMock.confirm).not.toHaveBeenCalled();
+      expect(fs.existsSync(inspector)).toBe(false);
+      expect(fs.existsSync(path.join(tmpDir, ".claude", "agents", "argent-current.md"))).toBe(true);
+      expect(notes()).toContain(
+        `  Removed retired agent argent-environment-inspector.md from ${path.join("~", ".claude", "agents")}`
+      );
+    }
+  );
+
+  // There Claude Code's local and global agents dir are one.
+  it("--yes from the home dir, configured in both scopes, removes the agent once", async () => {
+    const inspector = stage();
+    fs.writeFileSync(
+      path.join(tmpDir, ".mcp.json"),
+      JSON.stringify({ mcpServers: { argent: { command: "argent", args: ["mcp"] } } })
+    );
+    process.chdir(tmpDir);
+
+    await update(["--yes"]);
+
+    expect(fs.existsSync(inspector)).toBe(false);
+    const body = notes().join("\n");
+    expect(body.split("Removed retired agent argent-environment-inspector.md")).toHaveLength(2);
+    expect(body).not.toContain("Could not remove");
+  });
+
+  it("asks first when interactive, and keeps the file on no", async () => {
+    const inspector = stage();
+    // The update prompt, then the retired-files one.
+    promptsMock.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await update([]);
+
+    expect(promptsMock.confirm).toHaveBeenLastCalledWith({
+      message: "Remove them?",
+      initialValue: true,
+    });
+    expect(fs.existsSync(inspector)).toBe(true);
   });
 });

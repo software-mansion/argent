@@ -1,19 +1,171 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { spawn } from "node:child_process";
+import * as os from "node:os";
+import * as path from "node:path";
 import { track } from "@argent/telemetry";
-import { SKILLS_DIR, buildArgentSkillsSource, isOnline } from "./utils.js";
+import {
+  SKILLS_DIR,
+  buildArgentSkillsSource,
+  getGloballyInstalledPackageRoot,
+  getGloballyInstalledVersion,
+  getInstalledVersion,
+  isOnline,
+  listBundledSkills,
+  npxChildEnv,
+  probeLocalInstall,
+  resolveProjectRoot,
+  shellQuotePath,
+} from "./utils.js";
 import {
   NO_SKILLS_RUNNER_MESSAGE,
   isSkillsCliCached,
   resolveSkillsRunner,
   skillsCommand,
   type SkillsCommand,
+  type SkillsRunner,
 } from "./skills-runner.js";
 import { InitCancelled } from "./init-args.js";
+import { snapshotArgentSkills, listTrackedLegacySkills, pruneLegacySkillDirs } from "./skills.js";
 import type { Scope } from "./init-scope.js";
+import { ShellCommandError } from "./shell.js";
 
-export type SkillsMethod = "default" | "interactive" | "manual";
+type SkillsMethod = "default" | "interactive" | "manual";
+/** Where the skills were actually installed from. */
+type SkillsSource = "pinned" | "bundled";
+type SkillsOutcome = "success" | "failure" | "skipped";
+
+export interface SkillsStepResult {
+  method: SkillsMethod;
+  outcome: SkillsOutcome;
+  /** Null when this run installed nothing. */
+  source: SkillsSource | null;
+  /** True only when the pinned source failed and the bundled copy rescued it. */
+  usedFallback: boolean;
+  /** Skills this version ships that are on disk in the step's scope, once it finished. */
+  installedCount: number;
+  /** Of those, the ones this run wrote. */
+  installedThisRun: number;
+  /** Offline with no cached skills CLI, or no runner: the manual path was not the user's choice. */
+  forcedManual: boolean;
+  /** Neither npx nor pnpm was on PATH, so no skills CLI could run at all. */
+  noRunner?: boolean;
+}
+
+/** Matches the usual missing-ref wording. Used for telemetry only, never to decide. */
+const REF_MISSING =
+  /Remote branch .* not found in upstream|couldn't find remote ref|unknown revision/i;
+
+/**
+ * The line worth showing out of a wall of subprocess output: npm opens with
+ * warnings (`--force`, the package it is about to fetch), so skip those and prefer
+ * the line that names the actual failure.
+ */
+function meaningfulLine(err: unknown): string {
+  const lines = (err instanceof Error ? err.message : String(err))
+    .split("\n")
+    .map((l) => l.replace(/^[│┌└■◇\s]+/, "").trim())
+    .filter((l) => l && !/^npm (warn|notice)/i.test(l));
+  return (
+    lines.find((l) => l.startsWith("fatal:")) ??
+    lines.find((l) => /Error:|Failed to|not found|Could not/i.test(l)) ??
+    lines[0] ??
+    "unknown error"
+  );
+}
+
+// The copy matching `version`, from the install this run configured before the
+// running package: the lock records its path, and under `npx` the running package
+// sits in the npx cache, which only this machine has and npm may clear.
+function bundledCopyFor(version: string): string {
+  const local = probeLocalInstall(resolveProjectRoot(process.cwd()));
+  if (local.packageDir && local.version === version) return path.join(local.packageDir, "skills");
+  const globalRoot = getGloballyInstalledPackageRoot();
+  if (globalRoot && getGloballyInstalledVersion() === version) {
+    return path.join(globalRoot, "skills");
+  }
+  return SKILLS_DIR;
+}
+
+// `runnerLabel`: the command prefix to offer for `skills add` (`npx`,
+// `pnpm dlx`), or null to offer only the copy commands.
+function printManualInstructions(
+  source: string,
+  bundledCopy: string,
+  scope: Scope,
+  root: string,
+  runnerLabel: string | null
+): void {
+  // `~` stays bare so the shell expands it; a real root is quoted as one shell word.
+  const dir = (sub: string): string =>
+    scope === "global" ? `~/${sub}` : shellQuotePath(`${root}/${sub}`);
+  const add = `skills add ${source}${scope === "global" ? " -g" : ""} --skill '*' -y`;
+  // `skills add` writes to its cwd, so a project-scope command runs from the root.
+  const cd = scope === "global" ? "" : `cd ${shellQuotePath(root)} && `;
+  p.note(
+    [
+      `Skills are bundled at:`,
+      `  ${pc.cyan(bundledCopy)}`,
+      ``,
+      `To install manually, copy them to your editor's skills directory:`,
+      ``,
+      `  ${pc.dim("# Claude Code")}`,
+      `  mkdir -p ${dir(".claude/skills")} && cp -r ${bundledCopy}/* ${dir(".claude/skills/")}`,
+      ``,
+      `  ${pc.dim("# Cursor")}`,
+      `  mkdir -p ${dir(".cursor/skills")} && cp -r ${bundledCopy}/* ${dir(".cursor/skills/")}`,
+      ``,
+      // Without a runner the skills CLI is not an option, so do not offer it.
+      ...(runnerLabel
+        ? [
+            ``,
+            `  ${pc.dim(`# Or use ${runnerLabel} skills directly:`)}`,
+            `  ${cd}${runnerLabel} ${add}`,
+          ]
+        : []),
+    ].join("\n"),
+    "Manual Skills Installation"
+  );
+}
+
+// An install that ran, failed, and left none of this version's skills on disk.
+// Offline is not here: the probe resolves the public registry host only, so a
+// proxy or mirror user can look offline while npm works, and nothing was tried.
+export function skillsAreMissing(skills: SkillsStepResult): boolean {
+  return skills.outcome === "failure" && skills.installedCount === 0;
+}
+
+// Keyed on what this run wrote and on the count from the disk, not on the chosen
+// method: reporting "installed" after a failure is #614. Only a pinned attempt
+// that failed first is called out: a bundled source chosen deliberately (offline,
+// `--from <tgz>`, unknown version) is an ordinary success.
+export function formatSkillsSummaryLine(skills: SkillsStepResult): string {
+  const count = skills.installedCount;
+  const label = pc.yellow("Skills");
+  if (skills.outcome === "failure" || skills.forcedManual) {
+    const why = skills.noRunner
+      ? "neither npx nor pnpm is on PATH, see the instructions above"
+      : skills.forcedManual
+        ? "offline, see the instructions above"
+        : "see the error above";
+    return count > 0
+      ? `${label} not updated (${why}), ${count} from an earlier install on disk`
+      : `${label} NOT installed (${why})`;
+  }
+  if (skills.method === "manual") {
+    const existing = count > 0 ? `, ${count} from an earlier install on disk` : "";
+    return `${pc.green("Skills")} instructions printed${existing}`;
+  }
+  if (skills.outcome === "skipped") {
+    const existing = count > 0 ? `, ${count} from an earlier install on disk` : "";
+    return `${label} none installed (none selected)${existing}`;
+  }
+  const written = skills.installedThisRun;
+  if (skills.usedFallback) {
+    return `${label} ${written} installed from the bundled copy (the pinned source failed)`;
+  }
+  return `${pc.green("Skills")} ${written} installed`;
+}
 
 // Step 2. Emits the skill_install telemetry event itself (it owns all the
 // inputs). Throws InitCancelled("skills") on a cancelled method prompt.
@@ -22,19 +174,26 @@ export async function runSkillsStep(args: {
   fromTar: string | null;
   version: string;
   scope: Scope;
-  customRoot?: string;
-}): Promise<SkillsMethod> {
-  const { nonInteractive, fromTar, version, scope, customRoot } = args;
+  /** The root every other init step writes to: the custom root, else the resolved project root. */
+  effectiveRoot: string;
+}): Promise<SkillsStepResult> {
+  const { nonInteractive, fromTar, version, scope, effectiveRoot } = args;
+
+  // Project-scope `skills` commands act on their cwd, so pin them to init's
+  // root. Without this, `init` run from a project subdirectory installs the
+  // skills (and skills-lock.json) into that subdirectory instead (#1467).
+  const skillsCwd = scope === "global" ? undefined : effectiveRoot;
 
   p.log.step(pc.bold("Step 2: Skills Installation"));
   p.log.warn(pc.yellow("Skills installation is required for Argent to function properly."));
 
   let skillsMethod: SkillsMethod;
 
+  // npx when it is on PATH, else pnpm dlx (#1206), else null: nothing to run.
   const runner = resolveSkillsRunner();
   const label = runner?.label ?? "npx";
   const online = await isOnline();
-  const offlineWithCache = !online && runner !== null && isSkillsCliCached(runner);
+  const offlineWithCache = !online && runner !== null && isSkillsCliCached(runner, skillsCwd);
   const skillsCliReady = runner !== null && (online || offlineWithCache);
 
   if (runner === null) {
@@ -81,96 +240,204 @@ export async function runSkillsStep(args: {
     skillsMethod = choice as SkillsMethod;
   }
 
+  // Prefer the GitHub-pinned source: it keeps skills-lock.json portable by
+  // recording a shared ref rather than a path on this machine.
   const useGitHubSource = online && !fromTar && version !== "unknown";
   const skillsSource = useGitHubSource ? buildArgentSkillsSource(version) : SKILLS_DIR;
+  const bundledCopy = useGitHubSource ? bundledCopyFor(version) : SKILLS_DIR;
+  const skillsRoot = scope === "global" ? os.homedir() : effectiveRoot;
+  const skillsScope = scope === "global" ? "global" : "project";
+  // Only the names this version ships count: retired names and stray dirs say
+  // nothing about whether Argent's current skills are there.
+  const expected = listBundledSkills(bundledCopy);
+  const snapshot = () => snapshotArgentSkills(skillsRoot, skillsScope, expected);
+  const writtenSince = (before: Map<string, string>): number =>
+    [...snapshot()].filter(([name, stamp]) => before.get(name) !== stamp).length;
+  const initial = snapshot();
 
-  let skillOutcome: "success" | "failure" | "skipped";
+  let skillOutcome: SkillsOutcome;
+  let installedFrom = skillsSource;
+  let fallbackReason: "ref_missing" | "unclassified" | null = null;
 
   if (skillsMethod === "manual") {
-    p.note(
-      [
-        `Skills are bundled at:`,
-        `  ${pc.cyan(SKILLS_DIR)}`,
-        ``,
-        `To install manually, copy them to your editor's skills directory:`,
-        ``,
-        `  ${pc.dim("# Claude Code")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.claude/skills/" : `${scope === "custom" ? customRoot! : "."}/.claude/skills/`}`,
-        ``,
-        `  ${pc.dim("# Cursor")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
-        // Without a runner the skills CLI is not an option, so do not offer it.
-        ...(runner
-          ? [
-              ``,
-              `  ${pc.dim(`# Or use ${label} skills directly:`)}`,
-              `  ${label} skills add ${skillsSource}`,
-            ]
-          : []),
-      ].join("\n"),
-      "Manual Skills Installation"
-    );
+    printManualInstructions(skillsSource, bundledCopy, scope, effectiveRoot, runner?.label ?? null);
     skillOutcome = "skipped";
   } else {
-    const skillsArgs = ["skills", "add", skillsSource];
+    const interactive = skillsMethod === "interactive";
+    // Rebuilt per source rather than string-swapped, so a retry keeps the scope
+    // flag and the offline `--no-install` prefix it was going to run with.
+    const buildSkillsArgs = (source: string): string[] => {
+      const skillsArgs = ["skills", "add", source];
+      if (scope === "global") skillsArgs.push("-g");
+      if (!interactive) skillsArgs.push("--skill", "*", "-y");
+      return offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
+    };
 
-    if (scope === "global") {
-      skillsArgs.push("-g");
-    }
-
-    if (skillsMethod === "default") {
-      skillsArgs.push("--skill", "*", "-y");
-    }
-
-    // `--no-install` is npx-only; isSkillsCliCached() is true only for npx.
-    const baseArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
-    p.log.info(`Running: ${pc.dim(label)} ${pc.cyan(baseArgs.join(" "))}`);
+    // The runner adds what it needs (npx: `--force` to soften the host project's
+    // npm engine gate; pnpm: `dlx`), so the displayed and manual-fallback
+    // commands stay clean. `--no-install` is npx-only, and isSkillsCliCached()
+    // is true only for npx.
+    p.log.info(`Running: ${pc.dim(label)} ${pc.cyan(buildSkillsArgs(skillsSource).join(" "))}`);
 
     const spinner = p.spinner();
-    if (skillsMethod === "default") {
-      spinner.start("Installing skills...");
-    }
+    if (!interactive) spinner.start("Installing skills...");
+
+    // Resolves to the outcome of one attempt: success means this attempt wrote a
+    // skill. npx can exit 0 without having run the CLI at all (#1335), and the
+    // TUI exits 0 when cancelled, which is the user's call and not a failure.
+    const attempt = async (source: string, npmFlags: string[] = []): Promise<SkillsOutcome> => {
+      const before = snapshot();
+      await runSkillsCli(runner, [...npmFlags, ...buildSkillsArgs(source)], interactive, skillsCwd);
+      if (writtenSince(before) > 0) return "success";
+      if (interactive) return "skipped";
+      throw new Error("The skills CLI exited cleanly, but it installed no skills.");
+    };
+
+    const fail = (err: unknown, attempted: string, runnerMissing = false): SkillsOutcome => {
+      if (!interactive) spinner.stop(pc.red("Skills installation failed."));
+      p.log.error(`Failed to install skills from ${attempted}: ${meaningfulLine(err)}`);
+      // Name a source that could still work: printing the failing command back as
+      // the remedy is what made #614 so confusing.
+      // A runner that could not start is no remedy either.
+      printManualInstructions(
+        bundledCopy,
+        bundledCopy,
+        scope,
+        effectiveRoot,
+        runnerMissing ? null : label
+      );
+      return "failure";
+    };
 
     try {
-      if (!runner) throw new Error(NO_SKILLS_RUNNER_MESSAGE);
-      // skillsCommand adds whatever the runner needs (npx: --force; pnpm:
-      // dlx), and throws for an argument cmd.exe cannot take safely; baseArgs
-      // stays clean for the displayed and manual-fallback commands.
-      const command = skillsCommand(runner, baseArgs);
-      const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runSkillsCli(command, label, skillsMethod === "interactive", skillsCwd);
-      if (skillsMethod === "default") {
-        spinner.stop("Skills installed.");
-      }
-      skillOutcome = "success";
+      skillOutcome = await attempt(skillsSource);
+      if (!interactive) spinner.stop("Skills installed.");
     } catch (err) {
-      if (skillsMethod === "default") {
-        spinner.stop(pc.red("Skills installation failed."));
+      // Retry against the copy bundled with the package. Deliberately not a match
+      // on the error text: the TUI captures no output and git's wording is
+      // translated. Whatever the retry cannot rescue just fails a second time. It
+      // stays out only when the same runner cannot run at all, or was killed.
+      const runnerMissing = (err as NodeJS.ErrnoException).code === "ENOENT";
+      const interrupted = err instanceof ShellCommandError && err.signal !== null;
+      const canRetry =
+        skillsSource !== bundledCopy &&
+        !runnerMissing &&
+        !interrupted &&
+        listBundledSkills(bundledCopy).length > 0;
+
+      if (!canRetry) {
+        skillOutcome = fail(err, skillsSource, runnerMissing);
+      } else {
+        if (!interactive) spinner.stop(pc.yellow("Pinned skills source failed."));
+        p.log.warn(`Could not install skills from ${skillsSource}: ${meaningfulLine(err)}`);
+        fallbackReason = REF_MISSING.test(String(err)) ? "ref_missing" : "unclassified";
+
+        // Opening a second TUI unasked would be a surprise after the first one failed.
+        const retry = interactive
+          ? await p.confirm({ message: "Install from the copy bundled with this package instead?" })
+          : true;
+
+        if (retry !== true) {
+          skillOutcome = fail(err, skillsSource);
+        } else {
+          if (!interactive) spinner.start("Installing the copy bundled with this package...");
+          try {
+            // When the first attempt could not fetch the CLI, a second one with
+            // npm's default retries only doubles the wait (70s each, live). The
+            // flag is npm's, so pnpm dlx gets none.
+            skillOutcome = await attempt(
+              bundledCopy,
+              runner?.kind === "npx" ? ["--fetch-retries=0"] : []
+            );
+            if (!interactive) spinner.stop("Skills installed from the bundled copy.");
+            installedFrom = bundledCopy;
+          } catch (fallbackErr) {
+            skillOutcome = fail(fallbackErr, bundledCopy);
+          }
+        }
       }
-      p.log.error(`Failed to run ${label} skills: ${err}`);
-      p.log.info(`You can install skills manually:\n  ${label} ${skillsArgs.join(" ")}`);
-      skillOutcome = "failure";
+    }
+
+    // `skills add` never removes anything, so skills renamed since the last
+    // install would sit next to their new names. Interactive installs may have
+    // skipped the new names, so only the install-everything path prunes. The
+    // legacy names come from this package's bundled set, so skip the prune when
+    // the source was another version's (an older local install), which may still
+    // ship them.
+    if (
+      !interactive &&
+      skillOutcome === "success" &&
+      (installedFrom === SKILLS_DIR || version === getInstalledVersion())
+    ) {
+      const tracked = listTrackedLegacySkills(skillsRoot, skillsScope);
+      const removed = new Set<string>();
+      if (tracked.length > 0) {
+        const removeArgs = ["skills", "remove", "-y", ...(scope === "global" ? ["-g"] : [])];
+        try {
+          await runSkillsCli(
+            runner,
+            [...(offlineWithCache ? ["--no-install"] : []), ...removeArgs, ...tracked],
+            false,
+            skillsCwd
+          );
+          for (const name of tracked) removed.add(name);
+        } catch {
+          // non-fatal: the dir prune below still removes the managed dirs
+        }
+      }
+      for (const name of pruneLegacySkillDirs(skillsRoot, skillsScope)) removed.add(name);
+      if (removed.size > 0) {
+        p.log.info(pc.dim(`Removed legacy skills: ${[...removed].sort().join(", ")}`));
+      }
     }
   }
+
+  const usedFallback = fallbackReason !== null && skillOutcome === "success";
+  const source: SkillsSource | null =
+    skillOutcome !== "success"
+      ? null
+      : useGitHubSource && installedFrom === skillsSource
+        ? "pinned"
+        : "bundled";
 
   track("installation:skill_install", {
     method: skillsMethod,
     is_online: online,
     has_offline_cache: offlineWithCache,
     outcome: skillOutcome,
+    // A release whose tag was never pushed makes every install fall back. That
+    // is invisible once the fallback rescues it, so it has to be measurable.
+    ...(source ? { source } : {}),
+    used_fallback: usedFallback,
+    ...(fallbackReason ? { fallback_reason: fallbackReason } : {}),
   });
 
-  return skillsMethod;
+  return {
+    method: skillsMethod,
+    outcome: skillOutcome,
+    source,
+    usedFallback,
+    installedCount: snapshot().size,
+    installedThisRun: writtenSince(initial),
+    forcedManual: !skillsCliReady,
+    ...(runner === null ? { noRunner: true } : {}),
+  };
 }
 
-function runSkillsCli(
-  command: SkillsCommand,
-  label: string,
+// `args` is the plain argv after the runner (`skills ...`, with any npm flags
+// first). skillsCommand adds what the runner needs, and throws for an argument
+// cmd.exe cannot take safely.
+async function runSkillsCli(
+  runner: SkillsRunner | null,
+  args: string[],
   interactive: boolean,
   cwd?: string
 ): Promise<void> {
+  if (!runner) throw new Error(NO_SKILLS_RUNNER_MESSAGE);
+  const command: SkillsCommand = skillsCommand(runner, args);
   return new Promise((resolve, reject) => {
     const child = spawn(command.file, command.args, {
+      env: npxChildEnv(),
       stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
       shell: command.shell,
       ...(cwd ? { cwd } : {}),
@@ -188,12 +455,18 @@ function runSkillsCli(
       });
     }
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (code === 0) {
         resolve();
       } else {
         const output = [stderr, stdout].filter(Boolean).join("\n").trim();
-        reject(new Error(output || `${label} skills exited with code ${code}`));
+        reject(
+          new ShellCommandError(
+            output || `${runner.label} skills exited with code ${code}`,
+            code,
+            signal
+          )
+        );
       }
     });
 

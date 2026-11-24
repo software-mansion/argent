@@ -8,20 +8,7 @@ type ScreenshotDiffSummaryInput = Omit<PngDiffResult, "summary">;
 type TextSummaryChange = TextChange & {
   appearanceChange?: TextChange;
 };
-/**
- * `resized_no_change`: the inputs differed in resolution, one was resampled, and
- * nothing differed afterwards — kept distinct from `unchanged`, which claims the
- * two images are the same at their own resolutions (#617).
- *
- * Not named `unchanged_after_resize`: that string contains "unchanged", so a
- * gate matching `includes("status: unchanged")` would read it as a plain pass.
- */
-type SummaryStatus =
-  | "unchanged"
-  | "changed"
-  | "resized_no_change"
-  | "dimension_mismatch"
-  | "unknown";
+type SummaryStatus = "unchanged" | "changed" | "dimension_mismatch" | "unknown";
 type CoordinateSpace = { imageSize: Size } | undefined;
 
 export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput): string {
@@ -35,27 +22,18 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   const coordinateSpace = coordinateSpaceForSummary(result.imageSize);
 
   const lines: string[] = ["Screenshot diff summary", "", "Overall:"];
-  lines.push(`- status: ${status}`);
-
-  if (result.sizeNormalization) {
-    // Placed directly under the status so it frames every figure below it; the
-    // wording holds whether or not anything differed.
-    const { baseline, current, comparedAt } = result.sizeNormalization;
-    lines.push(
-      `- size_normalized: baseline=${formatSize(baseline)} current=${formatSize(current)} compared_at=${formatSize(comparedAt)}`,
-      "  - the inputs share an aspect ratio but not a resolution, so the larger was downscaled before comparing; any pixel or text differences below may include resampling artifacts, and the diff images are at compared_at rather than full size",
-      "  - re-capture the baseline at the same scale as the current image (screenshot with scale: 1.0) to compare without resampling"
-    );
-  }
+  lines.push(statusLine(status));
 
   if (result.dimensionMismatch) {
     lines.push(
-      `- dimension_mismatch: expected=${formatSize(result.dimensionMismatch.expected)} actual=${formatSize(result.dimensionMismatch.actual)}`
+      `- dimension_mismatch: expected=${formatSize(result.dimensionMismatch.expected)} actual=${formatSize(result.dimensionMismatch.actual)}`,
+      "  - only images of identical dimensions are compared; capture both with the same device model, orientation, foldable posture and screenshot scale (live captures use scale: 1.0) and, on a Mac app, the same window size, counting a sheet, popover, alert or menu reaching past it"
     );
   } else {
     lines.push(
       `- pixel_mismatch: ${formatPercentage(result.mismatchPercentage)} - ${describeMismatch(result)}`
     );
+    if (result.imageSize) lines.push(`- compared_at: ${formatSize(result.imageSize)}`);
   }
 
   lines.push(
@@ -109,6 +87,15 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   return lines.join("\n");
 }
 
+function statusLine(status: SummaryStatus): string {
+  return `- status: ${status}`;
+}
+
+// The result carries its status only inside the summary text.
+export function summaryReportsDimensionMismatch(summary: string): boolean {
+  return summary.split("\n").includes(statusLine("dimension_mismatch"));
+}
+
 function screenshotDiffStatus(result: ScreenshotDiffSummaryInput): SummaryStatus {
   if (result.dimensionMismatch) return "dimension_mismatch";
   if (
@@ -122,9 +109,6 @@ function screenshotDiffStatus(result: ScreenshotDiffSummaryInput): SummaryStatus
   if (result.textAnalysis?.status === "ok" && result.textAnalysis.changes.length > 0) {
     return "changed";
   }
-  // Checked last: a normalized comparison that did find a difference stays a
-  // plain `changed`, so the caveat never softens a real regression.
-  if (result.sizeNormalization) return "resized_no_change";
   return "unchanged";
 }
 

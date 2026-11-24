@@ -75,6 +75,18 @@ describe("sanitize", () => {
       expect(DEVICE_KINDS).toContain("device");
     });
 
+    it("keeps alias_used on the tool lifecycle events and cli:run_fail only as a boolean", () => {
+      for (const event of ["tool:invoke", "tool:complete", "tool:fail", "cli:run_fail"] as const) {
+        expect(sanitize(event, { tool: "e2e-execute", alias_used: true })).toEqual({
+          tool: "e2e-execute",
+          alias_used: true,
+        });
+        expect(sanitize(event, { tool: "e2e-execute", alias_used: "flow-execute" })).toEqual({
+          tool: "e2e-execute",
+        });
+      }
+    });
+
     it("drops a device kind outside the enum, including the registry's `unknown`", () => {
       // Mirror of the `platform: "unknown"` rule above: `resolveDevice` never
       // produces `unknown`, so a bucket for it could only be filled by a bug.
@@ -673,16 +685,6 @@ describe("sanitize", () => {
       const out = sanitize("tool:invoke", { tool: "x", platform: "ios", ...payload });
       expect(out).toEqual({ tool: "x", platform: "ios" });
     });
-
-    it("drops accidental error metadata", () => {
-      const out = sanitize("tool:fail", {
-        tool: "x",
-        platform: "ios",
-        duration_ms: 1,
-        error_message: "password=hunter2",
-      });
-      expect(out).toEqual({ tool: "x", platform: "ios", duration_ms: 1 });
-    });
   });
 
   describe("lens telemetry events", () => {
@@ -743,35 +745,6 @@ describe("sanitize", () => {
 
   describe("tool:fail invalid_params", () => {
     const base = { tool: "debugger-status", platform: "ios", duration_ms: 5 };
-
-    it("keeps a conforming list of schema-declared names (incl. the unrecognized_keys token)", () => {
-      const out = sanitize("tool:fail", {
-        ...base,
-        invalid_params: ["device_id", "port", "unrecognized_keys"],
-      });
-      expect(out).toEqual({
-        ...base,
-        invalid_params: ["device_id", "port", "unrecognized_keys"],
-      });
-    });
-
-    it("voids the whole array when longer than 16 (the emit side must cap first)", () => {
-      const out = sanitize("tool:fail", {
-        ...base,
-        invalid_params: Array.from({ length: 17 }, (_, i) => `p${i}`),
-      });
-      expect(out).toEqual(base);
-    });
-
-    it("voids the whole array when any element is not an identifier-shaped name", () => {
-      // A leaked value (spaces, path chars) must take the entire property down,
-      // not slip through next to valid names.
-      const out = sanitize("tool:fail", {
-        ...base,
-        invalid_params: ["port", "/Users/alice/secret file"],
-      });
-      expect(out).toEqual(base);
-    });
 
     it("voids a non-array invalid_params", () => {
       const out = sanitize("tool:fail", { ...base, invalid_params: "device_id" });

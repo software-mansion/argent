@@ -38,6 +38,19 @@ describe("toMcpContent", () => {
     expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }, null, 2) }]);
   });
 
+  it("keeps a warning that sits beside a long report in the text an agent reads", async () => {
+    const warning = "No source files found under project_root";
+    const result = await toMcpContent({ report: "x".repeat(50_000), warning });
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ type: "text" });
+    expect((result[0] as { text: string }).text).toContain(warning);
+  });
+
+  it("keeps the order of the result's keys, so a warning placed first is read first", async () => {
+    const result = await toMcpContent({ warning: "first", report: "x".repeat(50_000) });
+    expect((result[0] as { text: string }).text.indexOf('"warning"')).toBeLessThan(10);
+  });
+
   it("returns JSON text block when outputHint is not image", async () => {
     const result = await toMcpContent({ url: "http://x" }, "other");
     expect(result).toEqual([
@@ -198,6 +211,8 @@ describe("screenshotDiffToMcpContent", () => {
         mimeType: "image/png",
       },
       { type: "text", text: summary },
+      { type: "text", text: `diffPath: ${path.join(dir, "full.diff.png")}` },
+      { type: "text", text: `contextDiffPath: ${contextDiffPath}` },
     ]);
   });
 
@@ -245,6 +260,55 @@ describe("toMcpContent with artifact ctx", () => {
   afterEach(async () => {
     delete process.env.ARGENT_ARTIFACTS_DIR;
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("renders a screenshot-diff's path handles as their downloaded local paths", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const content = await screenshotDiffToMcpContent(
+      {
+        summary: "Screenshot diff summary",
+        diffPath: artifactHandle("d1", "current-diff.png", "image/png"),
+        contextDiffPath: artifactHandle("c1", "current-context-diff.png", "image/png"),
+      },
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) }
+    );
+
+    expect(content.map((b) => b.type)).toEqual(["image", "text", "text", "text"]);
+    const [, , diffBlock, contextBlock] = content as { type: "text"; text: string }[];
+    expect(diffBlock!.text).toMatch(/^diffPath: /);
+    expect(contextBlock!.text).toMatch(/^contextDiffPath: /);
+    const diffPath = diffBlock!.text.replace(/^diffPath: /, "");
+    const contextDiffPath = contextBlock!.text.replace(/^contextDiffPath: /, "");
+    expect(diffPath.startsWith(root)).toBe(true);
+    expect(path.basename(diffPath)).toBe("current-diff.png");
+    expect(path.basename(contextDiffPath)).toBe("current-context-diff.png");
+    expect([...(await fs.readFile(diffPath))]).toEqual(pngBytes);
+  });
+
+  it("marks a screenshot-diff path whose download failed as unavailable", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const fetchImpl = (async (url: string) =>
+      url.endsWith("/artifacts/d1")
+        ? { ok: false }
+        : {
+            ok: true,
+            arrayBuffer: async () => new Uint8Array(pngBytes).buffer,
+          }) as unknown as typeof fetch;
+    const content = await screenshotDiffToMcpContent(
+      {
+        summary: "Screenshot diff summary",
+        diffPath: artifactHandle("d1", "current-diff.png", "image/png"),
+        contextDiffPath: artifactHandle("c1", "current-context-diff.png", "image/png"),
+      },
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl }
+    );
+
+    expect(content.map((b) => b.type)).toEqual(["image", "text", "text", "text"]);
+    const [, summary, diffBlock, contextBlock] = content as { type: "text"; text: string }[];
+    expect(summary!.text).toBe("Screenshot diff summary");
+    expect(diffBlock!.text).toBe("diffPath: (unavailable)");
+    expect(contextBlock!.text).toMatch(/^contextDiffPath: /);
+    expect(path.basename(contextBlock!.text)).toBe("current-context-diff.png");
   });
 
   it("materializes an image artifact and renders image + local Saved path", async () => {
@@ -349,17 +413,76 @@ describe("flowRunToMcpContent", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("names the same-named test a run's test hides, under the header", async () => {
+    const warning =
+      "/p/.argent/flows/f.yaml is not used: /p/.argent/e2e/f.yaml has the same name and is read first.";
+    const blocks = await flowRunToMcpContent({ flow: "f", steps: [], warning });
+
+    expect(blocks.slice(0, 2)).toEqual([
+      { type: "text", text: 'Running e2e test "f" (0 steps)' },
+      { type: "text", text: `⚠ ${warning}` },
+    ]);
+  });
+
+  it("names each baseline a run over a link returned but could not write", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [],
+      baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+    });
+
+    expect(blocks).toContainEqual({
+      type: "text",
+      text: "✗ baseline not written: /p/b.png: EACCES: permission denied",
+    });
+  });
+
+  it("names the e2e test from e2eTest, falling back to the flow an older tool-server sends", async () => {
+    const texts = async (input: FlowExecuteResult) =>
+      (await flowRunToMcpContent(input)).map((b) => (b.type === "text" ? b.text : ""));
+    expect(await texts({ e2eTest: "new", flow: "old", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ e2eTest: "new", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ flow: "old", steps: [] })).toEqual([
+      'Running e2e test "old" (0 steps)',
+      'E2E test "old" complete.',
+    ]);
+  });
+
+  it("names each baseline the client could not write", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      ok: false,
+      passed: 1,
+      failed: 0,
+      errored: 0,
+      skipped: 0,
+      steps: [],
+      baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+    });
+
+    expect(blocks.slice(-2)).toEqual([
+      { type: "text", text: "✗ baseline not written: /p/b.png: EACCES: permission denied" },
+      { type: "text", text: "FAIL — 1 passed, 0 failed, 0 errored, 0 skipped" },
+    ]);
+  });
+
   it("produces header and footer text blocks", async () => {
     const input: FlowExecuteResult = { flow: "test", steps: [] };
     const blocks = await flowRunToMcpContent(input);
 
     expect(blocks[0]).toEqual({
       type: "text",
-      text: 'Running flow "test" (0 steps)',
+      text: 'Running e2e test "test" (0 steps)',
     });
     expect(blocks[blocks.length - 1]).toEqual({
       type: "text",
-      text: 'Flow "test" complete.',
+      text: 'E2E test "test" complete.',
     });
   });
 
@@ -563,7 +686,7 @@ describe("flowRunToMcpContent", () => {
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text);
 
-    expect(texts[0]).toBe('Running flow "checkout" on SIM (4 steps)');
+    expect(texts[0]).toBe('Running e2e test "checkout" on SIM (4 steps)');
     expect(texts[1]).toBe("[1] ✓ tap");
     expect(texts[2]).toBe("[2] ✓ assert");
     expect(texts[3]).toBe("[3] ✗ snapshot — diff 3.10% > 0.5% (home)");
@@ -874,7 +997,7 @@ describe("flowRunToMcpContent", () => {
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text);
 
-    expect(texts[0]).toContain("Running flow");
+    expect(texts[0]).toContain("Running e2e test");
     expect(texts[1]).toBe("[1] Start");
     expect(texts[2]).toBe("[2] gesture-tap");
     // [3] is JSON result

@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   attributeDeviceForTelemetry,
@@ -28,6 +31,7 @@ describe("attributeDeviceForTelemetry", () => {
     ["emulator-5554", { platform: "android", device_kind: "emulator" }],
     ["chromium-cdp-9222", { platform: "chromium", device_kind: "app" }],
     ["amazon-1a2b3c", { platform: "vega", device_kind: "vvd" }],
+    ["harmony-emulator-Phone_1", { platform: "harmony", device_kind: "emulator" }],
     // Android hardware: USB serials with a digit and a letter, non-loopback ip:port.
     ["R5CT12345678", { platform: "android", device_kind: "device" }],
     ["HT82A0203045", { platform: "android", device_kind: "device" }],
@@ -58,6 +62,37 @@ describe("attributeDeviceForTelemetry", () => {
     "0123456789ABCDEF0123456789ABCDEF", // 32-hex, over the 20-char cap
   ])("%s carries the fallback platform but no kind", (id) => {
     expect(attributeDeviceForTelemetry(id)).toEqual({ platform: "android" });
+  });
+
+  it.each([
+    // A connect key may name a USB phone or a booted emulator.
+    "harmony-025DEK236V035771",
+    "harmony-127.0.0.1:5555",
+  ])("%s carries the harmony platform but no kind", (id) => {
+    expect(attributeDeviceForTelemetry(id)).toEqual({ platform: "harmony" });
+  });
+
+  it("a Mac app id carries the kind of argent's record of the app", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-telemetry-kind-"));
+    vi.stubEnv("HOME", home);
+    try {
+      expect(attributeDeviceForTelemetry("macos-app-com.example.cat")).toEqual({
+        platform: "macos",
+        device_kind: "app",
+      });
+      fs.mkdirSync(path.join(home, ".argent"));
+      fs.writeFileSync(
+        path.join(home, ".argent", "macos-apps.json"),
+        JSON.stringify([{ bundleId: "com.example.cat", catalyst: true }])
+      );
+      expect(attributeDeviceForTelemetry("macos-app-com.example.cat")).toEqual({
+        platform: "macos",
+        device_kind: "catalyst",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("classifyDeviceForTelemetry is the platform half of the same classifier", () => {

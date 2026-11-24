@@ -1,25 +1,49 @@
 ---
-sidebar_position: 8
+sidebar_position: 9
 sidebar_label: Supported editors
-title: Supported editors
+title: "Supported editors: Claude Code, Codex, Cursor and more"
+description: The argent init command configures the Argent MCP server for Claude Code, Codex CLI, Cursor, VS Code, Zed, Gemini CLI and other editors. This page lists the config files and the auto-approve rules.
 sidebar_custom_props:
   icon: file-code
 ---
 
+# Supported editors
+
 `argent init` auto-detects and configures MCP for:
 
-| Editor      | Config location                                                             |
-| ----------- | --------------------------------------------------------------------------- |
-| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                          |
-| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)               |
-| VS Code     | `.vscode/mcp.json`                                                          |
-| Windsurf    | `~/.codeium/windsurf/mcp_config.json` (global)                              |
-| Zed         | `.zed/settings.json` (project) or `~/.config/zed/settings.json` (global)    |
-| Gemini CLI  | `.gemini/settings.json` (project) or `~/.gemini/settings.json` (global)     |
-| Codex CLI   | `.codex/config.toml` (project) or `~/.codex/config.toml` (global)           |
-| Hermes      | `~/.hermes/config.yaml` (global)                                            |
-| opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global)    |
-| Kiro        | `.kiro/settings/mcp.json` (project) or `~/.kiro/settings/mcp.json` (global) |
+| Editor        | Config location                                                             |
+| ------------- | --------------------------------------------------------------------------- |
+| Claude Code   | `.mcp.json` (project) or `~/.claude.json` (global)                          |
+| Cursor        | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)               |
+| VS Code       | `.vscode/mcp.json`                                                          |
+| Devin Desktop | `~/.codeium/windsurf/mcp_config.json` (global)                              |
+| Zed           | `.zed/settings.json` (project) or `~/.config/zed/settings.json` (global)    |
+| Gemini CLI    | `.gemini/settings.json` (project) or `~/.gemini/settings.json` (global)     |
+| Codex CLI     | `.codex/config.toml` (project) or `~/.codex/config.toml` (global)           |
+| Hermes        | `~/.hermes/config.yaml` (global)                                            |
+| opencode      | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global)    |
+| Kiro          | `.kiro/settings/mcp.json` (project) or `~/.kiro/settings/mcp.json` (global) |
+
+## Auto-approve
+
+`argent init` asks if it can add the Argent tools to the auto-approve list of each editor. `argent init -y` adds them without the question. `--no-allowlist` skips the step.
+
+| Editor        | What `argent init` writes                                                                                                           |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code   | `mcp__argent` in `permissions.allow` of `.claude/settings.json` (project) or `~/.claude/settings.json` (global)                     |
+| Cursor        | `argent:*` in `mcpAllowlist` of `~/.cursor/permissions.json`. Argent writes it only when the file already has an `mcpAllowlist` key |
+| Devin Desktop | `alwaysAllow: ["*"]` on the Argent entry, and `mcp__argent__*` in `permissions.allow` of `~/.config/devin/config.json`              |
+| Zed           | `agent.tool_permissions.default: "allow"` in the Zed settings file                                                                  |
+| Gemini CLI    | `trust: true` on the Argent entry                                                                                                   |
+| Codex CLI     | `approval_mode = "approve"` for each Argent tool under `mcp_servers.argent.tools`                                                   |
+| opencode      | `"argent*": true` under `tools`                                                                                                     |
+| Kiro          | `autoApprove: ["*"]` on the Argent entry                                                                                            |
+
+VS Code and Hermes have no auto-approve setting that Argent can write.
+
+Cursor enforces `~/.cursor/permissions.json` when its `mcpAllowlist` is not empty. Cursor then changes the Run Everything mode to Allowlist, and the file list replaces the allowlist in the IDE. For this reason, Argent does not create the file or add the key. When Argent skips Cursor, approve the Argent tools in Cursor.
+
+`argent update` does not add auto-approve rules again. If you remove or change a rule, the change stays. When a new version adds a tool, `argent update` approves the tool for Codex CLI only if at least one Argent tool in the Codex table has `approval_mode = "approve"`. The other editors use a pattern that includes new tools.
 
 <Video
   src="/video/opencode.mp4"

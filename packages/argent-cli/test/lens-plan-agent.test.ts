@@ -24,7 +24,7 @@ vi.mock("../src/lens-agents.js", () => ({
   agentIds: () => ["claude", "codex"],
 }));
 
-import { planAgent } from "../src/lens.js";
+import { lens, planAgent } from "../src/lens.js";
 import { getRememberedAgent } from "@argent/configuration-core";
 import { detectInstalledAgents } from "../src/lens-agents.js";
 
@@ -61,5 +61,25 @@ describe("planAgent — remembered preference", () => {
     mockInstalled.mockReturnValue([claude]);
     mockRemembered.mockReturnValue(null);
     expect(planAgent(undefined)).toEqual({ agent: claude });
+  });
+});
+
+describe("lens --agent", () => {
+  it("rejects a separately supplied empty --agent instead of falling back to the picker", async () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await expect(lens(["--agent", ""], {} as Parameters<typeof lens>[1])).rejects.toThrow(
+        "exit 2"
+      );
+      expect(stderr).toHaveBeenCalledWith(
+        "lens: --agent requires a value (one of: claude, codex)\n"
+      );
+    } finally {
+      exit.mockRestore();
+      stderr.mockRestore();
+    }
   });
 });
