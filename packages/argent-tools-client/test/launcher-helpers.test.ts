@@ -35,6 +35,20 @@ describe("buildToolsServerEnv — host and idle options", () => {
     expect(disabled.ARGENT_IDLE_TIMEOUT_MINUTES).toBe("0");
   });
 
+  it("never inherits a spawner pid, so a CLI-spawned server keeps the full idle timeout", () => {
+    const base = { ARGENT_SPAWNER_PID: "123", ARGENT_ORPHAN_IDLE_TIMEOUT_MINUTES: "2" };
+    const inherited = buildToolsServerEnv(paths, 3001, base, { idleTimeoutMinutes: 30 });
+    expect(inherited.ARGENT_SPAWNER_PID).toBeUndefined();
+    expect(inherited.ARGENT_ORPHAN_IDLE_TIMEOUT_MINUTES).toBeUndefined();
+
+    const own = buildToolsServerEnv(paths, 3001, base, {
+      orphanIdleTimeoutMinutes: 2,
+      spawnerPid: 456,
+    });
+    expect(own.ARGENT_SPAWNER_PID).toBe("456");
+    expect(own.ARGENT_ORPHAN_IDLE_TIMEOUT_MINUTES).toBe("2");
+  });
+
   it("preserves base env variables unchanged", () => {
     const env = buildToolsServerEnv(paths, 3001, { FOO: "bar", PATH: "/usr/bin" });
     expect(env.FOO).toBe("bar");

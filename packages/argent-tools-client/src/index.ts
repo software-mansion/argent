@@ -23,6 +23,7 @@ export {
   type ToolsServerHandle,
   type BuildToolsServerEnvOptions,
   type SpawnToolsServerOptions,
+  type EnsureToolsServerOptions,
 } from "./launcher.js";
 
 export {

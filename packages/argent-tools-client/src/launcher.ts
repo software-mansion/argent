@@ -64,6 +64,12 @@ export interface BuildToolsServerEnvOptions {
   /** Idle-timeout minutes (0 disables). Omit to keep `baseEnv`'s value. */
   idleTimeoutMinutes?: number;
   /**
+   * Shorter idle timeout that applies once `spawnerPid` has exited. Both are
+   * needed; never inherited from `baseEnv`.
+   */
+  orphanIdleTimeoutMinutes?: number;
+  spawnerPid?: number;
+  /**
    * Auth token, exported as `ARGENT_AUTH_TOKEN` so the tool-server enforces
    * `Authorization: Bearer <token>`. Omit (or pass empty) to run it
    * unauthenticated (`argent server start --no-auth`).
@@ -89,6 +95,13 @@ export function buildToolsServerEnv(
   }
   // Never inherited: an exported token would authenticate a `--no-auth` server.
   env[AUTH_TOKEN_ENV] = options.token ?? "";
+  // Never inherited either: a stale pid would tie this server to another process.
+  delete env.ARGENT_SPAWNER_PID;
+  delete env.ARGENT_ORPHAN_IDLE_TIMEOUT_MINUTES;
+  if (options.spawnerPid && options.orphanIdleTimeoutMinutes) {
+    env.ARGENT_SPAWNER_PID = String(options.spawnerPid);
+    env.ARGENT_ORPHAN_IDLE_TIMEOUT_MINUTES = String(options.orphanIdleTimeoutMinutes);
+  }
   if (paths.installKind) env.ARGENT_INSTALL_KIND = paths.installKind;
   if (paths.installProjectRoot) env.ARGENT_PROJECT_ROOT = paths.installProjectRoot;
   return env;
@@ -898,7 +911,20 @@ async function reusableHandle(
   return { url: formatUrl(healthCheckHost(host), state.port), token: state.token ?? "" };
 }
 
-export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsServerHandle> {
+export interface EnsureToolsServerOptions {
+  /**
+   * When this call spawns the server, shut it down after this many idle
+   * minutes once the calling process has exited (instead of the full
+   * auto-spawn idle timeout). `argent mcp` sets it: every live MCP client pings
+   * the server, so idleness after the spawner is gone means no clients remain.
+   */
+  orphanIdleTimeoutMinutes?: number;
+}
+
+export async function ensureToolsServer(
+  paths: ToolsServerPaths,
+  options: EnsureToolsServerOptions = {}
+): Promise<ToolsServerHandle> {
   // Fast path: a healthy server running OUR bundle is already tracked — reuse
   // it without paying for the spawn lock. Records are per bundle, so another
   // install's server is neither considered nor disturbed.
@@ -968,6 +994,9 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
       token,
       host: AUTOSPAWN_HOST,
       idleTimeoutMinutes: AUTOSPAWN_IDLE_TIMEOUT_MINUTES,
+      ...(options.orphanIdleTimeoutMinutes
+        ? { orphanIdleTimeoutMinutes: options.orphanIdleTimeoutMinutes, spawnerPid: process.pid }
+        : {}),
     });
 
     await writeState({

@@ -23,6 +23,7 @@ import { createRegistry } from "./utils/setup-registry";
 import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
+import { isPidGone } from "./utils/idle-timer";
 import { configuredAdbServerPort } from "./utils/adb-server";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import {
@@ -180,6 +181,15 @@ export function start(): void {
     10
   );
   const idleTimeoutMs = idleMinutes > 0 ? idleMinutes * 60_000 : 0;
+  // Set by the launcher for a server auto-spawned by `argent mcp`: once that
+  // process is gone, shut down after a short idle window instead of the full
+  // idle timeout, so a server whose clients all left does not linger detached.
+  const spawnerPid = parseInt(process.env.ARGENT_SPAWNER_PID ?? "", 10);
+  const orphanIdleMinutes = parseInt(process.env.ARGENT_ORPHAN_IDLE_TIMEOUT_MINUTES ?? "", 10);
+  const orphanIdle =
+    spawnerPid > 0 && orphanIdleMinutes > 0
+      ? { timeoutMs: orphanIdleMinutes * 60_000, isOrphaned: () => isPidGone(spawnerPid) }
+      : undefined;
 
   const registry = createRegistry();
   attachRegistryLogger(registry);
@@ -407,6 +417,7 @@ export function start(): void {
 
   const httpHandle = createHttpApp(registry, {
     idleTimeoutMs,
+    orphanIdle,
     onIdle: () => {
       shutdownReason = "idle";
       void shutdown?.();

@@ -55,6 +55,11 @@ export { fetchWithReconnect } from "./tool-caller.js";
 // reference to the file: a retry after a dropped result finds no session.
 const SAVES_FILES_AFTER_CANCEL = new Set(["screen-recording-stop", "native-profiler-stop"]);
 
+// A server this MCP auto-spawns exits this long after the MCP is gone and no
+// other client (each pings every 30s) has used it, instead of lingering
+// detached for the full auto-spawn idle timeout.
+const ENSURE_OPTIONS = { orphanIdleTimeoutMinutes: 2 };
+
 export interface StartMcpServerOptions {
   /**
    * Locations of bundled artifacts in the published package, used when no
@@ -122,7 +127,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     AUTH_TOKEN = resolved.token ?? "";
   } else {
     try {
-      const handle = await ensureToolsServer(options.paths);
+      const handle = await ensureToolsServer(options.paths, ENSURE_OPTIONS);
       TOOLS_URL = handle.url;
       AUTH_TOKEN = handle.token;
     } catch (err) {
@@ -151,7 +156,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   async function reconnect(): Promise<void> {
     if (remote) return;
     if (!reconnectPromise) {
-      reconnectPromise = ensureToolsServer(options.paths)
+      reconnectPromise = ensureToolsServer(options.paths, ENSURE_OPTIONS)
         .then((handle) => {
           TOOLS_URL = handle.url;
           AUTH_TOKEN = handle.token;

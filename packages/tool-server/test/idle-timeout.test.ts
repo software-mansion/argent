@@ -159,4 +159,45 @@ describe("idle timeout", () => {
 
     handle.dispose();
   });
+
+  it("shuts down after the short orphan window only once the spawner is gone", () => {
+    const onIdle = vi.fn();
+    let orphaned = false;
+    const handle = createHttpApp(stubRegistry(), {
+      idleTimeoutMs: 30 * 60_000,
+      orphanIdle: { timeoutMs: 2 * 60_000, isOrphaned: () => orphaned },
+      onIdle,
+    });
+
+    // Spawner still alive: the short window does not apply.
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(onIdle).not.toHaveBeenCalled();
+
+    // Spawner exits: idle already past the orphan window, so the next check fires.
+    orphaned = true;
+    vi.advanceTimersByTime(60_000);
+    expect(onIdle).toHaveBeenCalledOnce();
+
+    handle.dispose();
+  });
+
+  it("keeps an orphaned server alive while clients keep pinging", async () => {
+    const onIdle = vi.fn();
+    const handle = createHttpApp(stubRegistry(), {
+      idleTimeoutMs: 30 * 60_000,
+      orphanIdle: { timeoutMs: 2 * 60_000, isOrphaned: () => true },
+      onIdle,
+    });
+
+    const request = await import("supertest").then((m) => m.default);
+
+    // Another MCP's 30s health ping keeps the shared server up.
+    for (let i = 0; i < 20; i++) {
+      vi.advanceTimersByTime(30_000);
+      await request(handle.app).get("/tools").expect(200);
+    }
+    expect(onIdle).not.toHaveBeenCalled();
+
+    handle.dispose();
+  });
 });

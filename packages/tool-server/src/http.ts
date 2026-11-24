@@ -29,7 +29,11 @@ import {
   type TelemetryDeviceKind,
 } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
-import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
+import {
+  createIdleTimer,
+  IDLE_CHECK_INTERVAL_MS,
+  type OrphanIdleOptions,
+} from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
@@ -323,6 +327,8 @@ function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknow
 
 interface HttpAppOptions {
   idleTimeoutMs?: number;
+  /** Shorter idle limit applied only while `isOrphaned()` holds (see idle-timer). */
+  orphanIdle?: OrphanIdleOptions;
   onIdle?: () => void;
   onShutdown?: () => void;
   /**
@@ -469,7 +475,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   }, 60_000);
   uploadSweeper.unref();
 
-  const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
+  const idleTimer = createIdleTimer(
+    options?.idleTimeoutMs ?? 0,
+    options?.onIdle,
+    options?.orphanIdle
+  );
 
   // A non-loopback bind host is added so its legitimate clients pass the guard;
   // a wildcard bind disables the guard.
