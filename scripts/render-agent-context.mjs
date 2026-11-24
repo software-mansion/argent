@@ -17,9 +17,9 @@
  * device providers of the machine running the script are ignored.
  *
  * Usage:
- *   npm run render:agent-context
+ *   bun run render:agent-context
  *       Writes packages/tool-server/agent-context/, which git ignores.
- *   npm run render:agent-context -- --out <dir> [--enable <flag>]...
+ *   bun run render:agent-context --out <dir> [--enable <flag>]...
  *       Writes to <dir>, with the named flags on. --enable needs --out, so the
  *       default folder only ever holds the default render.
  *
@@ -93,7 +93,7 @@ function parseOptions() {
     },
   });
   if (values.help) {
-    console.log("Usage: npm run render:agent-context [-- --out <dir> [--enable <flag>]...]");
+    console.log("Usage: bun run render:agent-context [--out <dir> [--enable <flag>]...]");
     process.exit(0);
   }
   if (values.enable.length > 0 && !values.out) {
@@ -381,7 +381,7 @@ function renderIndex(tools, instructions, notListed, enable) {
       ? `Feature flags on: ${enable.map(code).join(", ")}. All others at their defaults.`
       : "Every feature flag is at its default.",
     "",
-    "Regenerate with `npm run render:agent-context`.",
+    "Regenerate with `bun run render:agent-context`.",
     "",
     "## How to read a tool file",
     "",
@@ -434,7 +434,7 @@ function renderIndex(tools, instructions, notListed, enable) {
     "| Kiro CLI 2.34, default engine | keeps | dropped | not checked |",
     "| VS Code 1.143, agent host | moves `minimum`/`maximum`/`pattern` into the description text | dropped | at most 128 tools |",
     "| VS Code Copilot Chat 0.71, `gpt-4*` models (source read) | drops `default`, `minimum`/`maximum`, `pattern` and other keywords; cuts parameter descriptions at 1,024 characters | not checked | not checked |",
-    "| Cursor (cursor-agent, model's self-report) | keeps | sent | names first, schemas on demand |",
+    "| Cursor (cursor-agent, model's self-report; server instructions confirmed with a canary on 2026-11-19, cursor-agent 2026.11.19) | keeps | sent | names first, schemas on demand |",
     "| Hermes 0.19 (source read) | keeps | dropped | not checked |",
     "",
     "So a fact that only a schema keyword states does not reach every model, and neither does",

@@ -31,9 +31,7 @@
 // endpoint ones it needs.
 //
 // This runs before the test module graph is imported, so module-level env reads
-// observe the cleared state too. On a machine exporting none of these the loop
-// bodies never run, so no suite failure can catch this file being weakened;
-// test/clear-telemetry-env.test.ts re-imports it against planted sentinels.
+// observe the cleared state too.
 
 /** Every env name the consent and cloud-agent-detect paths read that the ARGENT_ sweep misses. */
 export const CLEARED_ENV_VARS = [

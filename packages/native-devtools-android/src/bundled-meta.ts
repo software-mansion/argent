@@ -3,4 +3,4 @@
 // so builds without that submodule still compile. Informational only — it stamps
 // the bundled `trace_processor.wasm`, nothing resolves against it.
 
-export const PERFETTO_VERSION = "v55.3";
+export const PERFETTO_VERSION = "v59.1";

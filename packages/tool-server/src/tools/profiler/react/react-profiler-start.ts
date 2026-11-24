@@ -14,6 +14,7 @@ import {
   clearLostProfilerRun,
   getLostProfilerRun,
 } from "../../../blueprints/react-profiler-session";
+import { liveAndroidNetworkCaptureSerials } from "../../../blueprints/android-network-inspector";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-debugger";
 import {
   REACT_NATIVE_PROFILER_SETUP_SCRIPT,
@@ -29,10 +30,12 @@ import {
   STOP_IN_PROGRESS_NOTE,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "../../../utils/debugger/device-alias";
-import { findRuntimeDevice } from "../../../utils/debugger/runtime-device";
-import { trackProfilingRun } from "../../../utils/profiling-devices";
+import { findRuntimeDevices, type RuntimeDevices } from "../../../utils/debugger/runtime-device";
+import type { CDPClient } from "../../../utils/debugger/cdp-client";
+import { simulatorServerDeviceIds, trackProfilingRun } from "../../../utils/profiling-devices";
+import { externalNativeId } from "../../../utils/external-devices";
 import { RESULT_NOTE_KEY } from "../../screenshot/dropped-geometry";
 import {
   bootstrapFailureMessage,
@@ -151,6 +154,46 @@ function failedTakeoverText({ session_id, reason }: TakeoverReport): string {
   return `Before it failed, this start stopped ${run} (reason: ${reason}), and nothing is recording now.`;
 }
 
+/**
+ * Where the profiled runtime runs (see `findRuntimeDevices`). The probe waits in
+ * full for two kinds of id, which a slow transport of the profiled device must
+ * not miss:
+ * - Serials with native network capture for any app: the warning names every
+ *   app captured on the device. These alone are reported in `unresolved`, as
+ *   capture under a serial the probe could not read may be on this device.
+ * - The serials of the ids with a simulator-server, which the agent drives
+ *   devices by, so that a transport answering late is still tracked (see
+ *   {@link trackedIds}). One whose read fails is not tracked, as it may be
+ *   another device.
+ * A lookup that fails adds nothing, not a throw, like the warning it feeds.
+ */
+function findProfiledDevices(cdp: Pick<CDPClient, "evaluate">): Promise<RuntimeDevices> {
+  return findRuntimeDevices(cdp, {
+    awaitSerials: idsOf(liveAndroidNetworkCaptureSerials),
+    waitSerials: idsOf(simulatorServerDeviceIds).map(externalNativeId),
+  });
+}
+
+/**
+ * The ids a run found on `found` is tracked under (capture on demand, and the
+ * `profiling` flag on that id's calls): every found serial, and every id with a
+ * simulator-server that names one, such as a provider's `ext:<provider>:<serial>`.
+ */
+function trackedIds(found: readonly string[]): string[] {
+  const driven = idsOf(simulatorServerDeviceIds).filter((id) =>
+    found.includes(externalNativeId(id))
+  );
+  return [...new Set([...found, ...driven])];
+}
+
+function idsOf(lookup: () => string[]): string[] {
+  try {
+    return lookup();
+  } catch {
+    return [];
+  }
+}
+
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
   try {
     return registry.getServiceState(urn);
@@ -185,10 +228,10 @@ export function createReactProfilerStartTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-start",
-    description: `Record Hermes CPU samples and React commits during an interaction.<flag:macos-apps> For a Mac app, use a react-native-macos 0.76+ Debug build that loads JavaScript from Metro. The profiler connects without debugger-connect.</flag:macos-apps>
+    description: `Record Hermes CPU samples and React commits during an interaction.<flag:macos-apps> For a Mac app, use a Debug build that loads JavaScript from Metro: react-native-macos 0.76+, or React Native built for Mac Catalyst. The profiler connects without debugger-connect.</flag:macos-apps>
 On an iOS simulator, Android device<flag:macos-apps>, or Mac app</flag:macos-apps>, call native-profiler-start in parallel on the same target for a combined report, unless the user declines native profiling.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If a session is already running, returns { already_running: true, mine, owner, … } instead, without clobbering its data, unless it is another tool-server's stale run, has no owner record, or is a lost run of this tool-server: start replaces those. mine: true means this tool-server started the run: if it is yours, call react-profiler-stop. With stale: true it may be another agent's: follow the note. Otherwise, BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains. A start that replaces a run reports it in took_over.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On iOS and Android, a warning names the apps with native network capture on (started by network-capture-start): their timings in the profile can differ. If a session is already running, returns { already_running: true, mine, owner, … } instead, without clobbering its data, unless it is another tool-server's stale run, has no owner record, or is a lost run of this tool-server: start replaces those. mine: true means this tool-server started the run: if it is yours, call react-profiler-stop. With stale: true it may be another agent's: follow the note. Otherwise, BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains. A start that replaces a run reports it in took_over.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     interaction: {
@@ -198,7 +241,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       failedMsg: ({ failureSignal }) =>
         `Failed to start React profiler: ${failureSignal.error_code}`,
     },
-    capability: REACT_PROFILER_TOOL_CAPABILITY,
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
       // Collapse a forwarded logicalDeviceId onto the connect id so this
@@ -437,11 +480,12 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
 
       // A session keyed by Metro's logicalDeviceId (two or more devices on one
       // Metro) is not what the tools that drive the device name: they pass its
-      // serial or UDID. Find that id so their calls see the run. Before the
-      // start, so nothing is awaited between the start and the registration.
-      const runtimeDevice = isLogicalKeyedDevice(api.deviceId)
-        ? await findRuntimeDevice(cdp)
-        : undefined;
+      // serial or UDID. Find those ids (one per adb transport) so their calls
+      // see the run. Before the start, so nothing is awaited between the start
+      // and the registration.
+      const runtimeDevices = isLogicalKeyedDevice(api.deviceId)
+        ? await findProfiledDevices(cdp)
+        : { found: [], unresolved: [] };
 
       const sessionId = crypto.randomUUID();
       const ownerPayload: ProfilerSessionOwner = {
@@ -554,9 +598,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.sessionId = sessionId;
       api.ownerToolServerPid = process.pid;
       trackProfilingRun(api.deviceId, api);
-      if (runtimeDevice) trackProfilingRun(runtimeDevice, api);
+      for (const device of trackedIds(runtimeDevices.found)) trackProfilingRun(device, api);
 
-      const warning = nativeNetworkCaptureWarning(deviceId ?? params.device_id, api.runtimeApp);
+      const warning = nativeNetworkCaptureWarning(api.deviceId, api.runtimeApp, runtimeDevices);
       return {
         started_at: new Date(startedAtEpochMs).toISOString(),
         startedAtEpochMs,
@@ -564,7 +608,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         detected_architecture: api.detectedArchitecture,
         ...(tookOver ? { took_over: tookOver } : {}),
         ...(warning ? { warning } : {}),
-        ...(isLogicalKeyedDevice(api.deviceId) && !runtimeDevice
+        ...(isLogicalKeyedDevice(api.deviceId) && runtimeDevices.found.length === 0
           ? { [RESULT_NOTE_KEY]: UNKNOWN_DEVICE_NOTE }
           : {}),
       };

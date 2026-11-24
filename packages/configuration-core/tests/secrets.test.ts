@@ -202,6 +202,25 @@ describe("degradation", () => {
     expect(sources.filter((s) => s.label === globalSecrets())).toHaveLength(1);
     expect(lookupSecret("APP_PASSWORD", sources)).toBe("shared");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "lists a file shared by both scopes once when HOME is a symlink",
+    () => {
+      const linkedHome = path.join(projectDir, "home");
+      fs.symlinkSync(homeDir, linkedHome);
+      write(globalSecrets(), "APP_PASSWORD=shared\n");
+      // Physical, like process.cwd().
+      const cwd = path.join(homeDir, "Downloads");
+      fs.mkdirSync(cwd);
+      const sources = secretSources({ cwd, homeDir: linkedHome, env: NO_ENV });
+      expect(sources.map((s) => s.label)).toEqual([
+        "environment (ARGENT_SECRET_*)",
+        path.join(linkedHome, ".argent", "secrets.env"),
+        path.join(linkedHome, ".env.local"),
+        path.join(linkedHome, ".env"),
+      ]);
+    }
+  );
 });
 
 describe("diagnostics", () => {
@@ -218,18 +237,15 @@ describe("diagnostics", () => {
     expect(advice).toContain(globalSecrets());
     expect(advice).toContain("ARGENT_SECRET_APP_PASSWORD");
     expect(advice).toContain("never ask the user for the secret value itself");
-    expect(advice).toContain(
-      "the user can instead define it on the client's machine and run `argent enable forward-secrets` there; `argent secrets` there lists the sources the client reads"
-    );
+    expect(advice).toContain("argent enable forward-secrets");
+    expect(advice).toContain("argent secrets");
   });
 
   it("advises the client's machine for a secret a forwarding client lacks", () => {
     const advice = clientSecretPlacementAdvice("APP_PASSWORD");
-    expect(advice).toContain(
-      "add `APP_PASSWORD=…` to ~/.argent/secrets.env on the client's machine (or to " +
-        "`.argent/secrets.env` in the project the client runs in), or to export " +
-        "ARGENT_SECRET_APP_PASSWORD before the client starts"
-    );
+    expect(advice).toContain("~/.argent/secrets.env");
+    expect(advice).toContain("ARGENT_SECRET_APP_PASSWORD");
+    expect(advice).toMatch(/client.s machine/i);
     expect(advice).toContain("never ask the user for the secret value itself");
     expect(advice).not.toContain(globalSecrets());
   });

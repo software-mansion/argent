@@ -1,6 +1,6 @@
 ---
 name: argent-ios-device-interact
-description: Drive a physical iPhone through argent. Use when a physical iPhone is involved (a list-devices iOS entry with kind "device") and ONLY then; never for a simulator. For cable, trust, or signing problems read argent-ios-device-setup.
+description: Drive a physical iPhone through argent. Use when a physical iPhone is involved (a list-devices iOS entry with kind "device") and ONLY then; never for a simulator. For connection, trust, or signing problems read argent-ios-device-setup.
 ---
 
 # Physical iPhone interaction
@@ -15,5 +15,5 @@ Read this only for a physical iPhone. `argent-device-interact` still applies for
 
 ## Tools on hardware
 
-- Only these exist: `list-devices`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `describe`, `screenshot`, `screenshot-diff`, `gesture-tap`, `gesture-swipe`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button` (`home`, `volumeUp`, `volumeDown`, `actionButton` on models that have one), `keyboard`, `await-ui-element`, `await-screen-idle`, `run-sequence`, the e2e tools, `stop-simulator-server` and `stop-all-simulator-servers` (session end). Every other device tool fails with `not supported on ios device`.
-- No `rotate` (the orientation tool), `shake`, `paste`, `settings-permissions`, screen recording, `debugger-*`, `react-profiler-*`, `native-profiler-*`, `native-*`, `boot-device`: move the phone by hand, type with `keyboard`, change permissions in the phone's Settings, and debug, profile or record on a simulator.
+- Only these exist: `list-devices`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `describe`, `screenshot`, `screenshot-diff`, `gesture-tap`, `gesture-swipe`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button` (`home`, `volumeUp`, `volumeDown`, `actionButton` on models that have one), `keyboard`, `await-ui-element`, `await-screen-idle`, `run-sequence`, `screen-recording-start` and `screen-recording-stop` on a cabled phone (`argent-screen-recording`), the e2e tools, `stop-simulator-server` and `stop-all-simulator-servers` (session end), and for launch time `native-profiler-launch-analysis` with `profiler-load` and `profiler-stack-query` on its session (`argent-native-profiler` §4). Every other device tool fails with `not supported on ios device`.
+- No `rotate` (the orientation tool), `shake`, `paste`, `settings-permissions`, `debugger-*`, `react-profiler-*`, `native-*` other than `native-profiler-launch-analysis`, `boot-device`: move the phone by hand, type with `keyboard`, change permissions in the phone's Settings, and debug or profile on a simulator.

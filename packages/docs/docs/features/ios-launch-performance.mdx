@@ -1,0 +1,28 @@
+---
+sidebar_position: 10
+sidebar_label: iOS launch performance
+title: iOS launch performance
+description: Argent measures and profiles the launch of an iOS app on a physical iPhone or a simulator. The agent finds the functions that use the most CPU time before the first frame.
+sidebar_custom_props:
+  icon: gauge
+---
+
+Argent can measure and profile app launch performance on iOS. Measurements can be used to establish a baseline and detect regressions after code changes. Launch profiles help the agent find performance bottlenecks.
+
+## How it works
+
+The agent builds the app in Release mode and installs it on the selected device. The agent prefers a connected physical iPhone and can fall back to a simulator with your permission.
+
+For measurement, Argent uses a scripted XCUITest runner and Apple's launch metric. Argent opens the app once. Then XCTest discards one more launch to warm the app and measures five launches. This follows the approach described in Apple's [Optimizing App Launch talk at WWDC 2019](https://developer.apple.com/videos/play/wwdc2019/423/).
+
+For profiling, Xcode Instruments records launch phases and CPU samples with the App Launch template. Argent stores these CPU samples in a native profiler session. The agent queries this session to find functions that use the most CPU time before the first frame.
+
+## Common pitfalls
+
+- **Debug builds:** Measure a Release build. Debug build timings do not represent production performance. Argent cannot detect the build configuration of an installed app.
+- **Outdated builds:** After a native code or JavaScript change, the agent must build and install the app again before the next measurement.
+- **Time to interactive:** The launch profile covers work up to the first frame. React Native startup or content loading can continue after this point, so launch time does not represent the full time to interactive (TTI). The developer defines when the app is fully interactive.
+- **Simulator results:** A simulator uses Mac hardware, so its timings do not represent iPhone performance. Simulator launch profiles have no lifecycle phases.
+- **Xcode 26.4.x:** Simulator launch recording stalls with this Xcode version. Argent stops before it launches the app. Use Xcode 27 or a physical iPhone.
+- **Xcode 26.4.1 export crashes:** Exporting a recorded trace can crash, causing profiling to fail or return incomplete data. Open the saved trace in Instruments, or use Xcode 27 and run the profile again.
+- **Missing samples:** On iOS 18 iPhones, XCTest can return fewer than five launch measurements. Argent reports the sample count. Run the measurement again for a full set.

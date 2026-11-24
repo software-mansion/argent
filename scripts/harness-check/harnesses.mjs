@@ -105,19 +105,12 @@ async function installPinned(id, cacheDir, log) {
   if (existsSync(bin) && installed === pin.version) return bin;
   log(`  installing ${pin.pkg}@${pin.version} into ${dir} (once per version)`);
   mkdirSync(dir, { recursive: true });
-  const r = await run(
-    "npm",
-    [
-      "install",
-      "--prefix",
-      dir,
-      `${pin.pkg}@${pin.version}`,
-      "--no-audit",
-      "--no-fund",
-      "--loglevel=error",
-    ],
-    { timeoutMs: 600_000 }
+  // Without a manifest of its own, bun installs into the nearest ancestor's: by default the repo's.
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({ dependencies: { [pin.pkg]: pin.version } })
   );
+  const r = await run("bun", ["install", "--silent"], { cwd: dir, timeoutMs: 600_000 });
   if (r.code !== 0 || !existsSync(bin))
     throw new Error(`Installing ${pin.pkg} failed:\n${r.stderr}`);
   writeFileSync(marker, pin.version);

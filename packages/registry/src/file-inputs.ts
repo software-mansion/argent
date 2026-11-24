@@ -331,10 +331,21 @@ export function interpolateFileInputPath(
 /**
  * The names a file argument of a `tool:` step may have to travel over a link,
  * in any case of letters: the files the tools take (`screenshot-diff` PNGs, a
- * `e2e_test_path`). The tool-server refuses another one before the first step,
- * and the client sends no other one.
+ * `e2e_test_path`, `audio-input` audio files). The tool-server refuses another
+ * one before the first step, and the client sends no other one.
  */
-export const TOOL_FILE_EXTENSIONS = [".png", ".yaml"] as const;
+export const TOOL_FILE_EXTENSIONS = [
+  ".png",
+  ".yaml",
+  ".wav",
+  ".mp3",
+  ".m4a",
+  ".aac",
+  ".caf",
+  ".aif",
+  ".aiff",
+  ".flac",
+] as const;
 
 export function hasToolFileExtension(file: string): boolean {
   const name = file.toLowerCase();
@@ -363,6 +374,17 @@ export function toolStepFiles(
     if (filled !== null) files.push({ spec, path: filled });
   }
   return files;
+}
+
+/**
+ * An unexpanded `~`, variable, command or URL: `~/app`, `$HOME/app`, `$1/app`,
+ * `$(pwd)/app`, `` `pwd`/app ``, `%USERPROFILE%\app`, `file:///app`. A scheme has
+ * two letters or more, so `D:dir` is not one.
+ */
+const UNEXPANDED_PATH = /^~|\$[A-Za-z0-9_{(]|`|%[A-Za-z_][A-Za-z0-9_]*%|^[A-Za-z][A-Za-z0-9+.-]+:/;
+
+export function isUnexpandedPath(p: string): boolean {
+  return UNEXPANDED_PATH.test(p);
 }
 
 /**

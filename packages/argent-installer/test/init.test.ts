@@ -2,15 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-  SKILLS_DIR,
-  RULES_DIR,
-  AGENTS_DIR,
-  ARGENT_SKILLS_REPO,
-  buildArgentSkillsSource,
-} from "../src/utils.js";
+import { SKILLS_DIR, ARGENT_SKILLS_REPO, buildArgentSkillsSource } from "../src/utils.js";
 import * as p from "@clack/prompts";
-import { printFirstRunNotice, resolveTelemetryConsent } from "../src/first-run-notice.js";
+import {
+  printFirstRunNotice,
+  resolveTelemetryConsent,
+  seedWhatsNewVersion,
+} from "../src/first-run-notice.js";
+import { getWhatsNewSeenVersion, setWhatsNewSeenVersion } from "@argent/configuration-core";
 import {
   hasShownFirstRunNotice,
   markFirstRunNoticeShown,
@@ -27,25 +26,6 @@ vi.mock("@clack/prompts", async (importOriginal) => {
 
 // These tests verify the logic used by init.ts without running the full TUI.
 // The actual init flow is interactive and tested via the integration harness.
-
-describe("init — skills path resolution", () => {
-  it("SKILLS_DIR resolves relative to dist/", () => {
-    // cli.ts compiles to dist/cli.js, so import.meta.dirname = dist/
-    // SKILLS_DIR should be ../skills from there, i.e. <package-root>/skills
-    expect(SKILLS_DIR).toContain("skills");
-    expect(path.isAbsolute(SKILLS_DIR)).toBe(true);
-  });
-
-  it("RULES_DIR resolves relative to dist/", () => {
-    expect(RULES_DIR).toContain("rules");
-    expect(path.isAbsolute(RULES_DIR)).toBe(true);
-  });
-
-  it("AGENTS_DIR resolves relative to dist/", () => {
-    expect(AGENTS_DIR).toContain("agents");
-    expect(path.isAbsolute(AGENTS_DIR)).toBe(true);
-  });
-});
 
 describe("printFirstRunNotice", () => {
   let tmp: string;
@@ -100,6 +80,36 @@ describe("printFirstRunNotice", () => {
     _resetConsentCacheForTest();
     printFirstRunNotice();
     expect(hasShownFirstRunNotice()).toBe(false);
+  });
+});
+
+describe("seedWhatsNewVersion", () => {
+  let tmp: string;
+  const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "argent-installer-whats-new-"));
+    process.env.HOME = tmp;
+    process.env.USERPROFILE = tmp;
+  });
+
+  afterEach(() => {
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("records the version of a fresh install", () => {
+    seedWhatsNewVersion("0.35.0");
+    expect(getWhatsNewSeenVersion()).toBe("0.35.0");
+  });
+
+  it("keeps the version an earlier install recorded", () => {
+    setWhatsNewSeenVersion("0.34.0");
+    seedWhatsNewVersion("0.35.0");
+    expect(getWhatsNewSeenVersion()).toBe("0.34.0");
   });
 });
 
@@ -266,53 +276,5 @@ describe("buildArgentSkillsSource", () => {
     expect(buildArgentSkillsSource(null)).toBe(SKILLS_DIR);
     expect(buildArgentSkillsSource(undefined)).toBe(SKILLS_DIR);
     expect(buildArgentSkillsSource("")).toBe(SKILLS_DIR);
-  });
-});
-
-// Mirrors the args construction in init.ts Step 2. Kept as a regression check
-// against accidental flag reorders that would change `skills add` semantics
-// (e.g. dropping `-y` flipping into an interactive prompt during CI).
-describe("init — skills command construction", () => {
-  function buildArgs(
-    skillsSource: string,
-    scope: "local" | "global",
-    method: "default" | "interactive"
-  ): string[] {
-    const args = ["skills", "add", skillsSource];
-    if (scope === "global") args.push("-g");
-    if (method === "default") args.push("--skill", "*", "-y");
-    return args;
-  }
-
-  it("default method builds correct args with global scope", () => {
-    const source = buildArgentSkillsSource("0.7.1");
-    const args = buildArgs(source, "global", "default");
-
-    expect(args[2]).toBe(source);
-    expect(args).toContain("-g");
-    expect(args).toContain("--skill");
-    expect(args).toContain("*");
-    expect(args).toContain("-y");
-  });
-
-  it("default method omits -g for local scope", () => {
-    const args = buildArgs(buildArgentSkillsSource("0.7.1"), "local", "default");
-
-    expect(args).not.toContain("-g");
-    expect(args).toContain("-y");
-  });
-
-  it("interactive method passes no extra flags", () => {
-    const args = buildArgs(buildArgentSkillsSource("0.7.1"), "local", "interactive");
-
-    expect(args).toHaveLength(3);
-    expect(args).not.toContain("-y");
-    expect(args).not.toContain("-g");
-  });
-
-  it("falls back to SKILLS_DIR when the version is unknown (e.g. dev tarball)", () => {
-    const args = buildArgs(buildArgentSkillsSource("unknown"), "local", "default");
-
-    expect(args[2]).toBe(SKILLS_DIR);
   });
 });

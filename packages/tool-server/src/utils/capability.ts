@@ -175,6 +175,33 @@ const MACOS_REFUSAL_REASONS: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Why network-capture-start and network-capture-stop refuse a platform whose
+ * capture has no start, where the stock text would not name the read to call.
+ */
+const NO_CAPTURE_START_STOP_REASONS: Partial<Record<Platform, string>> = {
+  vega: "a Vega app's network capture has no start or stop: view-network-logs turns it on at its first call",
+  chromium:
+    "a Chromium app's network capture has no start or stop: argent turns it on at the first tool call " +
+    "on the app; read the requests with view-network-logs",
+};
+
+const CATALYST_NO_APPKIT_VIEWS =
+  "a Mac Catalyst app's UIKit views are not in its AppKit view tree: use describe, which " +
+  "lists them with their identifiers and frames";
+
+/**
+ * Why a tool whose `macos` block leaves out `catalyst` refuses a Mac Catalyst
+ * app: those tools return a Mac app's AppKit view tree, and a Catalyst app
+ * draws its UIKit views inside one AppKit view.
+ */
+const MACOS_CATALYST_REFUSAL_REASONS: Readonly<Record<string, string>> = {
+  "native-find-views": CATALYST_NO_APPKIT_VIEWS,
+  "native-full-hierarchy": CATALYST_NO_APPKIT_VIEWS,
+  "native-view-at-point": CATALYST_NO_APPKIT_VIEWS,
+  "native-user-interactable-view-at-point": CATALYST_NO_APPKIT_VIEWS,
+};
+
+/**
  * Throws if the tool's `capability` declaration doesn't include the given
  * device. No `capability` means universally supported — for system / workspace
  * tools that don't touch a device.
@@ -195,16 +222,21 @@ export function assertSupported(
   if (!matrix) {
     const reason =
       (device.platform === "macos" ? MACOS_REFUSAL_REASONS[toolId] : undefined) ??
+      (toolId === "network-capture-start" || toolId === "network-capture-stop"
+        ? NO_CAPTURE_START_STOP_REASONS[device.platform]
+        : undefined) ??
       `no ${device.platform} support declared`;
     throw new UnsupportedOperationError(toolId, device, reason);
   }
   const supported = matrix[device.kind] === true;
   if (!supported) {
+    const catalystReason =
+      device.kind === "catalyst" ? MACOS_CATALYST_REFUSAL_REASONS[toolId] : undefined;
     const reason =
       device.platform === "harmony" && device.kind === "emulator"
         ? "a `harmony-emulator-` id names an instance only boot-device starts; drive the " +
           '`harmony-<connectKey>` id of its `kind: "device"` entry in list-devices'
-        : `kind '${device.kind}' not supported`;
+        : (catalystReason ?? `kind '${device.kind}' not supported`);
     throw new UnsupportedOperationError(toolId, device, reason);
   }
   if (capability.supports && !capability.supports(device)) {

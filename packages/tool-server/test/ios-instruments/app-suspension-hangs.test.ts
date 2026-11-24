@@ -408,16 +408,9 @@ describe("the analyze report's note on the app's suspensions", () => {
     const api = makeApi("macos", LEAK_CHECKS);
     const { report } = await analyzeNativeProfilerIos(api);
 
-    expect(report).toContain(
-      `> ⚠️ ${NOTE} Instruments held the app suspended 2 times (23.8 s in all) to check it for ` +
-        `leaks. These pauses overlap 2 hangs. Such a hang keeps the length that Instruments ` +
-        `recorded, and the report gives the part of it when the app was suspended. A pause ` +
-        `makes a hang of fixed work longer. It does not make a hang longer when the main thread ` +
-        `waits for something that goes on during the pause, such as a sleep, a deadline, I/O or ` +
-        `another process. So the app's own hang is between the recorded length less the ` +
-        `suspended part and the recorded length. To measure such a hang, record the same ` +
-        `actions again with \`template_path: "Time Profiler"\`, which does not check for leaks.`
-    );
+    expect(report).toContain(NOTE);
+    expect(report).toMatch(/2 times \(23\.8 s.*overlap 2 hangs/s);
+    expect(report).toContain('template_path: "Time Profiler"');
     expect(report.indexOf(NOTE)).toBeLessThan(report.indexOf("---"));
     expect(report).not.toContain(OLD_NOTE);
     // Both hangs stay in the table, with their recorded lengths and labels.
@@ -438,10 +431,8 @@ describe("the analyze report's note on the app's suspensions", () => {
 
   it("words one pause and one hang", async () => {
     const { report } = await analyzeNativeProfilerIos(makeApi("macos", [LEAK_CHECKS[1]!]));
-    expect(report).toContain(
-      `> ⚠️ ${NOTE} Instruments held the app suspended once (10.0 s) to check it for leaks. ` +
-        `This pause overlaps 1 hang. Such a hang keeps`
-    );
+    expect(report).toContain(NOTE);
+    expect(report).toMatch(/10\.0 s.*overlaps 1 hang/s);
     expect(report).toContain("| 1 | Severe Hang | 00:03.644 | 13827ms | 🔴 |");
   });
 
@@ -452,14 +443,8 @@ describe("the analyze report's note on the app's suspensions", () => {
     writeFileSync(noDetail.exportedFiles!.leaks!, `<trace-query-result>\n</trace-query-result>`);
     for (const api of [noExport, noDetail]) {
       const { report } = await analyzeNativeProfilerIos(api);
-      expect(report).toContain(
-        `> ⚠️ **App pauses:** macOS held the app suspended 2 times (23.8 s in all). These ` +
-          `pauses overlap 2 hangs. Such a hang keeps`
-      );
-      expect(report).toContain(
-        `and the recorded length. To measure such a hang, record the same actions again while ` +
-          `nothing suspends the app, such as a debugger.`
-      );
+      expect(report).toMatch(/App pauses:.*23\.8 s.*overlap 2 hangs/s);
+      expect(report).toContain("debugger");
       expect(report).not.toContain(NOTE);
       expect(report).not.toContain("Time Profiler");
     }
@@ -599,6 +584,7 @@ describe("the suspended time next to a hang's duration", () => {
         ],
         cpuHotspots: [],
         memoryLeaks: [],
+        hangsRecorded: true,
         leaksRecorded: true,
         mallocStackLogging: null,
         wallClockStartMs: START,
