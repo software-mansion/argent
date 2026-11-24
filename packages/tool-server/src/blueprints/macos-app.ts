@@ -167,6 +167,18 @@ export interface MacosLaunchResult extends MacosLibraryHandshake {
   note?: string;
 }
 
+/**
+ * One connection to the library, from {@link MacosAppApi.connect}. The library
+ * drops what a connection started, such as a screen recording, when that
+ * connection closes: when the app quits, when stop-simulator-server closes it,
+ * or when another tool-server connects to the app.
+ */
+export interface MacosAppConnection {
+  /** The app process at the other end. */
+  readonly pid: number;
+  readonly isOpen: boolean;
+}
+
 export interface MacosAppApi {
   readonly bundleId: string;
   /**
@@ -175,12 +187,20 @@ export interface MacosAppApi {
    * names `boot-device` / `launch-app` when the app is not running. Reconnects
    * through the library's listening socket when the first channel is gone.
    * A request that times out never runs in the app later, unless `runLate`.
+   * With `connection`, the request goes over that connection only and never
+   * over a new one: it fails with `MACOS_APP_CONNECTION_LOST` once that
+   * connection closed.
    */
   call<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
-    opts?: { timeoutMs?: number; runLate?: boolean }
+    opts?: { timeoutMs?: number; runLate?: boolean; connection?: MacosAppConnection }
   ): Promise<T>;
+  /**
+   * Waits for a launch in flight, connects when there is no connection, and
+   * returns the connection that calls go over now.
+   */
+  connect(): Promise<MacosAppConnection>;
   launch(opts?: MacosLaunchOptions): Promise<MacosLaunchResult>;
   isConnected(): boolean;
   handshake(): MacosLibraryHandshake | null;
@@ -898,6 +918,39 @@ const lifecycles = new Map<
   string,
   { key: string; run: Promise<MacosLaunchResult>; settled: Promise<unknown>; pending: boolean }
 >();
+
+/** The connection handed out for each channel, and the channel behind each one. */
+const connections = new WeakMap<LibraryChannel, MacosAppConnection>();
+const connectionChannels = new WeakMap<MacosAppConnection, LibraryChannel>();
+
+function connectionOf(ch: LibraryChannel): MacosAppConnection {
+  let connection = connections.get(ch);
+  if (!connection) {
+    connection = {
+      pid: ch.handshake!.pid,
+      get isOpen() {
+        return ch.isOpen;
+      },
+    };
+    connections.set(ch, connection);
+    connectionChannels.set(connection, ch);
+  }
+  return connection;
+}
+
+/** A call pinned to a connection that closed is not sent over a new one. */
+function connectionGoneError(bundleId: string, method: string, cause?: unknown): FailureError {
+  return macosFailure(
+    `The connection to ${bundleId} that ${method} was bound to has closed: the app quit or ` +
+      `restarted, stop-simulator-server closed it, or another tool-server connected to the ` +
+      `app. argent did not send ${method} over a new connection, as the app dropped what the ` +
+      `old one started.`,
+    FAILURE_CODES.MACOS_APP_CONNECTION_LOST,
+    "macos_app_connection",
+    "unknown",
+    cause
+  );
+}
 
 /**
  * The quit of argent's own copy that a prompt holds up, by bundle id: the pid
@@ -1687,21 +1740,28 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     async call<T = unknown>(
       method: string,
       params: Record<string, unknown> = {},
-      opts: { timeoutMs?: number; runLate?: boolean } = {}
+      opts: { timeoutMs?: number; runLate?: boolean; connection?: MacosAppConnection } = {}
     ): Promise<T> {
-      await lifecycles.get(bundleId)?.settled;
+      const pinned = opts.connection ? connectionChannels.get(opts.connection) : undefined;
+      if (opts.connection && !pinned?.isOpen) throw connectionGoneError(bundleId, method);
+      if (!pinned) await lifecycles.get(bundleId)?.settled;
       try {
-        const ch = await ensureChannel();
+        const ch = pinned ?? (await ensureChannel());
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
         const suspensions = suspensionWatches.get(bundleId);
         if (suspensions) await waitWhileSuspended(suspensions, method);
         return (await ch.request(method, params, timeoutMs, opts.runLate, suspensions)) as T;
       } catch (err) {
+        if (pinned && !pinned.isOpen) throw connectionGoneError(bundleId, method, err);
         if (errorCode(err) === FAILURE_CODES.MACOS_APP_CONNECTION_CLOSED) {
           throw closedByArgentError(bundleId, method);
         }
         throw err;
       }
+    },
+    async connect() {
+      await lifecycles.get(bundleId)?.settled;
+      return connectionOf(await ensureChannel());
     },
     launch: (opts = {}) => {
       const key = JSON.stringify(opts);

@@ -6,6 +6,9 @@ import type { Registry } from "@argent/registry";
 import type { AXServiceApi, AXTreeResponse } from "../../src/blueprints/ax-service";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // The step outcomes of the launch pin across `tool:` steps, through the REAL
 // fetchFlowTree -> queryIosSimulatorFlowTree and the real launch gate. The only
