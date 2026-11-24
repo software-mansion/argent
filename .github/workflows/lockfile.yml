@@ -39,16 +39,3 @@ jobs:
             fi
           done
           exit "$status"
-
-  # Branch protection requires a check named "package-lock.json in sync"; this
-  # reports bun.lock's result under that name. `always()` keeps it from being
-  # skipped when that fails, since a skipped required check counts as passed.
-  lockfile-sync-result:
-    name: package-lock.json in sync
-    needs: lockfile-sync
-    if: always()
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Require bun.lock to be in sync
-        run: test "${{ needs.lockfile-sync.result }}" = success

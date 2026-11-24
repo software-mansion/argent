@@ -54,17 +54,21 @@ export function requireMacosAppOfBundle(
   bundleId: string
 ): MacosAppApi {
   const app = requireMacosApp(services, toolId, device);
-  if (bundleId !== app.bundleId) {
-    throw new InvalidToolInputError(
-      `bundleId '${bundleId}' is not the app of this device: a Mac app id names one app. ` +
-        `Pass bundleId '${app.bundleId}', or use the device id macos-app-${bundleId}.`,
-      {
-        error_code: FAILURE_CODES.MACOS_APP_BUNDLE_ID_MISMATCH,
-        failure_stage: "native_devtools_macos_bundle_id",
-      }
-    );
-  }
+  assertMacosAppBundle(app.bundleId, bundleId);
   return app;
+}
+
+/** Throws unless `bundleId` is `appBundleId`, the one app a Mac app id names. */
+export function assertMacosAppBundle(appBundleId: string, bundleId: string): void {
+  if (bundleId === appBundleId) return;
+  throw new InvalidToolInputError(
+    `bundleId '${bundleId}' is not the app of this device: a Mac app id names one app. ` +
+      `Pass bundleId '${appBundleId}', or use the device id macos-app-${bundleId}.`,
+    {
+      error_code: FAILURE_CODES.MACOS_APP_BUNDLE_ID_MISMATCH,
+      failure_stage: "native_devtools_macos_bundle_id",
+    }
+  );
 }
 
 type ViewHierarchyMethod = Parameters<NativeDevtoolsApi["queryViewHierarchy"]>[1];

@@ -41,16 +41,27 @@ jobs:
 
       - name: Restore node_modules
         id: node-modules
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             node_modules
             packages/*/node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
+          key: bun-install-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
 
       - name: Install dependencies
         if: steps.node-modules.outputs.cache-hit != 'true'
         run: bun install --frozen-lockfile
+
+      # Saved before the tests run: Vitest writes its transform cache into
+      # node_modules, and that cache misses tsconfig changes.
+      - name: Save node_modules
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: ${{ steps.node-modules.outputs.cache-primary-key }}
 
       - name: Build workspace dependencies
         run: bun run build
@@ -99,16 +110,25 @@ jobs:
 
       - name: Restore node_modules
         id: node-modules
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             node_modules
             packages/*/node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
+          key: bun-install-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
 
       - name: Install dependencies
         if: steps.node-modules.outputs.cache-hit != 'true'
         run: bun install --frozen-lockfile
+
+      - name: Save node_modules
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: ${{ steps.node-modules.outputs.cache-primary-key }}
 
       - name: Build workspace dependencies
         run: bun run build
