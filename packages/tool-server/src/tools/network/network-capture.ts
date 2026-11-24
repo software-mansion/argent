@@ -30,7 +30,7 @@ export const captureSchema = z.object({
     .enum(["js", "native"])
     .optional()
     .describe(
-      "The layer to act on: js (the app's JS runtime, read with view-network-logs) or native (NSURLProtocol on iOS, OkHttp on Android, read with native-network-logs). Omit it to act on both. The other layer stays as it is.<flag:macos-apps> A Mac app has only the native layer.</flag:macos-apps>"
+      "Use js for the app's JavaScript requests or native for requests captured by the native layer. Omit to control all supported layers.<flag:macos-apps> On Mac apps, this parameter supports only native. Read view-network-logs to start JavaScript capture in a React Native Mac app.</flag:macos-apps>"
     ),
   logicalDeviceId: z
     .string()
@@ -50,7 +50,7 @@ export function requestedLayers(layer: CaptureParams["layer"]): { js: boolean; n
 
 /** Why a call with layer js reaches nothing on a Mac app. */
 export const MACOS_NO_JS =
-  'a Mac app has no JS layer that argent captures: its network capture is native only, so omit layer or pass layer "native"';
+  'on a Mac app these tools act only on the native layer (view-network-logs starts the capture of a React Native app\'s JS runtime when it reads), so omit layer or pass layer "native"';
 
 /** The capture a call acts on, as its interaction messages name it. */
 export function captureName(layer: CaptureParams["layer"]): string {

@@ -32,6 +32,7 @@ vi.mock("../src/telemetry-finalize.js", () => ({
 }));
 vi.mock("../src/first-run-notice.js", () => ({
   resolveTelemetryConsent: async () => ({ kind: "skipped" }),
+  seedWhatsNewVersion: vi.fn(),
 }));
 vi.mock("../src/install-runner.js", () => ({ runInstall: async () => "1.0.0" }));
 vi.mock("../src/init-adapters.js", () => ({

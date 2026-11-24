@@ -39,6 +39,9 @@ vi.mock("../../src/tools/flows/flow-pixels", async (importOriginal) => ({
 
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { serializeFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 function stillScreen(): DescribeNode {
   return {

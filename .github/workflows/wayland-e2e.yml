@@ -70,6 +70,12 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Set up Bun
+        if: needs.changes.outputs.relevant == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
       - name: Set up JDK 17
         if: needs.changes.outputs.relevant == 'true'
         uses: actions/setup-java@v6
@@ -182,9 +188,8 @@ jobs:
       - name: Install argent dependencies + build
         if: needs.changes.outputs.relevant == 'true'
         run: |
-          npm ci
-          npm install @rollup/rollup-linux-x64-gnu --no-save
-          npm run build
+          bun install --frozen-lockfile
+          bun run build
 
       - name: Download signed simulator-server binary
         if: needs.changes.outputs.relevant == 'true'
@@ -205,7 +210,7 @@ jobs:
           mkdir -p ~/.argent
           : > ~/.argent/tool-server.log
           cd packages/tool-server
-          nohup env ARGENT_PORT=3033 npx ts-node src/index.ts start \
+          nohup env ARGENT_PORT=3033 bunx ts-node src/index.ts start \
             > ~/.argent/tool-server.log 2>&1 &
           echo "tool-server pid=$!"
           # Wait for /tools to respond.

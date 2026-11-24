@@ -16,22 +16,39 @@ concurrency:
 
 jobs:
   lockfile-sync:
-    name: package-lock.json in sync
+    name: bun.lock in sync
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          node-version: "24"
+          bun-version-file: package.json
 
-      - name: Verify package-lock.json is in sync with package.json
+      - name: Verify each bun.lock is in sync with its package.json
         run: |
-          npm install --package-lock-only --ignore-scripts
-          if ! git diff --exit-code -- package-lock.json; then
-            echo "::error::package-lock.json is out of sync. Run 'npm install' locally and commit the updated package-lock.json."
-            exit 1
-          fi
+          status=0
+          for dir in . packages/docs packages/tool-server/test/fixtures/electron-smoke-app; do
+            (cd "$dir" && bun install --lockfile-only)
+            if ! git diff --exit-code -- "$dir/bun.lock"; then
+              echo "::error::$dir/bun.lock is out of sync. Run 'bun install' in $dir and commit the updated bun.lock."
+              status=1
+            fi
+          done
+          exit "$status"
+
+  # Branch protection requires a check named "package-lock.json in sync"; this
+  # reports bun.lock's result under that name. `always()` keeps it from being
+  # skipped when that fails, since a skipped required check counts as passed.
+  lockfile-sync-result:
+    name: package-lock.json in sync
+    needs: lockfile-sync
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require bun.lock to be in sync
+        run: test "${{ needs.lockfile-sync.result }}" = success

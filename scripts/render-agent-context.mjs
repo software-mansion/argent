@@ -17,9 +17,9 @@
  * device providers of the machine running the script are ignored.
  *
  * Usage:
- *   npm run render:agent-context
+ *   bun run render:agent-context
  *       Writes packages/tool-server/agent-context/, which git ignores.
- *   npm run render:agent-context -- --out <dir> [--enable <flag>]...
+ *   bun run render:agent-context --out <dir> [--enable <flag>]...
  *       Writes to <dir>, with the named flags on. --enable needs --out, so the
  *       default folder only ever holds the default render.
  *
@@ -93,7 +93,7 @@ function parseOptions() {
     },
   });
   if (values.help) {
-    console.log("Usage: npm run render:agent-context [-- --out <dir> [--enable <flag>]...]");
+    console.log("Usage: bun run render:agent-context [--out <dir> [--enable <flag>]...]");
     process.exit(0);
   }
   if (values.enable.length > 0 && !values.out) {
@@ -381,7 +381,7 @@ function renderIndex(tools, instructions, notListed, enable) {
       ? `Feature flags on: ${enable.map(code).join(", ")}. All others at their defaults.`
       : "Every feature flag is at its default.",
     "",
-    "Regenerate with `npm run render:agent-context`.",
+    "Regenerate with `bun run render:agent-context`.",
     "",
     "## How to read a tool file",
     "",

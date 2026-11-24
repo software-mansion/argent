@@ -235,9 +235,9 @@ export function isProviderOwnedUrn(urn: string): boolean {
  * Of `urns`, the port-keyed sessions no device-scoped teardown could ever name,
  * whatever ids it was given.
  *
- * On a Metro serving two or more devices, `selectTarget` refuses a serial, or a
- * simulator udid it cannot match to one Metro device by name, and makes the
- * caller re-target with the `logicalDeviceId` Metro echoed — an opaque per-connection handle
+ * On a Metro serving two or more devices, `selectTarget` refuses a udid or
+ * serial it cannot match to one Metro device by name, and makes the caller
+ * re-target with the `logicalDeviceId` Metro echoed — an opaque per-connection handle
  * `list-devices` never mints, which the debugger URN then embeds. A teardown
  * scoped to real device ids leaves that session holding its CDP socket, a bound
  * loopback server and a log file handle, while the caller's serial still

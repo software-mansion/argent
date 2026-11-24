@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { MACOS_APP_ID_PREFIX, resolveDevice } from "../device-info";
-import { isExternalId } from "../external-devices";
-import { listIosSimulators } from "../ios-devices";
+import { MACOS_APP_ID_PREFIX } from "../device-info";
 import { trackedMacosAppKind, trackedMacosAppVendorId } from "../macos-app-kind";
 import type { CDPTarget } from "./discovery";
 
@@ -18,6 +16,8 @@ interface SelectedTarget {
    */
   legacyInspector: boolean;
   deviceName: string;
+  /** The device was found by its name (`deviceNameMatches`), not by its id. */
+  matchedByName: boolean;
 }
 
 /**
@@ -98,46 +98,6 @@ function metroDevices(pool: CDPTarget[]): Map<string, string> {
   return devices;
 }
 
-/** The targets of the one Metro device that reports `name`; undefined when none or several do. */
-function targetsOfOnlyDeviceNamed(
-  pool: CDPTarget[],
-  name: string | undefined
-): CDPTarget[] | undefined {
-  if (name === undefined) return undefined;
-  const named = pool.filter((t) => t.deviceName === name);
-  return new Set(named.map(deviceKey)).size === 1 ? named : undefined;
-}
-
-/**
- * The device name Metro lists for an app on a simulator of this name. React
- * Native sends the name unescaped in a query string, where `&` ends it and `+`
- * reads as a space.
- */
-function nameMetroLists(simulatorName: string): string {
-  return simulatorName.split("&")[0]!.replaceAll("+", " ");
-}
-
-/**
- * The name of the booted local iOS simulator `deviceId` names, for a Metro that
- * lists several devices. Metro never sees a UDID, only the name the app
- * reports, so {@link selectTarget} matches on that name. Undefined when Metro
- * lists the name differently, or lists another booted simulator under it.
- */
-export async function simulatorNameOnSharedMetro(
-  deviceId: string,
-  targets: CDPTarget[]
-): Promise<string | undefined> {
-  if (isExternalId(deviceId)) return undefined;
-  const device = resolveDevice(deviceId);
-  if (device.platform !== "ios" || device.kind !== "simulator") return undefined;
-  if (metroDevices(targets).size < 2) return undefined;
-  const simulators = await listIosSimulators().catch(() => []);
-  const booted = simulators.filter((sim) => sim.state === "Booted");
-  const name = booted.find((sim) => sim.udid === deviceId)?.name;
-  if (name === undefined || nameMetroLists(name) !== name) return undefined;
-  return booted.filter((sim) => nameMetroLists(sim.name) === name).length === 1 ? name : undefined;
-}
-
 /**
  * The runtime of the Mac app a `macos-app-<bundle id>` names. A Mac app's
  * inspector id follows from its bundle id (see `macosAppBundleIdOf`), so the
@@ -177,6 +137,23 @@ function macosAppTargets(pool: CDPTarget[], bundleId: string, port: number): CDP
   );
 }
 
+/**
+ * The targets of the one device whose name `matches` accepts, or undefined when
+ * no device or more than one does.
+ *
+ * A udid or serial is never echoed by Metro, but each target carries the name
+ * the app reported for its device, and the caller can say which names fit the
+ * id it holds (a simulator's name, an Android model). Two identical emulators
+ * report the same name, so only a single matching device counts: guessing
+ * between them would drive one while reporting the other.
+ */
+function targetsNamedFor(pool: CDPTarget[], matches: unknown): CDPTarget[] | undefined {
+  if (typeof matches !== "function") return undefined;
+  const named = pool.filter((t) => typeof t.deviceName === "string" && matches(t.deviceName));
+  const devices = new Set(named.map(deviceKey));
+  return devices.size === 1 && !devices.has(undefined) ? named : undefined;
+}
+
 /** logicalDeviceIds Metro has ever listed in this process. */
 const seenLogicalDeviceIds = new Set<string>();
 
@@ -202,6 +179,7 @@ export function selectTarget(
     if (id) seenLogicalDeviceIds.add(id);
   }
   let candidates = pool;
+  let matchedByName = false;
 
   // By the prefix alone, as the capability gate classifies the id, so that a
   // Mac app id with a bundle id macOS does not accept takes no fallback either.
@@ -213,14 +191,17 @@ export function selectTarget(
     candidates = macosAppTargets(pool, macosBundleId, port);
   } else if (typeof options?.deviceId === "string" && options.deviceId) {
     const deviceId = options.deviceId;
-    const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === deviceId);
-    const simulatorName =
-      typeof options.simulatorName === "string" ? options.simulatorName : undefined;
-    const sameName = targetsOfOnlyDeviceNamed(pool, simulatorName);
+    // The logicalDeviceId this udid or serial was matched to by name before.
+    // It stands for the device, so a Metro listing it needs no name, and one
+    // that does not must not fall back to another device.
+    const pinned =
+      typeof options.pinnedLogicalDeviceId === "string" ? options.pinnedLogicalDeviceId : undefined;
+    const filtered = candidates.filter((t) => {
+      const id = t.reactNative?.logicalDeviceId;
+      return id === deviceId || (pinned !== undefined && id === pinned);
+    });
     if (filtered.length) {
       candidates = filtered;
-    } else if (sameName) {
-      candidates = sameName;
     } else {
       // Falling back to the priority target would route every unmatched
       // device_id to whichever device Metro lists first, so only fall back when
@@ -230,15 +211,27 @@ export function selectTarget(
       // none, so a Vega device_id would count zero devices, look like "nothing
       // to disambiguate" and fall through into another device's runtime.
       const distinctDevices = metroDevices(pool);
-      if (distinctDevices.size > 1) {
+      const named =
+        distinctDevices.size > 1 || pinned !== undefined
+          ? targetsNamedFor(pool, options.deviceNameMatches)
+          : undefined;
+      if (named) {
+        candidates = named;
+        matchedByName = true;
+      } else if (distinctDevices.size > 1) {
         // Only a logicalDeviceId is a usable device_id; a legacy device's
         // internal key would read like one without being one.
         const listed = [...distinctDevices.values()].join(", ");
         throw new FailureError(
           `No debugger target matches device_id "${deviceId}". ` +
             `${distinctDevices.size} devices are connected to Metro on port ${port}: ` +
-            `${listed}. Re-target with the logicalDeviceId in parentheses — that is what ` +
-            `debugger-connect returns and what subsequent debugger-* calls must pass. ` +
+            `${listed}. ` +
+            (typeof options.deviceNameMatches === "function"
+              ? `More than one of them, or none, has this device's name, so it cannot ` +
+                `be told apart by name. `
+              : "") +
+            `Re-target with the logicalDeviceId in parentheses — debugger-connect returns ` +
+            `it, and it is accepted by every debugger-* call. ` +
             `A legacy-inspector device (RN 0.72 / Vega) reports none and cannot be singled ` +
             `out of a shared Metro: give it its own Metro port.`,
           {
@@ -258,15 +251,20 @@ export function selectTarget(
       // under a new id, since iOS derives the id from identifierForVendor, which
       // a reinstall can reset. None of these can be told apart here, so the
       // message covers them all.
-      const seen = seenLogicalDeviceIds.has(deviceId);
-      if (seen || LOGICAL_DEVICE_ID_SHAPE.test(deviceId)) {
+      const missingId = pinned ?? deviceId;
+      const seen = seenLogicalDeviceIds.has(missingId);
+      if (!named && (seen || LOGICAL_DEVICE_ID_SHAPE.test(missingId))) {
         const state = seen
           ? `is no longer attached to Metro on port ${port} — ` +
             `its app likely exited or reloaded onto another Metro. `
           : `is not attached to Metro on port ${port} — its app is not running, ` +
             `is still starting, or uses another Metro. `;
         throw new FailureError(
-          `Device with logicalDeviceId "${deviceId}" ${state}` +
+          `Device with logicalDeviceId "${missingId}"` +
+            (pinned !== undefined
+              ? `, which device_id "${deviceId}" was matched to by name,`
+              : "") +
+            ` ${state}` +
             `Not falling back to the remaining device: ${[...distinctDevices.values()].join(", ")}. ` +
             `If the app exited, relaunch it on the target device (launch-app / restart-app), then ` +
             `retry with the same id: a relaunched app keeps its logicalDeviceId. If it was ` +
@@ -290,13 +288,13 @@ export function selectTarget(
   const fusebox = candidates.find(
     (t) => t.reactNative?.capabilities?.prefersFuseboxFrontend === true
   );
-  if (fusebox) return makeResult(fusebox, port, true, false);
+  if (fusebox) return makeResult(fusebox, port, true, false, matchedByName);
 
   const cppConn = candidates.find((t) => t.description?.endsWith("[C++ connection]"));
-  if (cppConn) return makeResult(cppConn, port, true, false);
+  if (cppConn) return makeResult(cppConn, port, true, false, matchedByName);
 
   const bridge = candidates.find((t) => t.title?.startsWith("React Native Bridge"));
-  if (bridge) return makeResult(bridge, port, false, false);
+  if (bridge) return makeResult(bridge, port, false, false, matchedByName);
 
   // The legacy inspector also lists worklet runtimes (Reanimated's "Reanimated
   // UI runtime", or one named by `createWorkletRuntime`), in any order. They are
@@ -305,9 +303,9 @@ export function selectTarget(
   const hermes = candidates.find((t) =>
     LEGACY_APP_RUNTIME_TITLES.has(t.title?.replace(CXX_CONNECTION_SUFFIX, ""))
   );
-  if (hermes) return makeResult(hermes, port, false, true);
+  if (hermes) return makeResult(hermes, port, false, true, matchedByName);
 
-  return makeResult(candidates[0]!, port, false, true);
+  return makeResult(candidates[0]!, port, false, true, matchedByName);
 }
 
 /** The bridge's (`HermesExecutorFactory`) and bridgeless (`HermesInstance`) names. */
@@ -323,7 +321,8 @@ function makeResult(
   target: CDPTarget,
   port: number,
   isNewDebugger: boolean,
-  legacyInspector: boolean
+  legacyInspector: boolean,
+  matchedByName: boolean
 ): SelectedTarget {
   return {
     target,
@@ -331,6 +330,7 @@ function makeResult(
     isNewDebugger,
     legacyInspector,
     deviceName: target.deviceName ?? target.title ?? "unknown",
+    matchedByName,
   };
 }
 

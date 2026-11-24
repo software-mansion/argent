@@ -688,7 +688,7 @@ buildBundle({
 });
 
 // Require the darwin binary only when bundling ON darwin (the publish pipeline):
-// a Linux contributor running `npm run pack` can't produce the macOS binary, so
+// a Linux contributor running `bun run pack` can't produce the macOS binary, so
 // don't block them on its absence.
 for (const platform of SUPPORTED_HOST_PLATFORMS) {
   const binaryFile = simulatorServerFileName(platform);
