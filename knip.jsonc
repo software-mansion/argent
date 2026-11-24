@@ -29,7 +29,13 @@
   // src/sdk-tool-args.ts). CI runs knip unbuilt, where it does not resolve. An
   // `ignoreUnresolved` entry would turn into a hint, and so an error, on a built
   // tree; `ignoreIssues` passes in both. tsc still catches a broken import there.
-  "ignoreIssues": { "packages/argent/src/client.ts": ["unresolved"] },
+  //
+  // The e2e runner from before version 2 is main's code, kept unchanged so old
+  // e2e tests run as they did. Its exports were used by files that moved on.
+  "ignoreIssues": {
+    "packages/argent/src/client.ts": ["unresolved"],
+    "packages/tool-server/src/tools/flows/version-1/*.ts": ["exports", "types"],
+  },
 
   // Ships from its own repo with its own CI, and eslint and prettier skip it the
   // same way. It becomes a workspace the moment `git submodule update --init`

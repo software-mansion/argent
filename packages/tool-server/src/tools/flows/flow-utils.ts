@@ -3916,9 +3916,14 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
  * - 2: they are in the UI's upright space, as screenshots and describe frames
  *   are, and as on every other platform.
  *
- * The two differ only for a landscape or upside-down UI on an iOS simulator.
- * A version 1 file still runs as it was recorded: the runner turns its points
- * (flow-legacy-points.ts).
+ *   On an iOS simulator, its selectors resolve against the accessibility tree
+ *   `describe` shows, not the UIView hierarchy.
+ *
+ * The points differ only for a landscape or upside-down UI on an iOS simulator.
+ * A version 1 file still runs as it was recorded. On an iOS simulator, a
+ * version 1 e2e test runs on the runner from before version 2
+ * (`version-1/flow-run.ts`), and a version 1 fragment that a version 2 test
+ * runs has its points turned (flow-legacy-points.ts).
  */
 const FLOW_FILE_VERSION = 2;
 
@@ -3933,6 +3938,14 @@ const olderFormatVersions = new WeakMap<FlowFile, number>();
 /** The format version `flow` was read in: this build's own unless parseFlow read an older file. */
 export function flowFormatVersion(flow: FlowFile): number {
   return olderFormatVersions.get(flow) ?? FLOW_FILE_VERSION;
+}
+
+/**
+ * Whether an e2e test file is older than version 2. On an iOS simulator such a
+ * file runs on the e2e runner from before version 2 (`version-1/flow-run.ts`).
+ */
+export function isVersion1(flow: FlowFile): boolean {
+  return flowFormatVersion(flow) < 2;
 }
 
 function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["requires"] {

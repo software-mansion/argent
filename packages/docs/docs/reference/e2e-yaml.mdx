@@ -53,25 +53,46 @@ steps:
 
 The file has four top-level keys:
 
-| Key                     | Required | Description                                                                                        |
-| ----------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                  |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                            |
-| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                          |
-| `version`               | no       | The file format version. The value is `2`. Argent writes it. A file without `version` is version 1 |
+| Key                     | Required | Description                                                                                                          |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                                    |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                                              |
+| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                                            |
+| `version`               | no       | The file format version. Argent writes `2`. A file without `version` is version 1. See [File version](#file-version) |
 
 Argent refuses a file with a `version` that is higher than the version it reads. Update Argent to run that file.
 
 Argent releases from before the `version` key refuse a file that has the key. To run the file on such a release, delete the `version` line.
 
-The versions differ only on an iOS simulator with a landscape or upside-down UI:
+### File version
 
-| Version | Coordinates in `tap: { x, y }`, in the `from`, `to` and `by` of `swipe`, and in a `tool:` step |
-| ------- | ---------------------------------------------------------------------------------------------- |
-| `1`     | The portrait axes of the screen. Earlier Argent releases sent them that way                    |
-| `2`     | The UI as the user sees it, like the `describe` frames                                         |
+On an iOS simulator, local or remote, the version sets how Argent runs the e2e test:
 
-Argent still runs a version 1 file as it was recorded. It turns the coordinates of a `tap` and a `swipe` to the UI. It runs a `tool:` step with the portrait axes of the screen. A fragment keeps its own version: a version 2 e2e test can run a version 1 fragment, and the reverse.
+| Version                  | Run on an iOS simulator                                                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `2`                      | Selectors resolve on the accessibility tree of `describe`. See [Runner tree and discovery tree](#runner-tree-and-discovery-tree) |
+| `1`, or no `version` key | Selectors resolve on the native view hierarchy of the app, as in Argent releases from before version 2                           |
+
+- On other platforms and on a physical iPhone, the version has no effect.
+- A `run:` fragment resolves its selectors on the tree of the e2e test that runs it, with the rules of that e2e test. Only its coordinates follow its own version. An e2e test that a `tool: e2e-execute` step runs uses its own version.
+- When you record `e2e-execute` of a version 1 e2e test on an iOS simulator, the recorder writes a `run:` step. That step replays the e2e test on the accessibility tree. The message of `e2e-add-step` warns about this difference.
+- A selector from `describe` can miss in a version 1 e2e test.
+- On an iOS simulator, the steps of a version 1 e2e test do not get the rules that came with version 2. For example, a run of whitespace does not match one space in `id` and `text`, and a toggle does not have the role `AXSwitch`. For text fields, see [Conditions](#conditions). A `tool:` step runs the tool itself: for example, `tool: await-ui-element` reads the `describe` tree in a version 1 e2e test too.
+
+To change a version 1 e2e test:
+
+1. Set `version: 2`. Change the `version: 1` line, or add the line if the file has no `version` key.
+2. Replay the e2e test.
+3. Replace each selector that fails. In a landscape or upside-down UI, also replace the coordinates of each `tap`, `long-press`, `swipe` and `tool:` step.
+
+The versions also differ in coordinates on an iOS simulator with a landscape or upside-down UI:
+
+| Version | Coordinates in `tap: { x, y }` and `long-press: { x, y }`, in the `from`, `to` and `by` of `swipe`, and in a `tool:` step |
+| ------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `1`     | The portrait axes of the screen. Earlier Argent releases sent them that way                                               |
+| `2`     | The UI as the user sees it, like the `describe` frames                                                                    |
+
+Argent still runs a version 1 file as it was recorded. It turns the coordinates of a `tap`, a `long-press` and a `swipe` to the UI. It runs a `tool:` step with the portrait axes of the screen. For coordinates, a fragment keeps its own version: a version 2 e2e test can run a version 1 fragment, and the reverse.
 
 A `snapshot` baseline that an earlier release took of a landscape UI on an iOS simulator is sideways. Its key has the width and the height of the screen swapped. When Argent finds no baseline with the key of the upright capture, it compares against the sideways one, with the capture turned to match. The step has a warning. To store an upright baseline, run the e2e test with `--update-baselines`.
 
@@ -182,6 +203,8 @@ The runner resolves a selector against the runner tree. On some platforms, the r
 | Vega            | Toolkit page source                                                                       | Same source                |
 | Mac app         | The elements of the app tree that have an id, a label, a value, a clickable role or focus | The full app tree, nested  |
 | HarmonyOS       | None                                                                                      | `uitest` layout dump       |
+
+On an iOS simulator, a version 1 e2e test resolves selectors on the native view hierarchy of the app. As a `run:` fragment, it uses the tree of the e2e test that runs it. See [File version](#file-version).
 
 On an iOS simulator and on a physical iPhone, the runner and `describe` read one tree. Copy ids, text and roles from `describe`. On an iOS simulator, a toggle has the role `AXSwitch` in e2e tests, `describe`, `await-ui-element` and `ui-tree`. The runner tree on an iOS simulator has these differences:
 
@@ -427,6 +450,11 @@ On an iOS simulator, a `text` check reads a text field as follows:
 - An empty text field reads as its placeholder.
 - A text field with an accessibility label reads as the label, then a space, then the text or the placeholder. For example, an empty field with the label `Email` and the placeholder `Required` reads as `Email Required`.
 - Argent does not read the text in a secure text field.
+
+A version 1 e2e test on an iOS simulator reads the view hierarchy of the app, also in the `run:` fragments that it runs. There, these rules are different:
+
+- `matches` never reads a text field as empty.
+- The runner knows a text field by the class name of its view. The name must contain `TextField`, `TextView` or `SearchField`. Argent does not read the text in a text field of a different class, for example a `UITextField` subclass with the name `AmountField`. For such a field, `matches: '^$'` passes also when the field contains text.
 
 On an iOS simulator, Argent does not use the text in a text field as the selector of a recorded tap.
 

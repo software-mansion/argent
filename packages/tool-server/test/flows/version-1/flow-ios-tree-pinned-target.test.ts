@@ -6,9 +6,9 @@ import {
   type NativeAppState,
   type NativeDevtoolsApi,
   type NativeDevtoolsAppState,
-} from "../../src/blueprints/native-devtools";
-import type { FlowTreeTarget } from "../../src/tools/flows/flow-actions";
-import { queryFullHierarchyTree } from "../../src/tools/flows/flow-ios-tree";
+} from "../../../src/blueprints/native-devtools";
+import type { FlowTreeTarget } from "../../../src/tools/flows/version-1/flow-actions";
+import { queryFullHierarchyTree } from "../../../src/tools/flows/version-1/flow-ios-tree";
 
 // Simulator-wide injection means background system processes also connect, and
 // a suspended one never answers getState - auto-resolve Promise.alls getState

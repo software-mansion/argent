@@ -85,11 +85,6 @@ export interface FlowTreeTarget {
    * crashed, or a step opened another one). Unpinned, the id is only a hint.
    */
   pinned: boolean;
-  /**
-   * View hierarchy reads only: whether a pinned read's `Application.getState`
-   * probe has ever answered for this target. See `queryFullHierarchyTree`.
-   */
-  probeAnswered?: boolean;
 }
 
 /** Everything a directive needs to act on the run's device. */

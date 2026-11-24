@@ -26,6 +26,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dir = dirname(__filename);
 const toolsRoot = join(__dir, "..", "packages", "tool-server", "src", "tools");
 
+// The e2e runner for version 1 e2e test files is main's code, copied unchanged,
+// so it still holds main's `e2e-execute` tool definition. The registered
+// `e2e-execute` calls only its run logic and never registers that copy, so no
+// client is served its description.
+const skippedDirs = new Set([join(toolsRoot, "flows", "version-1")]);
+
+/** Whether a directory under the tools tree holds no served tool definition. */
+export function isSkippedToolDir(dir) {
+  return skippedDirs.has(dir);
+}
+
 // Single-character escapes with a non-identity meaning; unescapeJsString
 // handles the rest (\xNN, \uNNNN, \u{...}, line continuations, and identity
 // escapes, where the backslash simply drops).
@@ -87,7 +98,7 @@ function walk(dir) {
     const full = join(dir, name);
     const stat = statSync(full);
     if (stat.isDirectory()) {
-      entries.push(...walk(full));
+      if (!isSkippedToolDir(full)) entries.push(...walk(full));
     } else if (extname(name) === ".ts" && !name.endsWith(".d.ts")) {
       entries.push(full);
     }

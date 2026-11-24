@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { adaptFullHierarchyToDescribeResult } from "../src/tools/flows/flow-ios-tree";
+import { adaptFullHierarchyToDescribeResult } from "../../../src/tools/flows/version-1/flow-ios-tree";
 import {
   assertText,
   evaluateCondition,
   findAll,
   selectorToFrame,
-} from "../src/utils/ui-tree-match";
+} from "../../../src/tools/flows/version-1/ui-tree-match";
 
 // A getFullHierarchy payload shaped like SerializeView output: a window spanning
 // the screen, an `accessible` carousel container carrying a testID, and its
@@ -853,10 +853,8 @@ describe("describe full-hierarchy adapter", () => {
 
     expect(field[0]!.value).toBeUndefined();
     expect(assertText(field[0]!)).toBe("");
-    // The matcher tells a secure field by the accessibility tree's password
-    // flag, which this tree does not carry, so it reads this field as empty.
-    // The matcher this tree was read with before never read a text field so.
-    expect(evaluateCondition("text", "^$", field, "matches")).toBe(true);
+    // Not proof that the field is empty.
+    expect(evaluateCondition("text", "^$", field, "matches")).toBe(false);
   });
 
   it("keeps the value of a view that is not a text input out of the tree", () => {
