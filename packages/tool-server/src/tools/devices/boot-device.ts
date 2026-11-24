@@ -2298,7 +2298,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Mac app: path to the .app bundle to start with the argent library; its device id is `macos-app-<bundle id>`. A Release build with the hardened runtime cannot be driven; a hardened Debug build needs the step the error names."
+      "Mac app: path to the .app bundle to start with the argent library; its device id is `macos-app-<bundle id>`. An exported or notarized Release build with the hardened runtime cannot be driven without extra entitlements; a hardened Debug build needs the step the error names."
     )
     .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
   macosAppArgs: z

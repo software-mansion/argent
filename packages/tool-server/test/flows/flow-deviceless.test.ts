@@ -12,6 +12,9 @@ import {
   stepRequiresDevice,
 } from "../../src/tools/flows/flow-device";
 import { createStopAllSimulatorServersTool } from "../../src/tools/simulator/stop-all-simulator-servers";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 let tmpDir: string;
