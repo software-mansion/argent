@@ -24,7 +24,7 @@ Use the `device_id` from `list-devices` and keep the same ID and Metro port acro
 | `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                  |
 | `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                |
 | `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
-| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                         |
+| `debugger-log-registry`                              | Console log summary, the newest entries inline, and the log file path (§4)                                             |
 | `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                             |
 | `view-network-logs` → `view-network-request-details` | Find a request and inspect its headers, timing, or body                                                                |
 
@@ -68,7 +68,7 @@ What the `guidance` does not tell you:
 
 ## 4. Reading Console Logs (Log Registry)
 
-Logs are written to a flat log file on disk. `debugger-log-registry` returns the summary and the file path.
+`debugger-log-registry` returns the newest log entries inline (`levels` and `tail` filter them) plus the path of the full log file. Read `entries` first; search the file only for older lines or full messages.
 
 ### Flat log format
 

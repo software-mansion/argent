@@ -64,7 +64,7 @@ When a build fails (e.g. xcodebuild exit code 65), try the simplest fix first: c
 
 | Problem type                      | Where to look                                                                                                    |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | `debugger-log-registry` for a summary and the log file path, then `Grep` the file                                |
+| **JavaScript errors / logs**      | `debugger-log-registry` for a summary and the newest entries, then `Grep` its log file for more                  |
 | **React component hierarchy**     | `debugger-component-tree`, or `debugger-inspect-element` at logical pixel coordinates (not normalized 0-1)       |
 | **App state**                     | `debugger-evaluate` to run JavaScript in the app's runtime                                                       |
 | **Native crashes / native stack** | iOS: `~/Library/Logs/DiagnosticReports/`. Android: `adb -s <serial> logcat -d`, with `-b crash` for crashes only |

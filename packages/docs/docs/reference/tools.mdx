@@ -518,6 +518,13 @@ A simulator name with `&` or `+` never matches, because Metro lists it different
 
 After Argent finds a device by its name, the device ID stays bound to the app on that device. When that app exits, the `debugger-*` tools fail and do not use the other device. After the app starts again, the tools use it again. Argent confirms the app on each connect, so when the device ID names another device later, for example an emulator serial after the emulators restart on other ports, Argent finds the device by its name again.
 
+`debugger-log-registry` returns the counts, the clusters and the path of the log file. The result also contains `entries`: the newest console entries of the session, oldest first. These parameters change `entries`:
+
+- `tail`: the number of entries. The default is 20 and the maximum is 100.
+- `levels`: the console levels to return, for example `["warning", "error"]`. The levels are the CDP names, so `console.warn` is `warning`.
+
+Argent cuts each message in `entries` to 300 characters. The counts and the clusters do not change with these parameters. Argent stops the capture after 50,000 entries in one session.
+
 ### Wait for a request
 
 Start capture with `network-capture-start`, trigger the request, then call `await-network-request`. The wait can find a request that finished before you called it.
@@ -1357,7 +1364,7 @@ Some agent tools do not always give the same result as the hidden tool:
 
 - `restart-app` always relaunches the app. No agent tool leaves an app stopped. When the app is not installed, `restart-app` fails and `terminate-app` succeeds.
 - `describe` returns pruned text with one line for each element, not the raw tree. On an iOS simulator, the text does not show which element contains which. `describe` does not give the `hidden`, `covered`, `alertVisible`, `keyboardVisible` or `foregroundApp` fields.
-- `keyboard` types at the cursor and keeps the text that the field holds. `fill` replaces that text. With no focused field, `keyboard` drops the text and succeeds, and `fill` fails with `FILL_NO_FOCUSED_FIELD`. `fill` reads the field back, except on a physical iPhone. `keyboard` does not.
+- `keyboard` types at the cursor and keeps the text that the field holds. `fill` replaces that text. With no focused field, `keyboard` drops the text and succeeds, and `fill` fails with `FILL_NO_FOCUSED_FIELD`. `fill` reads the field back, except on a physical iPhone. `keyboard` reads the field back only on an iOS simulator, and only when the field is empty before it types. Then `verified: true` tells that the field contains the typed text. A capital that iOS put at the start of a word, and its smart punctuation (curly quotes, guillemets and apostrophes, a dash for two hyphens), still count as the typed text: both are on by default. `verified` is left out when Argent does not check the field: the field contains text before typing, the text contains Return or Tab, focus moves to another field while typing (as on a code screen that advances one box per digit), or Argent cannot read the field in time, for example because the app is busy. `verified: false` comes with a `warning`, and the tool does not fail. The field can contain different text for two reasons: the simulator dropped or repeated a key, or the app or iOS changed the text.
 - `native-describe-screen`, `native-find-views`, `native-full-hierarchy`, `native-view-at-point`, `native-user-interactable-view-at-point` and, on iOS after `network-capture-start`, `native-network-logs` return the same `message` as `native-devtools-status` when native devtools are not connected. Their `status` names the remedy, where `native-devtools-status` gives `state`. They fail instead for an Apple system app and for an app that a device provider did not lend. `native-profiler-*` do not use native devtools.
 - `describe` shows the disabled and selected states and the VoiceOver hint on an iOS simulator. `describe` does not show the frames in points, the view class or some traits, such as `toggleButton`. `native-describe-screen` returns them.
 - `chromium-storage` with no key returns every entry. Through `debugger-evaluate`, a bare `localStorage` returns `{}`, so use `Object.fromEntries(Object.entries(localStorage))`.
