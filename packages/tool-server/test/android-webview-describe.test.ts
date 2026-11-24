@@ -11,6 +11,9 @@ import { parseUiAutomatorDump } from "../src/tools/describe/platforms/android/ui
 import { describeAndroid, hasUnreadWebView } from "../src/tools/describe/platforms/android";
 import { formatDescribeTree } from "../src/tools/describe/format-tree";
 import type { DescribeNode } from "../src/tools/describe/contract";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const fixture = (name: string): string =>
   readFileSync(join(__dirname, "fixtures", `android-webview-${name}.xml`), "utf-8");
@@ -47,6 +50,14 @@ describe("parseUiAutomatorDump — WebView captures", () => {
     const rendered = formatDescribeTree(tree, { source: "android-devtools" });
     expect(rendered).toContain('StaticText "Android version history"');
     expect(rendered).toContain("[clickable]");
+  });
+
+  it("keeps the focus that Chromium's root web area holds in an in-app WebView", () => {
+    // The capture has focused="true" on the inner root and "false" on the outer host.
+    const webview = flatten(parseUiAutomatorDump(fixture("inapp"), 1080, 2424)).find(
+      (n) => n.role === "WebView"
+    );
+    expect(webview?.focused).toBe(true);
   });
 
   it("renders the cold capture as a leaf the adapter re-reads on", () => {

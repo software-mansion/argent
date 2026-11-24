@@ -53,8 +53,8 @@ request has been saved.
 
 ## Setup
 
-- **Node.js and npm**, at the versions [CONTRIBUTING.md](../../CONTRIBUTING.md#requirements) lists. Tried on macOS only.
-- **A built checkout:** `npm ci && npm run build`. The check runs the server from `dist/`.
+- **Node.js and Bun**, at the versions [CONTRIBUTING.md](../../CONTRIBUTING.md#requirements) lists. Tried on macOS only.
+- **A built checkout:** `bun install --frozen-lockfile && bun run build`. The check runs the server from `dist/`.
 - **Network access on the first run.** Codex 0.164.0, opencode 1.19.4 and Gemini CLI 0.65.0
   are installed into `node_modules/.cache/argent-harness-check/` (about 600 MB). They
   need no account: their model requests go to the local stand-in.
@@ -74,11 +74,11 @@ Claude Code, your `CLAUDE.md`), so check the results folder before you share it.
 ## Usage
 
 ```bash
-npm run harness-check                                   # Codex, opencode (3 providers), Gemini CLI
-npm run harness-check -- --with claude,kiro             # also Claude Code and Kiro CLI
-npm run harness-check -- --with claude --claude-all-tools
-npm run harness-check -- --only codex                   # one harness
-npm run harness-check -- --help
+bun run harness-check                                   # Codex, opencode (3 providers), Gemini CLI
+bun run harness-check --with claude,kiro                # also Claude Code and Kiro CLI
+bun run harness-check --with claude --claude-all-tools
+bun run harness-check --only codex                      # one harness
+bun run harness-check --help
 ```
 
 A run takes about 30 seconds after the first install. Results go to a new folder in the
@@ -91,10 +91,10 @@ branches:
 
 ```bash
 git worktree add ../argent-main main
-(cd ../argent-main && npm ci && npm run build)
+(cd ../argent-main && bun install --frozen-lockfile && bun run build)
 
-npm run harness-check -- --repo ../argent-main --with claude,kiro --out /tmp/hc-main
-npm run harness-check -- --with claude,kiro --compare /tmp/hc-main
+bun run harness-check --repo ../argent-main --with claude,kiro --out /tmp/hc-main
+bun run harness-check --with claude,kiro --compare /tmp/hc-main
 ```
 
 The second command adds a table of what changed in each harness's request, plus the

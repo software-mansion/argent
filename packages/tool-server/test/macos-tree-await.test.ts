@@ -12,6 +12,9 @@ import {
   webTree,
   windowRoot,
 } from "./helpers/macos-tree-fixture";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 useMacosAppsFlag();
 

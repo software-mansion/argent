@@ -8,7 +8,7 @@
 //
 // The two vendored artifacts are *runtime data*, never statically imported, so
 // the bundler ships them verbatim alongside `assets/queries`:
-//   • trace_processor.wasm        — read as bytes, handed to emscripten
+//   • trace_processor.wasm        — read as bytes, compiled, handed to the bridge
 //   • engine_bundle.node.js       — Google glue; read + patched + vm.runInThisContext
 
 import { readFileSync, existsSync } from "node:fs";
@@ -19,10 +19,6 @@ import vm from "node:vm";
 import { TraceProcessorUnavailableError } from "./errors.js";
 import { TraceProcessorRpc, type QueryResult, type SqlValue } from "./trace-processor-rpc.js";
 
-// Time the patched glue is given to finish `onRuntimeInitialized` (addFunction +
-// trace_processor_rpc_init) before the engine accepts queries. Override with
-// ARGENT_TRACE_PROCESSOR_INIT_MS on unusually slow hosts.
-const DEFAULT_INIT_MS = 1500;
 // Each warm engine holds its parsed trace plus the wasm heap, so the cap bounds
 // resident memory.
 const MAX_WARM_ENGINES = 3;
@@ -41,13 +37,16 @@ interface AssetPaths {
   gluePath: string;
 }
 
+/** A compiled `WebAssembly.Module`, opaque here: the lib config has no wasm types. */
+type WasmModule = object;
+
 /** Worker-scope / handoff globals the prebuilt web/worker glue needs. */
 interface EngineGlobals {
+  WebAssembly: { compile(bytes: Uint8Array): Promise<WasmModule> };
   self?: typeof globalThis;
   WorkerGlobalScope?: unknown;
   location?: { href: string };
-  __TP_WASM_BYTES?: Uint8Array;
-  __TP_bridge?: { initialize(port: MessagePort): void };
+  __TP_bridge?: { initialize(port: MessagePort, module: WasmModule): Promise<void> };
 }
 
 function engineGlobals(): EngineGlobals {
@@ -76,20 +75,18 @@ export function resolveTraceProcessorAssets(): AssetPaths {
 
 /**
  * Re-target Google's web/worker emscripten glue for Node. The input
- * (`engine_bundle.node.js`) already has `ENVIRONMENT_IS_NODE` forced false; this
- * applies the remaining three edits, throwing if an anchor stops matching
+ * (`engine_bundle.node.js`) never takes emscripten's Node path; this applies the
+ * remaining two edits, throwing if an anchor stops matching
  * (glue-format drift on a Perfetto bump).
  */
 export function patchGlueForNode(src: string): string {
   const edits: ReadonlyArray<readonly [string, string]> = [
-    // Force memory32: skip the memory64 probe and its __syscall_mprotect path.
-    ["this.useMemory64 = hasMemory64Support();", "this.useMemory64 = false;"],
-    // Hand the wasm bytes straight to emscripten -> it never calls readBinary/XHR.
-    ["locateFile: (s) => s,", "locateFile: (s) => s, wasmBinary: globalThis.__TP_WASM_BYTES,"],
+    // Force memory32: skip the memory64 probe, since only the memory32 wasm ships.
+    ["this.useMemory64 = memory64Supported();", "this.useMemory64 = false;"],
     // Expose the constructed bridge so we can drive it without self.onmessage.
     [
-      "const wasmBridge = new wasm_bridge_1.WasmBridge();",
-      "const wasmBridge = new wasm_bridge_1.WasmBridge(); globalThis.__TP_bridge = wasmBridge;",
+      "var wasmBridge = new WasmBridge();",
+      "var wasmBridge = new WasmBridge(); globalThis.__TP_bridge = wasmBridge;",
     ],
   ];
   for (const [from, to] of edits) {
@@ -205,31 +202,24 @@ async function createEngine(): Promise<ReadyEngine> {
   try {
     const { wasmPath, gluePath } = resolveTraceProcessorAssets();
     const dir = path.dirname(wasmPath);
-    const initMs = Number(process.env.ARGENT_TRACE_PROCESSOR_INIT_MS) || DEFAULT_INIT_MS;
 
     setupWorkerScope(dir);
 
     const g = engineGlobals();
-    // Hand the bytes to the patched glue (it reads globalThis.__TP_WASM_BYTES).
-    g.__TP_WASM_BYTES = new Uint8Array(readFileSync(wasmPath));
+    const wasmModule = await g.WebAssembly.compile(await readFile(wasmPath));
     const src = patchGlueForNode(readFileSync(gluePath, "utf8"));
     vm.runInThisContext(src, { filename: "engine_bundle.node.patched.js" });
 
     const bridge = g.__TP_bridge;
     if (!bridge) throw new Error("patched glue did not expose globalThis.__TP_bridge");
 
-    const channel = new MessageChannel();
-    bridge.initialize(channel.port1);
-    const engine = new WasmEngine(channel.port2);
-
-    // Let onRuntimeInitialized -> addFunction + trace_processor_rpc_init finish.
-    await new Promise<void>((r) => setTimeout(r, initMs));
-
-    // Drop the one-shot handoff globals; the wasm has copied the bytes into its
-    // own heap by now, so we can release the 13 MB reference.
     g.__TP_bridge = undefined;
-    g.__TP_WASM_BYTES = undefined;
-    return engine;
+
+    const channel = new MessageChannel();
+    // Resolves once the runtime is up and trace_processor_rpc_init has run, so
+    // the engine accepts requests from here on.
+    await bridge.initialize(channel.port1, wasmModule);
+    return new WasmEngine(channel.port2);
   } catch (err) {
     if (err instanceof TraceProcessorUnavailableError) throw err;
     throw new TraceProcessorUnavailableError("wasm_load_failed", { cause: err });

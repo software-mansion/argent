@@ -701,6 +701,37 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     await other.dispose();
   });
 
+  it("connect() waits for a launch in flight, and a call bound to a connection never goes over another", async () => {
+    const app = await macosApp();
+    const launching = app.launch({ appPath });
+    const connection = await app.connect();
+    const { pid } = await launching;
+    // The new process, whose record the launch wrote before it connected.
+    expect(connection.pid).toBe(pid);
+    expect(getTrackedMacosApp(BUNDLE_ID)?.pid).toBe(pid);
+    await expect(app.call("Echo", {}, { connection })).resolves.toMatchObject({ pid });
+
+    // Another tool-server connects, and the library replaces this one's connection.
+    const other = new Registry();
+    other.registerBlueprint(macosAppBlueprint);
+    const otherApp = await macosApp(other);
+    const otherConnection = await otherApp.connect();
+    await waitUntil(() => !connection.isOpen);
+
+    const lost = await app.call("Echo", {}, { connection }).catch((e) => e);
+    expect(codeOf(lost)).toBe(FAILURE_CODES.MACOS_APP_CONNECTION_LOST);
+    expect((lost as Error).message).toMatch(/did not send Echo over a new connection/);
+    expect(otherConnection.isOpen).toBe(true);
+    await expect(otherApp.call("Echo", {}, { connection: otherConnection })).resolves.toMatchObject(
+      { pid }
+    );
+
+    // An unbound call connects again, which closes the other tool-server's connection.
+    await app.call("Echo");
+    await waitUntil(() => !otherConnection.isOpen);
+    await other.dispose();
+  });
+
   it("says when an app has no listening socket, and a restart after the connection is gone quits and starts it again", async () => {
     // No socket path under so long a HOME fits sun_path.
     vi.stubEnv("HOME", path.join(root, "h".repeat(90)));
@@ -1042,10 +1073,8 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(await details("macos-0000-999999")).toBe(
         "Request macos-0000-999999 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
       );
-      // A Mac app has only native ids.
-      expect(await details("rn-net-1")).toBe(
-        "Request rn-net-1 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
-      );
+      // A JS ID is read from the app's JS runtime through Metro, which this fake has none of.
+      await expect(details("rn-net-1")).rejects.toThrow(/NetworkInspector:8081:macos-app-/);
     });
 
     it("keeps a request body read open while the app sends the body, past the default wait of a CDP request", async () => {
@@ -3171,7 +3200,9 @@ describe("stageMacosLibraries", () => {
           `"${folder}/libArgentInjectionBootstrap.dylib" "${folder}/libNativeDevtoolsMacos.dylib"`
       );
       expect(message).toContain("the user runs this command, not the agent");
-      expect(message).toContain("A Release build with the hardened runtime cannot be driven");
+      expect(message).toContain(
+        "An exported or notarized Release build with the hardened runtime cannot be driven"
+      );
 
       // The user signs the files in place; the next launch takes them as they are.
       fs.writeFileSync(path.join(folder!, "libNativeDevtoolsMacos.dylib"), "signed by the user");

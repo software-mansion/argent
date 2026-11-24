@@ -2,6 +2,7 @@
 sidebar_position: 2
 sidebar_label: Tools
 title: Tools reference
+description: Argent gives the AI coding agent its capabilities as MCP tools. This page lists the tools for devices, interaction, debugging, profiling, e2e tests and more.
 sidebar_custom_props:
   icon: wrench
 ---
@@ -12,24 +13,24 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Devices and apps
 
-| Tool                         | Description                                                                                                                             |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Mac apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators |
-| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, spawn an Electron app or web browser, or start a Mac app        |
-| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                                |
-| `restart-app`                | Terminate then relaunch an app                                                                                                          |
-| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                                  |
-| `open-url`                   | Open a URL or URL scheme on the device                                                                                                  |
-| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                           |
-| `rotate`                     | Set the device orientation to portrait or either landscape                                                                              |
-| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                               |
-| `shake`                      | Shake the device                                                                                                                        |
-| `network-conditions`         | Add latency, limit the download and upload speed, or set the network offline                                                            |
-| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                           |
-| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                      |
-| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                        |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, network capture and its requests (not on Vega)        |
-| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                        |
+| Tool                         | Description                                                                                                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Mac apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators                      |
+| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, spawn an Electron app or web browser, or start a Mac app                             |
+| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                                                     |
+| `restart-app`                | Terminate then relaunch an app                                                                                                                               |
+| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                                                       |
+| `open-url`                   | Open a URL or URL scheme on the device                                                                                                                       |
+| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                                                |
+| `rotate`                     | Set the device orientation to portrait or either landscape                                                                                                   |
+| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                                                    |
+| `shake`                      | Shake the device                                                                                                                                             |
+| `network-conditions`         | Add latency, limit the download and upload speed, or set the network offline                                                                                 |
+| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                                                |
+| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                                           |
+| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                                             |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, network capture and its requests (not on Vega), the Android throttle proxy |
+| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                                             |
 
 `list-devices` returns `devices` and, when one applies, `notes`. Each device has a `platform`, a `kind` and a `state`:
 
@@ -138,23 +139,23 @@ With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started 
 
 `network-conditions` sets the network conditions of an iOS simulator app, an Android emulator or a Chromium tab. Each call replaces the conditions of the previous call.
 
-| Parameter      | Description                                                                                               |
-| -------------- | --------------------------------------------------------------------------------------------------------- |
-| `udid`         | The device                                                                                                |
-| `bundleId`     | iOS only, and required on iOS: the app to throttle                                                        |
-| `port`         | iOS only: the Metro port that Argent does not throttle. The default is the Metro port of the device.      |
-| `latencyMs`    | The minimum time from a request to its response, in milliseconds, from 0 to 60000                         |
-| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.                                              |
-| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.                                                |
-| `offline`      | `true` makes requests fail as if no network is available. On Android, `adb reverse` ports stay reachable. |
+| Parameter      | Description                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `udid`         | The device                                                                                                  |
+| `bundleId`     | iOS only, and required on iOS: the app to throttle                                                          |
+| `port`         | iOS and Android: the Metro port that Argent does not throttle. The default is the Metro port of the device. |
+| `latencyMs`    | The minimum time from a request to its response, in milliseconds, from 0 to 60000                           |
+| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.                                                |
+| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.                                                  |
+| `offline`      | `true` makes requests fail as if no network is available. On Android, `adb reverse` ports stay reachable.   |
 
 A call without `latencyMs`, `downloadKbps`, `uploadKbps` and `offline` removes the throttle, also when it has `port`. An unknown parameter fails the call. The result contains `scope` and `conditions`. `conditions` is `null` after a removal. `scope` tells which traffic Argent changes:
 
-| `scope`  | Target             | Traffic                                                                                  |
-| -------- | ------------------ | ---------------------------------------------------------------------------------------- |
-| `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`) |
-| `device` | Android emulator   | The traffic of the emulator network. Only `offline` is available.                        |
-| `tab`    | Chromium, Electron | The requests of the page in the active tab                                               |
+| `scope`  | Target             | Traffic                                                                                                              |
+| -------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`)                             |
+| `device` | Android emulator   | The HTTP, HTTPS and WebSocket traffic of all apps that use the proxy of the system. `offline` turns off the network. |
+| `tab`    | Chromium, Electron | The requests of the page in the active tab                                                                           |
 
 `latencyMs` sets a minimum. A response that takes longer than `latencyMs` gets no extra delay.
 
@@ -171,12 +172,18 @@ On iOS:
 - On a simulator from a [device provider](./device-providers.mdx), a removal leaves the network capture of the provider as it was. A restart of the app removes the conditions there. Call `network-conditions` again after it.
 - When the tool-server stops or `stop-all-simulator-servers` stops the native devtools, the app removes the conditions.
 
-On Android, the emulator console cannot shape the Wi-Fi network of current system images. Thus `latencyMs`, `downloadKbps` and `uploadKbps` fail on an Android emulator. `offline: true` turns off Wi-Fi and mobile data with `svc`. Argent reports offline only when Android confirms that the emulator has no default network. If Argent cannot confirm this within 15 seconds, it tries to turn both radios on again and fails the call. An Android TV emulator connects over Ethernet, so `offline` fails there with `error_kind: "unsupported"`. On other emulators the call fails with `error_kind: "timeout"`. Call `network-conditions` again after a timeout. A call without conditions does nothing when the emulator has a network. Otherwise it turns on Wi-Fi and mobile data, and fails with `error_kind: "timeout"` when no network comes up within 15 seconds. The emulator stays offline after the tool-server stops.
+On Android, Argent sets the global HTTP proxy of the emulator (`settings put global http_proxy`) to a proxy on the host at `10.0.2.2`:
 
-While the Android emulator is offline:
+- The proxy adds `latencyMs` to each round trip, also on kept-alive connections. A new HTTPS connection pays it more than once: for the tunnel, the TLS handshake and the request.
+- `downloadKbps` and `uploadKbps` limit the total speed of all connections together.
+- HTTP, HTTPS and WebSocket traffic goes through the proxy. Requests to the Metro port (`port`) at `10.0.2.2` or the loopback of the emulator keep their speed. A connection keeps the target of its first request.
+- A request to `localhost` reaches the host port that `adb reverse` maps it to. Without a reverse, it fails with HTTP 502 while the throttle is on. Chromium and WebView send `localhost` requests directly.
+- Raw sockets, UDP, QUIC, DNS, apps that ignore the system proxy (such as Flutter `dart:io`) and connections opened before the call keep their speed. Restart the app to shape all its requests.
+- When the emulator has no network, a throttle turns on Wi-Fi and mobile data first, and fails with `error_kind: "timeout"` when no network comes up within 15 seconds.
+- The call fails when the emulator already has a proxy that Argent did not set, and on an emulator from a device provider.
+- A removal, a tool-server stop and `stop-all-simulator-servers` remove the proxy. A removal fails with `error_kind: "timeout"` when Android does not apply it within 5 seconds. After a crash of the tool-server, apps cannot connect until the agent calls `network-conditions` again.
 
-- Requests through `adb reverse` still work, because adb carries them.
-- The emulator cannot reach the host at `10.0.2.2`. A React Native app that loads from Metro at `10.0.2.2` loses its connection to Metro. The debugger tools then cannot reach the app until the network comes back.
+`offline: true` removes the proxy and turns off Wi-Fi and mobile data with `svc`. Argent reports offline only when Android confirms that the emulator has no default network. If Argent cannot confirm this within 15 seconds, it tries to turn both radios on again and fails the call. An Android TV emulator connects over Ethernet, so `offline` fails there with `error_kind: "unsupported"`. On other emulators the call fails with `error_kind: "timeout"`. Call `network-conditions` again after a timeout. A call without conditions removes the proxy, and does nothing more when the emulator has a network. Otherwise it turns on Wi-Fi and mobile data, and fails with `error_kind: "timeout"` when no network comes up within 15 seconds. The emulator stays offline after the tool-server stops.
 
 On Chromium, Argent applies the conditions to the page of the active tab. Argent applies them again after a tab switch with `chromium-tabs`, and before a tab that `chromium-tabs` opens loads its URL. When `chromium-tabs close` closes the active tab, Argent moves to another tab and applies the conditions there. Service workers, web workers and cross-site iframes keep the full speed. When the active tab closes outside Argent, or when another DevTools client detaches from the page, the conditions can go away. Call `network-conditions` again.
 
@@ -277,17 +284,17 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 
 ### Network capture on iOS, Android and Mac apps
 
-On iOS, Android and Mac apps, the network read tools only read. `view-network-logs`, `view-network-request-details` and `native-network-logs` never start capture. Call `network-capture-start` for the app before the action that sends the requests.
+For iOS and Android, start capture before the action that sends the request. For Mac apps, this workflow applies to the native layer.
 
 `native-network-logs` does not stop the capture. A call with `stop` fails with the error `TOOL_INPUT_INVALID`, and the message tells you to call `network-capture-stop`. Remove `stop` from the call, also `stop: false`.
 
-To capture a request:
+To capture a request with `network-capture-start`:
 
 1. Call `network-capture-start` with `udid` and `bundleId`.
 2. Do the action that sends the request.
-3. Call `view-network-logs` or `native-network-logs` to read the list of requests.
+3. Read the requests with the tool listed for the layer below.
 
-`network-capture-start` and `network-capture-stop` work on iOS simulators, remote iOS simulators, Android emulators, Android devices and Mac apps. On iOS and Android, each call controls two layers of the app. On a Mac app, each call controls the `macos-native` layer only:
+`network-capture-start` and `network-capture-stop` work on iOS simulators, remote iOS simulators, Android emulators, Android devices and Mac apps. On iOS and Android, each call controls two layers of the app. The Mac app layer is `macos-native`:
 
 | Layer            | Platform     | Requests                                | Read with             |
 | ---------------- | ------------ | --------------------------------------- | --------------------- |
@@ -296,18 +303,22 @@ To capture a request:
 | `android-native` | Android      | The OkHttp requests of a debuggable app | `native-network-logs` |
 | `macos-native`   | Mac apps     | The `URLSession` requests               | `native-network-logs` |
 
-The two tools do not support Chromium and Vega. There, Argent starts the capture without them:
+Other capture starts automatically:
 
-- Chromium: Argent starts the capture when it attaches to the page. Each Chromium tool attaches Argent to the page.
-- Vega: a read starts the capture of the JS runtime layer. Each call of `view-network-logs` or `view-network-request-details` installs the capture in the JS runtime of the app, also after a reload.
+- Chromium and Electron record when Argent attaches to the page on the first Chromium tool call.
+- Vega and React Native Mac apps start JS capture on the first call to `view-network-logs` or the first JS request lookup with `view-network-request-details`. Call `view-network-logs` before reproducing the request and again after any reload.
 
-| Parameter         | Effect                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `udid`            | The UDID of the iOS simulator, the serial of the Android device, or the device ID of the Mac app (`macos-app-<bundle id>`)                                                                                                                                                                                                                                                                                      |
-| `bundleId`        | The bundle ID of the app on iOS and on a Mac app, or the package name of the app on Android                                                                                                                                                                                                                                                                                                                     |
-| `port`            | The Metro port of the app. Argent reaches the JS runtime of the app through this port. The native layers remove the requests to this port on a local address from their lists. The default is the Metro port of the device.                                                                                                                                                                                     |
-| `layer`           | The layer that the call starts or stops: `js` for the JS runtime layer, or `native` for the `ios-native`, `android-native` or `macos-native` layer. Without `layer`, the call starts or stops both layers. A Mac app has only the native layer: there, a start with `layer: "js"` fails with `NETWORK_CAPTURE_UNAVAILABLE`, and a stop with `layer: "js"` changes nothing and does not stop the native capture. |
-| `logicalDeviceId` | Only for a Metro server that two or more devices use. The `logicalDeviceId` of the device on this Metro server. See [Several devices on one Metro server](#several-devices-on-one-metro-server).                                                                                                                                                                                                                |
+On a React Native Mac app, use `view-network-logs` for JavaScript requests and `native-network-logs` for `URLSession` requests. Both can show the same `fetch()` request. Pass the ID from either log to `view-network-request-details`. A `macos-` ID does not require a debugger connection.
+
+| Parameter         | Effect                                                                                                                                                                                                                      |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`            | The UDID of the iOS simulator, the serial of the Android device, or the device ID of the Mac app (`macos-app-<bundle id>`)                                                                                                  |
+| `bundleId`        | The bundle ID of the app on iOS and on a Mac app, or the package name of the app on Android                                                                                                                                 |
+| `port`            | The Metro port of the app. Argent reaches the JS runtime of the app through this port. The native layers remove the requests to this port on a local address from their lists. The default is the Metro port of the device. |
+| `layer`           | Use `js` for the JS runtime or `native` for the native layer. Omit to control all supported layers.                                                                                                                         |
+| `logicalDeviceId` | Only for a Metro server that two or more devices use. The `logicalDeviceId` of the device on this Metro server. See [Several devices on one Metro server](#several-devices-on-one-metro-server).                            |
+
+On a Mac app, `layer: "js"` returns `NETWORK_CAPTURE_UNAVAILABLE` on start. A stop with `layer: "js"` leaves both layers recording if they were active.
 
 #### One layer
 
@@ -487,7 +498,23 @@ The `header` line of `native-network-logs` gives one of these states after the n
 
 When the expression of `debugger-evaluate` returns a Promise, Argent waits up to 10 seconds and returns the value it resolves to. A rejection fails the call with the reason. On Vega and on React Native 0.75 and older, the result is the internal fields of the Promise.
 
-When two or more devices share one Metro, Metro does not list the device IDs from `list-devices`. For a booted local iOS simulator, Argent selects the app on the Metro device with the same name as the simulator. Argent does this only when exactly one booted local simulator and exactly one Metro device have that name. A simulator name with `&` or `+` never matches, because Metro lists it differently. For any other simulator, emulator or physical device ID, the debugger tools return `DEBUGGER_TARGET_DEVICE_MISMATCH` with the `logicalDeviceId` of each device on Metro, and `debugger-status` and `debugger-log-registry` return `not_connected` with the same list. Pass that `logicalDeviceId` as `device_id` in the next calls.
+For react-native-macos and Mac Catalyst apps, see [JavaScript debugging on a Mac app](#javascript-debugging-on-a-mac-app).
+
+Give `debugger-connect` the device ID from `list-devices`. When several devices share one Metro, Metro does not list those device IDs, so Argent finds the device by its name:
+
+| Device         | Name that Argent compares with the name that Metro reports                         | Other devices that must not have the same name |
+| -------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------- |
+| iOS simulator  | The name of the simulator                                                          | The other booted simulators                    |
+| Android device | `<model> - <release> - API <level>`, from `ro.product.model` and the build version | The other devices that adb lists               |
+| Other devices  | No name. Use the `logicalDeviceId`.                                                | Not applicable                                 |
+
+Then the app writes a marker to its device log, and Argent reads the log of the device to confirm that the app runs there. A device that Argent does not list can report the same name, for example a device on another adb server or on the network.
+
+A simulator name with `&` or `+` never matches, because Metro lists it differently: `Dev&QA` as `Dev`, and `Pro+Max` as `Pro Max`. Argent also compares the other booted simulators by the names that Metro lists for them.
+
+`debugger-connect` fails with `DEBUGGER_TARGET_DEVICE_MISMATCH` when another device has the same name, when the marker is in the log of another device, or when Argent cannot find the marker. The error lists the `logicalDeviceId` of each device on the Metro, and `debugger-status` and `debugger-log-registry` return `not_connected` with the same list. Give that `logicalDeviceId` as `device_id` in the next calls.
+
+After Argent finds a device by its name, the device ID stays bound to the app on that device. When that app exits, the `debugger-*` tools fail and do not use the other device. After the app starts again, the tools use it again. Argent confirms the app on each connect, so when the device ID names another device later, for example an emulator serial after the emulators restart on other ports, Argent finds the device by its name again.
 
 ## Native devtools
 
@@ -701,14 +728,14 @@ The result contains `platform: "macos"`, `id`, `kind`, `bundleId`, `pid`, `appPa
 
 A `note` reports conditions that need attention, such as no open window or arguments that differ from the request. Launch tools wait up to 10 seconds for a window. Use `force` to apply changed arguments to an already running app.
 
-| Tool                                                  | macOS behavior                                                                                                                                        |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                                                                       |
-| `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                                                                             |
-| `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                                                                   |
-| `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                                                                           |
-| `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                                                                           |
-| `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent. The app keeps running; network capture stops and its recorded requests are lost. `network-capture-start` starts the capture again. |
+| Tool                                                  | macOS behavior                                                                                                                                                                                                         |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                                                                                                                                        |
+| `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                                                                                                                                              |
+| `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                                                                                                                                    |
+| `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                                                                                                                                            |
+| `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                                                                                                                                            |
+| `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent. The app keeps running; network capture stops and its recorded requests are lost. `network-capture-start` starts the capture again. See [screen recording recovery](#screen-recording-on-a-mac-app). |
 
 For `launch-app` and `restart-app`, `bundleId` must match the device. Both accept `launchArgs` and otherwise reuse the previous arguments. Both report `appPath` and `args`.
 
@@ -978,6 +1005,20 @@ Use `describe` or `native-describe-screen` to inspect UIKit controls through the
 
 If typing, paste, or scrolling reports success without changing the app, check that your Argent build includes the native library with Mac Catalyst input support.
 
+### Screen recording on a Mac app
+
+Pass the Mac app's ID as `udid` to `screen-recording-start` and `screen-recording-stop`. Call `screen-recording-stop` to retrieve the MP4 even after the time limit ends the recording.
+
+The video uses a variable frame rate. Argent sets the video size from the window size at the start. The longer side can be up to 3840 pixels and the shorter side up to 2160 pixels. If the window changes size, Argent preserves its proportions and adds black bars as needed.
+
+With `showTouches` enabled, the video shows the agent's pointer, a ring for each click, and a dot while the agent holds a mouse button. Right-clicks use an orange ring.
+
+Before you start, open or restore a window and move it fully onto one display. The app must allow capture of that window. If Argent cannot capture it during recording, the video holds the last frame and `warning` gives the reason. Argent also warns when it omits a protected menu, sheet, or other overlay.
+
+- **`MACOS_APP_LIBRARY_OUTDATED`.** Run `restart-app` and try again. If the error persists, use an Argent build with native Mac recording support.
+- **Lost connection.** Quitting or restarting the app or connecting from another Argent tool-server can discard the recording. If stop reports a partial video path, check the file before recording again.
+- **Argent disconnects.** Stop the recording before you call `stop-simulator-server` or `stop-all-simulator-servers`. If you disconnect first, Argent gives the app up to 20 seconds to finish. Check the path in the next `screen-recording-stop` error on the tool-server host. After the tool-server restarts, check `outputFile` from the start result on that host.
+
 ### Profiling a Mac app
 
 Pass the Mac app's `device_id` to `native-profiler-start`, `native-profiler-stop`, `native-profiler-analyze`, and `profiler-stack-query`. Use `profiler-load` with `mode: "load_native"` to reopen a saved native session. See [Profiling](#profiling) for shared behavior.
@@ -1004,7 +1045,7 @@ A short recording may end before a leak check finishes. Follow the report's warn
 
 Start a [supported Debug build](/docs/features/mac-apps#profile-a-react-native-app) through Argent.
 Pass `id` from the app's `list-devices` entry as `device_id`, even on a shared Metro. The profiler
-connects directly to Metro. The `debugger-*` tools are unavailable for Mac apps.
+connects directly to Metro.
 
 Use the same `device_id` and Metro `port` for the React profiler and query tools. The default port
 is 8081. To reopen a saved React profile, use `profiler-load` with `mode: "load_react"`. To compare
@@ -1027,23 +1068,36 @@ files without a platform suffix. If the recording lacks architecture information
 `macos/Podfile`. A Mac Catalyst app runs the iOS bundle, so its report uses `.ios.*` files and
 `ios/Podfile`.
 
+### JavaScript debugging on a Mac app
+
+The debugger and JS network tools need a [supported Debug build](/docs/features/mac-apps#profile-a-react-native-app) that loads JavaScript from Metro. Start Metro before you launch the app.
+
+- **Launch.** Start Mac Catalyst apps through Argent so it can identify the runtime. If `boot-device` returns `MACOS_APP_HARDENED_RUNTIME` for a react-native-macos build, start the app from Xcode. You can still debug JavaScript. Screen inspection and gestures require an Argent-controlled build.
+- **Target.** Pass `macos-app-<bundle id>` as `device_id`, and pass `port` if Metro uses a port other than 8081. Keep the Mac app ID on shared Metro. If Metro lists other runtimes but cannot find the Mac app, the tools report `DEBUGGER_TARGET_DEVICE_MISMATCH` (or `reason: "device_mismatch"` in `debugger-status`). Check that the app loaded its Debug bundle from that Metro. The reported logical IDs belong to other targets.
+- **Coordinates.** `debugger-component-tree` reports tap fractions of the whole window, including the title bar. For `debugger-inspect-element`, multiply the horizontal and vertical fractions by the width and height from `Screen: WxH` to get window points.
+- **Several windows.** Both debugger tools use the React Native root with the most components. Check that it belongs to the window `describe` and `gesture-tap` target before using its coordinates. If you need to inspect a different window, close the other React Native windows and retry.
+- **Paper.** On react-native-macos with the old architecture, window coordinates assume the React Native root fills the content view. A native footer, for example, can shift the result. Use `describe` for tap targets and verify that the inspected component matches the intended control.
+- **Reload.** `debugger-reload-metro` targets only the Mac app. If it returns `DEBUGGER_RELOAD_FAILED`, restart the app. Argent skips the shared Metro reload because it would reload other apps too.
+
+For JavaScript and native request logs, see [Network capture](#network-capture-on-ios-android-and-mac-apps).
+
 ### Additional limitations
 
 See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types and features.
 
-| Area                      | Limitation or workaround                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Background windows        | Hiding the app does not pause automation. The next action shows it again without activating it.                                                                                                                                                                                                                                                                  |
-| Multiple windows          | Input and menu commands target the agent's current window. Panels beside that window may be inaccessible; panels over it can be controlled.                                                                                                                                                                                                                      |
-| Menus                     | Context and pop-up menus can bring the window forward temporarily. Only one menu can stay open on the Mac; another click can close it.                                                                                                                                                                                                                           |
-| Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                                                                                                                                                                |
-| Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                                                                                                                                                           |
-| Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                                                                                                                                                                |
-| Keyboard layout           | Mac Catalyst uses the current keyboard layout for the key codes of typed characters. Other Mac apps receive US-layout codes.                                                                                                                                                                                                                                     |
-| SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                                                                                                                                                   |
-| SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                                                                                                                                                              |
-| Protected windows         | Capture protection blocks screenshots, screenshot diffs, and e2e snapshots. Inspection and input still work.                                                                                                                                                                                                                                                     |
-| Other tools               | Hardware buttons, device rotation, shake, fold, TV remote, permission settings, screen recording, JavaScript debugger tools, and Chromium tools are unsupported. Use `network-capture-start` and `native-network-logs` for traffic, and `view-network-request-details` for a `macos-` request. `view-network-logs` and `native-devtools-status` are unavailable. |
+| Area                      | Limitation or workaround                                                                                                                                                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Background windows        | Hiding the app does not pause automation. The next action shows it again without activating it.                                                                                                                                |
+| Multiple windows          | Input and menu commands target the agent's current window. Panels beside that window may be inaccessible; panels over it can be controlled.                                                                                    |
+| Menus                     | Context and pop-up menus can bring the window forward temporarily. Only one menu can stay open on the Mac; another click can close it.                                                                                         |
+| Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                              |
+| Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                         |
+| Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                              |
+| Keyboard layout           | Mac Catalyst uses the current keyboard layout for the key codes of typed characters. Other Mac apps receive US-layout codes.                                                                                                   |
+| SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                 |
+| SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                            |
+| Protected windows         | Capture protection blocks screenshots, screenshot diffs, e2e snapshots, and screen recordings. Inspection and input still work.                                                                                                |
+| Other tools               | Hardware buttons, device rotation, shake, fold, TV remote, permission settings, Chromium tools, and `native-devtools-status` are unsupported. See [Network capture](#network-capture-on-ios-android-and-mac-apps) for traffic. |
 
 ## Profiling
 

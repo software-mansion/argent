@@ -28,26 +28,27 @@ jobs:
         with:
           # ESLint 10 requires Node ^20.19 || ^22.13 || >=24.
           node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            packages/docs/package-lock.json
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
-      # packages/docs is excluded from the root npm workspaces and carries its
+      # packages/docs is excluded from the root workspaces and carries its
       # own lockfile. The root config lints it too, and the type-aware parser
       # loads packages/docs/tsconfig.json, which extends @docusaurus/tsconfig
       # from the docs' own node_modules.
       - name: Install docs dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
         working-directory: packages/docs
 
       # Type-aware rules need the referenced projects' declarations on disk so
       # cross-package imports resolve to real types instead of `any`.
       - name: Build workspace dependencies
-        run: npm run build
+        run: bun run build
 
       # Type-aware linting holds the whole program graph in memory, and the
       # repo already peaks just under Node's default ~4 GiB old-space cap on a
@@ -55,6 +56,6 @@ jobs:
       # the job dies with "Ineffective mark-compacts near heap limit" (exit
       # 134) the first time an ordinary PR adds a few files.
       - name: Lint
-        run: npm run lint
+        run: bun run lint
         env:
           NODE_OPTIONS: --max-old-space-size=8192

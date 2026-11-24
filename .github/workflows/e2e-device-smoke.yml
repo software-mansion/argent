@@ -166,12 +166,12 @@ jobs:
 
       - name: Vendor the fixture's electron
         if: needs.changes.outputs.relevant == 'true'
-        # The fixture brings its own electron (kept out of the root lockfile);
+        # The fixture brings its own electron;
         # boot-electron resolves ./node_modules/.bin/electron from the app dir.
-        # Standalone project (not a packages/* workspace member), so this ci is
-        # independent of the root install. Electron is only needed at boot time,
-        # so vendoring it after the server starts is fine.
-        run: npm ci
+        # Standalone project (not a packages/* workspace member), so this
+        # install is independent of the root install. Electron is only needed at
+        # boot time, so vendoring it after the server starts is fine.
+        run: bun install --frozen-lockfile
         working-directory: packages/tool-server/test/fixtures/electron-smoke-app
 
       - name: Boot + drive
@@ -229,7 +229,7 @@ jobs:
 
       - name: Vendor the fixture's electron
         if: needs.changes.outputs.relevant == 'true'
-        run: npm ci
+        run: bun install --frozen-lockfile
         working-directory: packages/tool-server/test/fixtures/electron-smoke-app
 
       - name: Boot + drive
