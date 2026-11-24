@@ -74,9 +74,9 @@ export function createNetworkCaptureStartTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StartedLayer>> {
   return {
     id: "network-capture-start",
-    description: `Start network capture on iOS simulators and Android<flag:macos-apps> (also on Mac apps)</flag:macos-apps> before triggering requests, including in an e2e test. Repeating the call keeps requests already captured. Capture can slow the app.
+    description: `Start network capture on iOS simulators and Android<flag:macos-apps> (also on Mac apps)</flag:macos-apps>. Use when you are about to trigger requests you need to inspect, including in an e2e test. Repeating the call keeps requests already captured. Capture can slow the app.
 The JavaScript layer needs an app connected to Metro. Start again after its JavaScript loads, including after a reload or relaunch. Android native capture needs a debuggable build.<flag:macos-apps> For a supported React Native app launched from Xcode, use layer js and form udid as macos-app-<bundle id>. Native capture needs a supported build launched through Argent.</flag:macos-apps>
-Check armed and reason for each requested layer. A pending native layer can become ready when Argent launches or reconnects to the app. On iOS simulators using a device provider's socket, start native capture again after a relaunch.
+Returns { status, layers }: check armed and reason for each requested layer. A pending native layer can become ready when Argent launches or reconnects to the app. On a device whose devtools agent Argent attached to, start native capture again after a relaunch.
 When every requested layer is unavailable, the call fails with NETWORK_CAPTURE_UNAVAILABLE or TOOL_DEPENDENCY_MISSING.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
