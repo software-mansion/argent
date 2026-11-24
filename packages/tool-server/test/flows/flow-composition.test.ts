@@ -30,6 +30,7 @@ import { screenshotDiffTool } from "../../src/tools/screenshot-diff";
 vi.mock("../../src/tools/flows/flow-visual", () => ({
   DEFAULT_MAX_MISMATCH: 0.5,
   runSnapshot: vi.fn(async () => ({ status: "pass", reason: "snapshot stubbed" })),
+  warmSnapshotCapture: vi.fn(async () => {}),
 }));
 
 // Mock the Electron launcher: no test here may legitimately reach it — the
