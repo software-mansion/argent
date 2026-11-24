@@ -104,7 +104,7 @@ export function createRunSequenceTool(
     id: "run-sequence",
     description: `Execute several device interaction steps in one call.
 Use when every step is known in advance and you do not need to see the screen between steps (e.g. scrolling several times, typing then pressing enter). If a step depends on the result of an earlier one (e.g. a menu item that appears only after a tap), make separate calls instead.
-If a step fails, the sequence stops. This includes an unsupported tool, a wait step that returns success=false, or a keyboard step that returns verified=false. Returns { completed, total, steps } with a result or error for each step attempted.
+If a step fails, the sequence stops. This includes an unsupported tool, a wait step that returns success=false, or a keyboard step that returns verified=false on an Android phone or tablet. Returns { completed, total, steps } with a result or error for each step attempted.
 One screenshot and element tree are captured after the whole sequence, not per step: call screenshot separately only for a baseline before it or to see an intermediate step. A \`{{secret:...}}\` in any step skips that capture, so type a secret and submit it in one sequence.
 On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
 

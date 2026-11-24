@@ -104,8 +104,8 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
  * A nested `run-sequence` result.
  *
  * `run-sequence` has no verdict field: every failure path — a disallowed tool,
- * an unsupported operation, an unmet `await-ui-element`, a `keyboard` step with
- * `verified: false`, a tool that threw — pushes an `error` entry, breaks the
+ * an unsupported operation, an unmet `await-ui-element`, a `keyboard` step whose
+ * text did not land, a tool that threw — pushes an `error` entry, breaks the
  * loop, and returns normally.
  */
 function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | undefined {

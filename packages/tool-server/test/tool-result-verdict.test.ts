@@ -45,6 +45,10 @@ describe("toolResultVerdict", () => {
     expect(
       toolResultVerdict("keyboard", { typed: "hello", keys: 5, note: "not verified" })
     ).toBeUndefined();
+    // An iOS simulator's mismatch is advisory.
+    expect(
+      toolResultVerdict("keyboard", { typed: "hello", keys: 5, verified: false, warning: "w" })
+    ).toBeUndefined();
   });
 
   it("fails a run-sequence that stopped on an error", () => {

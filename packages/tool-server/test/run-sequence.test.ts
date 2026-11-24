@@ -411,6 +411,26 @@ describe("run-sequence", () => {
     expect(verdicts).toEqual([undefined, true, undefined]);
   });
 
+  it("continues past an iOS simulator's verified: false, which carries a warning", async () => {
+    const registry = mockRegistry((id: string, args: unknown) => {
+      const { text } = args as { text?: string };
+      if (text) return { typed: text, keys: text.length, verified: false, warning: "w" };
+      return { typed: "enter", keys: 1 };
+    });
+    const result = await createRunSequenceTool(registry).execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "keyboard", args: { text: "general" } },
+          { tool: "keyboard", args: { key: "enter" } },
+        ],
+      }
+    );
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+    expect(result.completed).toBe(2);
+  });
+
   it("does not stop on another tool's verified: false", async () => {
     const registry = mockRegistry(() => ({ verified: false }));
     const result = await createRunSequenceTool(registry).execute(

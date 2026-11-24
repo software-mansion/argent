@@ -114,6 +114,19 @@ describe("a raw tool: keyboard step the read-back failed", () => {
     expect(run.ok).toBe(true);
   });
 
+  it("passes an iOS simulator's verified:false, which carries a warning", async () => {
+    const { run, registry } = await runGated("ios-mismatch", {
+      typed: "hello world",
+      keys: 11,
+      verified: false,
+      warning: "w",
+    });
+
+    expect(invoked(registry)).toEqual(["keyboard", "gesture-tap"]);
+    expect(run.steps.map((s) => s.status)).toEqual(["pass", "pass"]);
+    expect(run.ok).toBe(true);
+  });
+
   it("passes when verification is absent — not checked is not failed", async () => {
     const { run, registry } = await runGated("unchecked", {
       typed: "hello world",
@@ -167,6 +180,7 @@ describe("recording a keyboard step", () => {
   it.each([
     ["verified", { typed: "display", keys: 7, verified: true }],
     ["unchecked", { typed: "display", keys: 7 }],
+    ["ios-mismatch", { typed: "display", keys: 7, verified: false, warning: "w" }],
   ])("does not warn on a %s step", async (name, result) => {
     expect(await record(`rec-${name}`, result)).toBe(`Step added to "rec-${name}" e2e test`);
     expect((await finish(`rec-${name}`)).message).toBe(

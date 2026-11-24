@@ -108,6 +108,9 @@ describe("tool interaction messages", () => {
       "Entered text"
     );
     expect(completed({ params: { udid: "d", text: "hi" }, result: {} })).toBe("Entered text");
+    expect(
+      completed({ params: { udid: "d", text: "hi" }, result: { verified: false, warning: "w" } })
+    ).toBe("Entered text");
   });
 
   it("does not claim a comparison for a dimension-mismatch screenshot-diff", () => {

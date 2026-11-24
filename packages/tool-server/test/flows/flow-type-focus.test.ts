@@ -242,6 +242,34 @@ describe("type directive — the keyboard tool's read-back verdict", () => {
     ]);
   });
 
+  it("passes the step, and presses Enter, on verified: false with a warning", async () => {
+    const calls: Call[] = [];
+    const registry = mockRegistry(calls, focusedEmail, (args) =>
+      args.text === undefined
+        ? { typed: "enter", keys: 1 }
+        : { typed: String(args.text), keys: 7, verified: false, warning: "w" }
+    );
+
+    await writeFlow("ios-mismatch-type", {
+      executionPrerequisite: "",
+      steps: [{ kind: "type", into: { identifier: "email" }, text: "a@b.com" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "ios-mismatch-type", project_root: tmpDir, device: ANDROID_DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
+    expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.key ?? c.args.text)).toEqual([
+      "a@b.com",
+      "enter",
+    ]);
+  });
+
   it("passes the step when the keyboard verifies the text", async () => {
     const calls: Call[] = [];
     const registry = mockRegistry(calls, focusedEmail, (args) => ({

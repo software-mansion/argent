@@ -13,18 +13,24 @@ export interface KeyboardResult {
   typed: string;
   keys: number;
   /**
-   * Android phone / tablet only: whether the focused field was read back holding
-   * the text. Absent when the check did not run or could not conclude.
-   */
-  verified?: boolean;
-  /** Why `verified` is false or absent. Never quotes the field's contents. */
-  note?: string;
-  /**
    * Physical iOS only: the target app was backgrounded and the runner
    * re-fronted it to deliver this input, so the foreground screen changed as
    * a side effect. Set only when true.
    */
   reactivated?: true;
+  /**
+   * Whether the focused field was read back holding the typed text. Absent
+   * when no such check ran or it could not conclude.
+   * - Android phone / tablet.
+   * - iOS simulator, only when the field was empty before typing (a secure
+   *   field: as many bullets). A capital iOS put at the start of a word still
+   *   counts as the typed text.
+   */
+  verified?: boolean;
+  /** Android: why `verified` is false or absent. Never quotes the field's contents. */
+  note?: string;
+  /** iOS simulator: set with `verified: false`, why the field may not hold what was typed. */
+  warning?: string;
 }
 
 export type KeyboardVerification = Pick<KeyboardResult, "verified" | "note">;
