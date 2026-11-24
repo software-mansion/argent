@@ -112,6 +112,7 @@ import { openUrlTool } from "../src/tools/open-url";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
 import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
+import { createAwaitNetworkRequestTool } from "../src/tools/await-network-request";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
@@ -334,6 +335,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       "native-network-logs": createNativeNetworkLogsTool(registry),
       "network-capture-start": createNetworkCaptureStartTool(registry),
       "network-capture-stop": createNetworkCaptureStopTool(registry),
+      "await-network-request": createAwaitNetworkRequestTool(registry),
       "view-network-request-details": networkRequestTool,
       "stop-simulator-server": createStopSimulatorServerTool(registry),
       "stop-all-simulator-servers": createStopAllSimulatorServersTool(registry),
@@ -2175,6 +2177,67 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       const err = await start().catch((e: unknown) => e);
       expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
       expect((err as Error).message).toContain(`macos-native: ${refusal}`);
+    });
+
+    it("turns off the capture of an earlier start when a later start finds a hardened copy", async () => {
+      const release = hardenedRelease("release");
+      searched.spotlight[BUNDLE_ID] = release;
+      // No copy runs, so this start arms the next copy that argent starts.
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      await startOutsideCopyOf(executableOf(release));
+      const refusal = hardenedRuntimeRefusal(await inspectMacosApp(release));
+      const err = await start().catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      // The read and the stop agree with that start.
+      expect((await readLog()).header).toBe(`macos-native: unavailable, 0 requests (${refusal})`);
+      expect((await stop()).layers).toEqual([
+        {
+          layer: "macos-native",
+          armed: false,
+          total: 0,
+          reason: "capture was not started for this app",
+        },
+      ]);
+    });
+
+    /** A wait that no request matches, for the native layer of the app. */
+    const waitForNone = () =>
+      run("await-network-request", {
+        udid: DEVICE_ID,
+        bundleId: BUNDLE_ID,
+        url: "/never",
+        timeoutMs: 3_000,
+      });
+
+    it("leaves await-network-request no native layer to read after a start finds a hardened copy", async () => {
+      const release = hardenedRelease("release");
+      searched.spotlight[BUNDLE_ID] = release;
+      await start();
+      await startOutsideCopyOf(executableOf(release));
+      expect(codeOf(await start().catch((e: unknown) => e))).toBe(
+        FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE
+      );
+      // The layer's capture is off, so the wait does not block on it.
+      expect(codeOf(await waitForNone().catch((e: unknown) => e))).toBe(
+        FAILURE_CODES.NETWORK_CAPTURE_NOT_STARTED
+      );
+    });
+
+    it("keeps the native layer of a stop for await-network-request after a start finds a hardened copy", async () => {
+      const release = hardenedRelease("release");
+      searched.spotlight[BUNDLE_ID] = release;
+      await start();
+      await stop();
+      await startOutsideCopyOf(executableOf(release));
+      expect(codeOf(await start().catch((e: unknown) => e))).toBe(
+        FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE
+      );
+      // The wait reads the requests up to the stop, and nothing is in flight.
+      const result = await waitForNone();
+      expect(result).toMatchObject({ success: false, cause: "unmet" });
+      expect(result.elapsed).toBeLessThan(2_000);
     });
 
     it("judges the build of a copy from another path than Spotlight's", async () => {
