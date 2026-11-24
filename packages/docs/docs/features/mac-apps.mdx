@@ -117,7 +117,7 @@ Use a [supported Debug build](#profile-a-react-native-app). Start Metro before y
 Argent targets the Mac app even when it shares Metro with an iOS simulator.
 
 If the hardened runtime prevents Argent from launching a react-native-macos build, start it from Xcode.
-The agent can still debug JavaScript and capture the JavaScript requests. Screen inspection, input and the capture of `URLSession` requests require a build Argent can control.
+The agent can still debug JavaScript and capture its HTTP requests through Metro. For screen inspection, input and native network capture, ask Argent to launch a supported build.
 
 See the [Mac app debugger reference](/docs/reference/tools#javascript-debugging-on-a-mac-app) for setup and troubleshooting.
 

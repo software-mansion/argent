@@ -313,7 +313,7 @@ Returns a paginated list of requests with method, URL, status, resource type, si
 A size with "~" is estimated from the body's length in characters; on React Native, "→ <url>" is the final URL after a redirect.
 Pass an entry's requestId to view-network-request-details for full details.
 On React Native, lists XMLHttpRequest (including axios), React Native fetch, Expo fetch, and requests from libraries such as react-native-fetch-api that call React Native's network module in a Metro development build.
-On iOS and Android<flag:macos-apps> and React Native Mac apps</flag:macos-apps>, call network-capture-start before triggering requests and again after a reload. On Vega, call this tool before triggering requests. The first read starts capture, and a read after a reload starts it again.<flag:macos-apps> Use native-network-logs for URLSession traffic on Mac apps. Both logs can contain the same fetch request.</flag:macos-apps>
+For JavaScript capture on iOS and Android<flag:macos-apps> (and on Mac apps)</flag:macos-apps>, use network-capture-start before triggering requests and after a reload. On Vega, the first read starts capture. Read again after a reload to resume capture.<flag:macos-apps> Use native-network-logs for native URLSession traffic on Mac apps. Both logs can show the same fetch request.</flag:macos-apps>
 On Chromium, lists all request types for the active tab.
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
