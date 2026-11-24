@@ -50,6 +50,7 @@ import {
 import type { MacosAppKind } from "../utils/macos-app-kind";
 import {
   createIosNetworkRecords,
+  lastIosRecordNumber,
   type IosNetworkCaptureState,
   type IosNetworkRecords,
 } from "./ios-network-records";
@@ -217,9 +218,10 @@ export interface MacosAppApi {
    * connection, also the one to a restarted app, is armed when argent adopts
    * it. Resolves armed once the app's connection acknowledges Network.enable,
    * and with a reason when it does not within 5 s or the app does not run.
-   * Never rejects.
+   * Marks where the start begins, with the caller's Metro port, before the
+   * enable, so a request during the arming counts. Never rejects.
    */
-  startNetworkCapture(): Promise<{ armed: boolean; reason?: string }>;
+  startNetworkCapture(metroPort: number): Promise<{ armed: boolean; reason?: string }>;
   /**
    * Stops native network capture and keeps the records: no new request is
    * recorded, and no later connection is armed until the next start. A
@@ -230,12 +232,14 @@ export interface MacosAppApi {
   /**
    * Turns off the capture that an earlier start left on for the app's next
    * connection, as before any start, when a later start finds that argent
-   * cannot capture the copy that runs. A stop stays, and so do the records.
-   * Does nothing while the app is connected.
+   * cannot capture the copy that runs. A stop stays, and so do the records
+   * and the stop's mark. Does nothing while the app is connected.
    */
   forgetNetworkCaptureStart(): void;
   isNetworkCaptureStarted(): boolean;
   isNetworkCaptureStopped(): boolean;
+  /** Where the last start began: records numbered higher came after it. A stop keeps it. */
+  networkCaptureMark(): { lastRecord: number; metroPort: number } | undefined;
   /**
    * The connected process did not acknowledge the last stop's
    * Network.disable, so it may still intercept its requests. A late
@@ -1041,6 +1045,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   // each one while capture is on.
   let captureStarted = false;
   let captureStopped = false;
+  let captureMark: { lastRecord: number; metroPort: number } | undefined;
   let captureGap = false;
   /** argent launched the recorded process while capture was on, and capture stayed on. */
   let armedSinceLaunch = false;
@@ -1818,8 +1823,9 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     },
     isConnected: () => Boolean(channel?.isOpen && channel.handshake),
     handshake: () => (channel?.isOpen ? channel.handshake : null),
-    async startNetworkCapture() {
+    async startNetworkCapture(metroPort) {
       captureStopped = false;
+      captureMark = { lastRecord: lastIosRecordNumber(), metroPort };
       const startedNow = !captureStarted;
       captureStarted = true;
       if (channel) channel.stopUnconfirmed = false;
@@ -1916,14 +1922,17 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       }
     },
     forgetNetworkCaptureStart() {
-      // A connected app is a copy that argent captures.
-      if (liveChannel()) return;
+      // A connected app is a copy that argent captures, and a stop keeps its mark.
+      if (liveChannel() || !captureStarted) return;
       captureStarted = false;
       captureGap = false;
       armedSinceLaunch = false;
+      // await-network-request reads no layer whose capture is off.
+      captureMark = undefined;
     },
     isNetworkCaptureStarted: () => captureStarted,
     isNetworkCaptureStopped: () => captureStopped,
+    networkCaptureMark: () => captureMark,
     isNetworkCaptureStopUnconfirmed: () => liveChannel()?.stopUnconfirmed === true,
     takeCaptureGap: () => {
       const gap = captureGap;

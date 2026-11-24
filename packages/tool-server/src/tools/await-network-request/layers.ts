@@ -1,0 +1,479 @@
+import type { DeviceInfo, Registry } from "@argent/registry";
+import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  AGENT_GONE_REASON,
+  androidNetworkInspectorRef,
+  LOST_WHILE_DISCONNECTED,
+  STOPPED_BEFORE_FINISH,
+  type AndroidNetworkInspectorApi,
+} from "../../blueprints/android-network-inspector";
+import { MACOS_CONNECTION_DROPPED } from "../../blueprints/ios-network-records";
+import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { findJsCaptureOfDevice, type JsCaptureMark } from "../../blueprints/network-inspector";
+import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
+import type { NetworkRequestRecord } from "../../chromium-server";
+import {
+  NOT_RECONNECTED,
+  PROCESS_ENDED,
+  type NativeNetworkRecord,
+} from "../../utils/native-network-record";
+import { metroPort } from "../../utils/debugger/metro-port";
+import { makeNetworkWaitReadScript } from "../../utils/debugger/scripts/network-interceptor";
+import { classifyNotConnected } from "../debugger/not-connected";
+import {
+  errorMessage,
+  isLiveService,
+  jsNotReached,
+  lastCaptureStart,
+  resolveJsRuntime,
+} from "../network/network-capture";
+import type { WaitLayer, WaitRecord } from "./match";
+
+/** What one read of a marked layer found. */
+export interface LayerRead {
+  layer: WaitLayer;
+  /** The read reached the layer's records. */
+  readable: boolean;
+  /** The layer captures the app's requests, or captured them until a stop. */
+  armed: boolean;
+  /** network-capture-stop stopped the layer: nothing after the stop is recorded. */
+  stopped: boolean;
+  /** The requests after the start's mark, oldest first. */
+  records: WaitRecord[];
+  /** Why the layer is not armed, or was not read, or what it may have missed. */
+  note?: string;
+}
+
+/** A layer that network-capture-start marked for the device and the app. */
+export interface MarkedLayer {
+  layer: WaitLayer;
+  /**
+   * Reads the layer's requests after its mark. Never rejects. Only the JS layer
+   * waits on the app, at most `budgetMs` for its answer.
+   */
+  read(budgetMs: number): Promise<LayerRead>;
+}
+
+const CAPTURE_ENDED =
+  "its capture ended after the start (stop-all-simulator-servers, a stop of the device's services, or a tool-server restart); call network-capture-start again";
+
+/** The service behind `ref` while it runs: the wait never creates one. */
+async function liveService<T>(
+  registry: Registry,
+  ref: { urn: string; options?: Record<string, unknown> }
+): Promise<T | undefined> {
+  return isLiveService(registry, ref.urn)
+    ? registry.resolveService<T>(ref.urn, ref.options)
+    : undefined;
+}
+
+function unreadable(layer: WaitLayer, note: string, stopped = false): LayerRead {
+  return { layer, readable: false, armed: false, stopped, records: [], note };
+}
+
+/** The number in a native id `<layer>-<run tag>-<n>`, which counts up across every app of the tool-server. */
+function recordNumber(id: string): number {
+  return Number(id.slice(id.lastIndexOf("-") + 1));
+}
+
+/**
+ * What argent writes into a native record it fails itself, as its capture
+ * lost sight of the request before the request ended: the app may still have
+ * got its response.
+ */
+const LOST_ENDINGS: ReadonlySet<string> = new Set([
+  STOPPED_BEFORE_FINISH,
+  LOST_WHILE_DISCONNECTED,
+  AGENT_GONE_REASON,
+  NOT_RECONNECTED,
+  PROCESS_ENDED,
+  MACOS_CONNECTION_DROPPED,
+]);
+
+function fromNative(record: NativeNetworkRecord): WaitRecord {
+  const lost =
+    record.state === "failed" &&
+    record.errorText !== undefined &&
+    LOST_ENDINGS.has(record.errorText);
+  return {
+    id: record.id,
+    layer: record.layer,
+    method: record.request.method,
+    url: record.request.url,
+    ...(record.response ? { status: record.response.status } : {}),
+    state: lost ? "lost" : record.state,
+    ...(record.timing.durationMs !== undefined
+      ? { durationMs: Math.round(record.timing.durationMs) }
+      : {}),
+    ...(record.errorText ? { errorText: record.errorText } : {}),
+  };
+}
+
+function nativeAfter(records: NativeNetworkRecord[], floor: number): WaitRecord[] {
+  return records.filter((r) => recordNumber(r.id) > floor).map(fromNative);
+}
+
+/**
+ * Every layer network-capture-start marked for the device and the app, the
+ * native layer first. Looks the native services up only while they run: the
+ * wait never creates one, and a service that stopped took its mark with it.
+ */
+export async function markedLayers(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string
+): Promise<MarkedLayer[]> {
+  const layers: MarkedLayer[] = [];
+  const start = lastCaptureStart(device.id, bundleId);
+  // Only the requests after the last start count. A native layer it left as it was is read
+  // after the start's native floor, and dropped when stopped, as it then holds none. The JS
+  // layer has no such floor, so it is read only when the last start named it.
+  const startWindow: Window = {
+    current: (layer, stopped) => !start || start.layers.has(layer) || (layer !== "js" && !stopped),
+    floor: (mark) => Math.max(mark.lastRecord, start?.nativeFloor ?? 0),
+  };
+  const native =
+    device.platform === "chromium"
+      ? await chromiumLayer(registry, device)
+      : device.platform === "android"
+        ? await androidLayer(registry, device, bundleId, startWindow)
+        : device.platform === "macos"
+          ? await macosLayer(registry, device, startWindow)
+          : await iosLayer(registry, device, bundleId, startWindow);
+  if (native) layers.push(native);
+  // Chromium's one layer records the page's JavaScript requests too.
+  if (device.platform !== "chromium") {
+    const js = jsLayer(registry, device, bundleId, startWindow);
+    if (js) layers.push(js);
+  }
+  return layers;
+}
+
+/** The window of the last start: which marked layers it covers, and where a native one begins. */
+interface Window {
+  current(layer: WaitLayer, stopped: boolean): boolean;
+  /** The record number after which a native layer's requests count. */
+  floor(mark: { lastRecord: number }): number;
+}
+
+async function iosLayer(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string,
+  startWindow: Window
+): Promise<MarkedLayer | undefined> {
+  const ref = nativeDevtoolsRef(device);
+  const resolve = () => liveService<NativeDevtoolsApi>(registry, ref);
+  const found = await resolve();
+  if (!found?.networkCaptureMark(bundleId)) return undefined;
+  if (!startWindow.current("ios-native", found.isNetworkCaptureStopped(bundleId))) return undefined;
+  return {
+    layer: "ios-native",
+    async read() {
+      const api = await resolve();
+      // A later start moves the mark; a new service has none.
+      const mark = api?.networkCaptureMark(bundleId);
+      if (!api || !mark) return unreadable("ios-native", CAPTURE_ENDED);
+      const stopped = api.isNetworkCaptureStopped(bundleId);
+      const store = api.networkRecords(bundleId);
+      const state = store?.state();
+      const armed = stopped || state?.armed === true;
+      return {
+        layer: "ios-native",
+        readable: true,
+        armed,
+        stopped,
+        records: nativeAfter(
+          store?.records(mark.metroPort, { includeHidden: true }) ?? [],
+          startWindow.floor(mark)
+        ),
+        ...(armed
+          ? {}
+          : { note: state?.note ?? "the app has not connected yet; capture arms when it does" }),
+      };
+    },
+  };
+}
+
+async function androidLayer(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string,
+  startWindow: Window
+): Promise<MarkedLayer | undefined> {
+  // The URN has no port, and the options only reach a service that does not run yet.
+  const ref = androidNetworkInspectorRef(device, bundleId, metroPort({ device_id: device.id }));
+  const resolve = () => liveService<AndroidNetworkInspectorApi>(registry, ref);
+  const found = await resolve();
+  if (!found?.captureMark()) return undefined;
+  if (!startWindow.current("android-native", found.isStopped())) return undefined;
+  return {
+    layer: "android-native",
+    async read() {
+      const api = await resolve();
+      const mark = api?.captureMark();
+      if (!api || !mark) return unreadable("android-native", CAPTURE_ENDED);
+      const stopped = api.isStopped();
+      const state = api.state();
+      // An agent that acknowledged Network.enable hooks no client while its capture is unavailable.
+      const armed = stopped || (state.armed && state.capture?.state !== "unavailable");
+      return {
+        layer: "android-native",
+        readable: true,
+        armed,
+        stopped,
+        records: nativeAfter(
+          api.records(mark.metroPort, { includeHidden: true }),
+          startWindow.floor(mark)
+        ),
+        ...(armed
+          ? {}
+          : {
+              note:
+                state.note ??
+                state.capture?.detail ??
+                api.unavailableReason() ??
+                "the app's agent has not armed yet",
+            }),
+      };
+    },
+  };
+}
+
+async function macosLayer(
+  registry: Registry,
+  device: DeviceInfo,
+  startWindow: Window
+): Promise<MarkedLayer | undefined> {
+  const ref = macosAppRef(device);
+  const resolve = () => liveService<MacosAppApi>(registry, ref);
+  const found = await resolve();
+  if (!found?.networkCaptureMark()) return undefined;
+  if (!startWindow.current("macos-native", found.isNetworkCaptureStopped())) return undefined;
+  return {
+    layer: "macos-native",
+    async read() {
+      const app = await resolve();
+      const mark = app?.networkCaptureMark();
+      if (!app || !mark) return unreadable("macos-native", CAPTURE_ENDED);
+      const stopped = app.isNetworkCaptureStopped();
+      const store = app.networkRecords();
+      const state = store.state();
+      const armed = stopped || state.armed;
+      return {
+        layer: "macos-native",
+        readable: true,
+        armed,
+        stopped,
+        records: nativeAfter(
+          store.records(mark.metroPort, { includeHidden: true }),
+          startWindow.floor(mark)
+        ),
+        ...(armed ? {} : { note: state.note ?? "the app has not connected to argent yet" }),
+      };
+    },
+  };
+}
+
+function fromChromium(record: NetworkRequestRecord): WaitRecord {
+  return {
+    id: record.requestId,
+    layer: "chromium",
+    method: record.method,
+    url: record.url,
+    ...(record.status !== undefined ? { status: record.status } : {}),
+    state: record.failed
+      ? "failed"
+      : record.finished
+        ? "complete"
+        : record.status !== undefined
+          ? "headers"
+          : "pending",
+    ...(record.durationMs !== undefined ? { durationMs: Math.round(record.durationMs) } : {}),
+    ...(record.errorText ? { errorText: record.errorText } : {}),
+  };
+}
+
+async function chromiumLayer(
+  registry: Registry,
+  device: DeviceInfo
+): Promise<MarkedLayer | undefined> {
+  const ref = chromiumCdpRef(device);
+  const resolve = () => liveService<ChromiumCdpApi>(registry, ref);
+  if (!(await resolve())?.server.network.captureMark()) return undefined;
+  return {
+    layer: "chromium",
+    async read() {
+      const network = (await resolve())?.server.network;
+      const mark = network?.captureMark();
+      if (!network || !mark) return unreadable("chromium", CAPTURE_ENDED);
+      const stopped = mark.stoppedSeq !== undefined;
+      return {
+        layer: "chromium",
+        readable: true,
+        armed: true,
+        stopped,
+        records: network
+          .requestsAfter(mark.lastSeq)
+          .filter(({ seq }) => mark.stoppedSeq === undefined || seq <= mark.stoppedSeq)
+          .map(({ record }) => fromChromium(record)),
+      };
+    },
+  };
+}
+
+interface WaitReadAnswer {
+  installed: boolean;
+  xhr?: boolean;
+  token?: string | null;
+  paused?: boolean;
+  entries?: Array<{
+    requestId?: string;
+    state?: string;
+    method?: string;
+    url?: string;
+    status?: number;
+    durationMs?: number;
+    errorText?: string;
+  }>;
+}
+
+function fromJs(entry: NonNullable<WaitReadAnswer["entries"]>[number]): WaitRecord {
+  const state =
+    entry.state === "finished"
+      ? "complete"
+      : entry.state === "failed"
+        ? "failed"
+        : entry.status !== undefined
+          ? "headers"
+          : "pending";
+  return {
+    id: entry.requestId ?? "",
+    layer: "js",
+    method: entry.method ?? "",
+    url: entry.url ?? "",
+    ...(typeof entry.status === "number" ? { status: entry.status } : {}),
+    state,
+    ...(typeof entry.durationMs === "number" ? { durationMs: Math.round(entry.durationMs) } : {}),
+    ...(entry.errorText ? { errorText: entry.errorText } : {}),
+  };
+}
+
+/**
+ * The JS layer, read through the app's debugger while argent stays connected to
+ * it. The wait creates no service and installs nothing: a JS runtime that lost
+ * the interceptor, as at a reload, records again after the next start.
+ */
+function jsLayer(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string,
+  startWindow: Window
+): MarkedLayer | undefined {
+  const found = findJsCaptureOfDevice(device.id, bundleId);
+  if (!found?.capture.mark) return undefined;
+  if (!startWindow.current("js", found.capture.intent === "stopped")) return undefined;
+  return {
+    layer: "js",
+    async read(budgetMs) {
+      // A later start replaces the entry, and a teardown forgets it.
+      const found = findJsCaptureOfDevice(device.id, bundleId);
+      const mark: JsCaptureMark | undefined = found?.capture.mark;
+      if (!found || !mark) return unreadable("js", CAPTURE_ENDED);
+      const { payload, port, capture } = found;
+      let stopped = capture.intent === "stopped";
+      if (!isLiveService(registry, `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`)) {
+        return unreadable(
+          "js",
+          stopped
+            ? "the app's JS runtime is not connected, and a stopped capture does not reconnect to it"
+            : "argent's connection to the app's JS runtime ended (a relaunch, a Metro restart or a stop of the device's services); call network-capture-start again",
+          stopped
+        );
+      }
+      const physical = capture.physicalDeviceId ?? device.id;
+      const target = payload.slice(payload.indexOf(":") + 1);
+      try {
+        const dbg = await resolveJsRuntime(
+          registry,
+          physical,
+          target !== physical ? target : undefined,
+          port
+        );
+        const appId = dbg.runtimeApp?.appId;
+        if (appId !== undefined && appId !== bundleId) {
+          return unreadable(
+            "js",
+            `the JS runtime on Metro port ${port} is ${appId}'s, not ${bundleId}'s`,
+            stopped
+          );
+        }
+        const answer = JSON.parse(
+          String(
+            await dbg.cdp.evaluate(makeNetworkWaitReadScript(mark, port), {
+              timeout: Math.max(1, budgetMs),
+            })
+          )
+        ) as WaitReadAnswer;
+        // A stop whose pause did not reach the runtime: it records still, also after the stop.
+        const pauseMissed = stopped && answer.installed && answer.paused === false;
+        if (pauseMissed) stopped = false;
+        if (!answer.installed) {
+          if (stopped) {
+            // Nothing records after the stop, and the reload cleared what was recorded.
+            return {
+              layer: "js",
+              readable: true,
+              armed: true,
+              stopped,
+              records: [],
+              note: "the app's JS runtime reloaded since the stop, which cleared its requests",
+            };
+          }
+          return unreadable(
+            "js",
+            answer.xhr === true
+              ? "the app's JS runtime has no interceptor, as after a reload; call network-capture-start again"
+              : "the app's JavaScript has not loaded yet; call network-capture-start once it has"
+          );
+        }
+        const records = (answer.entries ?? []).map(fromJs);
+        if (!stopped && answer.paused === true) {
+          // A stop's pause that the start did not lift.
+          return {
+            layer: "js",
+            readable: true,
+            armed: false,
+            stopped,
+            records,
+            note: "a stop's pause is still in the app's JS runtime, so it records nothing; call network-capture-start again",
+          };
+        }
+        const note =
+          mark.install !== null && answer.token !== mark.install
+            ? "the app's JS runtime reloaded after the start, so its requests between the reload and the interceptor's reinstall are missing"
+            : pauseMissed
+              ? "the stop's pause did not reach the app's JS runtime, which still records: requests after the stop count"
+              : undefined;
+        return {
+          layer: "js",
+          readable: true,
+          armed: true,
+          stopped,
+          records,
+          ...(note ? { note } : {}),
+        };
+      } catch (err) {
+        const reason = classifyNotConnected(err);
+        return unreadable(
+          "js",
+          reason !== undefined
+            ? jsNotReached(reason, port, err)
+            : `the app's JS runtime did not answer: ${errorMessage(err)}`,
+          stopped
+        );
+      }
+    },
+  };
+}

@@ -1200,17 +1200,10 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
   var log = globalThis.__argent_network_log;
   if (!log) return JSON.stringify({ entries: [], total: 0, interceptorInstalled: false });
 
-  // Filter out requests to the Metro server
+  ${metroFilter(metroPort)}
   var filtered = [];
   for (var i = 0; i < log.length; i++) {
-    var e = log[i];
-    if (e.request && e.request.url) {
-      try {
-        var u = e.request.url;
-        if ((u.indexOf('://localhost:${metroPort}') !== -1 || u.indexOf('://127.0.0.1:${metroPort}') !== -1)) continue;
-      } catch(ex) {}
-    }
-    filtered.push(e);
+    if (!isMetro(log[i])) filtered.push(log[i]);
   }
 
   var total = filtered.length;
@@ -1242,6 +1235,63 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
     total: total,
     interceptorInstalled: true,
     paused: globalThis.__argent_network_paused === true
+  });
+})()`;
+}
+
+/** Defines `isMetro(entry)` in a read script: a request to the Metro server on `metroPort`. */
+function metroFilter(metroPort: number): string {
+  return `function isMetro(e) {
+    var u = e.request && e.request.url;
+    return typeof u === 'string' && (u.indexOf('://localhost:${metroPort}') !== -1 || u.indexOf('://127.0.0.1:${metroPort}') !== -1);
+  }`;
+}
+
+/**
+ * Reads the list fields of the requests after a start's mark, for await-network-request, minus
+ * Metro's own traffic on `metroPort`: every request of a context whose install token is not the
+ * mark's (the app reloaded, so its ids start at 1 again), or of any context for a mark without a
+ * token, else the requests with a greater id. Also says whether the context has the interceptor,
+ * its token, whether a stop paused it, and whether the app's JavaScript has set up XMLHttpRequest,
+ * which an install needs.
+ */
+export function makeNetworkWaitReadScript(
+  mark: { install: string; lastId: number } | { install: null },
+  metroPort: number
+): string {
+  return `(function() {
+  var g = globalThis;
+  var xhr = typeof g.XMLHttpRequest === 'function';
+  var log = g.__argent_network_log;
+  if (typeof g.__argent_network_mark !== 'function' || !Array.isArray(log)) {
+    return JSON.stringify({ installed: false, xhr: xhr });
+  }
+  ${metroFilter(metroPort)}
+  var token = typeof g.__argent_network_install === 'string' ? g.__argent_network_install : null;
+  var markToken = ${JSON.stringify(mark.install)};
+  var lastId = ${mark.install === null ? 0 : mark.lastId};
+  var sameContext = markToken !== null && token === markToken;
+  var entries = [];
+  for (var i = 0; i < log.length; i++) {
+    var e = log[i];
+    if (sameContext && !(e.id > lastId)) continue;
+    if (isMetro(e)) continue;
+    entries.push({
+      requestId: e.requestId,
+      state: e.state,
+      method: e.request ? e.request.method : undefined,
+      url: e.request ? e.request.url : undefined,
+      status: e.response ? e.response.status : undefined,
+      durationMs: e.durationMs,
+      errorText: e.errorText
+    });
+  }
+  return JSON.stringify({
+    installed: true,
+    xhr: xhr,
+    token: token,
+    paused: g.__argent_network_paused === true,
+    entries: entries
   });
 })()`;
 }

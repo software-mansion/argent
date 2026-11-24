@@ -170,19 +170,49 @@ function lockDevice(udid: string): string {
  */
 const nativeUnavailable = new Map<string, string>();
 
-function nativeUnavailableKey(udid: string, bundleId: string): string {
+function appKey(udid: string, bundleId: string): string {
   return `${lockDevice(udid)}:${bundleId}`;
 }
 
 /** Keeps why a start found the app's native layer unavailable, or drops it without a reason. */
 export function setNativeUnavailable(udid: string, bundleId: string, reason?: string): void {
-  if (reason === undefined) nativeUnavailable.delete(nativeUnavailableKey(udid, bundleId));
-  else nativeUnavailable.set(nativeUnavailableKey(udid, bundleId), reason);
+  if (reason === undefined) nativeUnavailable.delete(appKey(udid, bundleId));
+  else nativeUnavailable.set(appKey(udid, bundleId), reason);
 }
 
 /** Why the last start of the app found its native layer unavailable, if it did. */
 export function nativeUnavailableReason(udid: string, bundleId: string): string | undefined {
-  return nativeUnavailable.get(nativeUnavailableKey(udid, bundleId));
+  return nativeUnavailable.get(appKey(udid, bundleId));
+}
+
+/**
+ * What the last network-capture-start of an app that did not fail marked, by device and app:
+ * the layers it started, and the native record number when it began. await-network-request
+ * reads the JS layer only when that start named it, and a native layer only after that number,
+ * so a layer the start left as it was gives no request from before it.
+ */
+export interface CaptureStart {
+  layers: ReadonlySet<CaptureLayer>;
+  nativeFloor: number;
+}
+
+const lastStarts = new Map<string, CaptureStart>();
+
+export function noteCaptureStart(
+  udid: string,
+  bundleId: string,
+  layers: readonly StartedLayer[],
+  nativeFloor: number
+): void {
+  lastStarts.set(appKey(udid, bundleId), {
+    layers: new Set(layers.filter((entry) => !entry.unavailable).map((entry) => entry.layer)),
+    nativeFloor,
+  });
+}
+
+/** What the last start of the app marked, or undefined before its first start. */
+export function lastCaptureStart(udid: string, bundleId: string): CaptureStart | undefined {
+  return lastStarts.get(appKey(udid, bundleId));
 }
 
 /** Forgets why a start found the native layer unavailable on the devices, or on every device. */

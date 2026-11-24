@@ -269,6 +269,7 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `view-network-request-details` | Get full details of one request by its `requestId` from `view-network-logs`, or by an `ios-`, `android-` or `macos-` ID from `native-network-logs` |
 | `network-capture-start`        | Start network capture or mark the start of a Chromium capture window                                                                               |
 | `network-capture-stop`         | Stop network capture or mark the end of a Chromium capture window                                                                                  |
+| `await-network-request`        | Wait for a matching request to finish in the current capture window                                                                                |
 
 ### Network capture on iOS, Android and Mac apps
 
@@ -280,7 +281,7 @@ To capture a request with `network-capture-start`:
 
 1. Call `network-capture-start` with `udid` and `bundleId`. Check that the layer you need reports `armed: true`.
 2. Do the action that sends the request.
-3. Read the requests with the tool listed for the layer below.
+3. Read the requests with the tool listed for the layer below, or wait for one request with [`await-network-request`](#wait-for-a-request).
 
 By default, `network-capture-start` and `network-capture-stop` control the JS runtime and native layers.
 
@@ -391,13 +392,15 @@ A second call of `network-capture-start` keeps the requests that Argent recorded
 
 The JS runtime capture of an app is on one Metro port of the device. A start or a stop on a different port moves it to that port only when Argent reaches the JS runtime of the app there. Otherwise, the capture on the earlier port stays as it is, and the `reason` of the `js` entry names that port.
 
-The native layer follows the app into each new process that `launch-app` or `restart-app` starts, until `network-capture-stop`. On a Mac app, `boot-device` also starts such a process. On iOS, it also follows a process that starts in a different way. On a simulator where Argent uses the socket of a device provider, a relaunch of the app ends the native capture. Then `native-network-logs` says that the capture is not started. The `reason` of `network-capture-stop` is `capture was not started for this app`. Call `network-capture-start` again after the relaunch. The JS runtime layer arms only at a call of `network-capture-start`. A new JS runtime of the app has no capture. Thus call `network-capture-start` again after each of these events:
+The native layer follows the app into each new process that `launch-app` or `restart-app` starts, until `network-capture-stop`. On a Mac app, `boot-device` also starts such a process. On iOS, it also follows a process that starts in a different way. On a simulator where Argent uses the socket of a device provider, a relaunch of the app ends the native capture. Then `native-network-logs` says that the capture is not started. The `reason` of `network-capture-stop` is `capture was not started for this app`. Call `network-capture-start` again after the relaunch.
+
+The JavaScript layer needs a new `network-capture-start` after each of these events:
 
 - A reload of the JavaScript, for example with `debugger-reload-metro`.
 - `restart-app`, or a `launch-app` that starts a new process.
 - A start of the capture before the JavaScript of the app loaded.
 
-Until then, `view-network-logs` says that the capture stopped recording at the reload, or that the JS runtime was not ready at the start. The native layer keeps its capture across these events.
+Wait until JavaScript is ready before you start capture again. Reads and waits do not restart JavaScript capture. Until the next start, `view-network-logs` reports that JavaScript capture stopped or did not start.
 
 #### Stop
 
@@ -514,6 +517,48 @@ A simulator name with `&` or `+` never matches, because Metro lists it different
 `debugger-connect` fails with `DEBUGGER_TARGET_DEVICE_MISMATCH` when another device has the same name, when the marker is in the log of another device, or when Argent cannot find the marker. The error lists the `logicalDeviceId` of each device on the Metro, and `debugger-status` and `debugger-log-registry` return `not_connected` with the same list. Give that `logicalDeviceId` as `device_id` in the next calls.
 
 After Argent finds a device by its name, the device ID stays bound to the app on that device. When that app exits, the `debugger-*` tools fail and do not use the other device. After the app starts again, the tools use it again. Argent confirms the app on each connect, so when the device ID names another device later, for example an emulator serial after the emulators restart on other ports, Argent finds the device by its name again.
+
+### Wait for a request
+
+Start capture with `network-capture-start`, trigger the request, then call `await-network-request`. The wait can find a request that finished before you called it.
+
+The wait supports local and remote iOS simulators, Android emulators and devices, Mac apps, and Chromium or Electron. A physical iPhone and Vega cannot run it.
+
+| Parameter        | Meaning                                                                                                                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`           | Device ID from the start call. The wait uses the start's Metro port and logical device ID when applicable.                                                                               |
+| `bundleId`       | App ID from the start call. On a Mac it must match the app named by `udid`. On Chromium, use a valid placeholder such as `argent.capture`.                                               |
+| `url`            | URL text or a regular expression, depending on `urlMatch`. Secret placeholders such as `{{secret:NAME}}` are invalid.                                                                    |
+| `urlMatch`       | `contains` (default) searches for a substring. `equals` compares the full URL. Both ignore case. `matches` uses a case-sensitive JavaScript regular expression with no implicit anchors. |
+| `method`         | HTTP method, such as `POST`. Ignores case.                                                                                                                                               |
+| `status`         | An HTTP status code from 100 to 599, or a class from `"1xx"` to `"5xx"`. A failed request has a status only if it received response headers.                                             |
+| `outcome`        | `complete` (default) means capture saw the response finish, including HTTP error responses. `failed` matches a request error such as an abort. `any` accepts either.                     |
+| `timeoutMs`      | Wait limit in milliseconds. Default 10000, maximum 120000.                                                                                                                               |
+| `pollIntervalMs` | Interval between capture reads in milliseconds. Default 400, range 50 to 5000.                                                                                                           |
+
+A request still in progress cannot match, including a response stream that stays open. A request whose end Argent missed cannot match either. On Chromium, use the URL, method and status of the final request after a redirect.
+
+#### Which requests the wait searches
+
+The wait searches retained requests that started after the last successful capture start for the app. That start must include the JavaScript layer for the wait to search it. A native layer already recording can still supply requests that started after the latest start, even when that start selected only JavaScript. The wait checks native records before JavaScript records. Clearing the native log listing does not remove records from the wait.
+
+The wait can still find requests after a stop. Once all selected layers have stopped and have no requests in progress, a miss returns without waiting for the deadline. If a JavaScript stop could not reach the runtime, that layer can still record and match requests.
+
+If no usable capture window exists, the tool raises `NETWORK_CAPTURE_NOT_STARTED`. Start capture and repeat the action. If JavaScript capture became unreadable after a reload, relaunch, or Metro restart, start again once JavaScript is ready.
+
+#### Result
+
+On success, `match` contains the request's `id`, `layer`, `method`, `url` and `state` (`complete` or `failed`). It can also include `status`, `durationMs` and `errorText`. Pass `match.id` as `requestId` to `view-network-request-details` for headers and bodies. A `note` can flag gaps in capture even when another request matched.
+
+When `success` is `false`, use `cause` to decide what to do:
+
+- `unmet`: Argent read an armed layer near the deadline or finished searching stopped layers. Check the request criteria and the action that should send it.
+- `unreadable`: Argent could not confirm the capture was readable near the deadline. Use the layer notes to restore capture, then repeat the action and wait.
+- `cancelled`: The client ended the wait before a match. Retry if the check is still needed.
+
+`elapsed` is in milliseconds. For `unmet` and `unreadable`, `layers` reports each layer's state and last available request count for the window. `readable` means at least one read succeeded. A stopped layer can still show `armed: true` because its retained requests are readable.
+
+In `run-sequence`, a wait with `success: false` stops later steps. For saved tests, see [Network checks in YAML](/docs/reference/e2e-yaml#network-checks).
 
 ## Native devtools
 
@@ -700,7 +745,7 @@ The capture stays on for the app until `network-capture-stop` stops it for the a
 
 Argent records requests when it connects to the active tab. Use `view-network-logs` before reproducing a request to make sure Argent is connected. The log can include requests from earlier tabs in the same session. Use `view-network-request-details` with an ID from the log.
 
-`network-capture-start` and `network-capture-stop` mark a capture window in that log. The read tools work without a start and include requests outside the window.
+`network-capture-start` and `network-capture-stop` mark a capture window in that log. `await-network-request` reads only the requests in this window. The read tools work without a start and include requests outside the window.
 
 For either call, pass the `chromium-cdp-<port>` ID from `list-devices` as `udid`. Use a valid placeholder such as `argent.capture` for the required `bundleId`. Argent uses `udid` to select the app and ignores `layer`, `port` and `logicalDeviceId` on Chromium.
 

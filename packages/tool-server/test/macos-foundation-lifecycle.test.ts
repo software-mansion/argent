@@ -112,6 +112,7 @@ import { openUrlTool } from "../src/tools/open-url";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
 import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
+import { createAwaitNetworkRequestTool } from "../src/tools/await-network-request";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
@@ -121,7 +122,10 @@ import { resolveDevice } from "../src/utils/device-info";
 import { createHttpApp } from "../src/http";
 import { pollPidsUntilGone } from "../src/utils/process-kill";
 import { PROCESS_ENDED } from "../src/utils/native-network-record";
-import { MACOS_CONNECTION_DROPPED } from "../src/blueprints/ios-network-records";
+import {
+  MACOS_CONNECTION_DROPPED,
+  lastIosRecordNumber,
+} from "../src/blueprints/ios-network-records";
 import { forgetNativeUnavailableOf } from "../src/tools/network/network-capture";
 import { forgetJsCapturesOf, jsCapturesOn } from "../src/blueprints/network-inspector";
 import {
@@ -331,6 +335,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       "native-network-logs": createNativeNetworkLogsTool(registry),
       "network-capture-start": createNetworkCaptureStartTool(registry),
       "network-capture-stop": createNetworkCaptureStopTool(registry),
+      "await-network-request": createAwaitNetworkRequestTool(registry),
       "view-network-request-details": networkRequestTool,
       "stop-simulator-server": createStopSimulatorServerTool(registry),
       "stop-all-simulator-servers": createStopAllSimulatorServersTool(registry),
@@ -2197,6 +2202,44 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
     });
 
+    /** A wait that no request matches, for the native layer of the app. */
+    const waitForNone = () =>
+      run("await-network-request", {
+        udid: DEVICE_ID,
+        bundleId: BUNDLE_ID,
+        url: "/never",
+        timeoutMs: 3_000,
+      });
+
+    it("leaves await-network-request no native layer to read after a start finds a hardened copy", async () => {
+      const release = hardenedRelease("release");
+      searched.spotlight[BUNDLE_ID] = release;
+      await start();
+      await startOutsideCopyOf(executableOf(release));
+      expect(codeOf(await start().catch((e: unknown) => e))).toBe(
+        FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE
+      );
+      // The layer's capture is off, so the wait does not block on it.
+      expect(codeOf(await waitForNone().catch((e: unknown) => e))).toBe(
+        FAILURE_CODES.NETWORK_CAPTURE_NOT_STARTED
+      );
+    });
+
+    it("keeps the native layer of a stop for await-network-request after a start finds a hardened copy", async () => {
+      const release = hardenedRelease("release");
+      searched.spotlight[BUNDLE_ID] = release;
+      await start();
+      await stop();
+      await startOutsideCopyOf(executableOf(release));
+      expect(codeOf(await start().catch((e: unknown) => e))).toBe(
+        FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE
+      );
+      // The wait reads the requests up to the stop, and nothing is in flight.
+      const result = await waitForNone();
+      expect(result).toMatchObject({ success: false, cause: "unmet" });
+      expect(result.elapsed).toBeLessThan(2_000);
+    });
+
     it("judges the build of a copy from another path than Spotlight's", async () => {
       searched.spotlight[BUNDLE_ID] = appPath;
       const release = hardenedRelease("installed");
@@ -2418,6 +2461,30 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       // The bundle id is checked before any layer runs, so no layer stored or armed a capture.
       expect(jsCapturesOn(DEVICE_ID)).toEqual([]);
       expect((await macosApp()).isNetworkCaptureStarted()).toBe(false);
+    });
+
+    it("marks where a native start begins, with the call's Metro port; a stop keeps the mark and the next start moves it", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      const app = await macosApp();
+      expect(app.networkCaptureMark()).toBeUndefined();
+
+      const before = lastIosRecordNumber();
+      await run("network-capture-start", {
+        udid: DEVICE_ID,
+        bundleId: BUNDLE_ID,
+        layer: "native",
+        port: 8095,
+      });
+      expect(app.networkCaptureMark()).toEqual({ lastRecord: before, metroPort: 8095 });
+      await request("https://example.com/a");
+      await stop();
+      expect(app.networkCaptureMark()).toEqual({ lastRecord: before, metroPort: 8095 });
+
+      // The next start marks again, after the requests recorded so far.
+      const next = lastIosRecordNumber();
+      expect(next).toBeGreaterThan(before);
+      await start();
+      expect(app.networkCaptureMark()).toEqual({ lastRecord: next, metroPort: 8081 });
     });
   });
 
