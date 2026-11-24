@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
+import { MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DISABLE_LOGBOX_SCRIPT } from "../../utils/debugger/scripts/disable-logbox";
@@ -11,7 +12,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
 });
 
@@ -28,7 +29,7 @@ export const debuggerReloadMetroTool: ToolDefinition<
 > = {
   id: "debugger-reload-metro",
   description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
-Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method (cdp or http), deviceName, appName, logicalDeviceId }. Fails if Metro is not running on the given port.`,
+Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method (cdp or http), deviceName, appName, logicalDeviceId }. Fails if Metro is not running on the given port.<flag:macos-apps> A Mac app reload targets only that app. If it fails, restart the app. A shared Metro reload would also reload other apps.</flag:macos-apps>`,
   zodSchema,
   interaction: {
     startedMsg: () => "Reloading the app through Metro",
@@ -42,7 +43,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
-  async execute(services, _params) {
+  async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const port = api.port;
 
@@ -61,8 +62,24 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
       await api.cdp.send("Page.reload");
       void disableLogBox();
       return { reloaded: true, port, method: "cdp", ...context };
-    } catch {
-      /* fall through */
+    } catch (err) {
+      // Metro's HTTP /reload reaches every app on this Metro. A Mac app often
+      // shares its Metro with a simulator of the same project, so a reload of the
+      // Mac app must not reload that simulator too.
+      if (canonicalDeviceId(params.device_id)?.startsWith(MACOS_APP_ID_PREFIX)) {
+        throw new FailureError(
+          `Failed to reload the Mac app: CDP Page.reload failed (${
+            err instanceof Error ? err.message : String(err)
+          }). argent does not fall back to Metro's HTTP /reload for a Mac app, because ` +
+            `that reloads every app on this Metro. Restart the app (restart-app) instead.`,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_RELOAD_FAILED,
+            failure_stage: "debugger_reload_metro",
+            failure_area: "tool_server",
+            error_kind: "network",
+          }
+        );
+      }
     }
 
     const res = await fetch(`http://127.0.0.1:${port}/reload`, {

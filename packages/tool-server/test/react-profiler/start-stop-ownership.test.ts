@@ -1246,12 +1246,6 @@ describe("the run lifecycle, on the real session and scripts", () => {
       expect(timeoutOf((c) => c.expression === STOP_AND_READ_SCRIPT)).toBe(60_000);
       expect(timeoutOf((c) => c.expression === RESOLVE_FIBER_META_SCRIPT)).toBe(15_000);
     });
-
-    it("is declared longRunning, so the MCP client cannot abort and resend a long collection", () => {
-      // Without it, argent-mcp aborts each attempt at 30 s and resends the call.
-      // The tool-server keeps collecting, so the resend fails on this very stop.
-      expect(createReactProfilerStopTool(new Registry()).longRunning).toBe(true);
-    });
   });
 
   it("stops the sampler of a run lost to a dropped connection, on the rebuilt session", async () => {

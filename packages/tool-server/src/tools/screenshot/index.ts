@@ -76,7 +76,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 /**
@@ -246,7 +246,7 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override for the screenshot (on Chromium it rotates the captured image). On Android the capture already follows the device's rotation. <flag:harmonyos>Rejected on HarmonyOS, which captures the display in its current orientation and has no override. </flag:harmonyos>Ignored on physical iPhones."
+      "Orientation override for the screenshot (on Chromium it rotates the captured image). Rarely needed: on Android and iOS simulators the capture already follows the UI's orientation, the space describe frames and gesture coordinates use, and an override can make the image disagree with them. <flag:harmonyos>Rejected on HarmonyOS, which captures the display in its current orientation and has no override. </flag:harmonyos>Ignored on physical iPhones."
     ),
   scale: z
     .number()
@@ -399,7 +399,7 @@ Fails if the capture backend (simulator-server, emulator, Chromium CDP<flag:harm
       // handed to the capture. The server cannot say which panel a frame is
       // from, so the result names it.
       const panel = await resolveCapturePanel(api);
-      const { path: capturedPath } = await captureScreenshotUpright(
+      const { path: capturedPath, note: orientationNote } = await captureScreenshotUpright(
         api,
         device,
         params.rotation,
@@ -413,9 +413,10 @@ Fails if the capture backend (simulator-server, emulator, Chromium CDP<flag:harm
         kind: "screenshot",
         mimeType: "image/png",
       });
+      const note = [panel?.note, orientationNote].filter((n) => n !== undefined).join(" ");
       return {
         image,
-        ...(panel ? { [RESULT_NOTE_KEY]: panel.note } : {}),
+        ...(note ? { [RESULT_NOTE_KEY]: note } : {}),
         ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
       };
     },

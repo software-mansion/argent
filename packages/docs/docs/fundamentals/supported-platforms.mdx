@@ -1,10 +1,13 @@
 ---
 sidebar_position: 4
 sidebar_label: Supported platforms
-title: Supported platforms
+title: iOS simulators, Android emulators, TVs and Mac apps
+description: Argent drives iOS simulators and iPhones, Android emulators and devices, Apple TV, Android TV, Fire TV, Electron and Chromium apps, Mac apps and HarmonyOS.
 sidebar_custom_props:
   icon: layers
 ---
+
+# Supported platforms
 
 Argent drives a growing set of targets through a single toolkit, each with the right interaction model.
 
@@ -14,7 +17,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 | **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
 | **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
 | **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
-| **Mac apps**      | Native Mac apps (AppKit, SwiftUI, react-native-macos) that you build    | Mouse / keyboard |
+| **Mac apps**      | Your own Mac apps (AppKit, SwiftUI, react-native-macos, Mac Catalyst)   | Mouse / keyboard |
 | **HarmonyOS**     | Phones over `hdc`, and DevEco Studio emulator instances                 | Touch / gesture  |
 
 <Video
@@ -46,7 +49,7 @@ The agent folds and unfolds the device with the `fold` tool. `list-devices` mark
 
 ### Physical iPhones
 
-Argent also drives a physical iPhone over a USB cable, including pinches, rotations and multi-finger paths in apps drawn in portrait. Physical iPads are not supported yet. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).
+Argent drives physical iPhones through USB or a connected CoreDevice network tunnel. Pinches, rotations and multi-finger paths work in apps drawn in portrait. Physical iPads are not supported yet. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).
 
 ### HarmonyOS
 
@@ -87,7 +90,7 @@ Electron apps and Chromium browsers exposing the Chrome DevTools Protocol are dr
 
 ### Mac apps
 
-Argent controls native Mac apps built with AppKit, SwiftUI, or react-native-macos on macOS 14.4 or later. The agent works in the background without moving your pointer. No Accessibility or Screen Recording permission is required. Mac app support is on by default. See [Mac apps](/docs/features/mac-apps) for setup and limitations.
+Argent controls Mac apps on macOS 14.4 or later. The agent works in the background without moving your pointer. No Accessibility or Screen Recording permission is required. See [Mac apps](/docs/features/mac-apps) for setup and limitations.
 
 ## React Native
 

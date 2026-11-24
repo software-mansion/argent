@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
 import { createNetworkManager, type NetworkManager } from "../src/chromium-server/network";
+import { toCdpNetworkConditions } from "../src/utils/network-conditions";
 
 // A fake CDP client: a real event bus (so the manager's `event` listener fires)
 // plus a `send` spy that records commands.
@@ -137,6 +138,18 @@ describe("NetworkManager (recording)", () => {
     emitRequest(f.events, { id: "late", url: "https://x.test/late", status: 200 });
     expect(net.get("late")).toBeUndefined();
   });
+
+  it("reports throttled only while the stored conditions shape traffic", async () => {
+    expect(net.throttled()).toBe(false);
+    await net.setConditions(toCdpNetworkConditions({ latencyMs: 300 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ offline: true }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ downloadKbps: 500 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions(null));
+    expect(net.throttled()).toBe(false);
+  });
 });
 
 // ── view-network-logs / view-network-request-details: Chromium branch ────────
@@ -209,6 +222,28 @@ describe("view-network-logs (chromium branch)", () => {
     expect(out).toContain("=== NETWORK LOGS (page 1/1, 2 total) ===");
     expect(out).toContain('{id: 1} "GET /a" 200 OK');
     expect(out).toContain('{id: 2} "POST /api" 500 Err');
+  });
+
+  it("reads pageIndex null as the latest page, like an omitted pageIndex", async () => {
+    const requests = Array.from({ length: 60 }, (_, i) =>
+      rec({ requestId: String(i + 1), url: `https://x.test/r${i + 1}`, status: 200 })
+    );
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const render = async (pageIndex: unknown) => {
+      const params = networkLogsTool.zodSchema!.parse({
+        device_id: "chromium-cdp-9222",
+        port: 8081,
+        pageIndex,
+      });
+      return (await networkLogsTool.execute(
+        services,
+        params as Parameters<typeof networkLogsTool.execute>[1]
+      )) as string;
+    };
+    expect(await render(null)).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+    expect(await render(undefined)).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+    expect(await render(0)).toContain("=== NETWORK LOGS (page 1/2, 60 total) ===");
+    expect(await render("1")).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
   });
 
   it("reports no-traffic when the recording is empty", async () => {

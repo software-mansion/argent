@@ -46,7 +46,7 @@ function requireTcpArtifact(
       `TCP-transport ${kind} not found: ${p}. This ${kind} is required to drive an ` +
         `ios-remote (sim-remote) device over the QUIC tunnel. It ships in the argent ` +
         `package under bin/tcp/ and dylibs/tcp/ (platform-neutral); if you are running a ` +
-        `local build, produce it with \`npm run build:ios-binaries:tcp\`. To point the ` +
+        `local build, produce it with \`bun run build:ios-binaries:tcp\`. To point the ` +
         `lookup at a directory that already contains it, set ${envVar}=<dir>.`
     );
   }
@@ -64,6 +64,15 @@ export const nativeDevtoolsDylibPath = () => {
 export const keyboardPatchDylibPath = () => {
   requireDarwin("keyboardPatchDylibPath");
   return requireDylibIn(DYLIB_DIR, "libKeyboardPatch.dylib");
+};
+/**
+ * The audio mock, inserted into every process of a locally armed simulator at
+ * arming time (the `ios-audio-always-inserted` flag, on by default; off, only
+ * once an audio tool is used). Local iOS only: no tvOS or TCP variant.
+ */
+export const audioDylibPath = () => {
+  requireDarwin("audioDylibPath");
+  return requireDylibIn(DYLIB_DIR, "libArgentAudio.dylib");
 };
 
 export const bootstrapDylibPathTcp = () => {

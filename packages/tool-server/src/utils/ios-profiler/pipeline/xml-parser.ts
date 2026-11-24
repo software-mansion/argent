@@ -1,6 +1,10 @@
 import { promises as fs } from "fs";
 import type { CpuSample, RawHang, RawLeak, StackFrame } from "../types";
-import { SYSTEM_LIBRARY_PATH_PREFIXES, TOOLING_LIBRARIES } from "../config";
+import {
+  DEVICE_SUPPORT_PATH_SEGMENT,
+  SYSTEM_LIBRARY_PATH_PREFIXES,
+  TOOLING_LIBRARIES,
+} from "../config";
 
 function decodeXml(str: string): string {
   return str
@@ -28,7 +32,10 @@ function extractRows(xml: string): string[] {
 }
 
 function isSystemLibraryPath(path: string): boolean {
-  return SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return (
+    SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path.includes(DEVICE_SUPPORT_PATH_SEGMENT)
+  );
 }
 
 /**
@@ -364,13 +371,15 @@ export async function parseCpuFile(
   }
 }
 
-export async function parseHangsFile(filePath: string | null): Promise<RawHang[]> {
-  if (!filePath) return [];
+/** Null means no readable table. An empty array means the table contains no hangs. */
+export async function parseHangsFile(filePath: string | null): Promise<RawHang[] | null> {
+  if (!filePath) return null;
   try {
     const xml = await fs.readFile(filePath, "utf8");
-    return parseHangsXml(xml);
+    // xctrace can return a query result with no matching table node.
+    return /<node(?=[\s/>])/.test(xml) ? parseHangsXml(xml) : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
