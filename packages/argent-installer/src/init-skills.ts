@@ -114,7 +114,6 @@ function printManualInstructions(
       ``,
       `  ${pc.dim("# Cursor")}`,
       `  mkdir -p ${dir(".cursor/skills")} && cp -r ${bundledCopy}/* ${dir(".cursor/skills/")}`,
-      ``,
       // Without a runner the skills CLI is not an option, so do not offer it.
       ...(runnerLabel
         ? [
