@@ -201,6 +201,9 @@ describe("typeWithReadback", () => {
       ["don't", "don’t"],
       ["a--b", "a—b"],
       ['say "hi"', "say „hi”"],
+      ['say "hi"', "say «hi»"],
+      ['say "hi"', "say «\u00A0hi\u00A0»"],
+      ["it's 'ok'", "it’s ‹ok›"],
       ["don't go", "Don’t go"],
     ])("verifies %s held as %s, without the slow check", async (typed, held) => {
       const fake = fakeScreen([input("", { focused: true })]);
@@ -237,6 +240,21 @@ describe("typeWithReadback", () => {
 
     expect(out.readback).toEqual({ verified: true });
     expect(fake.tree).toHaveBeenCalledTimes(3);
+  });
+
+  // The ax-service check compares exactly, so it says "no" to a capital iOS
+  // added; a busy app that also misses the late tree read must not get the
+  // mismatch warning for it.
+  it("says nothing when the late tree read times out after the check says no", async () => {
+    const fake = fakeScreen([input("", { focused: true })]);
+    fake.fill.mockImplementation(async () => {
+      fake.tree.mockImplementation(() => new Promise(() => {}));
+      return { focused: true, verified: false };
+    });
+
+    const out = await typeOn(fake, "hello", [input("hel", { focused: true })]);
+
+    expect(out.readback).toBeUndefined();
   });
 
   it("leaves a secure field, which shows bullets, to the check", async () => {

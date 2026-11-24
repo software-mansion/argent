@@ -115,9 +115,11 @@ export async function typeWithReadback<T>(
   const result = await type();
   if (!ax || !typedInto) return { result };
 
+  // "unread" when the tree read gave up: a busy app answers late, and that
+  // says nothing about the field.
   const judge = async () => {
     const nodes = await readTree();
-    return nodes && judgeTree(nodes, typedInto, text);
+    return nodes ? judgeTree(nodes, typedInto, text) : "unread";
   };
   const verified = { result, readback: { verified: true } };
 
@@ -133,7 +135,11 @@ export async function typeWithReadback<T>(
   // so by now: read the tree again before calling it a mismatch.
   const late = await judge();
   if (late === "holds") return verified;
-  if (late === "moved") return { result };
+  // The check compares exactly, so it says "no" to text iOS changed on
+  // purpose too (a capital, a curled quote). Only the tree can accept that;
+  // a tree read that gave up, as when the app is busy re-filtering a list,
+  // leaves the field unjudged rather than mismatched.
+  if (late === "moved" || late === "unread") return { result };
   return { result, readback: { verified: false, warning: READBACK_MISMATCH_WARNING } };
 }
 
@@ -207,12 +213,15 @@ export function holdsTyped(typed: string, held: string): boolean {
 }
 
 /**
- * Undoes smart punctuation: curly apostrophes and quotes (in the host
- * keyboard's language, so „ ” as well) back to straight ones, and a dash for
- * two hyphens on both sides.
+ * Undoes smart punctuation: curly apostrophes and quotes back to straight
+ * ones, and a dash for two hyphens on both sides. The quotes follow the host
+ * keyboard's language, which simulator-server passes through: „ ” in German,
+ * « » in French or Russian, the French ones with a no-break space inside.
  */
 function plainPunctuation(text: string): string {
   return text
+    .replace(/‹[\u00A0\u202F]?|[\u00A0\u202F]?›/gu, "'")
+    .replace(/«[\u00A0\u202F]?|[\u00A0\u202F]?»/gu, '"')
     .replace(/[‘’‚‛]/gu, "'")
     .replace(/[“”„‟]/gu, '"')
     .replace(/--|–/gu, "—");
