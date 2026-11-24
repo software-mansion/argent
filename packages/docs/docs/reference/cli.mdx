@@ -47,3 +47,5 @@ To send JSON `null`, use `--commit_index-json null` or `--hang_index-json null`.
 
 `argent server start` uses the same Node.js executable as the CLI in both foreground and detached mode.
 If that executable no longer exists, or the CLI runs under Bun, Deno or Electron, Argent uses `node` from `PATH`.
+
+When no tool-server runs, `argent mcp` and the other commands start one in the background. Other agents share this tool-server. It exits after 30 minutes without a request. When the `argent mcp` that started it has exited, it exits after 2 minutes without a request. Each running `argent mcp` sends a request every 30 seconds, so the tool-server stays up while an agent uses it.
