@@ -163,7 +163,7 @@ Keep the wait as a `tool:` step in YAML. Match on a part of the URL that contain
 
 On Android, capture can slow the app. Start just before the triggering action and stop immediately after the wait, before checking the UI. For many related requests, keep capture running through the group and stop after the last wait. If a replay fails before the stop, stop capture before retrying.
 
-If the recorder reports `NETWORK_CAPTURE_NOT_STARTED`, record the start and repeat the action. If it records a wait with `success: false`, read the warning. For `unmet`, inspect the request counts in `toolResult.note` and check the action and matcher. For `unreadable`, fix the layer named in the result before repeating the action. For `cancelled`, record the wait again. Remove superseded steps after `e2e-finish-recording`.
+If the recorder reports `NETWORK_CAPTURE_NOT_STARTED`, record the start and repeat the action. If it records a wait with `success: false`, read the warning. For `unmet`, use `toolResult.nearMisses` and the request counts in `toolResult.note` to check the matcher and the recorded action. For `unreadable`, fix the layer named in the result before repeating the action. For `cancelled`, record the wait again. Remove superseded steps after `e2e-finish-recording`.
 
 ### Wrong turns
 

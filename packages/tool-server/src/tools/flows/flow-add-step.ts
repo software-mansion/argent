@@ -476,8 +476,8 @@ function unmetWaitWarningFor(cause: UnmetWaitCause): string {
  */
 const UNMET_NETWORK_WAIT_WARNING =
   "recorded, but the wait never held: `await-network-request` returned success:false, and at " +
-  "replay an unmet wait FAILS the step. `toolResult.note` counts the requests since the start " +
-  "per layer: fix the matcher, or record the action that sends the request, then " +
+  "replay an unmet wait FAILS the step. `toolResult.nearMisses` lists the closest requests and " +
+  "the criteria each missed: fix the matcher, or record the action that sends the request, then " +
   "record the wait again. Delete the failed step after `e2e-finish-recording`, not mid-recording";
 
 const UNREADABLE_NETWORK_WAIT_WARNING =

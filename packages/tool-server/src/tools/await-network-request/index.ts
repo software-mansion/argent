@@ -22,7 +22,10 @@ import { markedLayers, type LayerRead, type MarkedLayer } from "./layers";
 import {
   STATUS_CLASSES,
   describeCriteria,
+  describeRecord,
   firstMatch,
+  nearMisses,
+  type NearMiss,
   type RequestCriteria,
   type WaitLayer,
   type WaitRecord,
@@ -135,6 +138,8 @@ interface WaitResult {
   note?: string;
   /** Why a wait that did not hold came back success: false; only `unmet` is a verdict. */
   cause?: UnmetWaitCause;
+  /** The closest requests since the start, on a wait that did not hold. */
+  nearMisses?: NearMiss[];
   /** Each layer the start marked, on a wait that did not hold. */
   layers?: LayerSummary[];
 }
@@ -179,8 +184,8 @@ export function createAwaitNetworkRequestTool(
     // A literal, so scripts/extract-tools.mjs finds the description it scores.
     id: "await-network-request",
     description: `Check whether a matching request finished. Use when an action should send a specific request. Call network-capture-start before the action, then call this tool. It searches requests started since the latest capture start and waits until a match finishes or the timeout expires. On Chromium, match the final URL, method and status after redirects.
-Returns the matching request. Pass match.id as requestId to view-network-request-details for headers and bodies. Requests whose outcome capture missed cannot match. When success is false, check cause. For unmet, check the action and criteria. For unreadable, use the layer notes to restore capture. For cancelled, retry if needed. A false result fails an e2e step and stops a run-sequence.
-If capture has no start for the target, the tool raises NETWORK_CAPTURE_NOT_STARTED. Start capture and repeat the action. After a JavaScript reload, start capture again once the runtime is ready.`,
+Pass match.id as requestId to view-network-request-details for headers and bodies. A request can match only if Argent saw its outcome. When success is false, check cause. For unmet or unreadable, nearMisses can show which criteria captured requests missed. For unreadable, follow the layer notes to restore capture and repeat the action. For cancelled, retry if needed. A false result fails an e2e step and stops a run-sequence.
+If the tool raises NETWORK_CAPTURE_NOT_STARTED, start capture and repeat the action. While the JavaScript capture window is active, the wait can reconnect to the runtime and restore recording. Requests sent before recording resumes may be missing.`,
     zodSchema,
     searchHint:
       "wait await network request http api call fetch xhr response status url match after capture start e2e assert",
@@ -357,6 +362,8 @@ If capture has no start for the target, the tool raises NETWORK_CAPTURE_NOT_STAR
             ...(last?.note ? { note: last.note } : {}),
           };
         });
+        const seen = [...latestReadable.values()].flatMap((read) => read.records);
+        const misses = nearMisses(criteria, seen);
         const counts = summaries
           .map(
             (s) =>
@@ -370,7 +377,12 @@ If capture has no start for the target, the tool raises NETWORK_CAPTURE_NOT_STAR
           .filter((s) => s.note)
           .map((s) => `${s.layer}: ${s.note}`)
           .join("; ");
-        const note = [head, `Requests since the start: ${counts}.`, notes ? `${notes}.` : undefined]
+        const note = [
+          head,
+          `Requests since the start: ${counts}.`,
+          notes ? `${notes}.` : undefined,
+          misses.length > 0 ? `Nearest: ${misses.map(describeRecord).join("; ")}.` : undefined,
+        ]
           .filter(Boolean)
           .join(" ");
         return {
@@ -378,6 +390,7 @@ If capture has no start for the target, the tool raises NETWORK_CAPTURE_NOT_STAR
           elapsed: elapsed(),
           cause,
           note,
+          nearMisses: misses,
           layers: summaries,
         };
       }

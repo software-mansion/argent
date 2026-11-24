@@ -10,8 +10,15 @@ import {
 import { MACOS_CONNECTION_DROPPED } from "../../blueprints/ios-network-records";
 import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { findJsCaptureOfDevice, type JsCaptureMark } from "../../blueprints/network-inspector";
-import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
+import {
+  findJsCaptureOfDevice,
+  installNetworkInterceptor,
+  type JsCaptureMark,
+} from "../../blueprints/network-inspector";
+import {
+  JS_RUNTIME_DEBUGGER_NAMESPACE,
+  type JsRuntimeDebuggerApi,
+} from "../../blueprints/js-runtime-debugger";
 import type { NetworkRequestRecord } from "../../chromium-server";
 import {
   NOT_RECONNECTED,
@@ -25,10 +32,12 @@ import {
   errorMessage,
   isLiveService,
   jsNotReached,
+  captureSweepUnderWay,
   lastCaptureStart,
   resolveJsRuntime,
+  withCaptureLock,
 } from "../network/network-capture";
-import type { WaitLayer, WaitRecord } from "./match";
+import type { LayerRecord, WaitLayer, WaitRecord } from "./match";
 
 /** What one read of a marked layer found. */
 export interface LayerRead {
@@ -40,7 +49,7 @@ export interface LayerRead {
   /** network-capture-stop stopped the layer: nothing after the stop is recorded. */
   stopped: boolean;
   /** The requests after the start's mark, oldest first. */
-  records: WaitRecord[];
+  records: LayerRecord[];
   /** Why the layer is not armed, or was not read, or what it may have missed. */
   note?: string;
 }
@@ -57,6 +66,10 @@ export interface MarkedLayer {
 
 const CAPTURE_ENDED =
   "its capture ended after the start (stop-all-simulator-servers, a stop of the device's services, or a tool-server restart); call network-capture-start again";
+const SWEEP_UNDER_WAY =
+  "stop-all-simulator-servers or the tool-server's exit is ending the app's capture";
+const CAPTURE_CHANGED =
+  "the app's capture changed during the read (a network-capture-start or -stop, or a teardown of the device), so the read left the app's JS runtime as it was";
 
 /** The service behind `ref` while it runs: the wait never creates one. */
 async function liveService<T>(
@@ -91,7 +104,7 @@ const LOST_ENDINGS: ReadonlySet<string> = new Set([
   MACOS_CONNECTION_DROPPED,
 ]);
 
-function fromNative(record: NativeNetworkRecord): WaitRecord {
+function fromNative(record: NativeNetworkRecord): LayerRecord {
   const lost =
     record.state === "failed" &&
     record.errorText !== undefined &&
@@ -107,10 +120,12 @@ function fromNative(record: NativeNetworkRecord): WaitRecord {
       ? { durationMs: Math.round(record.timing.durationMs) }
       : {}),
     ...(record.errorText ? { errorText: record.errorText } : {}),
+    // From the agent's wallTime, on the app's clock, as the start of a JS request.
+    startedAt: record.timing.startedAt,
   };
 }
 
-function nativeAfter(records: NativeNetworkRecord[], floor: number): WaitRecord[] {
+function nativeAfter(records: NativeNetworkRecord[], floor: number): LayerRecord[] {
   return records.filter((r) => recordNumber(r.id) > floor).map(fromNative);
 }
 
@@ -336,10 +351,12 @@ interface WaitReadAnswer {
     status?: number;
     durationMs?: number;
     errorText?: string;
+    /** When the request started, in epoch seconds of the app's clock. */
+    timestamp?: number;
   }>;
 }
 
-function fromJs(entry: NonNullable<WaitReadAnswer["entries"]>[number]): WaitRecord {
+function fromJs(entry: NonNullable<WaitReadAnswer["entries"]>[number]): LayerRecord {
   const state =
     entry.state === "finished"
       ? "complete"
@@ -357,13 +374,16 @@ function fromJs(entry: NonNullable<WaitReadAnswer["entries"]>[number]): WaitReco
     state,
     ...(typeof entry.durationMs === "number" ? { durationMs: Math.round(entry.durationMs) } : {}),
     ...(entry.errorText ? { errorText: entry.errorText } : {}),
+    ...(typeof entry.timestamp === "number" ? { startedAt: entry.timestamp * 1000 } : {}),
   };
 }
 
 /**
- * The JS layer, read through the app's debugger while argent stays connected to
- * it. The wait creates no service and installs nothing: a JS runtime that lost
- * the interceptor, as at a reload, records again after the next start.
+ * The JS layer, read through the app's debugger. While the capture is started,
+ * a read reconnects to the app's runtime, and installs the interceptor in a
+ * context that lost it (a reload) or never had it (a start before the app's
+ * JavaScript loaded), as the start asked. A stopped capture is only read where
+ * its runtime is still connected, and gets no install.
  */
 function jsLayer(
   registry: Registry,
@@ -383,24 +403,45 @@ function jsLayer(
       if (!found || !mark) return unreadable("js", CAPTURE_ENDED);
       const { payload, port, capture } = found;
       let stopped = capture.intent === "stopped";
-      if (!isLiveService(registry, `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`)) {
+      const physical = capture.physicalDeviceId ?? device.id;
+      // The teardown pauses the interceptor and drops the debugger; a read would undo both.
+      if (captureSweepUnderWay(physical)) return unreadable("js", SWEEP_UNDER_WAY, stopped);
+      const urn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`;
+      const live = isLiveService(registry, urn);
+      if (stopped && !live) {
         return unreadable(
           "js",
-          stopped
-            ? "the app's JS runtime is not connected, and a stopped capture does not reconnect to it"
-            : "argent's connection to the app's JS runtime ended (a relaunch, a Metro restart or a stop of the device's services); call network-capture-start again",
-          stopped
+          "the app's JS runtime is not connected, and a stopped capture does not reconnect to it",
+          true
         );
       }
-      const physical = capture.physicalDeviceId ?? device.id;
+      /**
+       * Runs `change` (a reconnect, an install or a resume) under the lock that
+       * network-capture-start and -stop take, and only while the capture is
+       * still the started one this read found. A teardown that began first
+       * ends first, and one that begins meanwhile waits for `change`, then
+       * pauses and disposes what it left.
+       */
+      const whileStarted = <T>(change: () => Promise<T>) =>
+        withCaptureLock(physical, bundleId, async (): Promise<{ value: T } | { note: string }> => {
+          if (captureSweepUnderWay(physical)) return { note: SWEEP_UNDER_WAY };
+          const now = findJsCaptureOfDevice(device.id, bundleId);
+          if (!now?.capture.mark) return { note: CAPTURE_ENDED };
+          if (now.capture !== capture || capture.intent !== "started") {
+            return { note: CAPTURE_CHANGED };
+          }
+          return { value: await change() };
+        });
       const target = payload.slice(payload.indexOf(":") + 1);
       try {
-        const dbg = await resolveJsRuntime(
-          registry,
-          physical,
-          target !== physical ? target : undefined,
-          port
-        );
+        // A live debugger is used as it is: resolving it creates nothing.
+        const opened = live
+          ? { value: await registry.resolveService<JsRuntimeDebuggerApi>(urn) }
+          : await whileStarted(() =>
+              resolveJsRuntime(registry, physical, target !== physical ? target : undefined, port)
+            );
+        if ("note" in opened) return unreadable("js", opened.note);
+        const dbg = opened.value;
         const appId = dbg.runtimeApp?.appId;
         if (appId !== undefined && appId !== bundleId) {
           return unreadable(
@@ -419,6 +460,10 @@ function jsLayer(
         // A stop whose pause did not reach the runtime: it records still, also after the stop.
         const pauseMissed = stopped && answer.installed && answer.paused === false;
         if (pauseMissed) stopped = false;
+        const resume = !stopped && !pauseMissed && (!answer.installed || answer.paused === true);
+        if (resume && answer.xhr !== true) {
+          return unreadable("js", "the app's JavaScript has not loaded yet", stopped);
+        }
         if (!answer.installed) {
           if (stopped) {
             // Nothing records after the stop, and the reload cleared what was recorded.
@@ -431,37 +476,52 @@ function jsLayer(
               note: "the app's JS runtime reloaded since the stop, which cleared its requests",
             };
           }
+          const installed = await whileStarted(() =>
+            installNetworkInterceptor(dbg.cdp, payload, dbg.runtimeApp)
+          );
+          if ("note" in installed) return unreadable("js", installed.note);
+          const install = installed.value;
           return unreadable(
             "js",
-            answer.xhr === true
-              ? "the app's JS runtime has no interceptor, as after a reload; call network-capture-start again"
-              : "the app's JavaScript has not loaded yet; call network-capture-start once it has"
+            install.installed
+              ? "the app's JS runtime had no interceptor (it reloaded, or its JavaScript had not loaded at the start), so the wait installed it: requests from now on are recorded, earlier ones in that runtime are missing"
+              : `the interceptor did not install: ${install.reason}`
           );
         }
-        const records = (answer.entries ?? []).map(fromJs);
-        if (!stopped && answer.paused === true) {
-          // A stop's pause that the start did not lift.
-          return {
-            layer: "js",
-            readable: true,
-            armed: false,
-            stopped,
-            records,
-            note: "a stop's pause is still in the app's JS runtime, so it records nothing; call network-capture-start again",
-          };
+        let note: string | undefined;
+        if (resume) {
+          // A stop's pause that the start did not reach: the start asked to record.
+          const resumed = await whileStarted(() =>
+            installNetworkInterceptor(dbg.cdp, payload, dbg.runtimeApp)
+          );
+          if ("note" in resumed) return unreadable("js", resumed.note);
+          const install = resumed.value;
+          note = install.installed
+            ? "a stop's pause was still in the app's JS runtime, so the wait resumed the capture: requests sent while it was paused are missing"
+            : `a stop's pause is still in the app's JS runtime, and the wait could not resume it: ${install.reason}`;
+          if (!install.installed) {
+            return {
+              layer: "js",
+              readable: true,
+              armed: false,
+              stopped,
+              records: (answer.entries ?? []).map(fromJs),
+              note,
+            };
+          }
+        } else if (mark.install !== null && answer.token !== mark.install) {
+          note =
+            "the app's JS runtime reloaded after the start, so its requests between the reload and the interceptor's reinstall are missing";
+        } else if (pauseMissed) {
+          note =
+            "the stop's pause did not reach the app's JS runtime, which still records: requests after the stop count";
         }
-        const note =
-          mark.install !== null && answer.token !== mark.install
-            ? "the app's JS runtime reloaded after the start, so its requests between the reload and the interceptor's reinstall are missing"
-            : pauseMissed
-              ? "the stop's pause did not reach the app's JS runtime, which still records: requests after the stop count"
-              : undefined;
         return {
           layer: "js",
           readable: true,
           armed: true,
           stopped,
-          records,
+          records: (answer.entries ?? []).map(fromJs),
           ...(note ? { note } : {}),
         };
       } catch (err) {

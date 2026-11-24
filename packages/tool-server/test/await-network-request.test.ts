@@ -11,6 +11,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { createAwaitNetworkRequestTool } from "../src/tools/await-network-request";
+import { markedLayers, type LayerRead } from "../src/tools/await-network-request/layers";
 import {
   mismatches,
   type RequestCriteria,
@@ -19,6 +20,7 @@ import {
 import {
   forgetJsCapturesOf,
   jsCapturePayload,
+  pauseJsCapturesOf,
   setJsCapture,
   type JsCaptureMark,
 } from "../src/blueprints/network-inspector";
@@ -30,15 +32,35 @@ import {
 import { STOPPED_BEFORE_FINISH } from "../src/blueprints/android-network-inspector";
 import { chromiumCdpRef } from "../src/blueprints/chromium-cdp";
 import { createNetworkManager } from "../src/chromium-server/network";
-import { noteCaptureStart } from "../src/tools/network/network-capture";
+import {
+  isLiveService,
+  noteCaptureStart,
+  withCaptureLock,
+  withCaptureSweep,
+} from "../src/tools/network/network-capture";
 import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
+import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import type { CDPClient } from "../src/utils/debugger/cdp-client";
-import { NETWORK_INTERCEPTOR_SCRIPT } from "../src/utils/debugger/scripts/network-interceptor";
+import {
+  NETWORK_CAPTURE_END_SCRIPT,
+  NETWORK_INTERCEPTOR_SCRIPT,
+  makeNetworkWaitReadScript,
+} from "../src/utils/debugger/scripts/network-interceptor";
 import type { NativeNetworkRecord, NativeRecordState } from "../src/utils/native-network-record";
 import { resolveDevice } from "../src/utils/device-info";
 import { AWAIT_NETWORK_REQUEST_TOOL_ID } from "../src/utils/wait-result";
 
+// The sim-remote tunnel that the JS layer of a remote simulator opens to Metro before it connects.
+const tunnel = vi.hoisted(() => ({
+  open: undefined as ((udid: string, port: number) => Promise<void>) | undefined,
+}));
+vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
+  proxyStart: async (udid: string, port: number) => tunnel.open?.(udid, port),
+}));
+
 const IOS = "11111111-2222-3333-4444-555555555555";
+const REMOTE = "remote:66666666-7777-8888-9999-000000000000";
 const CHROMIUM = "chromium-cdp-9222";
 const APP = "com.example.shop";
 /** The Metro port of the JS capture's payload. */
@@ -53,6 +75,7 @@ interface WaitResult {
   match?: WaitRecord;
   note?: string;
   cause?: string;
+  nearMisses?: Array<WaitRecord & { mismatch: string[] }>;
   layers?: Array<{ layer: string; armed: boolean; readable: boolean; stopped?: true }>;
 }
 
@@ -63,6 +86,8 @@ interface RecordSpec {
   status?: number;
   state?: NativeRecordState;
   errorText?: string;
+  /** Epoch ms of the app's clock, from the agent's wallTime. */
+  startedAt?: number;
 }
 
 /** The simulator's native-devtools service, with one app's records, numbered across the tool-server. */
@@ -74,7 +99,7 @@ class FakeIos {
   /** What each read of the records asked for. */
   readonly asked: Array<{ port: number; includeHidden?: boolean }> = [];
 
-  add(n: number, { url, status, state = "complete", errorText }: RecordSpec): void {
+  add(n: number, { url, status, state = "complete", errorText, startedAt = 0 }: RecordSpec): void {
     this.records.push({
       id: `ios-t7-${n}`,
       layer: "ios-native",
@@ -85,7 +110,7 @@ class FakeIos {
       ...(status !== undefined
         ? { response: { url, status, statusText: "", headers: {}, mimeType: "text/plain" } }
         : {}),
-      timing: { startedAt: 0 },
+      timing: { startedAt },
       ...(errorText !== undefined ? { errorText } : {}),
     });
   }
@@ -151,12 +176,13 @@ class FakeRuntime {
     return (this.context as { __argent_network_install: string }).__argent_network_install;
   }
 
-  /** A request the interceptor logged, with the id it gave. */
-  push(id: number, url: string, status = 200): void {
+  /** A request the interceptor logged, with the id it gave, and maybe when it started in epoch ms. */
+  push(id: number, url: string, status = 200, startedAt?: number): void {
     (this.context as { __argent_network_log: unknown[] }).__argent_network_log.push({
       id,
       requestId: `rn-net-${id}`,
       state: "finished",
+      ...(startedAt !== undefined ? { timestamp: startedAt / 1000 } : {}),
       request: { method: "GET", url: `${API}${url}`, headers: {} },
       response: { status, headers: {} },
     });
@@ -173,6 +199,8 @@ class FakeRuntime {
 /** What Metro serves per `<port>:<device>`. */
 const metro = new Map<string, FakeRuntime>();
 let debuggerFactoryCalls = 0;
+/** The options each debugger was created with. */
+let debuggerOptions: Array<Record<string, unknown> | undefined> = [];
 
 // ── The registry ────────────────────────────────────────────────────────────
 
@@ -182,13 +210,13 @@ let tab: FakeTab;
 
 function fakeBlueprint(
   namespace: string,
-  api: (payload: string) => unknown
+  api: (payload: string, options?: Record<string, unknown>) => unknown
 ): ServiceBlueprint<unknown, string> {
   return {
     namespace,
     getURN: (payload) => `${namespace}:${payload}`,
-    factory: async (_deps, payload) => ({
-      api: api(payload),
+    factory: async (_deps, payload, options) => ({
+      api: api(payload, options),
       dispose: async () => {},
       events: new TypedEventEmitter<ServiceEvents>(),
     }),
@@ -202,8 +230,9 @@ beforeEach(() => {
   registry.registerBlueprint(fakeBlueprint("NativeDevtools", () => ios));
   registry.registerBlueprint(fakeBlueprint("ChromiumCdp", () => ({ server: tab })));
   registry.registerBlueprint(
-    fakeBlueprint("JsRuntimeDebugger", (payload) => {
+    fakeBlueprint("JsRuntimeDebugger", (payload, options) => {
       debuggerFactoryCalls++;
+      debuggerOptions.push(options);
       const runtime = metro.get(payload);
       if (!runtime) {
         throw new FailureError(`nothing answers at ${payload}`, {
@@ -221,8 +250,11 @@ beforeEach(() => {
     })
   );
   registry.registerTool(createAwaitNetworkRequestTool(registry));
+  registry.registerTool(createStopAllSimulatorServersTool(registry));
   metro.clear();
   debuggerFactoryCalls = 0;
+  debuggerOptions = [];
+  tunnel.open = undefined;
   forgetJsCapturesOf();
 });
 
@@ -241,14 +273,20 @@ async function startIos(udid = IOS): Promise<void> {
 async function startJs(
   runtime: FakeRuntime,
   mark: JsCaptureMark,
-  { intent = "started", udid = IOS }: { intent?: "started" | "stopped"; udid?: string } = {}
+  {
+    intent = "started",
+    udid = IOS,
+    logicalDeviceId,
+  }: { intent?: "started" | "stopped"; udid?: string; logicalDeviceId?: string } = {}
 ): Promise<void> {
-  const payload = jsCapturePayload(PORT, udid);
+  const payload = jsCapturePayload(PORT, logicalDeviceId ?? udid);
   metro.set(payload, runtime);
-  setJsCapture(payload, { bundleId: APP, intent, mark, installed: true });
-  // A start leaves the debugger connected, which the wait reads through; a stop pauses the interceptor.
-  await registry.resolveService(`JsRuntimeDebugger:${payload}`);
-  if (intent === "stopped") runInContext("__argent_network_paused = true", runtime.context);
+  setJsCapture(payload, { bundleId: APP, intent, mark, installed: true, physicalDeviceId: udid });
+  // A stop pauses the interceptor; a stopped capture is read only while its debugger runs.
+  if (intent === "stopped") {
+    runInContext("__argent_network_paused = true", runtime.context);
+    await registry.resolveService(`JsRuntimeDebugger:${payload}`);
+  }
 }
 
 function wait(params: Record<string, unknown> & { url: string }, udid = IOS) {
@@ -259,6 +297,39 @@ function wait(params: Record<string, unknown> & { url: string }, udid = IOS) {
     timeoutMs: 150,
     ...params,
   });
+}
+
+/** One read of the JS layer, as a poll of the wait makes it. */
+async function readJs(udid = IOS): Promise<LayerRead> {
+  const js = (await markedLayers(registry, resolveDevice(udid), APP)).find(
+    ({ layer }) => layer === "js"
+  );
+  if (!js) throw new Error(`no js layer marked for ${udid}`);
+  return js.read(1000);
+}
+
+/** A reload that kept the CDP connection: a new context, whose bundle ran, without the interceptor. */
+function reload(runtime: FakeRuntime): void {
+  runtime.context = createContext({});
+  runInContext(XHR_BUNDLE, runtime.context);
+}
+
+/** A stop's pause in the app's JS context. */
+function pause(runtime: FakeRuntime): void {
+  runInContext("__argent_network_paused = true", runtime.context);
+}
+
+function isPaused(runtime: FakeRuntime): boolean {
+  return (
+    (runtime.context as { __argent_network_paused?: unknown }).__argent_network_paused === true
+  );
+}
+
+function hasInterceptor(runtime: FakeRuntime): boolean {
+  return (
+    typeof (runtime.context as { __argent_network_mark?: unknown }).__argent_network_mark ===
+    "function"
+  );
 }
 
 const criteria = (wanted: Partial<RequestCriteria>): RequestCriteria => ({
@@ -564,5 +635,280 @@ describe("await-network-request", () => {
     expect(result.note).toBe(
       "js: the app's JS runtime reloaded after the start, so its requests between the reload and the interceptor's reinstall are missing"
     );
+  });
+});
+
+describe("diagnostics: near misses and JS reinstall", () => {
+  it("lists the closest requests and the criteria each missed, also in the note", async () => {
+    await startIos();
+    ios.add(11, { url: "/v1/login", status: 500 });
+    ios.add(12, { url: "/v1/other", status: 200 });
+    ios.add(13, { url: "/v1/stop", state: "failed", errorText: STOPPED_BEFORE_FINISH });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    // A matching URL first, then the fewest misses; a lost request shows as lost.
+    expect(result.nearMisses?.map(({ id, state, mismatch }) => ({ id, state, mismatch }))).toEqual([
+      { id: "ios-t7-11", state: "complete", mismatch: ["status"] },
+      { id: "ios-t7-12", state: "complete", mismatch: ["url"] },
+      { id: "ios-t7-13", state: "lost", mismatch: ["url", "status", "outcome"] },
+    ]);
+    expect(result.note).toContain(
+      `Nearest: GET ${API}/v1/login 500 complete [ios-native ios-t7-11] (mismatch: status); `
+    );
+  });
+
+  it("orders the near misses by when each request started, across the layers", async () => {
+    await startIos();
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    const at = Date.UTC(2026, 10, 23, 12);
+    runtime.push(1, "/v1/login?try=1", 500, at + 100);
+    ios.add(11, { url: "/v1/login?try=2", status: 500, startedAt: at + 200 });
+    runtime.push(2, "/v1/login?try=3", 500, at + 300);
+    ios.add(12, { url: "/v1/login?try=4", status: 500, startedAt: at + 400 });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    expect(result.nearMisses?.map(({ id }) => id)).toEqual(["ios-t7-12", "rn-net-2", "ios-t7-11"]);
+    // The start orders the list and stays out of the result.
+    expect(result.nearMisses?.[0]).not.toHaveProperty("startedAt");
+  });
+
+  it("lists a request that the JS and native layers both recorded once, and each retry of it", async () => {
+    await startIos();
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    const at = Date.UTC(2026, 10, 23, 12);
+    // On iOS, the native layer also records an XMLHttpRequest, a little after the JS layer.
+    runtime.push(1, "/v1/login", 500, at + 100);
+    ios.add(11, { url: "/v1/login", status: 500, startedAt: at + 105 });
+    ios.add(12, { url: "/v1/other", status: 200, startedAt: at + 200 });
+    // The app retries the login.
+    runtime.push(2, "/v1/login", 500, at + 300);
+    ios.add(13, { url: "/v1/login", status: 500, startedAt: at + 305 });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    expect(result.nearMisses?.map(({ id, mismatch }) => ({ id, mismatch }))).toEqual([
+      { id: "ios-t7-13", mismatch: ["status"] },
+      { id: "ios-t7-11", mismatch: ["status"] },
+      { id: "ios-t7-12", mismatch: ["url"] },
+    ]);
+  });
+
+  it("lists twice a request that the layers recorded with the same fields more than a second apart", async () => {
+    await startIos();
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    const at = Date.UTC(2026, 10, 23, 12);
+    runtime.push(1, "/v1/login", 500, at + 100);
+    ios.add(11, { url: "/v1/login", status: 500, startedAt: at + 1_200 });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    expect(result.nearMisses?.map(({ id }) => id)).toEqual(["ios-t7-11", "rn-net-1"]);
+  });
+
+  it("takes one record of another layer at most as the same request", async () => {
+    await startIos();
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    const at = Date.UTC(2026, 10, 23, 12);
+    // Two tries of the login, and the native layer recorded only the second.
+    runtime.push(1, "/v1/login", 500, at + 100);
+    runtime.push(2, "/v1/login", 500, at + 300);
+    ios.add(11, { url: "/v1/login", status: 500, startedAt: at + 305 });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    expect(result.nearMisses?.map(({ id }) => id)).toEqual(["ios-t7-11", "rn-net-1"]);
+  });
+
+  it("installs the interceptor in a context that reloaded without it, and reads it next poll", async () => {
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    reload(runtime);
+    runtime.afterInstall = () => runtime.push(1, "/v1/login");
+
+    const result = await wait({ url: "/v1/login", timeoutMs: 2000 });
+
+    expect(result.match?.id).toBe("rn-net-1");
+    expect(hasInterceptor(runtime)).toBe(true);
+  });
+
+  it("resumes a started capture whose runtime still holds a stop's pause, and says so on the match", async () => {
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    runtime.push(1, "/v1/login");
+    // A stop's pause that the start did not reach.
+    pause(runtime);
+
+    const result = await wait({ url: "/v1/login" });
+
+    expect(result.match?.id).toBe("rn-net-1");
+    expect(result.note).toBe(
+      "js: a stop's pause was still in the app's JS runtime, so the wait resumed the capture: requests sent while it was paused are missing"
+    );
+    expect(isPaused(runtime)).toBe(false);
+  });
+
+  it.each([
+    {
+      context: "a stop's pause",
+      prepare: pause,
+      read: {
+        readable: true,
+        armed: false,
+        note: "a stop's pause is still in the app's JS runtime, and the wait could not resume it: unexpected answer: undefined",
+      },
+    },
+    {
+      context: "a reload",
+      prepare: reload,
+      read: {
+        readable: false,
+        armed: false,
+        note: "the interceptor did not install: unexpected answer: undefined",
+      },
+    },
+  ])(
+    "keeps the JS layer unarmed when the install after $context fails",
+    async ({ prepare, read }) => {
+      const runtime = new FakeRuntime();
+      await startJs(runtime, { install: runtime.token, lastId: 0 });
+      prepare(runtime);
+      // The runtime answers the install with nothing the tool-server can read.
+      const evaluate = runtime.evaluate.bind(runtime);
+      runtime.evaluate = (expr) =>
+        expr === NETWORK_INTERCEPTOR_SCRIPT ? Promise.resolve(undefined) : evaluate(expr);
+
+      expect(await readJs()).toMatchObject(read);
+    }
+  );
+
+  it("reconnects as the start did, through a remote simulator's tunnel, after the debugger session ended", async () => {
+    const logical = "a1b2c3d4e5f6";
+    const runtime = new FakeRuntime();
+    await startJs(
+      runtime,
+      { install: runtime.token, lastId: 0 },
+      { udid: REMOTE, logicalDeviceId: logical }
+    );
+    const urn = `JsRuntimeDebugger:${jsCapturePayload(PORT, logical)}`;
+    await registry.resolveService(urn, { physicalDeviceId: REMOTE });
+    // The app relaunched, which ended the CDP session, and with it the service.
+    await registry.disposeService(urn);
+    const tunnels: Array<[string, number]> = [];
+    tunnel.open = async (udid, port) => void tunnels.push([udid, port]);
+    runtime.push(1, "/v1/login");
+
+    const result = await wait({ url: "/v1/login" }, REMOTE);
+
+    expect(result.match?.id).toBe("rn-net-1");
+    expect(tunnels).toEqual([[REMOTE, PORT]]);
+    // A provider's grant and socket go by the udid, not by Metro's logicalDeviceId.
+    expect(debuggerOptions.at(-1)).toEqual({ physicalDeviceId: REMOTE });
+  });
+});
+
+describe("the JS layer and a teardown under way", () => {
+  it.each([
+    { context: "an interceptor", reloaded: false },
+    { context: "a context that reloaded without one", reloaded: true },
+  ])(
+    "leaves $context as stop-all-simulator-servers paused it during the read",
+    async ({ reloaded }) => {
+      const runtime = new FakeRuntime();
+      const mark = { install: runtime.token, lastId: 0 };
+      await startJs(runtime, mark);
+      if (reloaded) reload(runtime);
+      const evaluate = runtime.evaluate.bind(runtime);
+      let sweep: Promise<unknown> | undefined;
+      let ended!: () => void;
+      const endedFirst = new Promise<void>((resolve) => (ended = resolve));
+      runtime.evaluate = (expr) => {
+        if (expr === makeNetworkWaitReadScript(mark, PORT) && !sweep) {
+          // The teardown begins while the runtime works on the read, and its pause runs first.
+          sweep = registry.invokeTool("stop-all-simulator-servers", { devices: [IOS] });
+          return endedFirst.then(() => evaluate(expr));
+        }
+        if (expr === NETWORK_CAPTURE_END_SCRIPT) {
+          const answer = evaluate(expr);
+          ended();
+          // It answers a task later, so the read answers while the capture is not forgotten yet.
+          return new Promise((resolve) => setTimeout(() => resolve(answer), 0));
+        }
+        return evaluate(expr);
+      };
+
+      const read = await readJs();
+      await sweep;
+
+      // Neither resumed nor installed after the teardown's pause.
+      expect(isPaused(runtime)).toBe(true);
+      expect(hasInterceptor(runtime)).toBe(!reloaded);
+      expect(read).toMatchObject({
+        readable: false,
+        note: expect.stringContaining("its capture ended after the start"),
+      });
+    }
+  );
+
+  it("disposes the debugger that a read opens as stop-all-simulator-servers begins", async () => {
+    const logical = "a1b2c3d4e5f6";
+    const runtime = new FakeRuntime();
+    await startJs(
+      runtime,
+      { install: runtime.token, lastId: 0 },
+      { udid: REMOTE, logicalDeviceId: logical }
+    );
+    let sweep: Promise<unknown> | undefined;
+    tunnel.open = async () => {
+      // The teardown begins while the read opens the remote simulator's tunnel to Metro.
+      sweep ??= registry.invokeTool("stop-all-simulator-servers", { devices: [REMOTE, logical] });
+      await Promise.race([sweep, new Promise((resolve) => setTimeout(resolve, 50))]);
+    };
+
+    await readJs(REMOTE);
+    await sweep;
+
+    expect(isLiveService(registry, `JsRuntimeDebugger:${jsCapturePayload(PORT, logical)}`)).toBe(
+      false
+    );
+    expect(isPaused(runtime)).toBe(true);
+  });
+
+  it("does not resume an app that the tool-server's exit paused while the read waited for the capture lock", async () => {
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    await registry.resolveService(`JsRuntimeDebugger:${jsCapturePayload(PORT, IOS)}`);
+    // A stop's pause that the start did not reach, which the read resumes.
+    pause(runtime);
+    // A start or stop of the app that outlasts the exit's wait for it.
+    let finish!: () => void;
+    const held = withCaptureLock(
+      IOS,
+      APP,
+      () => new Promise<void>((resolve) => (finish = resolve))
+    );
+    const read = readJs();
+    // The read is in the lock's queue.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // As at the exit: a short wait for the starts and stops, then the pause.
+    await withCaptureSweep(undefined, { maxMs: 10 }, async () => {
+      await pauseJsCapturesOf(registry, undefined, { atExit: true });
+      // The start or stop ends while the exit is under way, and the read gets the lock.
+      finish();
+      await held;
+      await read;
+    });
+
+    expect(isPaused(runtime)).toBe(true);
+    expect(await read).toMatchObject({
+      readable: false,
+      note: "stop-all-simulator-servers or the tool-server's exit is ending the app's capture",
+    });
   });
 });
