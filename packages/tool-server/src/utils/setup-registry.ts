@@ -11,6 +11,7 @@ import { tvControlBlueprint } from "../blueprints/tv-control";
 import { androidTvControlBlueprint } from "../blueprints/android-tv-control";
 import { macosAppBlueprint } from "../blueprints/macos-app";
 import { androidNetworkInspectorBlueprint } from "../blueprints/android-network-inspector";
+import { androidNetworkShaperBlueprint } from "../blueprints/android-network-shaper";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { createNativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
@@ -148,6 +149,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(androidTvControlBlueprint);
   registry.registerBlueprint(macosAppBlueprint);
   registry.registerBlueprint(androidNetworkInspectorBlueprint);
+  registry.registerBlueprint(androidNetworkShaperBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));

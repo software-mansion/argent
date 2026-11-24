@@ -1,10 +1,13 @@
 ---
 sidebar_position: 10
 sidebar_label: Mac apps
-title: Mac apps
+title: Test native Mac apps with an AI agent
+description: Argent lets the AI coding agent test native Mac apps, including Mac Catalyst apps. The agent reads the interface, clicks, types and takes screenshots while the app runs in the background.
 sidebar_custom_props:
   icon: monitor
 ---
+
+# Mac apps
 
 Argent lets your agent test native Mac apps, including Mac Catalyst builds of iPad apps. The agent reads the interface, clicks, types, and takes screenshots while you continue to use your Mac.
 
@@ -44,6 +47,7 @@ Context menus and pop-up menus can temporarily bring the app window to the front
 - **Debug React Native apps:** inspect console logs and React components. See [Debug a React Native app](#debug-a-react-native-app).
 - **Profile performance:** find CPU hotspots, UI hangs, and memory leaks. In React Native apps, you can also find slow React renders. See [Profile your app](#profile-your-app).
 - **Test workflows:** record and replay [e2e tests](/docs/features/e2e), including screenshot comparisons.
+- **Record the app window:** capture an interaction as a video with optional click markers. See [Mac app recording](/docs/features/screen-recording#mac-apps).
 
 Text input supports accented characters and emoji. Argent disables automatic text correction so the app receives the text the agent types.
 
@@ -113,7 +117,7 @@ Use a [supported Debug build](#profile-a-react-native-app). Start Metro before y
 Argent targets the Mac app even when it shares Metro with an iOS simulator.
 
 If the hardened runtime prevents Argent from launching a react-native-macos build, start it from Xcode.
-The agent can still debug JavaScript. Screen inspection and input require a build Argent can control.
+The agent can still debug JavaScript and capture its HTTP requests through Metro. For screen inspection, input and native network capture, ask Argent to launch a supported build.
 
 See the [Mac app debugger reference](/docs/reference/tools#javascript-debugging-on-a-mac-app) for setup and troubleshooting.
 
@@ -153,6 +157,5 @@ Most distributed or notarized apps do not allow Argent to control them. Use your
 - **Windows:** the app needs a standard window. Apps with only a menu bar icon, panels, or borderless windows are unsupported.
 - **System dialogs:** the agent cannot control macOS permission prompts or content shown by another process, such as share sheets.
 - **Input:** hover, pinch, and rotate gestures are unavailable. Drag and drop works only within the app.
-- **Developer tools:** screen recording is unavailable.
 
 See the [Mac app tools reference](/docs/reference/tools#mac-apps) for tool parameters and additional limitations.

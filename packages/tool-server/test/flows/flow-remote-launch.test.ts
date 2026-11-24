@@ -15,6 +15,9 @@ import type { Registry } from "@argent/registry";
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, type FlowFile } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const REMOTE = "remote:00000000-0000-0000-0000-0000000000ab"; // → platform "ios-remote"
 const LOCAL = "00000000-0000-0000-0000-0000000000ab"; // → platform "ios"

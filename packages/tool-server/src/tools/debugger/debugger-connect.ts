@@ -10,7 +10,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), <flag:macos-apps>Mac app id (macos-app-<bundle id>), </flag:macos-apps>or Chromium device id (chromium-cdp-<port>)."
+      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), <flag:macos-apps>Mac app id (macos-app-<bundle id>), </flag:macos-apps>or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (Metro's own per-connection handle, absent on Vega); you do not switch to it. Forwarding it still resolves here, but the list-devices id is the stable one. On a Metro shared by several devices, a simulator UDID or Android serial is matched by the device's name (a simulator's name; an Android model, release and API level); the app's device log must then confirm it runs there. When another booted simulator or attached device shares that name, or the log does not confirm it, the error asks for the logicalDeviceId instead."
     ),
 });
 

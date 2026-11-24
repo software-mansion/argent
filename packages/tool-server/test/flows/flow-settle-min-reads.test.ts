@@ -26,6 +26,9 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 import { SETTLE_TIMEOUT_MS } from "../../src/tools/flows/flow-actions";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 // Outlasts the settle window on its own, the way a tree RPC's own timeout does.

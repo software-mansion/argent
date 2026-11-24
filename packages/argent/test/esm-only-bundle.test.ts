@@ -25,7 +25,7 @@ function exportTypeOf(file: string, exportName: string) {
   ]);
 }
 
-describe("bundle-tools.cjs --esm-only (npm run dev)", () => {
+describe("bundle-tools.cjs --esm-only (bun run dev)", () => {
   it("builds the bundles dist/cli.js imports, and each one loads", () => {
     const build = runNode(["scripts/bundle-tools.cjs", "--esm-only"]);
     expect(build.stderr).toBe("");
