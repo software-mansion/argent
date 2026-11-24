@@ -335,7 +335,7 @@ describe("ensureAudioEnv", () => {
         error_code: FAILURE_CODES.AUDIO_HOOK_UNAVAILABLE,
         error_kind: "dependency_missing",
       });
-      expect((err as Error).message).toContain("npm run build:ios-binaries");
+      expect((err as Error).message).toContain("bun run build:ios-binaries");
       expect((err as Error).message).toContain("download-native-binaries.sh");
       expect(setenvCalls()).toEqual([]);
     } finally {

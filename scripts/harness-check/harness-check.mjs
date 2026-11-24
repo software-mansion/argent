@@ -5,8 +5,8 @@
  * Argent's tool schemas the model can read, which are lost, and which it reads twice.
  *
  * Usage and how to read the results: scripts/harness-check/README.md
- *   npm run harness-check
- *   npm run harness-check -- --with claude,kiro
+ *   bun run harness-check
+ *   bun run harness-check --with claude,kiro
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +19,7 @@ import { ACCOUNT_HARNESSES, DEFAULT_HARNESSES, killRunning, planRuns, run } from
 import { startModelStub, startRecordingProxy } from "./model-stub.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const HELP = `Usage: npm run harness-check -- [options]
+const HELP = `Usage: bun run harness-check [options]
 
   --with claude,kiro    also run Claude Code and/or Kiro CLI (installed and signed in)
   --only codex,gemini   run only these (codex, opencode, gemini, claude, kiro)
@@ -89,7 +89,7 @@ for (const file of [
   "packages/tool-server/dist/http.js",
 ]) {
   if (!existsSync(join(repo, file)))
-    fail(`${join(repo, file)} is missing. Run \`npm run build\` in ${repo} first.`);
+    fail(`${join(repo, file)} is missing. Run \`bun run build\` in ${repo} first.`);
 }
 // Read the earlier check now, so a wrong path fails before any harness spends a request.
 let earlier = null;
