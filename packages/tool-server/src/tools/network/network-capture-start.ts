@@ -43,6 +43,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { macosLaunchRefusal, type MacosAppApi } from "../../blueprints/macos-app";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { classifyNotConnected } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
@@ -74,7 +75,8 @@ export function createNetworkCaptureStartTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StartedLayer>> {
   return {
     id: "network-capture-start",
-    description: `Start network capture on iOS simulators and Android<flag:macos-apps> (also on Mac apps)</flag:macos-apps>. Use when you are about to trigger requests you need to inspect, including in an e2e test. Repeating the call keeps requests already captured. Capture can slow the app.
+    description: `Start network capture on iOS simulators and Android<flag:macos-apps> (also on Mac apps)</flag:macos-apps>. Use when you need to inspect requests from an upcoming action, including in an e2e test. A new start keeps existing requests. Capture can slow the app.
+On Chromium, Argent connects if needed and marks the start of a capture window in the network log. Recording continues while connected.
 The JavaScript layer needs an app connected to Metro. Start again after its JavaScript loads, including after a reload or relaunch. Android native capture needs a debuggable build.<flag:macos-apps> For a supported React Native app launched from Xcode, use layer js and form udid as macos-app-<bundle id>. Native capture needs a supported build launched through Argent.</flag:macos-apps>
 Returns { status, layers }: check armed and reason for each requested layer. A pending native layer can become ready when Argent launches or reconnects to the app. On a device whose devtools agent Argent attached to, start native capture again after a relaunch.
 When every requested layer is unavailable, the call fails with NETWORK_CAPTURE_UNAVAILABLE or TOOL_DEPENDENCY_MISSING.`,
@@ -106,6 +108,14 @@ When every requested layer is unavailable, the call fails with NETWORK_CAPTURE_U
       // Only the HTTP gate checks the capability, and an e2e `tool:` step does not pass it.
       assertSupported("network-capture-start", CAPTURE_CAPABILITY, device);
       const run = requestedLayers(params.layer);
+      if (device.platform === "chromium") {
+        // One layer, the tab's CDP log, records every request; `layer` names a part of it.
+        const layer = await withCaptureLock(params.udid, params.bundleId, () =>
+          startChromiumLayer(registry, device)
+        );
+        if (layer.unavailable) throw unavailableError(params, [layer]);
+        return { status: "ok", layers: [layer] };
+      }
       const port = metroPort({ device_id: params.udid, port: params.port });
       // The checks run under the lock too: a stop called while they run waits for
       // this start, so the start cannot install capture after that stop.
@@ -195,6 +205,23 @@ async function startMacosLayer(
   setNativeUnavailable(device.id, bundleId);
   const { armed, reason } = await app.startNetworkCapture();
   return { layer: "macos-native", armed, ...(reason ? { reason } : {}) };
+}
+
+/**
+ * A Chromium app's one layer: the tool-server records the tab's requests from
+ * its first tool call on the app, so a start only marks where a capture
+ * window of them begins.
+ */
+async function startChromiumLayer(registry: Registry, device: DeviceInfo): Promise<StartedLayer> {
+  const ref = chromiumCdpRef(device);
+  let api: ChromiumCdpApi;
+  try {
+    api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
+  } catch (err) {
+    return unavailable("chromium", `argent cannot reach the app over CDP: ${errorMessage(err)}`);
+  }
+  api.server.network.startCapture();
+  return { layer: "chromium", armed: true };
 }
 
 function unavailableError(params: CaptureParams, layers: StartedLayer[]): FailureError {

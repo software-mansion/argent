@@ -36,7 +36,9 @@ On iOS, Android, and Mac apps, call `network-capture-start` before reproducing t
 
 Use the device ID as `udid` for start and stop. If shared Metro requires a logical ID on iOS or Android, pass it as `logicalDeviceId` for start and stop, and as `device_id` when reading. Keep the Metro port consistent across calls.
 
-On Vega, call `view-network-logs` before reproducing the request and again after a reload. On Chromium and Electron, capture starts when Argent attaches to the page.
+On Vega, call `view-network-logs` before reproducing the request and again after a reload.
+
+On Chromium and Electron, call `view-network-logs` before reproducing the request so Argent connects to the page. Use `network-capture-start` and `network-capture-stop` to mark a capture window when needed. The log includes requests outside that window.
 
 ### React Native Mac apps
 

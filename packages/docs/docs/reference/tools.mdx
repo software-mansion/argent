@@ -267,8 +267,8 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process                                                                                     |
 | `view-network-logs`            | List HTTP requests from the JavaScript runtime or the active Chromium tab                                                                          |
 | `view-network-request-details` | Get full details of one request by its `requestId` from `view-network-logs`, or by an `ios-`, `android-` or `macos-` ID from `native-network-logs` |
-| `network-capture-start`        | Start network capture for an app on iOS, Android or a Mac app, on each layer that sees its requests                                                |
-| `network-capture-stop`         | Stop network capture for an app, and keep the requests that Argent recorded                                                                        |
+| `network-capture-start`        | Start network capture or mark the start of a Chromium capture window                                                                               |
+| `network-capture-stop`         | Stop network capture or mark the end of a Chromium capture window                                                                                  |
 
 ### Network capture on iOS, Android and Mac apps
 
@@ -293,7 +293,7 @@ By default, `network-capture-start` and `network-capture-stop` control the JS ru
 
 Other capture starts automatically:
 
-- Chromium and Electron record when Argent attaches to the page on the first Chromium tool call.
+- [Chromium and Electron](#network-capture-on-chromium-and-electron) record when Argent connects to the page.
 - On Vega, the first `view-network-logs` call or JS request lookup starts capture. Call `view-network-logs` before you reproduce the request and after each reload.
 
 On a React Native Mac app, use `view-network-logs` for JavaScript requests and `native-network-logs` for `URLSession` requests. Both can show the same `fetch()` request. Pass the ID from either log to `view-network-request-details`. A `macos-` ID does not require a debugger connection.
@@ -695,6 +695,18 @@ The capture stays on for the app until `network-capture-stop` stops it for the a
 | ------------------ | ------------------------------------------------------ |
 | `chromium-tabs`    | List, switch, open, and close tabs or `BrowserWindow`s |
 | `chromium-cookies` | Read and write cookies, including `HttpOnly` ones      |
+
+### Network capture on Chromium and Electron
+
+Argent records requests when it connects to the active tab. Use `view-network-logs` before reproducing a request to make sure Argent is connected. The log can include requests from earlier tabs in the same session. Use `view-network-request-details` with an ID from the log.
+
+`network-capture-start` and `network-capture-stop` mark a capture window in that log. The read tools work without a start and include requests outside the window.
+
+For either call, pass the `chromium-cdp-<port>` ID from `list-devices` as `udid`. Use a valid placeholder such as `argent.capture` for the required `bundleId`. Argent uses `udid` to select the app and ignores `layer`, `port` and `logicalDeviceId` on Chromium.
+
+- **Start** connects if needed and returns `armed: true` for the `chromium` layer. A new start replaces the previous window. If the call fails with `NETWORK_CAPTURE_UNAVAILABLE`, check the connection error and confirm that the app exposes the remote debugging port in `udid`.
+- **Stop** uses the existing connection and returns `armed: false` for the `chromium` layer. Its `total` counts all requests still in the log. A second stop keeps the first end mark and reports the current total.
+- **If stop reports `capture was not started for this app`**, `total` is `0` even if the log has requests. Start again before reproducing the request. Argent clears the log and its window when the debugging session ends. `stop-simulator-server` and `stop-all-simulator-servers` end that session.
 
 ## Mac apps
 

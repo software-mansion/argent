@@ -22,22 +22,22 @@ export const captureSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Device ID from list-devices: an iOS simulator UDID or Android serial<flag:macos-apps>, or a Mac app id (macos-app-<bundle id>)</flag:macos-apps>"
+      "Target ID from list-devices: an iOS simulator UDID, an Android serial<flag:macos-apps>, a Mac app ID (macos-app-<bundle id>)</flag:macos-apps> or a Chromium ID (chromium-cdp-<port>)."
     ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
+      "App bundle ID on iOS or package name on Android<flag:macos-apps>. On Mac apps, use the bundle ID from udid</flag:macos-apps>. On Chromium, udid selects the app. Use a valid placeholder such as argent.capture."
     ),
   port: metroPortField.describe(
-    "The app's Metro port: the JS layer is reached through it, and the native layers leave its requests out. Omit it to use this device's port, 8081 by default."
+    "The app's Metro port. Omit it to use the device's port (8081 by default). Native layers exclude requests to this port on local addresses. Chromium uses the CDP port in udid."
   ),
   layer: z
     .enum(["js", "native"])
     .optional()
     .describe(
-      "Select js for JavaScript runtime capture or native for native HTTP capture. Omit to control both layers."
+      "Use js for JavaScript runtime capture or native for native HTTP capture. Omit to control both layers. Chromium ignores this setting and uses its single chromium layer."
     ),
   logicalDeviceId: z
     .string()
@@ -108,15 +108,19 @@ export function withLayerInRetries<L extends { reason?: string }>(
   );
 }
 
-/** The devices native-network-logs reads, where every layer start covers can run. */
+/**
+ * The devices native-network-logs reads, where every layer start covers can run, and
+ * Chromium, whose one layer a start marks.
+ */
 export const CAPTURE_CAPABILITY: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true },
   macos: { app: true, catalyst: true },
+  chromium: { app: true },
 };
 
-type CaptureLayer = "js" | "ios-native" | "android-native" | "macos-native";
+type CaptureLayer = "js" | "ios-native" | "android-native" | "macos-native" | "chromium";
 
 export interface StartedLayer {
   layer: CaptureLayer;

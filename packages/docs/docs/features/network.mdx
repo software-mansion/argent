@@ -59,7 +59,7 @@ A request that runs at the stop completes in the list on iOS, on a Mac app and i
 
 On Vega, ask the agent to read the JS network log before you reproduce the request. The first read starts capture. A reload or restart clears the log and ends capture. Read the log again to resume capture. The app keeps recording if Argent disconnects or stops.
 
-On Chromium and Electron, Argent records from the first Chromium tool call until it disconnects from the page.
+On Chromium and Electron, Argent records requests while it is connected to the page. Ask the agent to open the network log before you reproduce the request. Start and stop mark a capture window. The log also includes requests outside that window. See the [Chromium capture reference](/docs/reference/tools#network-capture-on-chromium-and-electron).
 
 ## Native network capture on Android
 
