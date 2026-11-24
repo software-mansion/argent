@@ -27,20 +27,20 @@ import { metroPort } from "../../utils/debugger/metro-port";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { localIosHost, remoteIosHost } from "../../utils/ios-host";
-import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
-import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
+import type { MacosAppApi } from "../../blueprints/macos-app";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../../utils/simctl-config";
 import { classifyNotConnected } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
+  appleAppNoJs,
   captureName,
   captureSchema,
   errorMessage,
   isLiveService,
   jsNotReached,
+  macosAppOfCall,
   resolveJsRuntime,
   otherPortHint,
-  MACOS_NO_JS,
   requestedLayers,
   runLayers,
   withLayerInRetries,
@@ -84,29 +84,15 @@ Returns { status, layers }: per layer the call stopped, armed (false once the la
       assertSupported("network-capture-stop", CAPTURE_CAPABILITY, device);
       const port = metroPort({ device_id: params.udid, port: params.port });
       const run = requestedLayers(params.layer);
-      if (device.platform === "macos") {
-        // A Mac app's capture is native only, so a JS stop leaves it as it is.
-        if (!run.native) {
-          return {
-            status: "ok",
-            layers: [
-              {
-                layer: "js",
-                armed: false,
-                total: 0,
-                reason: `${MACOS_NO_JS}; its native capture stays as it is`,
-              },
-            ],
-          };
-        }
-        const layer = await withCaptureLock(params.udid, params.bundleId, () =>
-          stopMacosLayer(registry, device, params.bundleId, port)
-        );
-        return { status: "ok", layers: [layer] };
-      }
       // A layer the call does not name stays as it is.
-      const layers = await withCaptureLock(params.udid, params.bundleId, () =>
-        runLayers([
+      const layers = await withCaptureLock(params.udid, params.bundleId, async () => {
+        // A Mac app's service is light and reaches nothing in the app, so the bundle id
+        // is checked also before any tool reached the app, and before any layer stops.
+        const app =
+          device.platform === "macos"
+            ? await macosAppOfCall(registry, device, "network-capture-stop", params.bundleId)
+            : undefined;
+        return runLayers([
           ...(run.js
             ? [
                 device.platform !== "android" && !isInjectableBundleId(params.bundleId)
@@ -114,7 +100,7 @@ Returns { status, layers }: per layer the call stopped, armed (false once the la
                       layer: "js",
                       armed: false,
                       total: 0,
-                      reason: `${params.bundleId} is an Apple system app, which runs no React Native JS`,
+                      reason: appleAppNoJs(params.bundleId, app !== undefined),
                     })
                   : stopJsLayer(
                       registry,
@@ -127,13 +113,15 @@ Returns { status, layers }: per layer the call stopped, armed (false once the la
             : []),
           ...(run.native
             ? [
-                device.platform === "android"
-                  ? stopAndroidLayer(registry, device, params.bundleId, port)
-                  : stopIosLayer(registry, device, params.bundleId, port),
+                app
+                  ? stopMacosLayer(app, port)
+                  : device.platform === "android"
+                    ? stopAndroidLayer(registry, device, params.bundleId, port)
+                    : stopIosLayer(registry, device, params.bundleId, port),
               ]
             : []),
-        ])
-      );
+        ]);
+      });
       return { status: "ok", layers: withLayerInRetries(layers, params.layer) };
     },
   };
@@ -375,22 +363,8 @@ async function stopIosLayer(
   };
 }
 
-/** A Mac app has one layer, in the app's own service. */
-async function stopMacosLayer(
-  registry: Registry,
-  device: DeviceInfo,
-  bundleId: string,
-  port: number
-): Promise<StoppedLayer> {
-  // The service is light and reaches nothing in the app, so the bundle id is
-  // checked also before any tool reached the app.
-  const ref = macosAppRef(device);
-  const app = requireMacosAppOfBundle(
-    { macosApp: await registry.resolveService<MacosAppApi>(ref.urn, ref.options) },
-    device,
-    "network-capture-stop",
-    bundleId
-  );
+/** A Mac app's native layer, in the app's own service. */
+async function stopMacosLayer(app: MacosAppApi, port: number): Promise<StoppedLayer> {
   if (!app.isNetworkCaptureStarted() && !app.isNetworkCaptureStopped()) {
     return { layer: "macos-native", armed: false, total: 0, reason: NOT_STARTED };
   }

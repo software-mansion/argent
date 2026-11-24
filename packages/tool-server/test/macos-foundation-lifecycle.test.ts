@@ -122,7 +122,8 @@ import { createHttpApp } from "../src/http";
 import { pollPidsUntilGone } from "../src/utils/process-kill";
 import { PROCESS_ENDED } from "../src/utils/native-network-record";
 import { MACOS_CONNECTION_DROPPED } from "../src/blueprints/ios-network-records";
-import { MACOS_NO_JS } from "../src/tools/network/network-capture";
+import { forgetNativeUnavailableOf } from "../src/tools/network/network-capture";
+import { forgetJsCapturesOf, jsCapturesOn } from "../src/blueprints/network-inspector";
 import {
   chromiumRefusal,
   findMacosAppByBundleId,
@@ -957,10 +958,12 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     }
     const readLog = (extra: Record<string, unknown> = {}): Promise<Listing> =>
       run("native-network-logs", { udid: DEVICE_ID, bundleId: BUNDLE_ID, ...extra });
+    // These tests are about the native layer, so their start and stop name it: without
+    // layer, a call also runs the JS layer, which this harness reaches no Metro for.
     const start = (): Promise<Capture> =>
-      run("network-capture-start", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      run("network-capture-start", { udid: DEVICE_ID, bundleId: BUNDLE_ID, layer: "native" });
     const stop = (): Promise<Capture> =>
-      run("network-capture-stop", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      run("network-capture-stop", { udid: DEVICE_ID, bundleId: BUNDLE_ID, layer: "native" });
     const details = (requestId: string): Promise<any> =>
       run("view-network-request-details", { device_id: DEVICE_ID, requestId });
     const request = async (url: string, extra: Record<string, unknown> = {}) =>
@@ -989,6 +992,15 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     const SERVICES_STOPPED =
       "the app's services stopped during this start, which ended the capture; call network-capture-start again";
     const NOT_RUNNING = `${BUNDLE_ID} is not running; capture arms when boot-device, launch-app or restart-app starts it`;
+    /** What a call with layer "native" adds to a reason that names a capture tool to call again. */
+    const NATIVE_RETRY =
+      '; pass layer "native" to that call, so it leaves the other layer as it is';
+
+    // A start keeps the JS layer's intent and a layer's refusal outside the services.
+    afterEach(() => {
+      forgetJsCapturesOf();
+      forgetNativeUnavailableOf();
+    });
     /** No copy that argent started runs, and neither a launch record nor Spotlight names a build. */
     const BUILD_UNKNOWN = `no copy of ${BUNDLE_ID} that argent started is running, and argent cannot find the app's build to look for another copy; capture arms when boot-device with macosAppPath starts it`;
 
@@ -1073,8 +1085,10 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(await details("macos-0000-999999")).toBe(
         "Request macos-0000-999999 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
       );
-      // A JS ID is read from the app's JS runtime through Metro, which this fake has none of.
-      await expect(details("rn-net-1")).rejects.toThrow(/NetworkInspector:8081:macos-app-/);
+      // A JS ID is read from the app's JS runtime, which only a start of the JS layer reaches.
+      expect(await details("rn-net-1")).toBe(
+        "Request rn-net-1 not found. Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then list the requests with view-network-logs."
+      );
     });
 
     it("keeps a request body read open while the app sends the body, past the default wait of a CDP request", async () => {
@@ -1530,50 +1544,89 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
     });
 
-    it("acts only on the native layer: layer js starts nothing and stops nothing, and layer native acts as without layer", async () => {
-      await run("boot-device", { macosAppPath: appPath });
-      const capture = (tool: string, layer: "js" | "native"): Promise<Capture> =>
-        run(tool, { udid: DEVICE_ID, bundleId: BUNDLE_ID, layer });
+    describe("the layer option", () => {
+      /** Why the JS layer is not reached: this harness serves no Metro and no JS debugger. */
+      const JS_NOT_REACHED = `the JS debugger could not connect: Service "JsRuntimeDebugger:8081:${DEVICE_ID}" not found`;
+      const JS_STOPPED = `${JS_NOT_REACHED}; while capture is stopped, the app's JS runtime gets no interceptor`;
+      const capture = (tool: string, layer?: "js" | "native"): Promise<Capture> =>
+        run(tool, { udid: DEVICE_ID, bundleId: BUNDLE_ID, ...(layer ? { layer } : {}) });
 
-      const err = await capture("network-capture-start", "js").catch((e: unknown) => e);
-      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
-      expect((err as Error).message).toContain(`js: ${MACOS_NO_JS}`);
-      expect(await request("https://example.com/before")).toEqual({
-        active: false,
-        activations: 0,
+      it("runs the JS and the native layer without layer: the JS layer says why it is not armed, and the native layer arms and stops", async () => {
+        await run("boot-device", { macosAppPath: appPath });
+
+        expect(await capture("network-capture-start")).toEqual({
+          status: "ok",
+          layers: [
+            {
+              layer: "js",
+              armed: false,
+              reason: `${JS_NOT_REACHED}; call network-capture-start again once the app runs`,
+            },
+            { layer: "macos-native", armed: true },
+          ],
+        });
+        // The JS start keeps its intent, so a JS read goes to the app's JS runtime.
+        expect(jsCapturesOn(DEVICE_ID)).toEqual([
+          expect.objectContaining({ bundleId: BUNDLE_ID, intent: "started", port: 8081 }),
+        ]);
+        expect(await request("https://example.com/a")).toEqual({ active: true, activations: 1 });
+
+        expect(await capture("network-capture-stop")).toEqual({
+          status: "ok",
+          layers: [
+            { layer: "js", armed: false, total: 0, reason: JS_STOPPED },
+            { layer: "macos-native", armed: false, total: 1 },
+          ],
+        });
+        expect(jsCapturesOn(DEVICE_ID)).toEqual([
+          expect.objectContaining({ bundleId: BUNDLE_ID, intent: "stopped" }),
+        ]);
+        expect(await request("https://example.com/after-stop")).toEqual({
+          active: false,
+          activations: 1,
+        });
       });
 
-      expect(await capture("network-capture-start", "native")).toEqual({
-        status: "ok",
-        layers: [{ layer: "macos-native", armed: true }],
-      });
-      await request("https://example.com/during");
+      it("layer native and layer js each act on their own layer alone", async () => {
+        await run("boot-device", { macosAppPath: appPath });
 
-      // A JS-only stop leaves the native capture running.
-      expect(await capture("network-capture-stop", "js")).toEqual({
-        status: "ok",
-        layers: [
-          {
-            layer: "js",
-            armed: false,
-            total: 0,
-            reason: `${MACOS_NO_JS}; its native capture stays as it is`,
-          },
-        ],
-      });
-      expect(await request("https://example.com/after-js-stop")).toEqual({
-        active: true,
-        activations: 1,
-      });
-      expect(await readUntil((log) => log.total === 2)).toMatchObject({ armed: true, total: 2 });
+        // A native start and stop store no JS capture.
+        expect(await capture("network-capture-start", "native")).toEqual({
+          status: "ok",
+          layers: [{ layer: "macos-native", armed: true }],
+        });
+        expect(await capture("network-capture-stop", "native")).toEqual({
+          status: "ok",
+          layers: [{ layer: "macos-native", armed: false, total: 0 }],
+        });
+        expect(jsCapturesOn(DEVICE_ID)).toEqual([]);
 
-      expect(await capture("network-capture-stop", "native")).toEqual({
-        status: "ok",
-        layers: [{ layer: "macos-native", armed: false, total: 2 }],
-      });
-      expect(await request("https://example.com/after-stop")).toEqual({
-        active: false,
-        activations: 1,
+        // A JS start arms no native capture. It succeeds: the app's JS runtime may answer later.
+        expect(await capture("network-capture-start", "js")).toEqual({
+          status: "ok",
+          layers: [
+            {
+              layer: "js",
+              armed: false,
+              reason: `${JS_NOT_REACHED}; call network-capture-start again once the app runs; pass layer "js" to that call, so it leaves the other layer as it is`,
+            },
+          ],
+        });
+        expect(await request("https://example.com/after-js-start")).toEqual({
+          active: false,
+          activations: 1,
+        });
+
+        // A JS stop leaves the native capture running.
+        await capture("network-capture-start", "native");
+        expect(await capture("network-capture-stop", "js")).toEqual({
+          status: "ok",
+          layers: [{ layer: "js", armed: false, total: 0, reason: JS_STOPPED }],
+        });
+        expect(await request("https://example.com/after-js-stop")).toEqual({
+          active: true,
+          activations: 2,
+        });
       });
     });
 
@@ -1667,7 +1720,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       await run("stop-simulator-server", { udid: DEVICE_ID });
       await booting;
       expect((await starting).layers).toEqual([
-        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED },
+        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED + NATIVE_RETRY },
       ]);
       expect(await readLog()).toMatchObject({ started: false });
       // The next service starts with capture off.
@@ -1680,7 +1733,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       await new Promise((r) => setTimeout(r, 300));
       await run("stop-simulator-server", { udid: DEVICE_ID });
       expect((await starting).layers).toEqual([
-        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED },
+        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED + NATIVE_RETRY },
       ]);
       expect(await readLog()).toMatchObject({ started: false });
     }, 15_000);
@@ -1814,13 +1867,15 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(await readLog()).toMatchObject({ armed: true, total: 1 });
     });
 
-    it("fails with NETWORK_CAPTURE_UNAVAILABLE for an Apple app, which no launch arms", async () => {
+    it("fails with NETWORK_CAPTURE_UNAVAILABLE for an Apple app, which no launch arms and which runs no React Native JS", async () => {
       const err = await run("network-capture-start", {
         udid: "macos-app-com.apple.TextEdit",
         bundleId: "com.apple.TextEdit",
       }).catch((e: unknown) => e);
       expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
-      expect((err as Error).message).toContain("macos-native: com.apple.TextEdit is an Apple app");
+      expect((err as Error).message).toContain(
+        "js: com.apple.TextEdit is an Apple app, which runs no React Native JS; macos-native: com.apple.TextEdit is an Apple app"
+      );
     });
 
     it("fails with NETWORK_CAPTURE_UNAVAILABLE for an Electron app, which argent never starts", async () => {
@@ -1830,9 +1885,11 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         recursive: true,
       });
       searched.spotlight = { [electronId]: electron };
+      // Only the native layer: the JS layer may still reach an Electron app through Metro.
       const err = await run("network-capture-start", {
         udid: `macos-app-${electronId}`,
         bundleId: electronId,
+        layer: "native",
       }).catch((e: unknown) => e);
       expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
       expect((err as Error).message).toContain(`macos-native: ${electronId} is an Electron app`);
@@ -1856,13 +1913,15 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         return res.body.data;
       };
       const app = { udid: DEVICE_ID, bundleId: BUNDLE_ID };
+      // The native layer: this harness serves no Metro for the JS layer.
+      const native = { ...app, layer: "native" };
       const { pid } = await post("boot-device", { macosAppPath: catalyst });
       expect(resolveDevice(DEVICE_ID).kind).toBe("catalyst");
       // The read names network-capture-start, which takes the app.
       expect((await post("native-network-logs", app)).header).toContain(
         "call network-capture-start for it"
       );
-      expect(await post("network-capture-start", app)).toEqual({
+      expect(await post("network-capture-start", native)).toEqual({
         status: "ok",
         layers: [{ layer: "macos-native", armed: true }],
       });
@@ -1882,7 +1941,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         response: { status: 200 },
       });
 
-      expect(await post("network-capture-stop", app)).toEqual({
+      expect(await post("network-capture-stop", native)).toEqual({
         status: "ok",
         layers: [{ layer: "macos-native", armed: false, total: 1 }],
       });
@@ -1894,7 +1953,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
 
       // A start while the app does not run waits for its next launch, as for an AppKit app.
       await quit(pid);
-      expect((await post("network-capture-start", app)).layers).toEqual([
+      expect((await post("network-capture-start", native)).layers).toEqual([
         { layer: "macos-native", armed: false, reason: NOT_RUNNING },
       ]);
     });
@@ -1912,7 +1971,9 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       await run("boot-device", { macosAppPath: appPath, macosAppArgs: ["--mode=network-silent"] });
       const reason =
         "the app did not acknowledge Network.enable within 5 s; network-capture-start asks again";
-      expect((await start()).layers).toEqual([{ layer: "macos-native", armed: false, reason }]);
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: reason + NATIVE_RETRY },
+      ]);
       expect((await readLog()).header).toMatch(`macos-native: not armed, 0 requests (pid `);
       expect((await readLog()).header).toContain(reason);
       expect((await stop()).layers).toEqual([
@@ -1936,7 +1997,8 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
             layer: "macos-native",
             armed: false,
             reason:
-              "the app did not acknowledge Network.enable within 5 s; network-capture-start asks again",
+              "the app did not acknowledge Network.enable within 5 s; network-capture-start asks again" +
+              NATIVE_RETRY,
           },
         ]);
       } finally {
@@ -1964,7 +2026,8 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
           layer: "macos-native",
           armed: false,
           reason:
-            "the app did not acknowledge Network.enable within 5 s; network-capture-start asks again",
+            "the app did not acknowledge Network.enable within 5 s; network-capture-start asks again" +
+            NATIVE_RETRY,
         },
       ]);
       expect((await start()).layers).toEqual([{ layer: "macos-native", armed: true }]);
@@ -2076,6 +2139,82 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         `${otherBuild} (pid ${outside.pid}) without the argent library`
       );
       expect(layer!.reason).toContain("Quit that copy if it is yours");
+    });
+
+    /** A Release build with the hardened runtime, which argent refuses to start. */
+    const hardenedRelease = (name: string): string => {
+      const release = writeBundle(path.join(root, `${name}-${Date.now()}`), BUNDLE_ID);
+      execFileSync("codesign", ["--force", "--sign", "-", "--options", "runtime", release], {
+        stdio: "ignore",
+      });
+      return release;
+    };
+    const executableOf = (app: string) => path.join(app, "Contents", "MacOS", "FakeApp");
+
+    // In these tests argent has started no build of the app, so the copy that runs is the build to judge.
+    it("reports the layer unavailable, not to quit first, when the copy that argent did not start is a hardened Release build", async () => {
+      const release = hardenedRelease("release");
+      searched.spotlight[BUNDLE_ID] = release;
+      await startOutsideCopyOf(executableOf(release));
+      const refusal = hardenedRuntimeRefusal(await inspectMacosApp(release));
+      expect(refusal).toContain("release build with the hardened runtime");
+
+      // The JS layer still starts, so a start without layer succeeds.
+      const all = await run("network-capture-start", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      expect(all.layers).toContainEqual({
+        layer: "macos-native",
+        armed: false,
+        reason: refusal,
+        unavailable: true,
+      });
+      expect((await readLog()).header).toBe(`macos-native: unavailable, 0 requests (${refusal})`);
+      // With the native layer alone, no layer can capture the app.
+      const err = await start().catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect((err as Error).message).toContain(`macos-native: ${refusal}`);
+    });
+
+    it("turns off the capture of an earlier start when a later start finds a hardened copy", async () => {
+      const release = hardenedRelease("release");
+      searched.spotlight[BUNDLE_ID] = release;
+      // No copy runs, so this start arms the next copy that argent starts.
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      await startOutsideCopyOf(executableOf(release));
+      const refusal = hardenedRuntimeRefusal(await inspectMacosApp(release));
+      const err = await start().catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      // The read and the stop agree with that start.
+      expect((await readLog()).header).toBe(`macos-native: unavailable, 0 requests (${refusal})`);
+      expect((await stop()).layers).toEqual([
+        {
+          layer: "macos-native",
+          armed: false,
+          total: 0,
+          reason: "capture was not started for this app",
+        },
+      ]);
+    });
+
+    it("judges the build of a copy from another path than Spotlight's", async () => {
+      searched.spotlight[BUNDLE_ID] = appPath;
+      const release = hardenedRelease("installed");
+      await startOutsideCopyOf(executableOf(release));
+      const err = await start().catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect((err as Error).message).toContain(
+        `macos-native: ${hardenedRuntimeRefusal(await inspectMacosApp(release))}`
+      );
+    });
+
+    it("says to quit a Debug copy that argent did not start while Spotlight's build is a hardened Release build", async () => {
+      searched.spotlight[BUNDLE_ID] = hardenedRelease("release");
+      const outside = await startOutsideCopy();
+      const [layer] = (await start()).layers;
+      expect(layer).toMatchObject({ layer: "macos-native", armed: false });
+      expect(layer).not.toHaveProperty("unavailable");
+      expect(layer!.reason).toContain(`${appPath} (pid ${outside.pid}) without the argent library`);
     });
 
     it("does not say that the app is not running when argent cannot find its build to look for a copy", async () => {
@@ -2192,7 +2331,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         process.kill(pid, "SIGCONT");
       }
       expect((await starting).layers).toEqual([
-        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED },
+        { layer: "macos-native", armed: false, reason: SERVICES_STOPPED + NATIVE_RETRY },
       ]);
       expect(await readLog()).toMatchObject({ started: false });
     }, 20_000);
@@ -2276,6 +2415,9 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       for (const tool of ["native-network-logs", "network-capture-start", "network-capture-stop"]) {
         expect(await refusal(tool)).toBe(FAILURE_CODES.MACOS_APP_BUNDLE_ID_MISMATCH);
       }
+      // The bundle id is checked before any layer runs, so no layer stored or armed a capture.
+      expect(jsCapturesOn(DEVICE_ID)).toEqual([]);
+      expect((await macosApp()).isNetworkCaptureStarted()).toBe(false);
     });
   });
 

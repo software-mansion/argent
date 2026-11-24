@@ -63,6 +63,8 @@ import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/c
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import { readAppProcesses } from "../src/blueprints/android-network-inspector-device";
+import { MACOS_APP_NAMESPACE, type MacosAppApi } from "../src/blueprints/macos-app";
+import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { localIosHost, remoteIosHost } from "../src/utils/ios-host";
 import { proxyStart } from "../src/utils/sim-remote";
 
@@ -3755,6 +3757,149 @@ describe("a device the capture tools do not cover", () => {
       expect(jsCapturesOn(udid)).toEqual([]);
     }
   );
+});
+
+describe("a Mac app", () => {
+  useMacosAppsFlag();
+
+  const MAC_APP = "com.example.macapp";
+  const MAC_ID = `macos-app-${MAC_APP}`;
+  const MAC_PAYLOAD = jsCapturePayload(PORT, MAC_ID);
+
+  /** One Mac app's service, connected to argent, as the capture tools use it. */
+  class FakeMacosApp implements Pick<
+    MacosAppApi,
+    | "bundleId"
+    | "isConnected"
+    | "startNetworkCapture"
+    | "stopNetworkCapture"
+    | "forgetNetworkCaptureStart"
+    | "isNetworkCaptureStarted"
+    | "isNetworkCaptureStopped"
+    | "isNetworkCaptureStopUnconfirmed"
+    | "networkRecords"
+    | "takeCaptureGap"
+  > {
+    /** What the tools asked of the service, in order. */
+    readonly calls: string[] = [];
+    private started = false;
+    private stopped = false;
+    private held = 0;
+
+    constructor(readonly bundleId: string) {}
+
+    /** The app sends a request, which the service records while capture is started. */
+    record(): void {
+      if (!this.started) return;
+      lastRecord++;
+      this.held++;
+    }
+
+    isConnected(): boolean {
+      return true;
+    }
+    async startNetworkCapture(): Promise<{ armed: boolean; reason?: string }> {
+      this.calls.push("start");
+      this.stopped = false;
+      this.started = true;
+      return { armed: true };
+    }
+    async stopNetworkCapture(): Promise<{ confirmed: boolean; reason?: string }> {
+      this.calls.push("stop");
+      this.started = false;
+      this.stopped = true;
+      return { confirmed: true };
+    }
+    forgetNetworkCaptureStart(): void {}
+    isNetworkCaptureStarted(): boolean {
+      return this.started;
+    }
+    isNetworkCaptureStopped(): boolean {
+      return this.stopped;
+    }
+    isNetworkCaptureStopUnconfirmed(): boolean {
+      return false;
+    }
+    takeCaptureGap(): boolean {
+      return false;
+    }
+    networkRecords(): IosNetworkRecords {
+      const count = this.held;
+      return {
+        state: () => ({ armed: this.started }),
+        records: () => Array.from({ length: count }, () => ({}) as NativeNetworkRecord),
+      } as unknown as IosNetworkRecords;
+    }
+  }
+
+  let mac: FakeMacosApp;
+
+  beforeEach(() => {
+    mac = new FakeMacosApp(MAC_APP);
+    const blueprint: ServiceBlueprint<unknown, string> = {
+      namespace: MACOS_APP_NAMESPACE,
+      getURN: (payload) => `${MACOS_APP_NAMESPACE}:${payload}`,
+      async factory(_deps, payload) {
+        // The service of a Mac app id serves the bundle id in it.
+        const app = payload === MAC_ID ? mac : new FakeMacosApp(payload.slice("macos-app-".length));
+        return {
+          api: app,
+          dispose: async () => {},
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+    };
+    registry.registerBlueprint(blueprint);
+  });
+
+  it("starts and stops the JS and Mac native layers, with the Mac app id as the JS device id", async () => {
+    const rt = new FakeRuntime(MAC_APP);
+    serve(PORT, MAC_ID, rt);
+    // A read no longer starts the JS capture of a Mac app.
+    expect(await read(MAC_ID)).toContain("network-capture-start");
+    expect(rt.evaluated).toEqual([]);
+
+    expect(await start(MAC_ID, MAC_APP)).toEqual({
+      status: "ok",
+      layers: [
+        { layer: "js", armed: true },
+        { layer: "macos-native", armed: true },
+      ],
+    });
+    expect(jsCapture(MAC_PAYLOAD)).toMatchObject({ bundleId: MAC_APP, intent: "started" });
+    rt.send("/a");
+    mac.record();
+    expect(await read(MAC_ID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+
+    expect(await stop(MAC_ID, MAC_APP)).toEqual({
+      status: "ok",
+      layers: [
+        { layer: "js", armed: false, total: 1 },
+        { layer: "macos-native", armed: false, total: 1 },
+      ],
+    });
+    expect(rt.paused).toBe(true);
+    expect(mac.calls).toEqual(["start", "stop"]);
+    expect(jsCapture(MAC_PAYLOAD)).toMatchObject({ intent: "stopped", paused: true });
+  });
+
+  it("fails an Apple app's start with both layers unavailable and reaches no JS runtime", async () => {
+    const appleId = "macos-app-com.apple.TextEdit";
+    const rt = new FakeRuntime("com.apple.TextEdit");
+    serve(PORT, appleId, rt);
+
+    const err = await start(appleId, "com.apple.TextEdit").then(
+      () => undefined,
+      (e: unknown) => e
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+    expect(String(err)).toContain(
+      "js: com.apple.TextEdit is an Apple app, which runs no React Native JS; macos-native: com.apple.TextEdit is an Apple app"
+    );
+    expect(rt.evaluated).toEqual([]);
+    expect(jsCapturesOn(appleId)).toEqual([]);
+  });
 });
 
 describe("the layer option", () => {
