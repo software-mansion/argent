@@ -30,6 +30,7 @@ let registry: Registry;
 let failSetup = false;
 let dropOnSetup = false;
 let dropOnEnable = false;
+let dropOnEvaluate = false;
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
   const { id, method } = JSON.parse(raw) as { id: number; method: string };
@@ -56,6 +57,10 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
   }
   if (method === "Runtime.addBinding" && failSetup) {
     ws.send(JSON.stringify({ id, error: { code: -32000, message: "Runtime.addBinding failed" } }));
+    return;
+  }
+  if (method === "Runtime.evaluate" && dropOnEvaluate) {
+    ws.terminate();
     return;
   }
   if (method === "Runtime.evaluate") {
@@ -109,6 +114,7 @@ afterEach(async () => {
   failSetup = false;
   dropOnSetup = false;
   dropOnEnable = false;
+  dropOnEvaluate = false;
   __resetReapedSessionsForTesting();
 });
 
@@ -163,5 +169,31 @@ describe("JsRuntimeDebugger startup log capture", () => {
     const reaped = takeReapedSession(`js-runtime-debugger:${mockPort}`, DEVICE);
     expect(reaped?.connectionLost).toBe(true);
     expect(reaped?.salvage).toContain(`kept at ${file}`);
+  });
+
+  it("fails the connect and names the kept file when the app dies after the binding is added", async () => {
+    dropOnEvaluate = true;
+    await expect(connect()).rejects.toThrow();
+    const files = logFiles();
+    expect(files).toHaveLength(1);
+    const file = path.join(process.env.HOME!, ".argent", "tmp", files[0]!);
+    const reaped = takeReapedSession(`js-runtime-debugger:${mockPort}`, DEVICE);
+    expect(reaped?.connectionLost).toBe(true);
+    expect(reaped?.salvage).toContain(`kept at ${file}`);
+  });
+
+  it("still names the crashed session's kept file after a reconnect that dies in the setup", async () => {
+    const api = await connect();
+    const crashed = api.logWriter.getFilePath();
+    const urn = `JsRuntimeDebugger:${mockPort}:${DEVICE}`;
+    for (const ws of wss.clients) ws.terminate();
+    await vi.waitFor(() => expect(registry.getServiceState(urn)).not.toBe("RUNNING"));
+    dropOnSetup = true;
+    await expect(registry.resolveService(urn)).rejects.toThrow();
+    const reaped = takeReapedSession(`js-runtime-debugger:${mockPort}`, DEVICE);
+    expect(reaped?.salvage).toContain(
+      `Before that: The log file with its 1 captured console entry is kept at ${crashed}`
+    );
+    expect(logFiles()).toHaveLength(2);
   });
 });

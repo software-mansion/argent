@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -36,7 +36,9 @@ describe("LogFileWriter", () => {
   });
 
   it("gives writers created in the same millisecond on one port separate files", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1710000000000);
     const writers = [new LogFileWriter(9999), new LogFileWriter(9999), new LogFileWriter(9999)];
+    now.mockRestore();
     const paths = new Set([writer, ...writers].map((w) => w.getFilePath()));
     for (const w of writers) w.close();
     expect(paths.size).toBe(4);

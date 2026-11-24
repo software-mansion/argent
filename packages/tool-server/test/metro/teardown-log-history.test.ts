@@ -204,6 +204,7 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
     expect(result.totalEntries).toBe(3);
     expect(result.note).toContain("5 captured console entries");
     expect(result.note).toContain("torn down");
+    expect(result.note).toContain("holds only what the runtime replayed or logged since");
   });
 
   it("reports the loss once, not on every later empty read", async () => {

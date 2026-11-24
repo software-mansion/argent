@@ -25,7 +25,7 @@ import {
   rememberLogicalKeyedDevice,
   forgetLogicalKeyedDevice,
 } from "../utils/debugger/device-alias";
-import { recordReapedSession } from "../utils/reaped-sessions";
+import { recordReapedSession, takeReapedSessionAnyId } from "../utils/reaped-sessions";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
@@ -196,6 +196,15 @@ export interface JsRuntimeDebuggerApi {
   logWriter: LogFileWriter;
   consoleEvents: TypedEventEmitter<ConsoleLogEvents>;
   consoleSocketUrl: string;
+}
+
+function cdpDisconnectedError() {
+  return new FailureError("CDP disconnected", {
+    error_code: FAILURE_CODES.JS_RUNTIME_CDP_DISCONNECTED,
+    failure_stage: "js_runtime_debugger_cdp_lifecycle",
+    failure_area: "tool_server",
+    error_kind: "network",
+  });
 }
 
 export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
@@ -431,10 +440,13 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           : stored
             ? `The ${entries} went with it: the log file is deleted on teardown. ${since}`
             : `The ${entries} went with it: no log file held them. ${since}`;
+        const kind = `js-runtime-debugger:${port}` as const;
+        const ids = [deviceId, logicalDeviceId];
+        const earlier = takeReapedSessionAnyId(kind, ids)?.salvage;
         recordReapedSession(
-          `js-runtime-debugger:${port}`,
-          [deviceId, logicalDeviceId],
-          salvage,
+          kind,
+          ids,
+          earlier ? `${salvage} Before that: ${earlier}` : salvage,
           connectionLost
         );
       }
@@ -502,6 +514,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
 
       await sourceMaps.waitForPending();
+      if (!cdp.isConnected()) throw cdpDisconnectedError();
 
       const sourceResolver = createSourceResolver(port, metro.projectRoot);
 
@@ -537,16 +550,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       const events = new TypedEventEmitter<ServiceEvents>();
 
       cdp.events.on("disconnected", (error) => {
-        events.emit(
-          "terminated",
-          error ??
-            new FailureError("CDP disconnected", {
-              error_code: FAILURE_CODES.JS_RUNTIME_CDP_DISCONNECTED,
-              failure_stage: "js_runtime_debugger_cdp_lifecycle",
-              failure_area: "tool_server",
-              error_kind: "network",
-            })
-        );
+        events.emit("terminated", error ?? cdpDisconnectedError());
       });
 
       return {
@@ -555,7 +559,6 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           forgetDeviceAlias(api.logicalDeviceId);
           forgetLogicalKeyedDevice(deviceId);
           await consoleServer.close();
-          // Routinely another agent's `stop-all-simulator-servers`, so leave word.
           closeLog({ breadcrumb: true });
           await cdp.disconnect();
         },
