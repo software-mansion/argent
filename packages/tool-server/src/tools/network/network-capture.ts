@@ -37,7 +37,7 @@ export const captureSchema = z.object({
     .enum(["js", "native"])
     .optional()
     .describe(
-      "Use js for the app's JavaScript requests or native for requests captured by the native layer. Omit to control all supported layers."
+      "Select js for JavaScript runtime capture or native for native HTTP capture. Omit to control both layers."
     ),
   logicalDeviceId: z
     .string()

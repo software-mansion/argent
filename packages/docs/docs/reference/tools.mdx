@@ -259,24 +259,24 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 | `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate                                                                                       |
 | `debugger-log-registry`        | Summarize console logs captured from the app                                                                                                       |
 | `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process                                                                                     |
-| `view-network-logs`            | Retrieve captured HTTP requests from the running app. On iOS, Android and Mac apps, a read never starts capture                                    |
+| `view-network-logs`            | List HTTP requests from the JavaScript runtime or the active Chromium tab                                                                          |
 | `view-network-request-details` | Get full details of one request by its `requestId` from `view-network-logs`, or by an `ios-`, `android-` or `macos-` ID from `native-network-logs` |
 | `network-capture-start`        | Start network capture for an app on iOS, Android or a Mac app, on each layer that sees its requests                                                |
 | `network-capture-stop`         | Stop network capture for an app, and keep the requests that Argent recorded                                                                        |
 
 ### Network capture on iOS, Android and Mac apps
 
-For iOS, Android and Mac apps, start capture before the action that sends the request.
+Use explicit capture on local or remote iOS simulators, Android emulators and devices, and Mac apps.
 
 `native-network-logs` does not stop the capture. A call with `stop` fails with the error `TOOL_INPUT_INVALID`, and the message tells you to call `network-capture-stop`. Remove `stop` from the call, also `stop: false`.
 
 To capture a request with `network-capture-start`:
 
-1. Call `network-capture-start` with `udid` and `bundleId`.
+1. Call `network-capture-start` with `udid` and `bundleId`. Check that the layer you need reports `armed: true`.
 2. Do the action that sends the request.
 3. Read the requests with the tool listed for the layer below.
 
-`network-capture-start` and `network-capture-stop` work on iOS simulators, remote iOS simulators, Android emulators, Android devices and Mac apps. Each call controls two layers of the app: the `js` layer and the native layer of the platform:
+By default, `network-capture-start` and `network-capture-stop` control the JS runtime and native layers.
 
 | Layer            | Platform               | Requests                                | Read with             |
 | ---------------- | ---------------------- | --------------------------------------- | --------------------- |
@@ -288,7 +288,7 @@ To capture a request with `network-capture-start`:
 Other capture starts automatically:
 
 - Chromium and Electron record when Argent attaches to the page on the first Chromium tool call.
-- Vega starts JS capture on the first call to `view-network-logs` or the first JS request lookup with `view-network-request-details`. Call `view-network-logs` before reproducing the request and again after any reload.
+- On Vega, the first `view-network-logs` call or JS request lookup starts capture. Call `view-network-logs` before you reproduce the request and after each reload.
 
 On a React Native Mac app, use `view-network-logs` for JavaScript requests and `native-network-logs` for `URLSession` requests. Both can show the same `fetch()` request. Pass the ID from either log to `view-network-request-details`. A `macos-` ID does not require a debugger connection.
 
@@ -300,7 +300,7 @@ On a React Native Mac app, use `view-network-logs` for JavaScript requests and `
 | `layer`           | Use `js` for the JS runtime or `native` for the native layer. Omit to control all supported layers.                                                                                                                         |
 | `logicalDeviceId` | Only for a Metro server that two or more devices use. The `logicalDeviceId` of the device on this Metro server. See [Several devices on one Metro server](#several-devices-on-one-metro-server).                            |
 
-On a Mac app, `layer` works as on iOS. The `js` layer reaches the app through Metro. Thus it also captures a React Native app that Argent did not start. An example is a build with the hardened runtime that you start from Xcode. The `macos-native` layer captures only a copy of the app that Argent starts. For a build that Argent cannot start, for example a build with the hardened runtime, the start reports the `macos-native` layer as unavailable. A copy that Argent did not start can run from a build that Argent can start, for example a Debug build that you start from Xcode. Then the `macos-native` layer is not armed, and its `reason` tells you to quit this copy. The reasons are in the table under [Start](#start).
+On a Mac app, set `udid` to `macos-app-<bundle id>` and pass the same bundle ID in `bundleId`. If you launched the app outside Argent, construct the ID yourself. Use the Mac app ID as `device_id` when you read JS requests, including on shared Metro. See [JavaScript debugging on a Mac app](#javascript-debugging-on-a-mac-app) for build and Metro requirements.
 
 #### One layer
 
@@ -348,7 +348,7 @@ A native layer that is not armed often arms later without a new start. For examp
 | `js`             | Argent did not reach the JS runtime of the app, but the capture that an earlier start installed there can still record.                      | absent        |
 | `js`             | No app is connected to Metro yet, or the JS runtime did not answer.                                                                          | absent        |
 | `js`             | The JavaScript of the app did not load yet.                                                                                                  | absent        |
-| `js`             | The app is an Apple app, which runs no React Native JS.                                                                                      | `true`        |
+| `js`             | The app is an Apple app on iOS or macOS.                                                                                                     | `true`        |
 | `ios-native`     | The app is an Apple system app.                                                                                                              | `true`        |
 | `ios-native`     | The Xcode command-line tools are not installed. The `js` layer starts without them.                                                          | `true`        |
 | `ios-native`     | The device provider has the capture off. Turn the capture on in the provider.                                                                | `true`        |
@@ -358,16 +358,12 @@ A native layer that is not armed often arms later without a new start. For examp
 | `android-native` | The app did not run at the start. `launch-app` or `restart-app` attaches the in-app agent to its next process.                               | absent        |
 | `android-native` | The in-app agent captures no requests in this process, for example because R8 fully minified OkHttp.                                         | `true`        |
 | `macos-native`   | The app is an Apple app. Argent does not load its library into an Apple app.                                                                 | `true`        |
-| `macos-native`   | Argent cannot start the app: an Electron app, or a build that the hardened runtime keeps the library out of. See the list below the table.   | `true`        |
+| `macos-native`   | Argent cannot launch the build. Use a supported Debug build, or use Chromium capture for Electron.                                           | `true`        |
 | `macos-native`   | The app does not run. `boot-device`, `launch-app` or `restart-app` starts it, and Argent arms its process.                                   | absent        |
-| `macos-native`   | A copy that Argent did not start runs a build Argent can start. The reason gives its process ID. Quit it, then start the app with Argent.    | absent        |
+| `macos-native`   | A supported build is running outside Argent. The reason gives its process ID. Quit that copy and launch the app through Argent.              | absent        |
 | `macos-native`   | No copy that Argent started runs. Argent cannot find the app build, so it cannot find other copies. Use `boot-device` with `macosAppPath`.   | absent        |
 
-To find a Mac app build that the hardened runtime keeps the library out of, Argent checks one build of the app:
-
-- The build that Argent started last.
-- If Argent did not start the app, the build of a copy that runs. An example is a Release build that you open in the Finder.
-- If Argent did not start the app and no copy runs, Argent checks no build. Spotlight finds a build, but you can start a different build, for example a Debug build.
+For the macOS hardened runtime check, Argent uses the last build it launched or, before the first launch, the build that is running. If neither exists, start the intended build with `boot-device` and `macosAppPath`.
 
 On iOS, Argent cannot tell an app that does not run from an app that is not installed. Thus the `ios-native` reason that tells you to call `restart-app` also says this: if `restart-app` cannot start the app, the bundle ID is not installed on the simulator.
 
@@ -381,7 +377,9 @@ When two or more devices use one Metro server, Argent cannot find the JS runtime
 
 The `js` layer uses `logicalDeviceId`. The native layer always uses `udid`, so a call with `layer: "native"` does not use `logicalDeviceId`. A stop without `logicalDeviceId` does not stop the `js` layer that a start with `logicalDeviceId` started. The result of such a stop gives the `js` layer `armed: true`. Its `reason` tells the agent to call `network-capture-stop` again with the `logicalDeviceId`. `stop-all-simulator-servers` with `udid` in `devices` does not stop it either: also put the `logicalDeviceId` in `devices`. Alternatively, give each device its own Metro port.
 
-When all layers that the call starts are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each of these layers. A start with `layer` fails when its layer is unavailable, also when the other layer can capture. An Apple app runs no React Native JS. Thus on iOS and on a Mac app, both layers of an Apple app are unavailable. A start for an Apple app always fails. On a Mac app, a start without `layer` for a React Native build that Argent cannot start succeeds when the `js` layer can capture. When the native layer is unavailable because Argent cannot find `adb` or the Xcode command-line tools, the error is `TOOL_DEPENDENCY_MISSING`. On a remote iOS simulator, both layers use `sim-remote`. Without `sim-remote`, the start fails with the error `TOOL_DEPENDENCY_MISSING` before it starts a layer.
+If every requested layer is unavailable, `network-capture-start` fails with `NETWORK_CAPTURE_UNAVAILABLE` and gives the reason for each layer. For example, a start for an Apple app on iOS or macOS fails. A supported React Native Mac app can report `js` as ready and `macos-native` as unavailable in the same successful call.
+
+When a missing `adb` or Xcode command-line tool prevents a requested native layer from starting and every requested layer is unavailable, the error is `TOOL_DEPENDENCY_MISSING`. On a remote iOS simulator, Argent requires `sim-remote` before it starts either layer.
 
 A second call of `network-capture-start` keeps the requests that Argent recorded.
 
@@ -440,7 +438,9 @@ The capture stays stopped, also across reloads and relaunches. A read, `launch-a
 | `e2e-execute`                                   | The first `launch` step of the app after the stop shows the `networkCapture` note as a `warning`.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `react-profiler-start`, `native-profiler-start` | The warning does not name the app. If the process of the app did not confirm the stop, the warning names the app until that process ends or confirms a later stop.                                                                                                                                                                                                                                                                                                                                                                                        |
 
-`stop-all-simulator-servers` ends the capture of all apps on the device. Argent removes the requests of the native layers and of the JS runtime layer, and their IDs are not valid after it. The JS runtime layer stops recording. After it, a read gives the result from before a start. If `stop-all-simulator-servers` cannot reach the JS runtime of the app, the capture there can still record, and its requests stay. Then the capture of the JS runtime layer stays stopped, and a read gives the result after a stop. A later `network-capture-stop` that reaches the JS runtime stops the recording. For the files on Android, see [Native network capture on Android](#native-network-capture-on-android). On a Mac app, `stop-all-simulator-servers` also stops the JS runtime layer, as on iOS. `stop-simulator-server` on a Mac app ends only the capture of the `macos-native` layer and removes its requests.
+`stop-all-simulator-servers` ends native capture and clears its records for the scoped devices. It also stops JS capture and clears its records when it can reach the runtime. If the runtime is unreachable, the read can show `stopped` while the app continues to record. Retry with `network-capture-stop` when the runtime is reachable, or reload the app. For Android files, see [Native network capture on Android](#native-network-capture-on-android).
+
+On a Mac app, `stop-simulator-server` ends only native capture and clears its records. Use `network-capture-stop` to stop capture and keep the records.
 
 A stop of the tool-server, for example at the idle timeout, also stops the recording of the JS runtime layer and removes its requests. This applies to each JS runtime that the tool-server is still connected to and that answers within 1 second. The tool-server does not connect again for this. `stop-all-simulator-servers` does not connect again either. The connection can be down, for example after Metro stopped or restarted, or after React Native DevTools took the JS runtime. Then the JS runtime keeps its capture and its requests until the app reloads or restarts. After the first `network-capture-start` of the next tool-server, `view-network-logs` lists these requests too. A different tool-server can also start the capture in the same JS runtime. Then the capture and its requests stay until the last of these tool-servers stops.
 
@@ -460,9 +460,9 @@ After a `network-capture-start` that found the JS runtime layer unavailable, for
 
 After a `network-capture-start` that found the `ios-native` layer unavailable, for example because native devtools failed to initialize, `native-network-logs` gives the reason of that start. The result contains `status: "ok"` and `started: false`, and the header is `ios-native: unavailable, 0 requests (<reason>)`. When this start comes after a stop, the header state stays `stopped`, and the header also gives the reason. `stop-all-simulator-servers` removes the reason. A later start that turns on the capture also removes it.
 
-On a Mac app, `native-network-logs` also gives the reason of a start that found the `macos-native` layer unavailable. An example is a build with the hardened runtime. The header is `macos-native: unavailable, 0 requests (<reason>)`. This start also turns off the capture that an earlier start turned on. Argent then does not arm the layer when it starts the app. After you make the change, call `network-capture-start` again. When this start comes after a stop, the header state stays `stopped`, but the header does not give the reason.
+On a Mac app, an unavailable start cancels any pending native capture for the next launch. Follow the start's `reason` and call `network-capture-start` again. The `native-network-logs` header shows `macos-native: unavailable, 0 requests (<reason>)`. A previous stop keeps the header `stopped`, so use the latest start result for the reason.
 
-While the header state is `unavailable`, `network-capture-stop` does not stop the native layer. The `reason` of the native entry is `capture was not started for this app`, and the header state stays `unavailable`.
+On a Mac app with an `unavailable` native header, a stop reports `capture was not started for this app` and the header stays `unavailable`.
 
 #### A started capture that lost the app
 
@@ -480,14 +480,14 @@ In the first two cases, for an ID from `view-network-logs`, `view-network-reques
 
 The `header` line of `native-network-logs` gives one of these states after the name of the layer:
 
-| State          | Meaning                                                                                                                                                                                                                                     |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `armed`        | The capture is ready in the current process of the app.                                                                                                                                                                                     |
-| `not armed`    | The capture is started, but it is not ready. The `header` line gives the reason.                                                                                                                                                            |
-| `not attached` | Android only. A process of the app with the in-app agent ended. The current process has no in-app agent, or the app exited.                                                                                                                 |
-| `stopped`      | `network-capture-stop` stopped the capture. The list contains the requests from before the stop.                                                                                                                                            |
-| `not started`  | No capture is started for the app, or `stop-all-simulator-servers` ended it. On a Mac app, `stop-simulator-server` also ends it. The list is empty.                                                                                         |
-| `unavailable`  | The last start found that Argent cannot capture the app. Examples: an Android build that is not debuggable, an `adb` that Argent cannot find, or a Mac app that Argent cannot start. The `header` line gives the reason. The list is empty. |
+| State          | Meaning                                                                                                                                             |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `armed`        | The capture is ready in the current process of the app.                                                                                             |
+| `not armed`    | The capture is started, but it is not ready. The `header` line gives the reason.                                                                    |
+| `not attached` | Android only. A process of the app with the in-app agent ended. The current process has no in-app agent, or the app exited.                         |
+| `stopped`      | `network-capture-stop` stopped the capture. The list contains the requests from before the stop.                                                    |
+| `not started`  | No capture is started for the app, or `stop-all-simulator-servers` ended it. On a Mac app, `stop-simulator-server` also ends it. The list is empty. |
+| `unavailable`  | The last start could not enable native capture. The header gives the reason and the list is empty.                                                  |
 
 When the expression of `debugger-evaluate` returns a Promise, Argent waits up to 10 seconds and returns the value it resolves to. A rejection fails the call with the reason. On Vega and on React Native 0.75 and older, the result is the internal fields of the Promise.
 
@@ -721,14 +721,14 @@ The result contains `platform: "macos"`, `id`, `kind`, `bundleId`, `pid`, `appPa
 
 A `note` reports conditions that need attention, such as no open window or arguments that differ from the request. Launch tools wait up to 10 seconds for a window. Use `force` to apply changed arguments to an already running app.
 
-| Tool                                                  | macOS behavior                                                                                                                                                                                                                                                                                |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                                                                                                                                                                                                               |
-| `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                                                                                                                                                                                                                     |
-| `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                                                                                                                                                                                                           |
-| `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                                                                                                                                                                                                                   |
-| `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                                                                                                                                                                                                                   |
-| `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent. The app keeps running; native network capture stops and its recorded requests are lost. `stop-all-simulator-servers` also stops the JS runtime capture. `network-capture-start` starts the capture again. See [screen recording recovery](#screen-recording-on-a-mac-app). |
+| Tool                                                  | macOS behavior                                                                                                                             |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list-devices`                                        | Lists running apps started by Argent under `platform: "macos"`.                                                                            |
+| `launch-app`                                          | Starts the app if needed. Leaves a running app unchanged.                                                                                  |
+| `restart-app`                                         | Quits the app and starts the same bundle again. Rebuild first to test code changes.                                                        |
+| `open-url`                                            | Delivers the URL to the running app. Web URLs go to the app, not a browser.                                                                |
+| `reinstall-app`                                       | Unsupported. Rebuild and use `restart-app`.                                                                                                |
+| `stop-simulator-server`, `stop-all-simulator-servers` | Disconnect Argent and leave the app running. See [network capture](#stop) and [screen recording recovery](#screen-recording-on-a-mac-app). |
 
 For `launch-app` and `restart-app`, `bundleId` must match the device. Both accept `launchArgs` and otherwise reuse the previous arguments. Both report `appPath` and `args`.
 
@@ -992,7 +992,7 @@ Use `describe` or `native-describe-screen` to inspect UIKit controls through the
 - **Toolbar menus.** With **Optimize Interface for Mac**, some UIKit toolbar menu buttons have no identifier. Select them by label.
 - **Drag and drop.** Pan and drag gestures work. UIKit drag and drop between views is unsupported.
 - **File dialogs.** [`file-panel`](#file-panel) works with the UIKit document picker and SwiftUI's `fileImporter` and `fileExporter`.
-- **Web views.** `describe` includes `WKWebView` content. Typing, paste, scrolling, and text selection work in it. The `macos-native` layer of `network-capture-start` and `native-network-logs` captures the app's `URLSession` requests only. It does not capture `WKWebView` traffic.
+- **Web views.** `describe` includes `WKWebView` content. Typing, paste, scrolling, and text selection work in it. `WKWebView` traffic is outside the scope of native network capture.
 - **Password fields.** Focusing an empty password field can show the macOS Passwords AutoFill pop-up. Input still works.
 - **Modifier clicks.** UIKit controls can respond to modifier clicks. React Native `Pressable` handlers receive the press without modifier keys. SwiftUI `List` row selection stays single-select with Command-click or Shift-click.
 
@@ -1065,7 +1065,7 @@ files without a platform suffix. If the recording lacks architecture information
 
 The debugger and JS network tools need a [supported Debug build](/docs/features/mac-apps#profile-a-react-native-app) that loads JavaScript from Metro. Start Metro before you launch the app.
 
-- **Launch.** Start Mac Catalyst apps through Argent so it can identify the runtime. If `boot-device` returns `MACOS_APP_HARDENED_RUNTIME` for a react-native-macos build, start the app from Xcode. You can still debug JavaScript, and `network-capture-start` still captures the `js` layer. Screen inspection, gestures and the `macos-native` layer require an Argent-controlled build.
+- **Launch.** Start Mac Catalyst apps through Argent so it can identify the runtime. If `boot-device` returns `MACOS_APP_HARDENED_RUNTIME` for a react-native-macos build, start the app from Xcode. Use `network-capture-start` with `layer: "js"` for its JavaScript requests. For screen inspection, gestures and native capture, launch a supported build through Argent.
 - **Target.** Pass `macos-app-<bundle id>` as `device_id`, and pass `port` if Metro uses a port other than 8081. Keep the Mac app ID on shared Metro. If Metro lists other runtimes but cannot find the Mac app, the tools report `DEBUGGER_TARGET_DEVICE_MISMATCH` (or `reason: "device_mismatch"` in `debugger-status`). Check that the app loaded its Debug bundle from that Metro. The reported logical IDs belong to other targets.
 - **Coordinates.** `debugger-component-tree` reports tap fractions of the whole window, including the title bar. For `debugger-inspect-element`, multiply the horizontal and vertical fractions by the width and height from `Screen: WxH` to get window points.
 - **Several windows.** Both debugger tools use the React Native root with the most components. Check that it belongs to the window `describe` and `gesture-tap` target before using its coordinates. If you need to inspect a different window, close the other React Native windows and retry.
