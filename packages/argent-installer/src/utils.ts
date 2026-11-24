@@ -14,6 +14,7 @@ import {
   parse as parseJsonc,
   type JSONPath,
   type ParseError,
+  type ParseOptions,
 } from "jsonc-parser";
 import { canonicalPath } from "@argent/configuration-core";
 import { resolvePackageRoot } from "./package-root.js";
@@ -438,10 +439,7 @@ export function readJsonc(filePath: string): Record<string, unknown> {
   return parsed ?? {};
 }
 
-export function findJsoncSyntaxErrorLine(
-  filePath: string,
-  allowTrailingComma: boolean
-): number | null {
+export function findJsoncSyntaxErrorLine(filePath: string, options: ParseOptions): number | null {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf8");
@@ -450,7 +448,7 @@ export function findJsoncSyntaxErrorLine(
   }
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const errors: ParseError[] = [];
-  parseJsonc(raw, errors, { allowTrailingComma });
+  parseJsonc(raw, errors, options);
   const first = errors[0];
   return first ? raw.slice(0, first.offset).split("\n").length : null;
 }

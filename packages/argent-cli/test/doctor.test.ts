@@ -106,6 +106,31 @@ describe("classifyMcpEntry", () => {
     expect(classifyMcpEntry(entry, ctx()).status).toBe("ok");
   });
 
+  describe("package runner on PATH", () => {
+    const realPath = process.env.PATH;
+    const entry = { command: "pnpm", args: ["dlx", "@swmansion/argent", "mcp"] };
+    const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+    afterEach(() => {
+      process.env.PATH = realPath;
+    });
+
+    it("fails a runner that is on neither the shell's nor the entry's PATH", () => {
+      process.env.PATH = path.join(projectRoot, "shell");
+      const missing = classifyMcpEntry({ ...entry, env: { PATH: "/opt/x:${PATH}" } }, ctx());
+      expect(missing.status).toBe("error");
+      expect(missing.label).toContain("`pnpm` is not on PATH");
+    });
+
+    it("accepts a runner on the entry's PATH or on the shell's PATH it expands", () => {
+      process.env.PATH = path.join(projectRoot, "shell");
+      fs.writeFileSync(path.join(projectRoot, pnpm), "");
+      expect(classifyMcpEntry({ ...entry, env: { PATH: projectRoot } }, ctx()).status).toBe("ok");
+      process.env.PATH = projectRoot;
+      const expanded = { ...entry, env: { PATH: "/opt/x:${PATH}" } };
+      expect(classifyMcpEntry(expanded, ctx()).status).toBe("ok");
+    });
+  });
+
   it("warns about an entry it could not read", () => {
     expect(classifyMcpEntry({ command: "", args: [] }, ctx()).status).toBe("warn");
   });
@@ -137,6 +162,21 @@ describe("toolchainChecks", () => {
     });
     expect(ios!.status).toBe("warn");
     expect(ios!.fix).toContain("xcode-select -s");
+  });
+
+  it("selects the Xcode that is installed and asks to install one only when none is", () => {
+    const report = {
+      adb,
+      xcode: {
+        developerDir: "/Library/Developer/CommandLineTools",
+        simctl: false,
+        firstLaunch: null,
+      },
+    };
+    expect(toolchainChecks(report, ["Xcode-26.6.app"])[0]!.fix).toBe(
+      "Run sudo xcode-select -s /Applications/Xcode-26.6.app/Contents/Developer"
+    );
+    expect(toolchainChecks(report, [])[0]!.fix).toContain("Install Xcode from the App Store");
   });
 
   it("warns while Xcode has not finished its first launch", () => {
@@ -172,14 +212,24 @@ describe("resolveDoctorRoot", () => {
     process.env.HOME = realHome;
   });
 
-  it("finds a config written to a parent directory with init's custom install directory", () => {
-    const repo = path.join(projectRoot, "ws", "repo-a");
+  it("finds the config at the git root from a subfolder with its own marker", () => {
+    const repo = path.join(projectRoot, "repo");
+    const app = path.join(repo, "packages", "app");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
-    fs.mkdirSync(path.join(repo, "src"));
-    writeArgentEntry(path.join(projectRoot, "ws", ".mcp.json"));
+    fs.mkdirSync(path.join(app, ".vscode"), { recursive: true });
+    writeArgentEntry(path.join(repo, ".mcp.json"));
     const homeDir = path.join(projectRoot, "home");
     process.env.HOME = homeDir;
-    expect(resolveDoctorRoot(path.join(repo, "src"), homeDir)).toBe(path.join(projectRoot, "ws"));
+    expect(resolveDoctorRoot(app, homeDir)).toBe(repo);
+  });
+
+  it("ignores a config above the git root", () => {
+    const repo = path.join(projectRoot, "code", "newrepo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    writeArgentEntry(path.join(projectRoot, "code", ".cursor", "mcp.json"));
+    const homeDir = path.join(projectRoot, "home");
+    process.env.HOME = homeDir;
+    expect(resolveDoctorRoot(repo, homeDir)).toBe(repo);
   });
 
   it("keeps the git root over a stale parent config when a global entry covers it", () => {
@@ -233,6 +283,38 @@ describe("editorsSection", () => {
     const [claude] = editorChecks(projectRoot);
     expect(claude!.status).toBe("error");
     expect(claude!.label).toBe("Claude Code: the config has a JSON syntax error on line 1");
+  });
+
+  it("rejects a comment in Claude Code's config but not in Gemini's", () => {
+    process.env.HOME = path.join(projectRoot, "home");
+    const config = '// argent\n{"mcpServers":{"argent":{"command":"argent","args":["mcp"]}}}';
+    fs.writeFileSync(path.join(projectRoot, ".mcp.json"), config);
+    fs.mkdirSync(path.join(projectRoot, ".gemini"));
+    fs.writeFileSync(path.join(projectRoot, ".gemini", "settings.json"), config);
+    const checks = editorChecks(projectRoot);
+    expect(checks.find((c) => c.label.startsWith("Claude Code"))!.status).toBe("error");
+    expect(checks.find((c) => c.label.startsWith("Gemini"))!.status).toBe("ok");
+  });
+
+  it("points at the broken line when the config cannot be parsed at all", () => {
+    process.env.HOME = path.join(projectRoot, "home");
+    fs.writeFileSync(path.join(projectRoot, ".mcp.json"), '{ "mcpServers": oops');
+    const checks = editorChecks(projectRoot).filter((c) => c.status === "error");
+    expect(checks.map((c) => c.label)).toEqual([
+      "Claude Code: the config has a JSON syntax error on line 1",
+    ]);
+  });
+
+  it("does not offer global-only editors to a local install", () => {
+    process.env.HOME = path.join(projectRoot, "home");
+    fs.mkdirSync(path.join(projectRoot, "home", ".hermes"), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "home", ".hermes", "config.yaml"), "model: x\n");
+    const detected = () => editorChecks(projectRoot).find((c) => c.label.startsWith("Detected"));
+    expect(detected()!.label).toContain("Hermes");
+
+    fs.mkdirSync(path.join(projectRoot, ".argent"));
+    fs.writeFileSync(path.join(projectRoot, ".argent", "install.json"), '{"mode":"local"}');
+    expect(detected()?.label ?? "").not.toContain("Hermes");
   });
 
   it("tells the user to pick the global scope when a global entry is broken", () => {

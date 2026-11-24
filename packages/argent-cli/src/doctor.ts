@@ -37,7 +37,11 @@ const CHECK_DEPS_TIMEOUT_MS = 30_000;
 type ConfiguredAdapterScope = ReturnType<typeof findConfiguredAdapterScopes>[number];
 
 const PACKAGE_RUNNERS = new Set(["npx", "yarn", "pnpm", "bunx"]);
-const NO_TRAILING_COMMA_EDITORS = new Set(["Claude Code", "Gemini"]);
+const JSONC_OPTIONS = { allowTrailingComma: true };
+const EDITOR_JSON_OPTIONS: Record<string, Parameters<typeof findJsoncSyntaxErrorLine>[1]> = {
+  "Claude Code": { disallowComments: true },
+  "Gemini": {},
+};
 
 type CheckStatus = "ok" | "warn" | "error" | "info";
 
@@ -168,7 +172,26 @@ function classifyPinnedEntry(entry: McpServerEntry, initFix: string): DoctorChec
     : entryCheck("ok", entry);
 }
 
+function isOnPath(command: string, searchPath: string): boolean {
+  const names =
+    process.platform === "win32" ? [".cmd", ".exe"].map((ext) => command + ext) : [command];
+  return searchPath
+    .split(path.delimiter)
+    .some((dir) => dir !== "" && names.some((name) => fs.existsSync(path.join(dir, name))));
+}
+
 function classifyPackageRunner(entry: McpServerEntry, ctx: EntryContext): DoctorCheck {
+  const searchPath = [entry.env?.PATH, process.env.PATH].filter(Boolean).join(path.delimiter);
+  if (!isOnPath(entry.command, searchPath)) {
+    return entryCheck(
+      "error",
+      entry,
+      `\`${entry.command}\` is not on PATH, so this entry cannot start`,
+      {
+        fix: `Install ${entry.command}, or put it on the PATH the entry runs with`,
+      }
+    );
+  }
   const fetchesPackage = entry.args.some(
     (arg) => arg === PACKAGE_NAME || arg.startsWith(`${PACKAGE_NAME}@`)
   );
@@ -204,7 +227,10 @@ function readEntry(adapter: (typeof ALL_ADAPTERS)[number], configPath: string): 
 
 function syntaxCheck(adapterName: string, configPath: string): DoctorCheck | null {
   if (!/\.jsonc?$/.test(configPath)) return null;
-  const line = findJsoncSyntaxErrorLine(configPath, !NO_TRAILING_COMMA_EDITORS.has(adapterName));
+  const line = findJsoncSyntaxErrorLine(
+    configPath,
+    EDITOR_JSON_OPTIONS[adapterName] ?? JSONC_OPTIONS
+  );
   if (line === null) return null;
   return check("error", `the config has a JSON syntax error on line ${line}`, {
     fix: `Fix line ${line} of ${home(configPath)}. The editor loads no MCP servers from it until then`,
@@ -217,6 +243,28 @@ function globalScopeFix(fix: string | undefined, initFix: string): string | unde
     : fix;
 }
 
+function editorCheck(
+  result: DoctorCheck,
+  { adapter, scope, configPath }: ConfiguredAdapterScope,
+  initFix: string
+): DoctorCheck {
+  return {
+    ...result,
+    label: `${adapter.name}: ${result.label}`,
+    fix: scope === "global" ? globalScopeFix(result.fix, initFix) : result.fix,
+    detail: [`${home(configPath)} (${scope})`, result.detail].filter(Boolean).join(", "),
+  };
+}
+
+function brokenProjectConfigs(projectRoot: string, initFix: string): DoctorCheck[] {
+  return ALL_ADAPTERS.flatMap((adapter) => {
+    const configPath = adapter.projectPath(projectRoot);
+    if (!configPath) return [];
+    const result = syntaxCheck(adapter.name, configPath);
+    return result ? [editorCheck(result, { adapter, scope: "project", configPath }, initFix)] : [];
+  });
+}
+
 export function editorsSection(
   ctx: EntryContext & Pick<DoctorContext, "configured">
 ): DoctorSection {
@@ -224,30 +272,28 @@ export function editorsSection(
   const { configured } = ctx;
   const initFix = `${ctx.argentCommand} init`;
 
-  for (const { adapter, scope, configPath } of configured) {
+  for (const entry of configured) {
     const result =
-      syntaxCheck(adapter.name, configPath) ??
-      classifyMcpEntry(readEntry(adapter, configPath), ctx);
-    checks.push({
-      ...result,
-      label: `${adapter.name}: ${result.label}`,
-      fix: scope === "global" ? globalScopeFix(result.fix, initFix) : result.fix,
-      detail: [`${home(configPath)} (${scope})`, result.detail].filter(Boolean).join(", "),
-    });
+      syntaxCheck(entry.adapter.name, entry.configPath) ??
+      classifyMcpEntry(readEntry(entry.adapter, entry.configPath), ctx);
+    checks.push(editorCheck(result, entry, initFix));
   }
 
   if (configured.length === 0) {
+    const broken = brokenProjectConfigs(ctx.projectRoot, initFix);
     checks.push(
-      check("error", "No editor has an argent MCP entry for this project", {
-        fix: initFix,
-      })
+      ...(broken.length > 0
+        ? broken
+        : [check("error", "No editor has an argent MCP entry for this project", { fix: initFix })])
     );
   }
 
   const configuredNames = new Set(configured.map((c) => c.adapter.name));
+  const localMode = resolveInstallMode(ctx.projectRoot) === "local";
   const unconfigured = detectAdapters()
-    .map((a) => a.name)
-    .filter((name) => !configuredNames.has(name));
+    .filter((a) => !configuredNames.has(a.name))
+    .filter((a) => !localMode || a.projectPath(ctx.projectRoot) !== null)
+    .map((a) => a.name);
   if (unconfigured.length > 0) {
     checks.push(
       check("info", `Detected without argent: ${unconfigured.join(", ")}`, {
@@ -348,7 +394,23 @@ async function probeHostDeps(paths: ToolsServerPaths): Promise<HostDepsReport | 
   }
 }
 
-function iosCheck(xcode: HostDepsReport["xcode"]): DoctorCheck {
+function installedXcodes(): string[] {
+  try {
+    return fs.readdirSync("/Applications").filter((name) => /^Xcode.*\.app$/.test(name));
+  } catch {
+    return [];
+  }
+}
+
+function selectXcodeFix(xcodeApps: string[]): string {
+  const app = xcodeApps.includes("Xcode.app") ? "Xcode.app" : xcodeApps[0];
+  const select = `sudo xcode-select -s /Applications/${app ?? "Xcode.app"}/Contents/Developer`;
+  return app
+    ? `Run ${select}`
+    : `Install Xcode from the App Store, open it once, then run ${select}`;
+}
+
+function iosCheck(xcode: HostDepsReport["xcode"], xcodeApps: string[]): DoctorCheck {
   if (!xcode) return check("info", "iOS simulators: need a macOS host");
   if (xcode.simctl && xcode.firstLaunch) {
     return check("warn", "iOS simulators: Xcode has not finished installing its components", {
@@ -359,13 +421,11 @@ function iosCheck(xcode: HostDepsReport["xcode"]): DoctorCheck {
   if (xcode.simctl)
     return check("ok", "iOS simulators", { detail: `Xcode at ${xcode.developerDir}` });
   if (!xcode.developerDir) {
-    return check("warn", "iOS simulators: Xcode not found", {
-      fix: "Install Xcode from the App Store and open it once",
-    });
+    return check("warn", "iOS simulators: Xcode not found", { fix: selectXcodeFix(xcodeApps) });
   }
   return check("warn", "iOS simulators: the active developer directory has no simctl", {
     detail: xcode.developerDir,
-    fix: "Install Xcode from the App Store, then run sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
+    fix: selectXcodeFix(xcodeApps),
   });
 }
 
@@ -376,8 +436,11 @@ function androidCheck(adb: string | null): DoctorCheck {
   });
 }
 
-export function toolchainChecks(report: HostDepsReport): DoctorCheck[] {
-  return [iosCheck(report.xcode), androidCheck(report.adb)];
+export function toolchainChecks(
+  report: HostDepsReport,
+  xcodeApps: string[] = installedXcodes()
+): DoctorCheck[] {
+  return [iosCheck(report.xcode, xcodeApps), androidCheck(report.adb)];
 }
 
 async function toolchainSection(ctx: DoctorContext): Promise<DoctorSection> {
@@ -413,6 +476,12 @@ function hasAnyConfig(dir: string): boolean {
   return findConfigured(dir).length > 0;
 }
 
+function ancestorsInRepo(dir: string, homeDir: string): string[] {
+  const ancestors = ancestorsBelowHome(dir, homeDir);
+  const repoIndex = [dir, ...ancestors].findIndex((d) => fs.existsSync(path.join(d, ".git")));
+  return repoIndex === -1 ? ancestors : ancestors.slice(0, repoIndex);
+}
+
 function ancestorsBelowHome(dir: string, homeDir: string): string[] {
   const ancestors: string[] = [];
   let current = path.dirname(dir);
@@ -426,9 +495,7 @@ function ancestorsBelowHome(dir: string, homeDir: string): string[] {
 export function resolveDoctorRoot(cwd: string, homeDir: string = homedir()): string {
   const projectRoot = resolveProjectRoot(cwd, homeDir);
   if (projectRoot === path.resolve(homeDir) || hasAnyConfig(projectRoot)) return projectRoot;
-  return (
-    ancestorsBelowHome(projectRoot, path.resolve(homeDir)).find(hasProjectConfig) ?? projectRoot
-  );
+  return ancestorsInRepo(projectRoot, path.resolve(homeDir)).find(hasProjectConfig) ?? projectRoot;
 }
 
 function offPathBinDir(): string | null {
