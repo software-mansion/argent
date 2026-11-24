@@ -51,7 +51,7 @@ Use a native layer for requests from native code. In a react-native-macos app, b
 
 On iOS, Android and Mac apps, ask the agent to start capture before you reproduce the request. The agent can start and stop the JS runtime layer and the native layer together or separately. Argent reports which layers are ready and gives a reason for each layer that is not ready.
 
-After a reload or relaunch, ask the agent to start JS capture again. Native capture follows the app when Argent relaunches it. If your iOS simulator uses a device provider's socket, start native capture again after a relaunch.
+After a reload or relaunch, ask the agent to start JS capture again before you repeat the action. If the agent left JS capture on, a request wait can also restore it. Argent can miss requests until recording resumes. Native capture follows the app when Argent relaunches it. If your iOS simulator uses a device provider's socket, start native capture again after a relaunch.
 
 The agent stops these layers when it has the requests it needs or before a profile. Capture for other apps continues. If Argent cannot reach the JS runtime to stop capture, the result tells the agent to retry later. Argent keeps the captured requests after a stop. A reload or restart clears the JS log. After the next start, an old JS request ID can name a new request. Stopped layers stay off until the agent starts them again.
 
@@ -59,7 +59,15 @@ A request that runs at the stop completes in the list on iOS, on a Mac app and i
 
 On Vega, ask the agent to read the JS network log before you reproduce the request. The first read starts capture. A reload or restart clears the log and ends capture. Read the log again to resume capture. The app keeps recording if Argent disconnects or stops.
 
-On Chromium and Electron, Argent records requests while it is connected to the page. Ask the agent to open the network log before you reproduce the request. Start and stop mark a capture window. The log also includes requests outside that window. See the [Chromium capture reference](/docs/reference/tools#network-capture-on-chromium-and-electron).
+On Chromium and Electron, Argent records requests while it is connected to the page. Ask the agent to open the network log before you reproduce the request. Start and stop mark the part of the log that a request wait searches. The network log still shows requests outside that window. See the [Chromium capture reference](/docs/reference/tools#network-capture-on-chromium-and-electron).
+
+## Wait for a request
+
+Ask the agent to wait for a specific request on an iOS simulator, Android, a Mac app, or Chromium. The agent starts capture before the action that sends the request. Argent searches from the latest capture start and returns a match when the request finishes. The agent can then open its details.
+
+If the wait finds no match, Argent reports what it could read and shows any near misses. For example, the report can show a request to the expected URL with an unexpected status. If capture was interrupted, start it again once the app is ready and repeat the action.
+
+An [e2e test](/docs/features/e2e) can use the same wait to verify a request. The check requires a match, so it cannot verify that the app sent no request.
 
 ## Native network capture on Android
 
@@ -182,12 +190,15 @@ On an iOS simulator, the app does not use its HTTP cache while Argent shapes or 
 - "Make sure that the app sends the second request after the error 500."
 - "Show the requests from the analytics SDK in my Android app."
 - "Start the network capture, sign in, then stop the capture and show the sign-in requests."
+- "Tap Log in. Wait for the login request and tell me its status."
 - "Make the network slow and show me the loading state of the feed."
 
 ## Limits
 
 - Argent records requests only while capture runs. See [Start and stop the capture](#start-and-stop-the-capture). On iOS simulators that use a device provider's socket, native capture can begin when Argent connects to the provider's in-app agent, before the agent starts capture.
 - A restart of a Chromium app clears the network log of the Chrome DevTools Protocol layer and its capture window. Argent records again when the agent uses the app the next time, so the log does not contain the requests that the app sends at startup.
+- A request wait needs a known outcome. A stream that stays open or a request interrupted by app exit cannot match if Argent never saw it finish.
+- On Chromium, a request wait uses the final URL, method and status after redirects.
 - On iOS, Android and Mac apps, Argent can stop JS capture during shutdown only while the runtime is reachable. If the app keeps running after Argent loses the connection, a later capture can include requests from that interval. Reload or restart the app to end capture and clear the JS log.
 - After an upgrade of Argent, the network capture of the earlier version stays in the app until the app reloads. The earlier network capture keeps no records, but it still reads each response. Reload the app to remove the earlier network capture.
 - Expo `fetch()` does not always report a connection that breaks in the middle of the response body. The app then gets a part of the body, or its read of the body does not end. The record shows the same: that part of the body, or a pending request. If the app does not read the body, the record shows a finished request.
@@ -232,4 +243,4 @@ On an iOS simulator, the app does not use its HTTP cache while Argent shapes or 
   - The `adb reverse` stays until you remove it with `adb reverse --remove`, until the adb server or the device restarts, or until the USB connection of the device stops. A restart of the adb server also removes the other reverses, for example the reverse of Metro. Each `adb reverse` that stays holds one device port from 20000 to 29999.
 - Argent does not replace the data in the URLs and in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
 
-Argent does this with these tools: `network-capture-start`, `network-capture-stop`, `view-network-logs`, `view-network-request-details`, `native-network-logs` and `network-conditions`. The [tools reference](/docs/reference/tools) contains all tools.
+Argent does this with these tools: `network-capture-start`, `network-capture-stop`, `await-network-request`, `view-network-logs`, `view-network-request-details`, `native-network-logs` and `network-conditions`. The [tools reference](/docs/reference/tools) contains all tools.

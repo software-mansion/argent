@@ -80,7 +80,7 @@ Use `run-sequence` when every step is known in advance; if a step depends on wha
 - "submit form": fill every field, then tap submit
 - "go back to X": a known tap path
 
-Gate a step that depends on a screen transition with an `await-ui-element` step rather than a fixed `delayMs`. If its condition is not met before the timeout, the sequence **stops there** and the later steps do not run, so a tap can't fire against a screen that never appeared. Any failing step also stops the sequence, with partial results.
+Use `await-ui-element` to gate a step on a screen transition. To gate on a network request, start capture before the sequence, then put `await-network-request` after the triggering action. A failed step, including a wait with `success: false`, stops the sequence and returns partial results.
 
 ## 6. Text Entry and Secrets
 
