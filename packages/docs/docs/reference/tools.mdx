@@ -460,7 +460,7 @@ After a `network-capture-start` that found the JS runtime layer unavailable, for
 
 After a `network-capture-start` that found the `ios-native` layer unavailable, for example because native devtools failed to initialize, `native-network-logs` gives the reason of that start. The result contains `status: "ok"` and `started: false`, and the header is `ios-native: unavailable, 0 requests (<reason>)`. When this start comes after a stop, the header state stays `stopped`, and the header also gives the reason. `stop-all-simulator-servers` removes the reason. A later start that turns on the capture also removes it.
 
-On a Mac app, `native-network-logs` also gives the reason of a start that found the `macos-native` layer unavailable. An example is a build with the hardened runtime. The header is `macos-native: unavailable, 0 requests (<reason>)`. When this start comes after a stop, the header state stays `stopped`, but the header does not give the reason.
+On a Mac app, `native-network-logs` also gives the reason of a start that found the `macos-native` layer unavailable. An example is a build with the hardened runtime. The header is `macos-native: unavailable, 0 requests (<reason>)`. This start also turns off the capture that an earlier start turned on. Argent then does not arm the layer when it starts the app. After you make the change, call `network-capture-start` again. When this start comes after a stop, the header state stays `stopped`, but the header does not give the reason.
 
 While the header state is `unavailable`, `network-capture-stop` does not stop the native layer. The `reason` of the native entry is `capture was not started for this app`, and the header state stays `unavailable`.
 

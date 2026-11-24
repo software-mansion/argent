@@ -2174,6 +2174,29 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect((err as Error).message).toContain(`macos-native: ${refusal}`);
     });
 
+    it("turns off the capture of an earlier start when a later start finds a hardened copy", async () => {
+      const release = hardenedRelease("release");
+      searched.spotlight[BUNDLE_ID] = release;
+      // No copy runs, so this start arms the next copy that argent starts.
+      expect((await start()).layers).toEqual([
+        { layer: "macos-native", armed: false, reason: NOT_RUNNING },
+      ]);
+      await startOutsideCopyOf(executableOf(release));
+      const refusal = hardenedRuntimeRefusal(await inspectMacosApp(release));
+      const err = await start().catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      // The read and the stop agree with that start.
+      expect((await readLog()).header).toBe(`macos-native: unavailable, 0 requests (${refusal})`);
+      expect((await stop()).layers).toEqual([
+        {
+          layer: "macos-native",
+          armed: false,
+          total: 0,
+          reason: "capture was not started for this app",
+        },
+      ]);
+    });
+
     it("judges the build of a copy from another path than Spotlight's", async () => {
       searched.spotlight[BUNDLE_ID] = appPath;
       const release = hardenedRelease("installed");
