@@ -180,9 +180,6 @@ const MACOS_REFUSAL_REASONS: Readonly<Record<string, string>> = {
  */
 const NO_CAPTURE_START_STOP_REASONS: Partial<Record<Platform, string>> = {
   vega: "a Vega app's network capture has no start or stop: view-network-logs turns it on at its first call",
-  chromium:
-    "a Chromium app's network capture has no start or stop: argent turns it on at the first tool call " +
-    "on the app; read the requests with view-network-logs",
 };
 
 const CATALYST_NO_APPKIT_VIEWS =
