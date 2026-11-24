@@ -2,6 +2,7 @@
 sidebar_position: 7
 sidebar_label: Device providers
 title: Device providers
+description: Argent attaches to a simulator or an emulator that a different application already runs, for example an IDE extension. This page describes the provider contract.
 sidebar_custom_props:
   icon: plug
 ---
@@ -52,12 +53,12 @@ Argent writes one line to `stderr` and reports no external device if the file is
 
 An external device appears in `list-devices` with the other devices. Its id starts with `ext:`. The entry contains these additional fields.
 
-| Field          | Content                                                                                                                                                                                                                       |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `external`     | Always `true`. It marks the device as the device of a provider.                                                                                                                                                               |
-| `provider`     | The id and the name of the provider, and the project that the provider opened.                                                                                                                                                |
-| `capabilities` | The mechanisms that the provider granted for this device.                                                                                                                                                                     |
-| `foldable`     | `true` for a foldable iOS simulator. Absent otherwise, and on a call where the check takes over 5 seconds. Then the `hint` tells the agent to call again, and a later call adds the flag once the device set answers in time. |
+| Field          | Content                                                                                                                                                                                                                    |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `external`     | Always `true`. It marks the device as the device of a provider.                                                                                                                                                            |
+| `provider`     | The id and the name of the provider, and the project that the provider opened.                                                                                                                                             |
+| `capabilities` | The mechanisms that the provider granted for this device.                                                                                                                                                                  |
+| `foldable`     | `true` for a foldable iOS simulator. Absent otherwise, and on a call where the check takes over 5 seconds. Then `notes` tells the agent to call again, and a later call adds the flag once the device set answers in time. |
 
 The agent drives an external device with the usual tools. Two rules are different:
 
@@ -84,7 +85,7 @@ Argent ignores an unknown token. Thus a provider can declare a capability of a n
 
 Argent uses `native-devtools` on iOS only. `argent providers check` reports an error for an Android device that declares this token.
 
-On Android, native network capture needs only the `adb` token. With `adb`, `native-network-logs` attaches an in-app agent to a debuggable app on the device. It also adds an `adb reverse` port forward to the device for the in-app agent. Argent removes the port forward when the capture stops. A provider that withholds `adb` also withholds native network capture.
+On Android, native network capture needs only the `adb` token. With `adb`, `network-capture-start` attaches an in-app agent to a debuggable app on the device. It also adds an `adb reverse` port forward to the device for the in-app agent. `network-capture-stop` keeps the port forward. Argent removes it when it stops the services of the device: at `stop-all-simulator-servers`, or at a stop of the tool-server. A provider that withholds `adb` also withholds native network capture.
 
 ### One grant, both names of the device
 

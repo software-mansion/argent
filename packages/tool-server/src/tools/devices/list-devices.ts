@@ -5,7 +5,9 @@ import {
   isFoldableAvd,
   listAvds,
   consolePortFromAdbSerial,
+  readEmulatorConsoleAvdName,
   ADB_DEVICES_TIMEOUT_MS,
+  type AndroidDevice as AdbAndroidDevice,
 } from "../../utils/adb";
 import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
@@ -18,7 +20,8 @@ import {
 } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
 import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
-import { simctlListDevices } from "../../utils/sim-remote";
+import { simctlListDevices, simRemoteExecError } from "../../utils/sim-remote";
+import { resolveAndroidBinary } from "../../utils/android-binary";
 import {
   withRemotePrefix,
   harmonyDeviceId,
@@ -41,7 +44,12 @@ import {
   type VegaDevice,
 } from "../../utils/vega-devices";
 import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
-type IosDevice = IosSimulator & { platform: "ios" };
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+type IosDevice = IosSimulator & { platform: "ios"; kind: "simulator" };
 
 /**
  * A physical iPhone from CoreDevice (`xcrun devicectl`). Physical-device
@@ -52,7 +60,7 @@ type IosPhysicalDevice = {
   kind: "device";
   udid: string;
   name: string;
-  // connected = wired transport. paired = listed but not reachable over USB.
+  // connected = reachable over USB or the network; the tunnel comes up on first use. paired = remembered but unreachable.
   state: "connected" | "paired";
   runtime: string;
   model: string | null;
@@ -65,6 +73,7 @@ type IosPhysicalDevice = {
 
 type IosRemoteDevice = {
   platform: "ios-remote";
+  kind: "simulator";
   udid: string;
   name: string;
   state: string;
@@ -144,9 +153,24 @@ type MacosAppDevice = {
   note?: string;
 };
 
+/**
+ * An AVD that is not running. It has no serial until boot-device starts it; a
+ * running AVD is listed only as its emulator.
+ */
+type AndroidAvdEntry = {
+  platform: "android";
+  kind: "avd";
+  avdName: string;
+  state: "stopped";
+  foldable?: true;
+};
+
+type ChromiumListedDevice = ChromiumDevice & { kind: "app" };
+
 type ListedDevice =
   | AndroidDevice
-  | ChromiumDevice
+  | AndroidAvdEntry
+  | ChromiumListedDevice
   | ExternalListedDevice
   | HarmonyDevice
   | IosDevice
@@ -157,17 +181,52 @@ type ListedDevice =
 
 type ListDevicesResult = {
   devices: ListedDevice[];
-  avds: Array<{ name: string; foldable?: true }>;
   /**
-   * Present only when it applies, unlike the description, which is read once
-   * per session: why local iOS targets are missing while Xcode's component
-   * install is pending, a retry notice when `simctl` timed out, the rules for a
-   * provider's device when one is listed, a retry notice when the foldable
-   * check of a provider's simulator timed out, and how to reach the adb server
-   * when it is not adb's default.
+   * Present only when one applies, unlike the description, which is read once
+   * per session: a platform this machine cannot reach and what would change
+   * that, why local iOS targets are missing while Xcode's component install is
+   * pending, a retry notice when `simctl` timed out, the rules for a provider's
+   * device when one is listed, a retry notice when the foldable check of a
+   * provider's simulator timed out, and how to reach the adb server when it is
+   * not adb's default.
    */
-  hint?: string;
+  notes?: string[];
 };
+
+/** Argent Cloud through the `sim-remote` CLI, as far as list-devices can tell. */
+type CloudState = "absent" | "logged-out" | "logged-in" | "unknown";
+
+const ARGENT_CLOUD_URL = "https://argent.swmansion.com/cloud/";
+
+const ARGENT_CLOUD_OFFER =
+  `Argent Cloud, a hosted service that is not set up here, runs iOS simulators on remote Macs; ` +
+  `once the user sets it up with their API key and the sim-remote CLI, they are listed as platform 'ios-remote'. ` +
+  ARGENT_CLOUD_URL;
+
+/**
+ * Why no iOS target can appear, and what would change that. Only for a host
+ * that cannot run local simulators, or when sim-remote waits for a login: on a
+ * Mac with Xcode the note would be noise on every call.
+ */
+function iosReachNote(
+  host: { localIos: boolean; darwin: boolean },
+  cloud: CloudState
+): string | null {
+  if (cloud === "logged-out") {
+    return (
+      `iOS: ${host.localIos ? "" : "this machine cannot run iOS simulators locally; "}` +
+      `sim-remote is installed but not logged in, so Argent Cloud simulators are not listed. ` +
+      `The user runs \`sim-remote login\` in their own terminal.`
+    );
+  }
+  if (cloud !== "absent" || host.localIos) return null;
+  return host.darwin
+    ? `iOS: no local simulators because \`simctl\` was not found in the active developer directory. Select your Xcode installation, or install Xcode if needed. ${ARGENT_CLOUD_OFFER}`
+    : `iOS: this machine cannot run iOS simulators (they need macOS with Xcode). ${ARGENT_CLOUD_OFFER}`;
+}
+
+const ANDROID_SDK_MISSING_NOTE =
+  "Android: no SDK found (adb, emulator). Installing the platform tools and creating an AVD adds Android targets.";
 
 /** Only what differs from a device argent booted itself. */
 const EXTERNAL_DEVICES_HINT =
@@ -213,13 +272,19 @@ function sortIos(a: IosDevice, b: IosDevice): number {
   return aIpad - bIpad;
 }
 
-function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
+function sortAndroid(
+  a: AndroidDevice | AndroidAvdEntry,
+  b: AndroidDevice | AndroidAvdEntry
+): number {
   const aReady = a.state === "device" ? 0 : 1;
   const bReady = b.state === "device" ? 0 : 1;
   if (aReady !== bReady) return aReady - bReady;
-  const aEmu = a.isEmulator ? 0 : 1;
-  const bEmu = b.isEmulator ? 0 : 1;
-  return aEmu - bEmu;
+  return androidKindRank(a) - androidKindRank(b);
+}
+
+/** Running emulators, then phones, then AVDs that are not running. */
+function androidKindRank(d: AndroidDevice | AndroidAvdEntry): number {
+  return d.kind === "emulator" ? 0 : d.kind === "device" ? 1 : 2;
 }
 
 // Floats booted/ready devices to the top across platforms; the merged array is
@@ -242,10 +307,14 @@ function readinessRank(d: ListedDevice): number {
 }
 
 /**
- * Remote iOS simulators via `sim-remote`. Returns [] when the CLI is missing or
- * logged out — list-devices reports an unavailable platform as absent, not as an error.
+ * Remote iOS simulators via `sim-remote`, with the CLI's state. A missing CLI or
+ * a logged-out session lists nothing and is reported through a note, not as an
+ * error; any other failure lists nothing and says nothing.
  */
-async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
+async function listRemoteIosSimulators(): Promise<{
+  devices: IosRemoteDevice[];
+  cloud: CloudState;
+}> {
   try {
     const result = await simctlListDevices();
     const out: IosRemoteDevice[] = [];
@@ -256,6 +325,7 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
         if (d.isAvailable === false) continue;
         out.push({
           platform: "ios-remote",
+          kind: "simulator",
           udid: withRemotePrefix(d.udid),
           name: d.name,
           state: d.state,
@@ -264,10 +334,50 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
         });
       }
     }
-    return out;
-  } catch {
-    return [];
+    return { devices: out, cloud: "logged-in" };
+  } catch (err) {
+    if ((simRemoteExecError(err) as { code?: unknown }).code === "ENOENT") {
+      return { devices: [], cloud: "absent" };
+    }
+    const loggedOut = err instanceof Error && /not logged in/i.test(err.message);
+    return { devices: [], cloud: loggedOut ? "logged-out" : "unknown" };
   }
+}
+
+/**
+ * Whether this host can run iOS simulators at all. Only probed when the scan
+ * found none, so a Mac with simulators pays nothing.
+ */
+async function canRunLocalIos(simulatorsFound: boolean): Promise<boolean> {
+  if (process.platform !== "darwin") return false;
+  if (simulatorsFound) return true;
+  return execFileAsync("xcrun", ["--find", "simctl"], { timeout: 5_000 }).then(
+    () => true,
+    () => false
+  );
+}
+
+/**
+ * adb lists an emulator as `offline` while it boots, before getprop can name its
+ * AVD. Its console answers from the start, so ask it: otherwise the AVD would
+ * also be listed as stopped and an agent could boot it a second time.
+ */
+async function nameBootingEmulators(devices: AdbAndroidDevice[]): Promise<AdbAndroidDevice[]> {
+  return Promise.all(
+    devices.map(async (d) => {
+      if (!d.isEmulator || d.avdName !== null) return d;
+      const answer = await readEmulatorConsoleAvdName(d.serial);
+      return answer.status === "ok" ? { ...d, avdName: answer.avdName } : d;
+    })
+  );
+}
+
+async function androidSdkFound(): Promise<boolean> {
+  const [adb, emulator] = await Promise.all([
+    resolveAndroidBinary("adb"),
+    resolveAndroidBinary("emulator"),
+  ]);
+  return adb !== null || emulator !== null;
 }
 
 async function listMacosApps(): Promise<MacosAppDevice[]> {
@@ -382,7 +492,7 @@ type ExternalEntry = { device: ExternalDevice; foldable: boolean; foldableTimedO
  * and `plutil` calls has its own timeout and in series they can outlast
  * `BRANCH_DEADLINE_MS`, which would drop every lent device, Android ones
  * included. Past this budget a lent simulator is listed without the flag and
- * the result's hint says so. The check keeps running and caches what it finds,
+ * a note in the result says so. The check keeps running and caches what it finds,
  * so a later call gets the flag once the device set answers in time.
  */
 export const EXTERNAL_FOLDABLE_BUDGET_MS = 5_000;
@@ -460,18 +570,14 @@ const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
-  description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, <flag:harmonyos>HarmonyOS phones and emulators, </flag:harmonyos>and Vega (Fire TV) devices in one place.
-Call this at the start of a session to pick a target id ('udid' for iOS<flag:harmonyos>/HarmonyOS</flag:harmonyos> entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
-Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', <flag:harmonyos>'harmony', </flag:harmonyos>or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
-<flag:harmonyos>HarmonyOS entries carry a 'kind': 'device' is a target connected over \`hdc\` (a phone on USB, or a booted emulator) and is what the interaction tools drive; 'emulator' is a DevEco Studio instance, running or not, and is what boot-device starts. A running emulator appears under both, exactly as a running Android AVD appears in both 'avds' and the device list. Instance state is 'running'/'stopped'; connected-target state is 'Connected'/'Offline'.
-</flag:harmonyos>Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone on USB / wireless adb). Physical phones use the same interaction tools as emulators and need no boot-device (just connect the phone with USB debugging authorised).
-Physical iPhones appear as iOS entries with kind 'device' (no iPads); no boot-device. State 'connected' = cabled and usable; 'paired' = not reachable over USB, never auto-bound.
-TV targets are tagged with runtimeKind 'tv' (Apple TV simulators, Android TV / leanback devices). They are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses, and \`keyboard\` to type, rather than the coordinate/gesture tools.
-iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are tagged with their 'deviceSet' path; the same tools drive them by udid, but they run headless (no Simulator.app window).
-A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'; use the \`fold\` tool to fold or unfold it.
-Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
-<flag:macos-apps>Mac apps that argent started (boot-device with macosAppPath) are listed while they run, as platform 'macos' with the 'id' macos-app-<bundle id>.
-</flag:macos-apps>Booted/ready devices are listed first, but use a physical phone (kind 'device') only when the user asks for one. A platform is silently omitted when its CLI is not found; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
+  description: `List the targets argent can drive or start: iOS simulators and iPhones, Android emulators, AVDs and phones, Chromium (CDP) apps, Vega (Fire TV) devices, <flag:harmonyos>HarmonyOS phones and emulators, </flag:harmonyos><flag:macos-apps>Mac apps argent started, </flag:macos-apps>and iOS simulators hosted on Argent Cloud.
+Returns { devices, notes? }. Each device has a 'platform', a 'kind' and a 'state'. Pass its 'udid' (iOS<flag:harmonyos>, HarmonyOS</flag:harmonyos>), 'serial' (Android, Vega) or 'id' (Chromium<flag:macos-apps>, Mac app</flag:macos-apps>) to the other tools. Ready devices come first.
+Start a stopped device with boot-device: an iOS simulator by 'udid', an Android AVD (kind 'avd', no serial until it runs) by 'avdName', a Vega VVD by 'vvdImage'. A physical phone (kind 'device') needs no boot; use one only when the user asks for it. A physical iPhone is usable only in state 'connected'.
+<flag:harmonyos>HarmonyOS kind 'device' is an \`hdc\` target that the tools drive; kind 'emulator' is a DevEco Studio instance that boot-device starts, and a running one is listed as both.
+</flag:harmonyos>platform 'ios-remote' is an iOS simulator hosted on Argent Cloud, usable from Linux too (https://argent.swmansion.com/cloud/); drive it with the same tools by its 'remote:' udid. A 'deviceSet' simulator (e.g. from Radon IDE) runs headless.
+runtimeKind 'tv' marks a focus-driven TV target: use describe, tv-remote and keyboard, not gestures. 'foldable: true' marks a device the fold tool folds.
+Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-device with electronAppPath launches one.
+'notes' says which platform this machine cannot reach and what would change that; tell the user when their task needs that platform.`,
   zodSchema,
   alwaysLoad: true,
   searchHint:
@@ -479,11 +585,8 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
   readOnly: true,
   interaction: {
     startedMsg: () => "Listing devices",
-    completedMsg: ({ result }) => {
-      const deviceLabel = result.devices.length === 1 ? "device" : "devices";
-      const avdLabel = result.avds.length === 1 ? "AVD" : "AVDs";
-      return `Listed ${result.devices.length} ${deviceLabel} and ${result.avds.length} ${avdLabel}`;
-    },
+    completedMsg: ({ result }) =>
+      `Listed ${result.devices.length} ${result.devices.length === 1 ? "device" : "devices"}`,
     failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
   },
   services: () => ({}),
@@ -515,14 +618,18 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
         [],
         "ios-physical"
       ),
-      withDeadline(listRemoteIosSimulators(), [], "ios-remote"),
+      withDeadline(
+        listRemoteIosSimulators(),
+        { devices: [], cloud: "unknown" as CloudState },
+        "ios-remote"
+      ),
       withDeadline(
         // list-devices is the one caller that surfaces TV vs mobile, so it pays for
         // runtimeKind's extra per-device probe. The explicit `adb devices` bound
         // (not runAdb's 30s default) keeps this branch under BRANCH_DEADLINE_MS.
-        listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS }).catch(
-          () => []
-        ),
+        listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS })
+          .then(nameBootingEmulators)
+          .catch(() => []),
         [],
         "android"
       ),
@@ -574,7 +681,7 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
 
     const iosTagged: IosDevice[] = ios.simulators
       .filter((simulator) => !externalShadows.has(simulator.udid))
-      .map((simulator) => ({ platform: "ios", ...simulator }));
+      .map((simulator) => ({ platform: "ios", kind: "simulator", ...simulator }));
 
     iosTagged.sort(sortIos);
     const iosPhysicalTagged: IosPhysicalDevice[] = iosPhysical
@@ -584,7 +691,10 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
         kind: "device",
         udid: d.udid,
         name: d.name,
-        state: d.transportType === "wired" ? "connected" : "paired",
+        state:
+          d.transportType === "wired" || d.transportType === "localNetwork"
+            ? "connected"
+            : "paired",
         runtime: d.osVersion ? `iOS ${d.osVersion} (physical device)` : "iOS (physical device)",
         model: d.model,
         developerModeEnabled: d.developerModeEnabled,
@@ -592,7 +702,7 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
         transportType: d.transportType,
         tunnelState: d.tunnelState,
       }));
-    iosRemote.sort(sortIosRemote);
+    const iosRemoteSorted = [...iosRemote.devices].sort(sortIosRemote);
     // One config.ini read per AVD name, shared by the running emulators and the AVD list.
     const foldableAvds = new Set(
       (
@@ -620,7 +730,22 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
     const vvdShadowSerials = await resolveVvdShadowAdbSerials(androidTagged, vega);
     const shadowSerials = new Set([...vvdShadowSerials, ...externalShadows]);
     const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, shadowSerials);
-    androidDeduped.sort(sortAndroid);
+    // A running AVD is listed once, as its emulator; the rest can be booted by name.
+    const runningAvds = new Set(android.map((d) => d.avdName).filter((n) => n !== null));
+    const avdEntries: AndroidAvdEntry[] = avds
+      .filter((a) => !runningAvds.has(a.name))
+      .map((a) => ({
+        platform: "android",
+        kind: "avd",
+        avdName: a.name,
+        state: "stopped",
+        ...(foldableAvds.has(a.name) ? { foldable: true as const } : {}),
+      }));
+    const androidListed: Array<AndroidDevice | AndroidAvdEntry> = [
+      ...androidDeduped,
+      ...avdEntries,
+    ];
+    androidListed.sort(sortAndroid);
 
     const harmonyTagged: HarmonyDevice[] = [
       ...harmonyTargets.map((t): HarmonyDevice => ({
@@ -645,9 +770,13 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
     const devices: ListedDevice[] = [
       ...iosTagged,
       ...iosPhysicalTagged,
-      ...iosRemote,
-      ...androidDeduped,
-      ...chromium,
+      ...iosRemoteSorted,
+      ...androidListed,
+      ...chromium.map(({ platform, ...rest }): ChromiumListedDevice => ({
+        platform,
+        kind: "app",
+        ...rest,
+      })),
       ...macos,
       ...vega,
       ...harmonyTagged,
@@ -655,8 +784,13 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
-    const avdsTagged = avds.map((a) =>
-      foldableAvds.has(a.name) ? { ...a, foldable: true as const } : a
+    const [localIos, androidSdk] = await Promise.all([
+      xcodeInstallPending.includes("simctl") ? true : canRunLocalIos(ios.simulators.length > 0),
+      android.length > 0 || avds.length > 0 ? true : androidSdkFound(),
+    ]);
+    const iosNote = iosReachNote(
+      { localIos, darwin: process.platform === "darwin" },
+      iosRemote.cloud
     );
 
     const foldableTimedOut = external
@@ -664,7 +798,9 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
       .map(({ device }) => device.name);
 
     const adbPrefix = adbCommandPrefix(process.env);
-    const hints = [
+    const notes = [
+      ...(iosNote ? [iosNote] : []),
+      ...(androidSdk ? [] : [ANDROID_SDK_MISSING_NOTE]),
       ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
       ...(ios.timedOut ? [iosListTimedOutHint()] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
@@ -672,10 +808,6 @@ Chromium apps are discovered by probing CDP debugging ports (default 9222; exten
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];
 
-    return {
-      devices,
-      avds: avdsTagged,
-      ...(hints.length > 0 ? { hint: hints.join("\n\n") } : {}),
-    };
+    return { devices, ...(notes.length > 0 ? { notes } : {}) };
   },
 };

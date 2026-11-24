@@ -36,8 +36,27 @@ import {
   type NdjsonCdpRequester,
 } from "../utils/ndjson-socket";
 import { withKeyedLock } from "../utils/keyed-lock";
-import { canonicalDeviceId } from "../utils/debugger/device-alias";
-import { externalNativeId } from "../utils/external-devices";
+import {
+  MAX_CACHED_BODIES,
+  MAX_LAYER_ID_CHARS,
+  MAX_RECORDS,
+  NOT_RECONNECTED,
+  PROCESS_ENDED,
+  PROCESS_GONE,
+  RECORD_CHARS_BUDGET,
+  asObject,
+  asString,
+  capString,
+  deviceKeyOf,
+  headerMap,
+  isMetroTraffic,
+  isOpen,
+  recordSize,
+  toBody,
+  unavailable,
+  type NativeNetworkBody,
+  type NativeNetworkRecord,
+} from "../utils/native-network-record";
 import {
   AGENT_ABIS,
   AGENT_LIB_NAME,
@@ -71,15 +90,6 @@ interface AndroidNetworkInspectorOptions extends Record<string, unknown> {
 }
 
 /**
- * One device, whichever id names it: an `ext:` id and the adb serial behind
- * it, or a Metro logicalDeviceId and the id it was connected with, all key the
- * same inspector.
- */
-function deviceKeyOf(deviceId: string): string {
-  return externalNativeId(canonicalDeviceId(deviceId) ?? deviceId);
-}
-
-/**
  * The URN has no Metro port: one app on one device has one inspector, and each
  * call hands it the port it should use.
  */
@@ -100,16 +110,7 @@ const MIN_SDK = 26;
 const PACKAGE_NAME = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*$/;
 const PROTOCOL_VERSION = 2;
 
-/** Record memory is bounded by count and by size, whichever binds first. */
-const MAX_RECORDS = 2000;
-const RECORD_CHARS_BUDGET = 32 * 1024 * 1024;
-/** One URL, header value or text field; longer ones keep their start. */
-const MAX_VALUE_CHARS = 64 * 1024;
-const MAX_HEADERS = 256;
-const MAX_HEADER_MAP_CHARS = 256 * 1024;
 const MAX_REDIRECTS = 32;
-const MAX_LAYER_ID_CHARS = 200;
-const MAX_CACHED_BODIES = 64;
 
 /** An authenticated agent's sealed frames: a body can be several MiB of base64. */
 const MAX_FRAME_CHARS = 8 * 1024 * 1024;
@@ -132,7 +133,10 @@ const ARM_PROCESS_CHECK_MS = 500;
 const RECHECK_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000];
 /** The agent flushes what it buffered while disconnected, up to 8 MiB, before it replies. */
 const ENABLE_TIMEOUT_MS = 60_000;
+/** A dispose gives each connection this long, so a teardown never waits on one that does not answer. */
 const DISABLE_TIMEOUT_MS = 1_000;
+/** A stop waits this long for the agent's reply, which comes after the events it already queued. */
+const STOP_DISABLE_TIMEOUT_MS = 5_000;
 const SESSION_REMOVE_TIMEOUT_MS = 5_000;
 
 export const AGENT_BINARIES_MISSING_REASON = "agent binaries not present in this build";
@@ -140,11 +144,14 @@ const AGENT_GONE_REASON =
   "the agent that recorded the request is no longer in the app, as after an emulator snapshot load";
 const LOST_WHILE_DISCONNECTED =
   "the agent lost this request's final events while it was disconnected";
-const NOT_RECONNECTED =
-  "the agent did not reconnect after its connection dropped, so this request's final events never arrived";
-const PROCESS_ENDED = "the app process ended before the request finished";
-const JS_LAYER_FALLBACK =
-  "Use view-network-logs: the JS layer still records the app's JavaScript requests while Metro serves the app.";
+const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
+const DROPPED_NOTE = "the agent's connection dropped; it reconnects by itself while the app runs";
+const NOT_RECONNECTED_NOTE =
+  "the agent's connection dropped, and it did not reconnect; network-capture-start connects it again";
+const STOPPED_NOTE =
+  "capture stopped by network-capture-stop; network-capture-start turns it on again";
+const AWAY_AT_STOP =
+  "the agent's connection was down at the stop, so it did not get Network.disable; it gets it when it connects again, and argent records none of the app's new requests meanwhile";
 
 /**
  * The status events whose detail goes into the log with the event. The
@@ -162,73 +169,19 @@ const RUN_TAG = randomBytes(2).toString("hex");
 
 export const ANDROID_NATIVE_REQUEST_ID = /^android-[0-9a-f]{4}-\d+$/;
 
-export interface AndroidNetworkNotAttachable {
+interface AndroidNetworkNotAttachable {
   status: "not_attachable";
   reason: string;
-  fallback: string;
-}
-
-export type AndroidNativeRecordState = "pending" | "headers" | "complete" | "failed";
-
-/** One hop before the final response: what was asked, and what came back. */
-interface AndroidNativeRedirect {
-  /** The URL that answered with the redirect. */
-  url: string;
-  method: string;
-  status: number;
-  statusText: string;
-  /** The redirect response's headers. */
-  headers: Record<string, string>;
-  /** As this hop's request went on the wire, when the agent reported them. */
-  requestHeaders?: Record<string, string>;
-}
-
-export interface AndroidNativeRecord {
-  id: string;
-  layer: "android-native";
-  layerId: string;
-  connection: number;
-  rnRequestId?: number;
-  state: AndroidNativeRecordState;
-  request: {
-    /** The URL the app requested. */
-    url: string;
-    method: string;
-    /** As the app set them. */
-    headers: Record<string, string>;
-    /** As they went on the wire for the latest hop, when the agent reported them. */
-    wireHeaders?: Record<string, string>;
-    hasPostData?: boolean;
-  };
-  /** The hops before the final response, oldest first. */
-  redirects?: AndroidNativeRedirect[];
-  response?: {
-    /** The final URL, after any redirects. */
-    url: string;
-    status: number;
-    statusText: string;
-    headers: Record<string, string>;
-    mimeType: string;
-    fromCache?: boolean;
-  };
-  timing: { startedAt: number; durationMs?: number };
-  resourceType?: string;
-  encodedDataLength?: number;
-  errorText?: string;
-}
-
-export interface AndroidNetworkBody {
-  available: boolean;
-  body: string;
-  base64Encoded: boolean;
-  truncated: boolean;
-  reason?: string;
 }
 
 export type AndroidCaptureState = "active" | "waiting" | "unavailable";
 
 export interface AndroidNetworkInspectorState {
   armed: boolean;
+  /** network-capture-stop stopped capture; the records stay. */
+  stopped?: true;
+  /** The process of the last connection ended, and no agent runs in the app's current process. */
+  notAttached?: true;
   /** The process of the live connection; absent once that connection is gone. */
   process?: { pid: number; startTime: number };
   /** What the live connection's agent reports; absent once that connection is gone. */
@@ -238,30 +191,46 @@ export interface AndroidNetworkInspectorState {
   note?: string;
 }
 
-/**
- * A call that did not reach the device after capture was set up: what was
- * captured is still listed, and `note` says why the device was not reached.
- */
-interface AndroidNetworkCallNote {
-  status: "ok";
-  note: string;
+/** What a start found: armed, or why not, and whether anything arms it without a change. */
+export interface AndroidCaptureStart {
+  armed: boolean;
+  reason?: string;
+  /** Nothing arms the layer without a change the caller must make, such as a debuggable build. */
+  unavailable?: true;
 }
 
 export interface AndroidNetworkInspectorApi {
   readonly packageName: string;
   /**
-   * Sets capture up and attaches the agent to the running app; `metroPort` is
-   * the caller's. A note about this call alone comes back with it, never
-   * through `state()`, which concurrent calls share.
+   * Starts capture: ends a stop, marks where this start begins, sets the
+   * device up and attaches the agent to the running app, then waits up to 5 s
+   * for it to be armed. `metroPort` is the caller's. From then on launch-app
+   * and restart-app attach it to each new process. A start that finds the
+   * layer unavailable keeps the stop and the mark it found.
    */
-  ensureAttached(
-    metroPort: number
-  ): Promise<AndroidNetworkNotAttachable | AndroidNetworkCallNote | null>;
+  startCapture(metroPort: number): Promise<AndroidCaptureStart>;
+  /**
+   * Stops capture and keeps the records, their ids and the device setup: the
+   * agent is sent Network.disable, and no launch or reconnect arms it again
+   * until the next start. Requests in flight fail, because the agent stops
+   * reporting them. `confirmed` is false when an agent did not acknowledge.
+   */
+  stopCapture(): Promise<{ confirmed: boolean; reason?: string }>;
+  /** Capture is started: from a start until a stop or a dispose. */
+  isStarted(): boolean;
+  isStopped(): boolean;
+  /**
+   * Why the last start found the layer unavailable. Undefined after a start
+   * that did not, and after a stop.
+   */
+  unavailableReason(): string | undefined;
+  /** Where the last start began: records numbered higher came after it. */
+  captureMark(): { lastRecord: number; metroPort: number } | undefined;
   state(): AndroidNetworkInspectorState;
-  records(metroPort: number): AndroidNativeRecord[];
-  record(id: string): AndroidNativeRecord | undefined;
-  responseBody(id: string): Promise<AndroidNetworkBody>;
-  requestPostData(id: string): Promise<AndroidNetworkBody>;
+  records(metroPort: number): NativeNetworkRecord[];
+  record(id: string): NativeNetworkRecord | undefined;
+  responseBody(id: string): Promise<NativeNetworkBody>;
+  requestPostData(id: string): Promise<NativeNetworkBody>;
   clear(): void;
 }
 
@@ -271,9 +240,14 @@ interface InspectorHandle {
   readonly packageName: string;
   /** Set once the device's identity was read; see `DeviceFacts.hardwareKey`. */
   hardwareKey: string | null;
-  /** Capture is live from a successful native-network-logs call until stop, stop-all or exit. */
+  /** Capture is live from network-capture-start until network-capture-stop or a dispose. */
   isLive(): boolean;
+  isStopped(): boolean;
+  /** Live, or stopped while an agent has not acknowledged the stop and may still intercept. */
+  mayIntercept(): boolean;
   attachLaunch(): Promise<string | undefined>;
+  /** The launch note while stopped. */
+  stoppedLaunch(): Promise<string>;
 }
 
 /**
@@ -291,7 +265,7 @@ function allHandles(): InspectorHandle[] {
 /** Ids are unique per tool-server, so the device that recorded one does not matter. */
 export function findAndroidNativeRecord(
   id: string
-): { inspector: AndroidNetworkInspectorApi; record: AndroidNativeRecord } | undefined {
+): { inspector: AndroidNetworkInspectorApi; record: NativeNetworkRecord } | undefined {
   for (const handle of allHandles()) {
     const record = handle.api.record(id);
     if (record) return { inspector: handle.api, record };
@@ -299,36 +273,55 @@ export function findAndroidNativeRecord(
   return undefined;
 }
 
-/** Package names with live native network capture on the device. */
+/** Some app on some device has capture started or stopped, so its ids can be listed. */
+export function hasAndroidNetworkCapture(): boolean {
+  return allHandles().some((handle) => handle.isLive() || handle.isStopped());
+}
+
+function stoppedLaunchNote(packageName: string): string {
+  return `native network capture is stopped for ${packageName} (network-capture-stop); this process runs without it until network-capture-start`;
+}
+
+/**
+ * Package names with live native network capture on the device, and those
+ * whose agent has not acknowledged the stop.
+ */
 export function liveAndroidNetworkCaptures(deviceId: string): string[] {
   return [...(liveInspectors.get(deviceKeyOf(deviceId)) ?? [])]
-    .filter((handle) => handle.isLive())
+    .filter((handle) => handle.mayIntercept())
     .map((handle) => handle.packageName)
     .sort();
 }
 
-/** Adb serials with live native network capture for any app. */
+/**
+ * Adb serials with live native network capture for any app, or whose agent has
+ * not acknowledged the stop.
+ */
 export function liveAndroidNetworkCaptureSerials(): string[] {
   return liveCaptureSerials(() => true);
 }
 
-/** Adb serials of the devices with live native network capture for the app. */
+/**
+ * Adb serials of the devices with live native network capture for the app, or
+ * whose agent has not acknowledged the stop.
+ */
 export function liveAndroidNetworkCaptureDevices(packageName: string): string[] {
   return liveCaptureSerials((handle) => handle.packageName === packageName);
 }
 
 function liveCaptureSerials(matches: (handle: InspectorHandle) => boolean): string[] {
   const serials = allHandles()
-    .filter((handle) => matches(handle) && handle.isLive())
+    .filter((handle) => matches(handle) && handle.mayIntercept())
     .map((handle) => handle.serial);
   return [...new Set(serials)].sort();
 }
 
 /**
  * Attaches the agent to the app's new process while native capture is live
- * for it, and returns a one-line note for the launch's output then; undefined
- * when capture is not live. Never throws: a launch must not fail because
- * network capture could not follow it.
+ * for it, and returns a one-line note for the launch's output then; a stopped
+ * capture says so and attaches nothing; undefined when capture was never
+ * started. Never throws: a launch must not fail because network capture could
+ * not follow it.
  */
 export async function attachAndroidNetworkInspectorToLaunch(
   deviceId: string,
@@ -336,7 +329,9 @@ export async function attachAndroidNetworkInspectorToLaunch(
 ): Promise<string | undefined> {
   try {
     for (const handle of liveInspectors.get(deviceKeyOf(deviceId)) ?? []) {
-      if (handle.packageName !== packageName || !handle.isLive()) continue;
+      if (handle.packageName !== packageName) continue;
+      if (handle.isStopped()) return await handle.stoppedLaunch();
+      if (!handle.isLive()) continue;
       return await handle.attachLaunch();
     }
   } catch (err) {
@@ -425,7 +420,17 @@ interface AgentConnection {
   closed: boolean;
   capture?: { state: AndroidCaptureState; detail?: string };
   droppedEvents: number;
-  byLayerId: Map<string, AndroidNativeRecord>;
+  /** A Network.enable sent since the last stop is on its way on this connection. */
+  enabling: boolean;
+  /** The Network.disable of the last stop went unanswered, so the agent may still intercept. */
+  stopUnconfirmed?: boolean;
+  /** The agent acknowledged a stop's Network.disable, and no Network.enable went to it since. */
+  disabled?: boolean;
+  /** The agent was away at a stop, and the reply that ends its flush has not come. */
+  afterMissedStop?: boolean;
+  /** A process read found its process gone. */
+  ended?: boolean;
+  byLayerId: Map<string, NativeNetworkRecord>;
   resumes?: AgentConnection;
   resumedBy?: AgentConnection;
   agentGone?: boolean;
@@ -467,6 +472,15 @@ function createInspector(
 
   let disposed = false;
   let live = false;
+  /** Set by a stop until the next start: nothing attaches, arms or records a new request. */
+  let stopped = false;
+  /** The number of stops so far: a Network.enable sent before the last one is stale. */
+  let stops = 0;
+  /** The app's last agent process ended and none runs in its current one. */
+  let notAttached = false;
+  let mark: { lastRecord: number; metroPort: number } | undefined;
+  /** Kept so a read says why, and does not send the caller back to the start that refused. */
+  let unavailableReason: string | undefined;
   let ready = false;
   let gates: { abi: AgentAbi } | null = null;
   /**
@@ -489,6 +503,8 @@ function createInspector(
   let sessionPort = 0;
   const attachedProcesses = new Set<string>();
   let note: string | undefined;
+  /** The note a start left as its answer: the next start replaces it. */
+  let startNote: string | undefined;
   /**
    * The process attached last while its agent has not completed a handshake:
    * the note that says so, and the reason the agent last logged for not
@@ -497,19 +513,24 @@ function createInspector(
   let awaiting: { key: string; note: string; since?: string; reason?: string } | null = null;
   const pendingSockets = new Set<net.Socket>();
   const connections: AgentConnection[] = [];
-  const records: AndroidNativeRecord[] = [];
+  const records: NativeNetworkRecord[] = [];
   let recordChars = 0;
-  const recordSizes = new WeakMap<AndroidNativeRecord, number>();
-  const byId = new Map<string, { record: AndroidNativeRecord; conn: AgentConnection }>();
-  const bodies = new Map<string, Promise<AndroidNetworkBody>>();
-  const cleared = new WeakSet<AndroidNativeRecord>();
+  const recordSizes = new WeakMap<NativeNetworkRecord, number>();
+  const byId = new Map<string, { record: NativeNetworkRecord; conn: AgentConnection }>();
+  const bodies = new Map<string, Promise<NativeNetworkBody>>();
+  const cleared = new WeakSet<NativeNetworkRecord>();
   /** Failed only because their final events did not arrive; a later event still settles them. */
-  const lostOnly = new WeakSet<AndroidNativeRecord>();
+  const lostOnly = new WeakSet<NativeNetworkRecord>();
+  /**
+   * Failed when the agent did not acknowledge the stop in time: only a final
+   * event of an agent that was just slow settles them.
+   */
+  const failedAtStopTimeout = new WeakSet<NativeNetworkRecord>();
   /** The URL and method of each record's latest hop. */
-  const hops = new WeakMap<AndroidNativeRecord, { url: string; method: string }>();
-  const startArrivals = new WeakMap<AndroidNativeRecord, number>();
+  const hops = new WeakMap<NativeNetworkRecord, { url: string; method: string }>();
+  const startArrivals = new WeakMap<NativeNetworkRecord, number>();
   const armWaiters = new Set<() => void>();
-  /** One attach at a time: native-network-logs calls and launches. */
+  /** One attach at a time: starts, stops and launches. */
   const attachLock = new Map<string, Promise<unknown>>();
   /**
    * The device port and the session that names it change only under this
@@ -519,16 +540,21 @@ function createInspector(
   const tunnelLock = new Map<string, Promise<unknown>>();
   /** One recheck per process; a drop while one runs restarts its delays. */
   const rechecks = new Map<string, { restart: boolean }>();
+  /**
+   * Agents, by instance, that were away at a stop and have not connected
+   * since: the flush of each one's next connection adds no new record.
+   */
+  const missedStop = new Set<string>();
 
   const user = (): number => appUser;
+  /** Ends a step that runs on after a dispose or a stop. */
   const checkpoint = (): void => {
-    if (disposed) throw new InspectorStopped();
+    if (disposed || stopped) throw new InspectorStopped();
   };
 
   const notAttachable = (reason: string): AndroidNetworkNotAttachable => ({
     status: "not_attachable",
     reason,
-    fallback: JS_LAYER_FALLBACK,
   });
 
   function sessionLine(port: number): string {
@@ -647,7 +673,7 @@ function createInspector(
       if (other) {
         throw new FailureError(
           `${packageName} on this device is already inspected through adb serial ${other.serial}, and ${serial} is another connection to the same device. ` +
-            `Use ${other.serial}, or end that capture first with native-network-logs and stop: true on ${other.serial}.`,
+            `Use ${other.serial}, or end that capture first with stop-all-simulator-servers for ${other.serial}.`,
           {
             error_code: FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_DEVICE_IN_USE,
             failure_stage: "android_network_inspector_device_identity",
@@ -742,7 +768,9 @@ function createInspector(
    */
   async function assertReverse(): Promise<void> {
     await withKeyedLock(tunnelLock, "tunnel", async () => {
-      checkpoint();
+      // Not a stop: it keeps the tunnel, and an agent that connects while
+      // stopped gets Network.disable through it.
+      if (disposed) throw new InspectorStopped();
       if (devicePort !== 0) {
         try {
           await adbReverse(serial, devicePort, hostPort, { timeoutMs: 10_000 });
@@ -772,7 +800,7 @@ function createInspector(
       } catch (err) {
         if (!isPortTaken(err)) throw err;
         log(`device port ${port} is taken; trying another`);
-        checkpoint();
+        if (disposed) throw new InspectorStopped();
         continue;
       }
       devicePort = port;
@@ -857,11 +885,13 @@ function createInspector(
     if (copy === "loaded") {
       if (known) return "known";
       // The agent reads the session only before it connects, so while another
-      // tool-server holds its connection it stays with that one. An agent from
-      // an earlier Argent dials a port of its own and never reads the session.
-      // The note has to hold for both.
-      note = `pid ${proc.pid} already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server is capturing this app or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's capture of the app`;
+      // tool-server holds its connection it stays with that one. A stop keeps
+      // the connection, so this holds also when that capture is stopped. An
+      // agent from an earlier Argent dials a port of its own and never reads
+      // the session. The note has to hold for all of them.
+      note = `pid ${proc.pid} already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server holds the agent's connection, also after a network-capture-stop there, or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's connection to the app; after restart-app, call network-capture-start again, since a relaunch ends the JS layer's capture`;
       awaiting = { key, note, since };
+      notAttached = false;
       log(`pid ${proc.pid} already has the agent loaded`);
       return "loaded";
     }
@@ -872,7 +902,13 @@ function createInspector(
       log(`pid ${proc.pid} lost the agent, as after an emulator snapshot load; attaching again`);
     }
 
-    checkpoint();
+    try {
+      checkpoint();
+    } catch (err) {
+      // Nothing was attached, so the next start attaches this process again.
+      attachedProcesses.delete(key);
+      throw err;
+    }
     const dir = agentDirFor(packageName, user());
     const agentOptions = `jar=${dir}/${JAR_NAME},pkg=${packageName}`;
     try {
@@ -888,13 +924,16 @@ function createInspector(
       attachedProcesses.delete(key);
       // A stop that came meanwhile keeps its own note.
       checkpoint();
-      note = `attach-agent failed for pid ${proc.pid} (${firstLine(adbFailureDetail(err))}); the next native-network-logs call or launch tries again`;
+      note = `attach-agent failed for pid ${proc.pid} (${firstLine(adbFailureDetail(err))}); the next launch or network-capture-start tries again`;
       log(note);
       return "attach_failed";
     }
     checkpoint();
     note = `attached to pid ${proc.pid}; waiting for the agent to connect`;
     awaiting = { key, note, since };
+    // A check after the previous process's drop can finish before a launch
+    // attaches the new one.
+    notAttached = false;
     log(`attached the agent to pid ${proc.pid}`);
     return "attached";
   }
@@ -1135,6 +1174,9 @@ function createInspector(
             phase = "ready";
             conn = openConnection(socket, cdp, send, handshake);
             sendMetroPort(conn);
+            // What it flushes can hold requests the app sent after the stop
+            // it missed. While stopped, the enable's reply sends Network.disable.
+            if (missedStop.delete(handshake.instance)) conn.afterMissedStop = true;
             enableNetwork(conn);
             return;
           }
@@ -1177,6 +1219,7 @@ function createInspector(
   ): AgentConnection {
     const key = `${handshake.pid}:${handshake.startTime}`;
     if (awaiting?.key === key) awaiting = null;
+    notAttached = false;
     // An agent keeps one connection. One of its earlier connections that is
     // still open here is one it gave up on, so it closes now and can be
     // resumed.
@@ -1201,6 +1244,7 @@ function createInspector(
       armed: false,
       closed: false,
       droppedEvents: 0,
+      enabling: false,
       byLayerId: new Map(),
     };
 
@@ -1258,17 +1302,32 @@ function createInspector(
    * left unarmed; the agent connects again and enables anew.
    */
   function enableNetwork(conn: AgentConnection): void {
+    conn.enabling = true;
+    conn.disabled = false;
+    // A stop after this request sent Network.disable after it, so the agent
+    // no longer captures. Only the next start's own request arms again.
+    const stopsBefore = stops;
+    const stale = (): boolean => stops !== stopsBefore;
     conn.cdp
       .request(
         "Network.enable",
         {},
-        { timeoutMs: ENABLE_TIMEOUT_MS, onResult: (result) => onEnabled(conn, result) }
+        {
+          timeoutMs: ENABLE_TIMEOUT_MS,
+          onResult: (result) => {
+            // While capture stays stopped, onEnabled sends Network.disable once more.
+            if (stale() && !stopped) return;
+            conn.enabling = false;
+            onEnabled(conn, result);
+          },
+        }
       )
       .catch((err: unknown) => {
-        if (conn.closed || disposed) {
+        if (conn.closed || disposed || stale()) {
           log(`Network.enable on connection ${conn.index} failed: ${errorMessage(err)}`);
           return;
         }
+        conn.enabling = false;
         if (getFailureSignal(err)?.error_kind === "timeout") {
           connectionClosed(
             conn,
@@ -1284,6 +1343,8 @@ function createInspector(
 
   function onEnabled(conn: AgentConnection, result: unknown): void {
     if (conn.closed || disposed) return;
+    // Every flushed event came before this reply.
+    conn.afterMissedStop = false;
     const r = asObject(result);
     const capture = parseCapture(r.capture);
     if (capture) conn.capture = capture;
@@ -1302,9 +1363,72 @@ function createInspector(
         }
       }
     }
+    if (stopped) {
+      // A connection that arrives while capture is stopped is enabled, then
+      // disabled, and never armed.
+      void disableOn(conn, STOP_DISABLE_TIMEOUT_MS);
+      return;
+    }
     conn.armed = true;
     note = undefined;
     for (const wake of armWaiters) wake();
+  }
+
+  /**
+   * Sends Network.disable. On the reply, the requests the connection carries
+   * that are still open fail: the agent reports no more of them. An agent
+   * that does not reply in time, as in a frozen app, sends no events either,
+   * so they fail then too. Resolves true once acknowledged, or once the
+   * connection closed.
+   */
+  function disableOn(conn: AgentConnection, timeoutMs: number): Promise<boolean> {
+    return conn.cdp
+      .request(
+        "Network.disable",
+        {},
+        {
+          timeoutMs,
+          onResult: () => {
+            // A start since then enabled the agent again.
+            if (stopped) conn.disabled = true;
+            failStopped(conn);
+          },
+        }
+      )
+      .then(
+        () => {
+          conn.stopUnconfirmed = false;
+          return true;
+        },
+        (err: unknown) => {
+          if (conn.closed || disposed) return true;
+          log(`Network.disable on connection ${conn.index} failed: ${errorMessage(err)}`);
+          if (stopped) conn.stopUnconfirmed = true;
+          // While stopped, no request opens, so the open ones are from before
+          // the stop. The requester drops a reply that comes after the timeout.
+          // An agent that was only slow can still send their final events.
+          if (stopped && getFailureSignal(err)?.error_kind === "timeout") failStopped(conn, true);
+          return false;
+        }
+      );
+  }
+
+  /** `settleLater`: a later final event of the request still settles it. */
+  function failStopped(conn: AgentConnection, settleLater = false): void {
+    const open: NativeNetworkRecord[] = [];
+    for (let c: AgentConnection | undefined = conn; c; c = c.resumes) {
+      for (const record of c.byLayerId.values()) {
+        if (isOpen(record) || lostOnly.has(record)) open.push(record);
+      }
+    }
+    for (const record of open) {
+      lostOnly.delete(record);
+      if (settleLater) failedAtStopTimeout.add(record);
+      record.state = "failed";
+      record.errorText = STOPPED_BEFORE_FINISH;
+      cleared.delete(record);
+    }
+    for (const record of open) resize(record);
   }
 
   function onStatus(conn: AgentConnection, payload: Record<string, unknown>): void {
@@ -1331,7 +1455,7 @@ function createInspector(
     if (disposed) return;
     log(`agent connection ${conn.index} closed${why ? `: ${why}` : ""}`);
     if (!connections.some((c) => !c.closed)) {
-      note = "the agent's connection dropped; it reconnects by itself while the app runs";
+      note = DROPPED_NOTE;
     }
     const running = rechecks.get(conn.processKey);
     if (running) {
@@ -1378,7 +1502,14 @@ function createInspector(
         const running = runningKeys(read);
         if (!running.has(key)) {
           failOrphans(running);
-          if (!connections.some((c) => !c.closed)) note = afterExitNote(read);
+          if (!connections.some((c) => !c.closed)) {
+            // A launch that is attaching the app's next process keeps its own note.
+            const next = processOfUser(read, read.user ?? appUser);
+            if (!next || !attachedProcesses.has(processKey(next))) {
+              note = afterExitNote(read);
+              notAttached = true;
+            }
+          }
           return;
         }
         await assertReverse().catch(() => {});
@@ -1390,6 +1521,11 @@ function createInspector(
           if (isOpen(record)) markLost(record, NOT_RECONNECTED);
         }
       }
+      // Reads run no adb, so after this window nothing puts back a reverse
+      // that adb dropped while the app runs; a start does.
+      if (note === DROPPED_NOTE && !connections.some((c) => !c.closed)) {
+        note = NOT_RECONNECTED_NOTE;
+      }
     } finally {
       if (rechecks.get(key) === recheck) rechecks.delete(key);
       // A drop that came in after the last check still gets its own recheck.
@@ -1397,17 +1533,22 @@ function createInspector(
     }
   }
 
-  /** What the next trigger finds once the process of a dropped connection ended. */
+  /**
+   * Why no agent runs in the app once the process of a dropped connection
+   * ended, and what attaches one: a read does not.
+   */
   function afterExitNote(read: AppProcesses): string {
-    const trigger =
-      "launch-app, restart-app or the next native-network-logs call attaches the agent";
     const foreground = read.user ?? appUser;
-    if (!processOfUser(read, foreground)) {
-      return `${packageName} exited; ${trigger} to its new process`;
+    const next = processOfUser(read, foreground);
+    if (!next) {
+      // The note stays until capture attaches again, also over a process started without launch-app.
+      return `the process of ${packageName} that capture was attached to exited, and no later process has capture; launch-app or restart-app attaches capture to the next process, or call network-capture-start once the app runs`;
     }
+    // Another tool-server can have attached its agent to that process, so
+    // the note says only what this one did.
     return foreground === appUser
-      ? `the app restarted; ${trigger} to its new process`
-      : `Android user ${foreground} is in the foreground now; ${trigger} to that user's process of ${packageName}`;
+      ? `the app restarted as pid ${next.pid}, and this tool-server did not attach capture to that process; call network-capture-start to attach it`
+      : `Android user ${foreground} is in the foreground now, and its process of ${packageName} runs without capture; restart-app attaches capture to it, or call network-capture-start`;
   }
 
   function fold(conn: AgentConnection, method: string, params: unknown): void {
@@ -1439,7 +1580,8 @@ function createInspector(
       case "Network.responseReceived": {
         revive(record);
         const r = asObject(p.response);
-        record.state = "headers";
+        // Until a final event, the stop's failure stands.
+        if (!failedAtStopTimeout.has(record)) record.state = "headers";
         record.response = {
           url: capString(asString(r.url)) || hops.get(record)?.url || record.request.url,
           status: typeof r.status === "number" ? r.status : 0,
@@ -1453,6 +1595,7 @@ function createInspector(
       }
       case "Network.loadingFinished":
         revive(record);
+        if (failedAtStopTimeout.delete(record)) delete record.errorText;
         // A request in flight at a clear lists again once it settles, so
         // polling with clear sees it finish.
         cleared.delete(record);
@@ -1462,6 +1605,7 @@ function createInspector(
         break;
       case "Network.loadingFailed":
         revive(record);
+        failedAtStopTimeout.delete(record);
         cleared.delete(record);
         record.state = "failed";
         record.errorText = capString(asString(p.errorText)) || "Unknown error";
@@ -1480,7 +1624,7 @@ function createInspector(
   }
 
   /** A record failed only for lost events takes the state the agent reports after all. */
-  function revive(record: AndroidNativeRecord): void {
+  function revive(record: NativeNetworkRecord): void {
     if (!lostOnly.has(record)) return;
     lostOnly.delete(record);
     record.state = record.response ? "headers" : "pending";
@@ -1492,7 +1636,7 @@ function createInspector(
    * the previous hop goes into `redirects`, and the record keeps the URL the
    * app requested.
    */
-  function addHop(record: AndroidNativeRecord, p: Record<string, unknown>): void {
+  function addHop(record: NativeNetworkRecord, p: Record<string, unknown>): void {
     revive(record);
     const previous = hops.get(record) ?? { url: record.request.url, method: record.request.method };
     const response = asObject(p.redirectResponse);
@@ -1519,7 +1663,7 @@ function createInspector(
   }
 
   /** Durations run from the arrival of a request's first event to its last. */
-  function setDurationFromArrival(record: AndroidNativeRecord): void {
+  function setDurationFromArrival(record: NativeNetworkRecord): void {
     const arrived = startArrivals.get(record);
     if (arrived !== undefined) record.timing.durationMs = Math.round(performance.now() - arrived);
   }
@@ -1538,6 +1682,9 @@ function createInspector(
       );
       break;
     }
+    // While stopped, a new request gets no record, and nor does one in the
+    // flush of an agent that missed a stop: it can be from after that stop.
+    if (stopped || conn.afterMissedStop) return;
     const req = asObject(p.request);
     const startedAt =
       typeof p.wallTime === "number"
@@ -1545,7 +1692,7 @@ function createInspector(
         : typeof p.timestamp === "number"
           ? p.timestamp * 1000
           : Date.now();
-    const record: AndroidNativeRecord = {
+    const record: NativeNetworkRecord = {
       id: `android-${RUN_TAG}-${nextRecordNumber++}`,
       layer: "android-native",
       layerId,
@@ -1570,18 +1717,20 @@ function createInspector(
     resize(record);
   }
 
-  function findRecord(conn: AgentConnection, layerId: string): AndroidNativeRecord | undefined {
+  function findRecord(conn: AgentConnection, layerId: string): NativeNetworkRecord | undefined {
     const own = conn.byLayerId.get(layerId);
     if (own) return own;
     for (let dropped = conn.resumes; dropped; dropped = dropped.resumes) {
       const record = dropped.byLayerId.get(layerId);
-      if (record && (isOpen(record) || lostOnly.has(record))) return record;
+      if (record && (isOpen(record) || lostOnly.has(record) || failedAtStopTimeout.has(record))) {
+        return record;
+      }
     }
     return undefined;
   }
 
   /** Re-measures a record after it grew, and evicts the oldest past either bound. */
-  function resize(record: AndroidNativeRecord): void {
+  function resize(record: NativeNetworkRecord): void {
     if (!byId.has(record.id)) return;
     const size = recordSize(record);
     recordChars += size - (recordSizes.get(record) ?? 0);
@@ -1594,7 +1743,7 @@ function createInspector(
     }
   }
 
-  function evict(record: AndroidNativeRecord): void {
+  function evict(record: NativeNetworkRecord): void {
     const entry = byId.get(record.id);
     if (entry && entry.conn.byLayerId.get(record.layerId) === record) {
       entry.conn.byLayerId.delete(record.layerId);
@@ -1606,7 +1755,7 @@ function createInspector(
     bodies.delete(`post:${record.id}`);
   }
 
-  function markLost(record: AndroidNativeRecord, reason: string): void {
+  function markLost(record: NativeNetworkRecord, reason: string): void {
     record.state = "failed";
     record.errorText = reason;
     lostOnly.add(record);
@@ -1640,7 +1789,7 @@ function createInspector(
     return last.agentGone === true;
   }
 
-  function fetchBody(id: string, kind: "response" | "post"): Promise<AndroidNetworkBody> {
+  function fetchBody(id: string, kind: "response" | "post"): Promise<NativeNetworkBody> {
     const entry = byId.get(id);
     if (!entry) return Promise.resolve(unavailable("no such request"));
     const { record } = entry;
@@ -1667,11 +1816,7 @@ function createInspector(
     const conn = liveConnectionFor(entry.conn);
     if (!conn) {
       return Promise.resolve(
-        unavailable(
-          agentGoneFor(entry.conn)
-            ? AGENT_GONE_REASON
-            : "the app process that made the request is gone"
-        )
+        unavailable(agentGoneFor(entry.conn) ? AGENT_GONE_REASON : PROCESS_GONE)
       );
     }
     // A "no body" answer for a pending request is not cached.
@@ -1702,8 +1847,12 @@ function createInspector(
     return fetched;
   }
 
-  /** Open requests of a process that no longer runs, which no connection carries on. */
+  /**
+   * Open requests of a process that no longer runs, which no connection
+   * carries on, fail. The connections of such a process are marked ended.
+   */
   function failOrphans(running: ReadonlySet<string>): void {
+    for (const c of connections) if (!running.has(c.processKey)) c.ended = true;
     for (const record of records) {
       if (!isOpen(record) && !lostOnly.has(record)) continue;
       const conn = byId.get(record.id)?.conn;
@@ -1727,50 +1876,201 @@ function createInspector(
     return connections.some((c) => c.armed && !c.closed && c.processKey === key);
   }
 
-  async function ensureAttached(
-    port: number
-  ): Promise<AndroidNetworkNotAttachable | AndroidNetworkCallNote | null> {
-    setMetroPort(port);
-    return withKeyedLock(attachLock, "attach", async () => {
-      if (disposed) return null;
-      const hadCapture = live;
-      try {
-        const blocked = await prepare();
-        if (blocked) return blocked;
-        const read = await readAppProcesses(serial, packageName);
-        checkpoint();
-        const switched = await followUser(read.user);
-        if (switched) return switched;
-        const current = processOfUser(read, user());
-        failOrphans(runningKeys(read));
-        if (!current) {
-          if (!armedConnection()) {
-            note = `${packageName} is not running; launch-app or restart-app attaches the agent to its next process`;
-          }
-        } else {
-          // A process attached just now gives its agent no time to log yet.
-          if ((await attach(current)) !== "attached") await refreshAgentReason(current);
-          if (!ready) {
-            const again = await prepare();
-            if (again) return again;
-          }
-        }
-        // Live from the first call that went through, so a launch attaches
-        // and the profilers warn only once capture really is on.
-        live = true;
-        return null;
-      } catch (err) {
-        if (err instanceof InspectorStopped) return null;
-        // What was captured is still here: list it, and say why the device
-        // was not reached.
-        if (!hadCapture) throw err;
-        const callNote = isOwnFailure(err)
-          ? `${errorMessage(err)} Listing the requests captured so far.`
-          : `adb did not answer (${firstLine(adbFailureDetail(err))}); listing the requests captured so far`;
-        log(callNote);
-        return { status: "ok", note: callNote };
+  /**
+   * Sets the device up and attaches the agent to the app's running process,
+   * if it has one. Runs under the attach lock.
+   */
+  async function attachCurrent(): Promise<
+    { blocked: AndroidNetworkNotAttachable } | { current: AppProcess | null }
+  > {
+    const blocked = await prepare();
+    if (blocked) return { blocked };
+    const read = await readAppProcesses(serial, packageName);
+    checkpoint();
+    const switched = await followUser(read.user);
+    if (switched) return { blocked: switched };
+    const current = processOfUser(read, user());
+    failOrphans(runningKeys(read));
+    if (!current) {
+      if (!armedConnection()) {
+        // Kept for later reads, which do not check whether the app runs since.
+        note = `${packageName} was not running at network-capture-start; launch-app or restart-app attaches the agent to its next process, or call network-capture-start once it runs`;
       }
+      return { current: null };
+    }
+    // A process attached just now gives its agent no time to log yet.
+    if ((await attach(current)) !== "attached") await refreshAgentReason(current);
+    if (!ready) {
+      const again = await prepare();
+      if (again) return { blocked: again };
+    }
+    return { current };
+  }
+
+  async function startCapture(port: number): Promise<AndroidCaptureStart> {
+    setMetroPort(port);
+    // A start that finds the layer unavailable leaves capture as it found it:
+    // a stop before it stays, and so do the mark and whether capture was
+    // started. A stop during it stays too.
+    let found = { stopped, mark, live };
+    const unavailableStart = (reason: string): { result: AndroidCaptureStart } => {
+      if (found.stopped) stopped = true;
+      if (!found.live) live = false;
+      mark = found.mark;
+      unavailableReason = reason;
+      // For the reads of a capture an earlier start left started.
+      note = reason;
+      startNote = reason;
+      return { result: { armed: false, unavailable: true, reason } };
+    };
+    const attached = await withKeyedLock(
+      attachLock,
+      "attach",
+      async (): Promise<{ result: AndroidCaptureStart } | { current: AppProcess | null }> => {
+        if (disposed) return { result: { armed: false, reason: "capture was disposed" } };
+        found = { stopped, mark, live };
+        // Before the attach, so a request during the arming counts.
+        mark = { lastRecord: nextRecordNumber - 1, metroPort: port };
+        stopped = false;
+        notAttached = false;
+        // An earlier start's answer, and the advice to start again, describe
+        // no part of this start: what it finds says why capture is not armed.
+        if (note === startNote || note === NOT_RECONNECTED_NOTE) note = awaiting?.note;
+        try {
+          const outcome = await attachCurrent();
+          if ("blocked" in outcome) return unavailableStart(outcome.blocked.reason);
+          live = true;
+          unavailableReason = undefined;
+          // A stop left its connection open and disabled, and the attach finds
+          // its process known, so nothing else would enable it.
+          for (const conn of connections) {
+            if (!conn.closed && !conn.armed && !conn.enabling) enableNetwork(conn);
+          }
+          return outcome;
+        } catch (err) {
+          if (err instanceof InspectorStopped) {
+            return {
+              result: { armed: false, reason: disposed ? "capture was disposed" : STOPPED_NOTE },
+            };
+          }
+          if (isUnavailableFailure(err)) return unavailableStart(errorMessage(err));
+          // A launch attaches once the device answers again.
+          live = true;
+          unavailableReason = undefined;
+          const reason = isOwnFailure(err)
+            ? errorMessage(err)
+            : `adb did not answer (${firstLine(adbFailureDetail(err))}); the next launch or network-capture-start tries again`;
+          log(reason);
+          // Reads run no adb, so they say why from this note.
+          note = reason;
+          startNote = reason;
+          return { result: { armed: false, reason } };
+        }
+      }
+    );
+    if ("result" in attached) return attached.result;
+    if (!attached.current) {
+      return {
+        armed: false,
+        reason:
+          shownNote() ??
+          `${packageName} is not running; launch-app or restart-app attaches the agent to its next process`,
+      };
+    }
+    const key = processKey(attached.current);
+    await waitForArmed(key, ARM_WAIT_MS);
+    if (disposed) return { armed: false, reason: "capture was disposed" };
+    if (stopped) return { armed: false, reason: STOPPED_NOTE };
+    const conn = connections.find((c) => c.armed && !c.closed && c.processKey === key);
+    if (!conn) {
+      const reason = await refreshAgentReason(attached.current);
+      // Reads run no adb, so they say what this start found.
+      note ??= `waiting for the agent in pid ${attached.current.pid}${reason ? `: ${reason}` : ""}`;
+      return { armed: false, reason: shownNote() ?? note };
+    }
+    // The agent reports that it captures nothing in this process, and no retry
+    // changes that. The start's js layer tells whether JavaScript requests are
+    // still recorded.
+    if (conn.capture?.state === "unavailable") {
+      const { result } = unavailableStart(
+        `capture unavailable${conn.capture.detail ? `: ${conn.capture.detail}` : ""}`
+      );
+      // A stop the start found stays: the connections it enabled are disabled
+      // again. The reads keep the reason, as after any start that found the
+      // layer unavailable.
+      if (stopped) {
+        void stopCapture();
+        unavailableReason = result.reason;
+      }
+      return result;
+    }
+    return { armed: true };
+  }
+
+  async function stopCapture(): Promise<{ confirmed: boolean; reason?: string }> {
+    if (disposed) return { confirmed: true };
+    // At once, so an attach in flight ends at its next step and a listing
+    // during the stop does not read armed.
+    stopped = true;
+    live = false;
+    notAttached = false;
+    unavailableReason = undefined;
+    // The Network.disable below follows any Network.enable on its way, so the
+    // next start enables each connection again.
+    stops++;
+    for (const conn of connections) {
+      conn.armed = false;
+      conn.enabling = false;
+      conn.stopUnconfirmed = false;
+    }
+    for (const wake of armWaiters) wake();
+    return withKeyedLock(attachLock, "attach", async () => {
+      if (disposed) return { confirmed: true };
+      const answers = await Promise.all(
+        connections.filter((c) => !c.closed).map((c) => disableOn(c, STOP_DISABLE_TIMEOUT_MS))
+      );
+      const reasons: string[] = [];
+      if (answers.some((answered) => !answered)) {
+        reasons.push(
+          `the agent did not acknowledge Network.disable within ${STOP_DISABLE_TIMEOUT_MS / 1000} s; argent records none of the app's new requests, and launches do not attach it`
+        );
+      }
+      if (await awayAtStop()) reasons.push(AWAY_AT_STOP);
+      return reasons.length === 0
+        ? { confirmed: true }
+        : { confirmed: false, reason: reasons.join("; ") };
     });
+  }
+
+  /**
+   * An agent whose connection dropped captures on in the app until it
+   * connects again. An agent that acknowledged an earlier stop's
+   * Network.disable before the drop captures nothing, and nor does one whose
+   * process ended.
+   */
+  function isAway(c: AgentConnection): boolean {
+    return c.closed && !c.resumedBy && !c.agentGone && !c.ended && !c.disabled;
+  }
+
+  /**
+   * The stop's Network.disable did not reach an agent that is away. It gets
+   * that Network.disable when it connects. The process read leaves out an
+   * agent whose process ended.
+   */
+  async function awayAtStop(): Promise<boolean> {
+    const away = (): AgentConnection[] => connections.filter(isAway);
+    if (away().length === 0) return false;
+    try {
+      const read = await readAppProcesses(serial, packageName, STOP_DISABLE_TIMEOUT_MS);
+      failOrphans(runningKeys(read));
+      // An outage longer than the checks after the drop removed the reverse
+      // the agent connects through.
+      if (away().length > 0) await assertReverse();
+    } catch {
+      // adb did not answer, as in an outage: the app may still run.
+    }
+    for (const c of away()) missedStop.add(c.instance);
+    return away().length > 0;
   }
 
   async function attachLaunch(): Promise<string | undefined> {
@@ -1796,7 +2096,8 @@ function createInspector(
         }
       });
     } catch (err) {
-      if (err instanceof InspectorStopped || disposed) return undefined;
+      if (disposed) return undefined;
+      if (err instanceof InspectorStopped) return stoppedLaunchNote(packageName);
       return `native network capture could not follow this launch of ${packageName}: ${firstLine(isOwnFailure(err) ? errorMessage(err) : adbFailureDetail(err))}`;
     }
     // Only an attach that went through for this process has an agent to wait for.
@@ -1806,7 +2107,41 @@ function createInspector(
         ? await refreshAgentReason(outcome.proc)
         : undefined;
     if (disposed) return undefined;
+    if (stopped) return stoppedLaunchNote(packageName);
     return launchNote(outcome, reason);
+  }
+
+  /**
+   * The connection whose agent did not acknowledge the stop: an open one that
+   * did not answer Network.disable, or one away at the stop that has not
+   * connected again.
+   */
+  function unconfirmedStop(): AgentConnection | undefined {
+    if (!stopped) return undefined;
+    return (
+      connections.find((c) => !c.closed && c.stopUnconfirmed) ??
+      connections.find((c) => missedStop.has(c.instance) && isAway(c))
+    );
+  }
+
+  /**
+   * A launch of an app that already runs only brings its process to the
+   * front, so a process that did not acknowledge the stop keeps its agent on.
+   */
+  async function stoppedLaunch(): Promise<string> {
+    const conn = unconfirmedStop();
+    if (!conn) return stoppedLaunchNote(packageName);
+    // Without a process read, as when adb does not answer, the connection counts.
+    const read = await readAppProcesses(serial, packageName).catch(() => null);
+    // An agent away at the stop counts only while its process runs.
+    if (read) failOrphans(runningKeys(read));
+    const current = read ? processOfUser(read, user()) : null;
+    // A start, an acknowledgement or a closed connection while adb answered.
+    if (unconfirmedStop() !== conn) return stoppedLaunchNote(packageName);
+    if (read && (!current || processKey(current) !== conn.processKey)) {
+      return stoppedLaunchNote(packageName);
+    }
+    return `native network capture is stopped for ${packageName} (network-capture-stop), but its running process (pid ${conn.pid}) has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`;
   }
 
   function launchNote(outcome: LaunchOutcome, reason?: string): string {
@@ -1814,27 +2149,27 @@ function createInspector(
       case "blocked":
         return `native network capture cannot follow ${packageName}: ${outcome.reason}`;
       case "no_process":
-        return `native network capture is on for ${packageName}, but no process of it appeared within ${NEW_PROCESS_WAIT_MS / 1000} s; the next native-network-logs call attaches the agent`;
+        return `native network capture is on for ${packageName}, but no process of it appeared within ${NEW_PROCESS_WAIT_MS / 1000} s; restart-app attaches the agent to its next process, or call network-capture-start once it runs`;
       case "copy_failed":
       case "attach_failed":
         return `native network capture could not follow this launch: ${note ?? "the attach failed"}`;
       default: {
         const { pid } = outcome.proc;
         return armedFor(processKey(outcome.proc))
-          ? `native network capture is attached to ${packageName} (pid ${pid}); native-network-logs with stop: true ends it`
+          ? `native network capture is attached to ${packageName} (pid ${pid}); network-capture-stop ends it`
           : `native network capture is attaching to ${packageName} (pid ${pid}), and the agent has not connected yet; native-network-logs shows when it is armed${reason ? `; the agent says: ${reason}` : ""}`;
       }
     }
   }
 
-  /** Until the process's agent is armed, the timeout, or the process exits. */
+  /** Until the process's agent is armed, the timeout, a stop, or the process exits. */
   async function waitForArmed(key: string, timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    while (!disposed && !armedFor(key)) {
+    while (!disposed && !stopped && !armedFor(key)) {
       const left = deadline - Date.now();
       if (left <= 0) return;
       const woken = await nextArmEvent(Math.min(ARM_PROCESS_CHECK_MS, left));
-      if (woken || disposed || armedFor(key)) continue;
+      if (woken || disposed || stopped || armedFor(key)) continue;
       // The process check gets only the time left, so a slow adb cannot hold
       // the wait past timeoutMs. A timeout of 0 would mean no limit to adb.
       const readTimeoutMs = deadline - Date.now();
@@ -1864,19 +2199,29 @@ function createInspector(
 
   const api: AndroidNetworkInspectorApi = {
     packageName,
-    ensureAttached,
+    startCapture,
+    stopCapture,
+    isStarted: () => live && !disposed,
+    isStopped: () => stopped && !disposed,
+    unavailableReason: () => unavailableReason,
+    captureMark: () => mark,
     state() {
       const conn = armedConnection();
       return {
         armed: Boolean(conn),
+        ...(stopped ? { stopped: true as const } : {}),
+        ...(!conn && notAttached && !stopped ? { notAttached: true as const } : {}),
         ...(conn ? { process: { pid: conn.pid, startTime: conn.startTime } } : {}),
         ...(conn?.capture ? { capture: { ...conn.capture } } : {}),
         ...(conn && conn.droppedEvents > 0 ? { droppedEvents: conn.droppedEvents } : {}),
-        ...(!conn && note ? { note: shownNote() } : {}),
+        ...(!conn && note && !stopped ? { note: shownNote() } : {}),
       };
     },
     records: (port) =>
-      records.filter((r) => !cleared.has(r) && !isMetroTraffic(r.request.url, port)),
+      records.filter(
+        (r) =>
+          !cleared.has(r) && !isMetroTraffic(r.request.url, port, { androidEmulatorHost: true })
+      ),
     record: (id) => byId.get(id)?.record,
     responseBody: (id) => fetchBody(id, "response"),
     requestPostData: (id) => fetchBody(id, "post"),
@@ -1895,7 +2240,10 @@ function createInspector(
     packageName,
     hardwareKey: null,
     isLive: () => live && !disposed,
+    isStopped: () => stopped && !disposed,
+    mayIntercept: () => !disposed && (live || unconfirmedStop() !== undefined),
     attachLaunch,
+    stoppedLaunch,
   };
 
   return {
@@ -2056,10 +2404,6 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isOpen(record: AndroidNativeRecord): boolean {
-  return record.state === "pending" || record.state === "headers";
-}
-
 function parseCapture(value: unknown): { state: AndroidCaptureState; detail?: string } | undefined {
   const o = asObject(value);
   if (o.state !== "active" && o.state !== "waiting" && o.state !== "unavailable") return undefined;
@@ -2083,109 +2427,17 @@ function isAgentAbi(abi: string): abi is AgentAbi {
   return (AGENT_ABIS as readonly string[]).includes(abi);
 }
 
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "10.0.2.2", "[::1]"]);
-
 /**
- * Metro's own traffic on `metroPort`: the bundle, HMR, symbolication, the
- * inspector socket. Keyed on the caller's port.
+ * A start that throws one of these reports the layer unavailable: no retry
+ * changes them. A device provider that did not grant adb blocks every adb call.
  */
-function isMetroTraffic(url: string, metroPort: number): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  return LOOPBACK_HOSTS.has(parsed.hostname) && Number(parsed.port) === metroPort;
-}
-
-function toBody(result: unknown, kind: "response" | "post"): AndroidNetworkBody {
-  const r = asObject(result);
-  const text = kind === "response" ? r.body : r.postData;
-  if (r.bodyAvailable === false || typeof text !== "string") {
-    return unavailable(
-      kind === "response"
-        ? "the agent holds no body for this response"
-        : "the agent holds no body for this request"
-    );
-  }
-  return {
-    available: true,
-    body: text,
-    base64Encoded: r.base64Encoded === true,
-    truncated: r.wasTruncated === true,
-  };
-}
-
-function unavailable(reason: string): AndroidNetworkBody {
-  return { available: false, body: "", base64Encoded: false, truncated: false, reason };
-}
-
-/** Keeps the start of an absurdly long value and says how much was left out. */
-function capString(value: string, max = MAX_VALUE_CHARS): string {
-  return value.length > max ? `${value.slice(0, max)}…[${value.length - max} more chars]` : value;
-}
-
-/**
- * A header map with every value capped, bounded in count and in total size.
- * The headers left out are counted in an entry that says so.
- */
-function headerMap(value: unknown): Record<string, string> {
-  const headers: Record<string, string> = {};
-  let kept = 0;
-  let chars = 0;
-  let left = 0;
-  for (const [name, v] of Object.entries(asObject(value))) {
-    if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
-    const key = capString(name, 1024);
-    const text = capString(String(v));
-    if (kept >= MAX_HEADERS || chars + key.length + text.length > MAX_HEADER_MAP_CHARS) {
-      left++;
-      continue;
-    }
-    headers[key] = text;
-    kept++;
-    chars += key.length + text.length;
-  }
-  if (left > 0) headers["(not kept)"] = `${left} more headers`;
-  return headers;
-}
-
-function mapChars(map: Record<string, string> | undefined): number {
-  let chars = 0;
-  for (const [name, value] of Object.entries(map ?? {})) chars += name.length + value.length;
-  return chars;
-}
-
-/** What a record holds in strings, which is what its memory scales with. */
-function recordSize(record: AndroidNativeRecord): number {
-  let chars =
-    record.request.url.length +
-    record.request.method.length +
-    mapChars(record.request.headers) +
-    mapChars(record.request.wireHeaders) +
-    (record.errorText?.length ?? 0) +
-    256;
-  if (record.response) {
-    chars +=
-      record.response.url.length +
-      record.response.statusText.length +
-      record.response.mimeType.length +
-      mapChars(record.response.headers);
-  }
-  for (const hop of record.redirects ?? []) {
-    chars +=
-      hop.url.length + hop.statusText.length + mapChars(hop.headers) + mapChars(hop.requestHeaders);
-  }
-  return chars;
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
+function isUnavailableFailure(err: unknown): boolean {
+  const code = getFailureSignal(err)?.error_code;
+  return (
+    code === FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_UNKNOWN_PACKAGE ||
+    code === FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_DEVICE_IN_USE ||
+    code === FAILURE_CODES.EXTERNAL_DEVICE_CAPABILITY_DENIED
+  );
 }
 
 /** The inspector's own failures, whose messages stand on their own. */

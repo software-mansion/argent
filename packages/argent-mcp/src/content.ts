@@ -29,7 +29,7 @@ function imageBlock(data: Buffer, mimeType: string): ContentBlock {
 // `file://` needs fs — Node's `fetch` only supports `http(s)://`, and the
 // ios-remote screenshot transport writes PNGs to a temp dir under a `file://`
 // URL.
-async function fetchPngBytes(url: string): Promise<Buffer | null> {
+async function fetchPngBytes(url: string, signal?: AbortSignal): Promise<Buffer | null> {
   try {
     let buf: Buffer;
     if (url.startsWith("file://")) {
@@ -37,7 +37,7 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
       const { fileURLToPath } = await import("node:url");
       buf = await readFile(fileURLToPath(url));
     } else {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal });
       if (!res.ok) return null;
       buf = Buffer.from(await res.arrayBuffer());
     }
@@ -73,7 +73,7 @@ export async function toMcpContent(
         return blocks;
       }
       // No image artifact — fall back to older tool-servers' `{ url, path }`.
-      return legacyImageContent(rewritten, suppressImage);
+      return legacyImageContent(rewritten, suppressImage, ctx.signal);
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
@@ -104,14 +104,15 @@ function stringifyForText(value: unknown): string {
  */
 async function legacyImageContent(
   result: unknown,
-  suppressImage: boolean
+  suppressImage: boolean,
+  signal?: AbortSignal
 ): Promise<ContentBlock[]> {
   if (result && typeof result === "object" && "url" in result) {
     const r = result as { url: string; path?: string };
     if (suppressImage) {
       return [{ type: "text" as const, text: `Saved: ${r.path ?? ""}` }];
     }
-    const buf = await fetchPngBytes(r.url);
+    const buf = await fetchPngBytes(r.url, signal);
     if (buf) {
       return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${r.path ?? ""}` }];
     }
@@ -150,10 +151,12 @@ export async function screenshotDiffToMcpContent(
   // The context diff's bytes come back in `images` whether the file was already
   // on this machine or had to be downloaded from a remote tool-server.
   let contextDiffPath = result.contextDiffPath;
+  let diffPath = result.diffPath;
   let materializedImages: { localPath: string; data: Buffer; mimeType: string }[] = [];
   if (ctx) {
     const { result: rewritten, images } = await materializeArtifacts(result, ctx);
     contextDiffPath = (rewritten as ScreenshotDiffResult).contextDiffPath;
+    diffPath = (rewritten as ScreenshotDiffResult).diffPath;
     materializedImages = images;
   }
 
@@ -182,6 +185,16 @@ export async function screenshotDiffToMcpContent(
   }
 
   blocks.push({ type: "text" as const, text: result.summary });
+  // The summary refers the agent to these fields by name; null ⇒ the fetch failed.
+  const paths = [
+    ["diffPath", diffPath],
+    ["contextDiffPath", contextDiffPath],
+  ] as const;
+  for (const [key, value] of paths) {
+    if (value === undefined) continue;
+    const text = `${key}: ${typeof value === "string" ? value : "(unavailable)"}`;
+    blocks.push({ type: "text", text });
+  }
   return blocks;
 }
 

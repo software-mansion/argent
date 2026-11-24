@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
+import { canonicalPath } from "@argent/configuration-core";
 import {
   MCP_SERVER_KEY,
   MCP_BINARY_NAME,
@@ -33,6 +34,7 @@ import {
   RETIRED_GLOBAL_RULES,
   type RetiredFile,
 } from "./utils.js";
+import { getGloballyInstalledLaunchPaths } from "./topology.js";
 import { isMap, parse as parseYamlText } from "yaml";
 import { parse as parseJsoncText, type ParseError } from "jsonc-parser";
 import { parse as parseTomlText } from "smol-toml";
@@ -151,6 +153,7 @@ type CodexConfig = {
 // stdio server.
 export type McpCommandMode =
   | { kind: "global" }
+  | { kind: "global-pinned"; node: string; cli: string }
   | { kind: "local-node"; binRelPath: string }
   | { kind: "local-pnp" }
   | { kind: "local-npx" };
@@ -167,6 +170,8 @@ function buildMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServerEntr
       return { command: "yarn", args: ["argent", "mcp"] };
     case "local-npx":
       return { command: "npx", args: ["--no-install", "argent", "mcp"] };
+    case "global-pinned":
+      return { command: mode.node, args: [mode.cli, "mcp"] };
     default:
       return { command: MCP_BINARY_NAME, args: ["mcp"] };
   }
@@ -183,16 +188,27 @@ export function resolveLocalCommandMode(root: string): McpCommandMode {
   return { kind: "local-npx" };
 }
 
-// Shared by `init` and `update`: only a local-mode PROJECT-scope entry runs the
-// repo-local copy; everything else keeps the bare `argent` command.
+// Global config files are read by editors started without the shell PATH
+// (Dock, JetBrains ACP), so they get absolute paths when the global install
+// has them. Spawns `which`: resolve once per run.
+export function resolveGlobalCommandMode(): McpCommandMode {
+  const launch = getGloballyInstalledLaunchPaths();
+  return launch ? { kind: "global-pinned", ...launch } : { kind: "global" };
+}
+
+// Shared by `init` and `update`: a local-mode PROJECT-scope entry runs the
+// repo-local copy, a global-scope entry runs `globalCmdMode`, and every other
+// project-scope entry keeps the bare `argent` command.
 export function getMcpEntryForScope(
   installMode: "global" | "local",
   configScope: "local" | "global",
-  localCmdMode: McpCommandMode | null
+  localCmdMode: McpCommandMode | null,
+  globalCmdMode: McpCommandMode
 ): McpServerEntry {
-  return installMode === "local" && configScope === "local" && localCmdMode
-    ? getMcpEntry(localCmdMode)
-    : getMcpEntry({ kind: "global" });
+  if (installMode === "local" && configScope === "local" && localCmdMode) {
+    return getMcpEntry(localCmdMode);
+  }
+  return getMcpEntry(configScope === "global" ? globalCmdMode : { kind: "global" });
 }
 
 function hasEnv(entry: McpServerEntry): entry is McpServerEntry & { env: Record<string, string> } {
@@ -264,11 +280,13 @@ function normalizeServerEntry(raw: unknown): McpServerEntry | null {
 }
 
 // A shape argent itself writes; anything else is a customization that
-// refresh/cleanup flows must not rewrite or remove. The node form accepts any
-// RELATIVE path into a node_modules copy of the package (everything
-// getLocalArgentBinRelPath can emit); absolute or out-of-tree is hand-tuned.
+// refresh/cleanup flows must not rewrite or remove. The bare `node` form
+// accepts any RELATIVE path into a node_modules copy of the package (everything
+// getLocalArgentBinRelPath can emit); an absolute path there is hand-tuned. The
+// absolute-`node` form is the global pin (isPinnedGlobalEntry).
 export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
   if (entry === null || hasCustomizingEnv(entry)) return false;
+  if (isPinnedGlobalEntry(entry)) return true;
   const { command, args } = entry;
   switch (command) {
     case MCP_BINARY_NAME:
@@ -288,6 +306,18 @@ export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
     default:
       return false;
   }
+}
+
+export function isPinnedGlobalEntry(entry: McpServerEntry): boolean {
+  const [cli, subcommand] = entry.args;
+  return (
+    path.isAbsolute(entry.command) &&
+    path.basename(entry.command) === "node" &&
+    entry.args.length === 2 &&
+    subcommand === "mcp" &&
+    path.isAbsolute(cli) &&
+    cli.includes(`/node_modules/${PACKAGE_NAME}/`)
+  );
 }
 
 // Deliberately does NOT recursively prune empty tables/arrays, so a foreign TOML
@@ -763,19 +793,11 @@ const cursorAdapter: McpConfigAdapter = {
 
 // MARK: Claude
 
-// ~/.claude.json keys its per-project entries by absolute path, so match
-// loosely: realpathSync.native canonicalizes symlinks and, on case-insensitive
-// filesystems, on-disk case.
+// ~/.claude.json keys its per-project entries by absolute path, so match them
+// by canonical path.
 function claudeProjectKeysForRoot(projects: Record<string, unknown>, root: string): string[] {
-  const canonical = (value: string): string => {
-    try {
-      return fs.realpathSync.native(value);
-    } catch {
-      return path.resolve(value);
-    }
-  };
-  const target = canonical(root);
-  return Object.keys(projects).filter((key) => key === root || canonical(key) === target);
+  const target = canonicalPath(root);
+  return Object.keys(projects).filter((key) => key === root || canonicalPath(key) === target);
 }
 
 // A recorded "reject" for the argent .mcp.json server: a rejection made before
@@ -1804,9 +1826,11 @@ function formatCopyDestination(
 }
 
 function formatManagedPathLabel(targetPath: string, root: string): string {
-  const home = homedir();
-  if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
-    return `~${targetPath.slice(home.length)}`;
+  // targetPath may be physical (from process.cwd() or realpath) while $HOME is not.
+  for (const home of [path.resolve(homedir()), canonicalPath(homedir())]) {
+    if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
+      return `~${targetPath.slice(home.length)}`;
+    }
   }
 
   const relative = path.relative(root, targetPath);

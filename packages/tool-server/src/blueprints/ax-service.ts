@@ -20,7 +20,7 @@ import { axServiceSocketPath } from "../utils/socket-tag";
 import { asUiOrientation, type UiOrientation } from "../tools/describe/contract";
 
 // Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
-export { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../utils/ax-prefs";
+export { ensureAutomationEnabled } from "../utils/ax-prefs";
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 

@@ -43,7 +43,7 @@ export default tseslint.config(
       parserOptions: {
         // Explicit list rather than `projectService`, which would not pick up
         // the per-package tsconfig.test.json. The glob also matches
-        // packages/docs, which is outside the npm workspaces, so `npm ci` there
+        // packages/docs, which is outside the workspaces, so `bun install` there
         // has to run before this lint (see .github/workflows/lint.yml).
         project: ["packages/*/tsconfig.json", "packages/*/tsconfig.test.json"],
         tsconfigRootDir: import.meta.dirname,
@@ -101,8 +101,8 @@ export default tseslint.config(
         "error",
         {
           selector:
-            "CallExpression[callee.property.name='listen'][arguments.0.value=0]:not([arguments.1.value='127.0.0.1'])",
-          message: "Bind ephemeral-port listeners to 127.0.0.1.",
+            "CallExpression[callee.property.name='listen'][arguments.0.value=0]:not([arguments.1.value='127.0.0.1']):not([arguments.1.value='::1'])",
+          message: "Bind ephemeral-port listeners to 127.0.0.1 or ::1.",
         },
       ],
     },
