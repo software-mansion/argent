@@ -3,7 +3,6 @@ import {
   requestedGeometry,
   chromiumDropNote,
   unsupportedDropNote,
-  RESULT_NOTE_KEY,
 } from "../src/tools/screenshot/dropped-geometry";
 
 describe("requestedGeometry", () => {
@@ -67,11 +66,5 @@ describe("drop notes", () => {
     expect(note).not.toContain("untransformed");
     // The Chromium remedy must not leak into a case where it cannot help.
     expect(note).not.toContain("install");
-  });
-
-  it("keeps the reserved key stable", () => {
-    // http.ts hoists this off the result into the response envelope; renaming
-    // it silently drops every note.
-    expect(RESULT_NOTE_KEY).toBe("__argentNote");
   });
 });

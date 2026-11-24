@@ -112,6 +112,9 @@ final class ArgentRunnerSession: XCTestCase {
         finishLock.unlock()
 
         let server = RunnerHTTPServer(
+            tunnelAddress: ProcessInfo.processInfo.environment["ARGENT_RUNNER_ADDRESS"].flatMap {
+                $0.isEmpty ? nil : $0
+            },
             dispatch: { [weak self] body, deliver in
                 self?.dispatch(body: body, deliver: deliver)
             },

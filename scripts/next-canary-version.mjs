@@ -34,7 +34,7 @@ const PACKAGE = "@swmansion/argent";
 const PKG_JSON = "packages/argent/package.json";
 
 /**
- * Pure version math, separated from npm I/O so it can be unit-tested.
+ * Pure version math, separated from registry I/O so it can be unit-tested.
  * @param {string[]} versions  published versions (unparseable entries ignored)
  * @returns {string} the canary version, e.g. "0.13.1-next.0"
  */
@@ -66,11 +66,9 @@ export function computeCanaryVersion(versions) {
 
 function main() {
   const write = processArgv.includes("--write");
-  const raw = JSON.parse(
-    execFileSync("npm", ["view", PACKAGE, "versions", "--json"], { encoding: "utf8" })
+  const versions = JSON.parse(
+    execFileSync("bun", ["info", PACKAGE, "versions", "--json"], { encoding: "utf8" })
   );
-  // npm returns a bare string when a package has exactly one published version.
-  const versions = Array.isArray(raw) ? raw : [raw];
   const takenIdx = processArgv.indexOf("--taken");
   if (takenIdx !== -1) versions.push(processArgv[takenIdx + 1]);
   const version = computeCanaryVersion(versions);

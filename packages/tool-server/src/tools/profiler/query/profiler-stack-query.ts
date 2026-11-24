@@ -25,6 +25,8 @@ import {
 } from "../../../utils/ios-profiler/render";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
+const HANGS_NOT_RECORDED = "_No UI hang data was recorded._";
+
 const stackQueryMode = {
   hang_stacks: "hang stacks",
   function_callers: "function callers",
@@ -35,7 +37,7 @@ const stackQueryMode = {
 function getIosParsedData(api: NativeProfilerSessionApi) {
   if (!api.parsedData) {
     throw new FailureError(
-      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze first.",
+      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze, or profiler-load, first.",
       {
         error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
         failure_stage: "profiler_stack_query_load_data",
@@ -188,7 +190,8 @@ export function renderThreadBreakdownIos(
   cpuSamples: CpuSample[],
   cpuHotspots: CpuHotspot[],
   threadFilter: string | undefined,
-  topN: number
+  topN: number,
+  hangsRecorded = true
 ): string {
   const threadWeight = new Map<string, number>();
   const threadSamples = new Map<string, number>();
@@ -213,9 +216,9 @@ export function renderThreadBreakdownIos(
   const lines: string[] = [
     `## Thread CPU Breakdown${threadFilter ? ` (filter: "${threadFilter}")` : ""}`,
     "",
-    "| Thread | Weight (ms) | % | Samples |",
-    "|---|---|---|---|",
   ];
+  if (!hangsRecorded) lines.push(HANGS_NOT_RECORDED, "");
+  lines.push("| Thread | Weight (ms) | % | Samples |", "|---|---|---|---|");
 
   for (const [thread, weight] of sorted) {
     const weightMs = Math.round(weight / 1_000_000);
@@ -235,8 +238,9 @@ export function renderThreadBreakdownIos(
       lines.push("| Function | Weight (ms) | % | During Hang |");
       lines.push("|---|---|---|---|");
       for (const h of threadHotspots.slice(0, topN)) {
+        const hangStatus = hangsRecorded ? (h.duringHang ? "Yes" : "No") : "Not recorded";
         lines.push(
-          `| \`${escapeMarkdownTableCell(demangleSymbol(h.dominantFunction))}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
+          `| \`${escapeMarkdownTableCell(demangleSymbol(h.dominantFunction))}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${hangStatus} |`
         );
       }
     }
@@ -342,6 +346,7 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
           error_kind: "validation",
         });
       }
+      if (!data.hangsRecorded) return HANGS_NOT_RECORDED;
       return renderHangStacksIos(data.cpuSamples, data.uiHangs, params.hang_index, params.top_n);
     }
     case "function_callers": {
@@ -360,7 +365,8 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         data.cpuSamples,
         data.cpuHotspots,
         params.thread,
-        params.top_n
+        params.top_n,
+        data.hangsRecorded
       );
     case "leak_stacks":
       // Capture mode from parsedData, frozen with the leaks it describes — the
@@ -411,12 +417,19 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
 
 const zodSchema = z.object({
   device_id: metroDeviceIdParam(
-    "Target device id from `list-devices` (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial)."
+    "Target device id from `list-devices` (iOS UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial)."
   ),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe("Query mode; see Modes in the tool description."),
-  hang_index: z.coerce.number().int().optional().describe("0-based index into the hang list"),
+  // Without `.nullable()`, `z.coerce.number()` reads null as hang 0.
+  hang_index: z.coerce
+    .number()
+    .int()
+    .nullable()
+    .transform((value) => value ?? undefined)
+    .optional()
+    .describe("0-based index into the hang list"),
   function_name: z.string().optional().describe("Native function name"),
   thread: z
     .string()
@@ -448,11 +461,12 @@ Modes:
     completedMsg: ({ params }) => `Queried native stacks by ${stackQueryMode[params.mode]}`,
     failedMsg: ({ failureSignal }) => `Failed to query native stacks: ${failureSignal.error_code}`,
   },
-  // No chromium entry: it has no native trace capture.
+  // No chromium entry: it has no native trace capture. Physical iPhones only
+  // reach it through profiler-load of a native-profiler-launch-analysis session.
   capability: {
-    apple: { simulator: true },
+    apple: { simulator: true, device: true },
     android: { emulator: true, device: true, unknown: true },
-    macos: { app: true },
+    macos: { app: true, catalyst: true },
   },
   // The Android branch re-queries the .pftrace, so a cold trace-processor engine
   // re-pays the full parse past the 30s MCP fetch timeout, whose abort replays
@@ -472,7 +486,8 @@ Modes:
       throw new FailureError(
         `No native profiler capture is loaded for device \`${params.device_id}\`. Run ` +
           "native-profiler-start → native-profiler-stop → native-profiler-analyze on this device " +
-          "first. (If that id came from debugger-connect, pass the id from list-devices instead — " +
+          "first, or load a saved session with profiler-load mode=load_native (the only path on a " +
+          "physical iPhone, for a native-profiler-launch-analysis session). (If that id came from debugger-connect, pass the id from list-devices instead — " +
           "the simulator UDID or adb serial — since profiler sessions are keyed by that one.)",
         {
           error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,

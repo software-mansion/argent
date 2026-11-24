@@ -13,7 +13,7 @@ import { toSimulatorNetworkError } from "../src/utils/format-error";
 // specific (argv, stdio).
 
 const spawnMock = vi.fn();
-const ensureAutomationEnabledMock = vi.fn();
+const clearAutomationEnabledOrWarnMock = vi.fn();
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -23,8 +23,8 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-vi.mock("../src/blueprints/ax-service", () => ({
-  ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
+vi.mock("../src/utils/ax-prefs", () => ({
+  clearAutomationEnabledOrWarn: (...args: unknown[]) => clearAutomationEnabledOrWarnMock(...args),
 }));
 
 // `android.sdkRoot` reaches the binary as ANDROID_HOME; stub the config read
@@ -52,8 +52,9 @@ vi.mock("@argent/native-devtools-ios", () => ({
 // iOS path (false) so these spawn/stdio tests stay hermetic — no real `simctl`,
 // which would otherwise hang the fake-timer test waiting on a child process.
 const isFoldableSimulatorMock = vi.fn(async (_udid: string) => false);
+const isTvOsSimulatorMock = vi.fn(async (_udid: string) => false);
 vi.mock("../src/utils/ios-devices", () => ({
-  isTvOsSimulator: vi.fn(async () => false),
+  isTvOsSimulator: (udid: string) => isTvOsSimulatorMock(udid),
   // A foldable's factory probes the server for its panels; every case here is
   // a plain device unless it flips this.
   isFoldableSimulator: (udid: string) => isFoldableSimulatorMock(udid),
@@ -65,6 +66,15 @@ vi.mock("../src/utils/ios-devices", () => ({
 const deviceSetForUdidMock = vi.fn(async (_udid: string): Promise<string | null> => null);
 vi.mock("../src/utils/ios-device-sets", () => ({
   deviceSetForUdid: (udid: string) => deviceSetForUdidMock(udid),
+}));
+
+const waitForFirstFrameMock = vi.fn(async (_timeoutMs: number) => Buffer.alloc(0));
+const openMjpegStreamMock = vi.fn(async (_url: string) => ({
+  waitForFirstFrame: waitForFirstFrameMock,
+  close: vi.fn(),
+}));
+vi.mock("../src/tools/screen-recording/mjpeg-stream", () => ({
+  openMjpegStream: (url: string) => openMjpegStreamMock(url),
 }));
 
 function makeFakeProc() {
@@ -109,11 +119,28 @@ function androidDevice(serial: string): DeviceInfo {
   return { id: serial, platform: "android", kind: "emulator" };
 }
 
+async function startAdbFallback(serial: string, port: number, discoveryStderr: string) {
+  const grpcLess = makeFakeProc();
+  const fallback = makeFakeProc();
+  spawnMock.mockReturnValueOnce(grpcLess).mockReturnValueOnce(fallback);
+  const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+  const device = androidDevice(serial);
+  const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+  setImmediate(() => {
+    grpcLess.stderr.push(discoveryStderr);
+    setTimeout(() => {
+      grpcLess.emit("exit", 1);
+      signalReady(fallback, port);
+    }, 20);
+  });
+  return factoryPromise;
+}
+
 describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInfo", () => {
   beforeEach(async () => {
     spawnMock.mockReset();
     androidSdkRootMock.mockReturnValue(null);
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     isFoldableSimulatorMock.mockReset().mockResolvedValue(false);
     // Pre-warm the dep cache so the Android branch's `ensureDep('adb')` doesn't
     // shell out to `command -v adb` — CI Linux runners don't have adb on PATH
@@ -155,9 +182,21 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(instance.api.apiUrl).toBe("http://127.0.0.1:55555");
     expect(typeof instance.api.pressKey).toBe("function");
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledWith(udid);
 
     await instance.dispose();
     expect(fakeProc.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a tvOS simulator without clearing tv-control's AutomationEnabled", async () => {
+    isTvOsSimulatorMock.mockResolvedValueOnce(true);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const device = iosDevice("66666666-2222-3333-4444-555555555555");
+
+    await expect(simulatorServerBlueprint.factory({}, device, { device })).rejects.toThrow(/tvOS/);
+
+    expect(clearAutomationEnabledOrWarnMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("passes --device-set for an iOS device from an additional CoreSimulator set", async () => {
@@ -214,6 +253,98 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(spawnMock.mock.calls[0]![2]).toMatchObject({
       env: expect.objectContaining({ ANDROID_HOME: "/nix/store/android-sdk" }),
     });
+  });
+
+  it.each([
+    'Error: emulator "emulator-5570" not found among running emulators\n',
+    'Error: emulator "emulator-5570" did not answer on gRPC port 8570 within 20s\n',
+    "Error: Failed to find any running emulator\n",
+    "Error: transport error\nCaused by:\n    0: tcp connect error: Connection refused (os error 61)\n",
+    "Error: transport error\nCaused by:\n    0: tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)\n",
+  ])("falls back to `android_device` on %j", async (discoveryError) => {
+    const serial = "emulator-5570";
+    await startAdbFallback(serial, 55570, discoveryError);
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock.mock.calls[0]![1]).toEqual(["android", "--id", serial]);
+    expect(spawnMock.mock.calls[1]![1]).toEqual(["android_device", "--id", serial]);
+  });
+
+  it("does not fall back on a transport error that is not a refused connection", async () => {
+    const grpcLess = makeFakeProc();
+    spawnMock.mockReturnValueOnce(grpcLess);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const device = androidDevice("emulator-5590");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    const assertion = expect(factoryPromise).rejects.toThrow(/transport error/);
+    setImmediate(() => {
+      grpcLess.stderr.push(
+        "Error: transport error\nCaused by:\n    0: tcp connect error: Connection reset by peer\n"
+      );
+      setTimeout(() => grpcLess.emit("exit", 1), 20);
+    });
+    await assertion;
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands out the fallback only after its first frame and then closes the stream", async () => {
+    let sendFrame!: () => void;
+    const frame = new Promise<void>((resolve) => (sendFrame = resolve));
+    const close = vi.fn();
+    openMjpegStreamMock.mockImplementationOnce(async () => ({
+      waitForFirstFrame: vi.fn((_timeoutMs: number) => frame.then(() => Buffer.alloc(0))),
+      close,
+    }));
+
+    let settled = false;
+    const factoryPromise = startAdbFallback(
+      "emulator-5580",
+      55580,
+      "Error: Failed to find any running emulator\n"
+    ).finally(() => (settled = true));
+    await vi.waitFor(() =>
+      expect(openMjpegStreamMock).toHaveBeenCalledWith("http://127.0.0.1:55581")
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+
+    sendFrame();
+    await factoryPromise;
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts the fallback anyway when the frame stream cannot be opened", async () => {
+    openMjpegStreamMock.mockImplementationOnce(() => Promise.reject(new Error("ECONNREFUSED")));
+
+    await startAdbFallback("emulator-5584", 55584, "Error: Failed to find any running emulator\n");
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces the fallback's own error when the `android_device` fallback fails too", async () => {
+    const grpcLess = makeFakeProc();
+    const fallback = makeFakeProc();
+    spawnMock.mockReturnValueOnce(grpcLess).mockReturnValueOnce(fallback);
+
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5572");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => {
+      grpcLess.stderr.push("Error: Failed to find any running emulator\n");
+      grpcLess.stderr.push(null);
+      grpcLess.emit("exit", 1, null);
+      setTimeout(() => {
+        fallback.stderr.push("Error: screen sharing agent did not connect\n");
+        fallback.stderr.push(null);
+        fallback.emit("exit", 1, null);
+      }, 20);
+    });
+
+    const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(error.message).toContain("Error: screen sharing agent did not connect");
+    expect(error.message).not.toContain("Failed to find any running emulator");
   });
 
   it("spawns the `android_device` subcommand for a physical Android device", async () => {
@@ -327,7 +458,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
       fakeProc.stderr.push(
         "[2026-09-23T16:23:35Z INFO  simulator_server::media_handler::screenshot_service] Screenshot service stopped\n"
       );
-      fakeProc.stderr.push("Error: Failed to find any running emulator\n");
+      fakeProc.stderr.push("Error: Failed to connect to the emulator gRPC endpoint\n");
       // `exit` can fire before stderr drains; the reason must still make it in.
       fakeProc.emit("exit", 1, null);
       setImmediate(() => fakeProc.stderr.push(null));
@@ -335,7 +466,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
     expect(error.message).toMatch(/^simulator-server exited with code 1 before becoming ready/);
-    expect(error.message).toContain("Error: Failed to find any running emulator");
+    expect(error.message).toContain("Error: Failed to connect to the emulator gRPC endpoint");
     expect(error.message).not.toContain("Screenshot service stopped");
     expect(getFailureSignal(error)).toMatchObject({
       error_code: "SIMULATOR_SERVER_READY_EXITED",
@@ -371,7 +502,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     const device = androidDevice("emulator-5554");
     const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
     setImmediate(() => {
-      fakeProc.stderr.push("Error: Failed to find any running emulator\n");
+      fakeProc.stderr.push("Error: Failed to connect to the emulator gRPC endpoint\n");
       for (let i = 0; i < 12; i++) {
         fakeProc.stderr.push(
           `[2026-09-23T16:23:35Z INFO  simulator_server::media_handler] shutdown step ${i}\n`
@@ -382,7 +513,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     });
 
     const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
-    expect(error.message).toContain("Error: Failed to find any running emulator");
+    expect(error.message).toContain("Error: Failed to connect to the emulator gRPC endpoint");
     expect(error.message).not.toContain("shutdown step");
   });
 
@@ -529,7 +660,7 @@ describe("simulatorServerBlueprint.factory — a foldable simulator's panels", (
 
   beforeEach(async () => {
     spawnMock.mockReset();
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     isFoldableSimulatorMock.mockReset().mockResolvedValue(true);
     fetchMock.mockReset();
     globalThis.fetch = fetchMock as unknown as typeof fetch;

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
+import { canonicalPath } from "@argent/configuration-core";
 import {
   MCP_SERVER_KEY,
   MCP_BINARY_NAME,
@@ -33,6 +34,7 @@ import {
   RETIRED_GLOBAL_RULES,
   type RetiredFile,
 } from "./utils.js";
+import { getGloballyInstalledLaunchPaths } from "./topology.js";
 import { isMap, parse as parseYamlText } from "yaml";
 import { parse as parseJsoncText, type ParseError } from "jsonc-parser";
 import { parse as parseTomlText } from "smol-toml";
@@ -94,8 +96,42 @@ export interface McpConfigAdapter {
   // Report argent state outside the projectPath/globalPath pair that can keep
   // the entry written at `writtenScope` from taking effect.
   findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
+  // `init` only, after the user agreed. `update` never calls it: the user may
+  // have removed or narrowed the rules since, and that choice stays.
   addAllowlist?(root: string, scope: "local" | "global"): void;
+  // Why addAllowlist would write nothing here, for init to report; null when
+  // it would write.
+  allowlistSkipReason?(root: string, scope: "local" | "global"): string | null;
+  // `update` only: carry an allowlist the user still has over to the tools
+  // this version added. Never re-adds rules the user removed.
+  refreshAllowlist?(root: string, scope: "local" | "global"): void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
+}
+
+// `write` replaces the whole argent server entry, so an approval key the
+// editor keeps inside that entry (Devin's alwaysAllow, Gemini's trust, Kiro's
+// autoApprove) would be lost on every update. This reads it back so the new
+// entry carries it over, whatever the user set it to.
+function existingEntryKeys(
+  configPath: string,
+  serversKey: string,
+  keys: readonly string[]
+): Record<string, unknown> {
+  let entry: unknown;
+  try {
+    entry = (readJsonc(configPath)[serversKey] as Record<string, unknown> | undefined)?.[
+      MCP_SERVER_KEY
+    ];
+  } catch {
+    return {};
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return {};
+  const kept: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = (entry as Record<string, unknown>)[key];
+    if (value !== undefined) kept[key] = value;
+  }
+  return kept;
 }
 
 type CodexConfig = {
@@ -117,6 +153,7 @@ type CodexConfig = {
 // stdio server.
 export type McpCommandMode =
   | { kind: "global" }
+  | { kind: "global-pinned"; node: string; cli: string }
   | { kind: "local-node"; binRelPath: string }
   | { kind: "local-pnp" }
   | { kind: "local-npx" };
@@ -133,6 +170,8 @@ function buildMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServerEntr
       return { command: "yarn", args: ["argent", "mcp"] };
     case "local-npx":
       return { command: "npx", args: ["--no-install", "argent", "mcp"] };
+    case "global-pinned":
+      return { command: mode.node, args: [mode.cli, "mcp"] };
     default:
       return { command: MCP_BINARY_NAME, args: ["mcp"] };
   }
@@ -149,16 +188,27 @@ export function resolveLocalCommandMode(root: string): McpCommandMode {
   return { kind: "local-npx" };
 }
 
-// Shared by `init` and `update`: only a local-mode PROJECT-scope entry runs the
-// repo-local copy; everything else keeps the bare `argent` command.
+// Global config files are read by editors started without the shell PATH
+// (Dock, JetBrains ACP), so they get absolute paths when the global install
+// has them. Spawns `which`: resolve once per run.
+export function resolveGlobalCommandMode(): McpCommandMode {
+  const launch = getGloballyInstalledLaunchPaths();
+  return launch ? { kind: "global-pinned", ...launch } : { kind: "global" };
+}
+
+// Shared by `init` and `update`: a local-mode PROJECT-scope entry runs the
+// repo-local copy, a global-scope entry runs `globalCmdMode`, and every other
+// project-scope entry keeps the bare `argent` command.
 export function getMcpEntryForScope(
   installMode: "global" | "local",
   configScope: "local" | "global",
-  localCmdMode: McpCommandMode | null
+  localCmdMode: McpCommandMode | null,
+  globalCmdMode: McpCommandMode
 ): McpServerEntry {
-  return installMode === "local" && configScope === "local" && localCmdMode
-    ? getMcpEntry(localCmdMode)
-    : getMcpEntry({ kind: "global" });
+  if (installMode === "local" && configScope === "local" && localCmdMode) {
+    return getMcpEntry(localCmdMode);
+  }
+  return getMcpEntry(configScope === "global" ? globalCmdMode : { kind: "global" });
 }
 
 function hasEnv(entry: McpServerEntry): entry is McpServerEntry & { env: Record<string, string> } {
@@ -230,11 +280,13 @@ function normalizeServerEntry(raw: unknown): McpServerEntry | null {
 }
 
 // A shape argent itself writes; anything else is a customization that
-// refresh/cleanup flows must not rewrite or remove. The node form accepts any
-// RELATIVE path into a node_modules copy of the package (everything
-// getLocalArgentBinRelPath can emit); absolute or out-of-tree is hand-tuned.
+// refresh/cleanup flows must not rewrite or remove. The bare `node` form
+// accepts any RELATIVE path into a node_modules copy of the package (everything
+// getLocalArgentBinRelPath can emit); an absolute path there is hand-tuned. The
+// absolute-`node` form is the global pin (isPinnedGlobalEntry).
 export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
   if (entry === null || hasCustomizingEnv(entry)) return false;
+  if (isPinnedGlobalEntry(entry)) return true;
   const { command, args } = entry;
   switch (command) {
     case MCP_BINARY_NAME:
@@ -254,6 +306,18 @@ export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
     default:
       return false;
   }
+}
+
+export function isPinnedGlobalEntry(entry: McpServerEntry): boolean {
+  const [cli, subcommand] = entry.args;
+  return (
+    path.isAbsolute(entry.command) &&
+    path.basename(entry.command) === "node" &&
+    entry.args.length === 2 &&
+    subcommand === "mcp" &&
+    path.isAbsolute(cli) &&
+    cli.includes(`/node_modules/${PACKAGE_NAME}/`)
+  );
 }
 
 // Deliberately does NOT recursively prune empty tables/arrays, so a foreign TOML
@@ -635,6 +699,16 @@ function codexDirLooksArgentOnly(dir: string): boolean {
 
 // MARK: Cursor
 
+function cursorPermissionsPath(): string {
+  return path.join(homedir(), ".cursor", "permissions.json");
+}
+
+// The file's mcpAllowlist, or null when the file or the key is missing.
+function cursorPermissionsList(): string[] | null {
+  const list = readJsonc(cursorPermissionsPath()).mcpAllowlist;
+  return Array.isArray(list) ? (list as string[]) : null;
+}
+
 const cursorAdapter: McpConfigAdapter = {
   name: "Cursor",
 
@@ -685,19 +759,27 @@ const cursorAdapter: McpConfigAdapter = {
 
   // The allowlist lives in a separate ~/.cursor/permissions.json that may carry
   // the user's own rules, so edit that one key instead of rewriting the file.
+  // Only a file that already has an mcpAllowlist is edited. Once that key is
+  // non-empty, Cursor enforces the file: Run Everything drops to Allowlist, and
+  // the file's list replaces the in-IDE one. Under Run Everything the rule does
+  // nothing anyway, and without the file the user approves argent in Cursor.
+  allowlistSkipReason(): string | null {
+    return cursorPermissionsList() === null
+      ? "creating ~/.cursor/permissions.json would turn off Cursor's Run Everything mode; approve argent in Cursor instead"
+      : null;
+  },
+
   addAllowlist(): void {
-    const permPath = path.join(homedir(), ".cursor", "permissions.json");
-    const config = readJsonc(permPath);
-    const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : [];
-    if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
-    editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
+    const list = cursorPermissionsList();
+    if (list === null || list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
+    editJsoncFile(cursorPermissionsPath(), ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
   },
 
   removeAllowlist(_root: string, scope: "local" | "global"): void {
     // The allowlist lives ONLY in the machine-global permissions file, which a
     // retained global install still depends on.
     if (scope !== "global") return;
-    const permPath = path.join(homedir(), ".cursor", "permissions.json");
+    const permPath = cursorPermissionsPath();
     if (!fs.existsSync(permPath)) return;
     const config = readJsonc(permPath);
     const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : undefined;
@@ -711,19 +793,11 @@ const cursorAdapter: McpConfigAdapter = {
 
 // MARK: Claude
 
-// ~/.claude.json keys its per-project entries by absolute path, so match
-// loosely: realpathSync.native canonicalizes symlinks and, on case-insensitive
-// filesystems, on-disk case.
+// ~/.claude.json keys its per-project entries by absolute path, so match them
+// by canonical path.
 function claudeProjectKeysForRoot(projects: Record<string, unknown>, root: string): string[] {
-  const canonical = (value: string): string => {
-    try {
-      return fs.realpathSync.native(value);
-    } catch {
-      return path.resolve(value);
-    }
-  };
-  const target = canonical(root);
-  return Object.keys(projects).filter((key) => key === root || canonical(key) === target);
+  const target = canonicalPath(root);
+  return Object.keys(projects).filter((key) => key === root || canonicalPath(key) === target);
 }
 
 // A recorded "reject" for the argent .mcp.json server: a rejection made before
@@ -1041,6 +1115,7 @@ const windsurfAdapter: McpConfigAdapter = {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...existingEntryKeys(configPath, "mcpServers", ["alwaysAllow"]),
     });
   },
 
@@ -1191,6 +1266,7 @@ const geminiAdapter: McpConfigAdapter = {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...existingEntryKeys(configPath, "mcpServers", ["trust"]),
     });
   },
 
@@ -1269,10 +1345,14 @@ const codexAdapter: McpConfigAdapter = {
   write(configPath: string, entry: McpServerEntry): void {
     const config = readToml(configPath);
     const servers = (config.mcp_servers ?? {}) as Record<string, unknown>;
+    // The per-tool approvals live inside the entry, so keep them as they are
+    // (see existingEntryKeys).
+    const previous = servers[MCP_SERVER_KEY] as { tools?: unknown } | undefined;
     servers[MCP_SERVER_KEY] = {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...(previous?.tools !== undefined ? { tools: previous.tools } : {}),
     };
     config.mcp_servers = servers;
     writeToml(configPath, config);
@@ -1321,6 +1401,30 @@ const codexAdapter: McpConfigAdapter = {
       };
     }
 
+    writeToml(configPath, config);
+  },
+
+  // Codex has no wildcard: each tool id is listed. A table with at least one
+  // approved tool means the user kept the allowlist, so tools this version
+  // added are approved too. Tools already listed keep the mode the user gave
+  // them, and an emptied or removed table stays as it is.
+  refreshAllowlist(root, scope): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+    if (!configPath || !fs.existsSync(configPath)) return;
+
+    const config = readToml(configPath) as CodexConfig;
+    const toolsConfig = config.mcp_servers?.argent?.tools;
+    if (!toolsConfig) return;
+    const optedIn = Object.values(toolsConfig).some(
+      (tool) => (tool as { approval_mode?: unknown } | undefined)?.approval_mode === "approve"
+    );
+    if (!optedIn) return;
+
+    const missing = getAvailableToolIds().filter((tool) => !(tool in toolsConfig));
+    if (missing.length === 0) return;
+    for (const tool of missing) {
+      toolsConfig[tool] = { approval_mode: "approve" };
+    }
     writeToml(configPath, config);
   },
 
@@ -1538,6 +1642,7 @@ const kiroAdapter: McpConfigAdapter = {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...existingEntryKeys(configPath, "mcpServers", ["autoApprove"]),
     });
   },
 
@@ -1721,9 +1826,11 @@ function formatCopyDestination(
 }
 
 function formatManagedPathLabel(targetPath: string, root: string): string {
-  const home = homedir();
-  if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
-    return `~${targetPath.slice(home.length)}`;
+  // targetPath may be physical (from process.cwd() or realpath) while $HOME is not.
+  for (const home of [path.resolve(homedir()), canonicalPath(homedir())]) {
+    if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
+      return `~${targetPath.slice(home.length)}`;
+    }
   }
 
   const relative = path.relative(root, targetPath);

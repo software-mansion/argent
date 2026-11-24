@@ -16,6 +16,7 @@ Read this reference when polishing, composing, or manually reviewing an e2e test
   - [Composition and platform limits](#composition-and-platform-limits)
   - [Local scripts](#local-scripts)
   - [Snapshots and CLI runs](#snapshots-and-cli-runs)
+    - [Suites](#suites)
   - [YAML safety](#yaml-safety)
 
 ## File shape and test type
@@ -38,7 +39,7 @@ executionPrerequisite: User is signed in and viewing Settings
 steps: []
 ```
 
-The recorder also writes `version: 1`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused.
+The recorder also writes `version: 2`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused. Do not change the version of an existing file: on an iOS simulator with a landscape UI, version 1 coordinates use the portrait axes of the screen and version 2 coordinates the UI as the user sees it, and Argent runs each as it was recorded.
 
 E2E tests never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
@@ -119,7 +120,7 @@ Directives stop the test on failure and skip later steps. The available directiv
 
 - The coordinates change with the panel. Selectors resolve against a new tree.
 - A `snapshot` baseline is valid only for the posture that made it.
-- iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
+- iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions, the reading order and coordinates stay as the user sees the UI, the space of `describe` frames and screenshots.
 - iOS: a fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
 Use the launch map for cross-platform tests. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, `macos:`, and `chromium:`. `native:` is one id shared by iOS, Android, Vega, and macOS, and a per-platform key overrides it for that platform. `macos:` takes a Mac app's bundle id. `chromium:` accepts a relative or absolute app path. `ios:` and `macos:` also accept `{ app, args }`; Argent passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no test needs a key for a remote run. On an iOS simulator, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
@@ -277,6 +278,23 @@ Do not use a snapshot as the only proof of navigation, persistence, data, access
 Baselines live beside the test, under `.argent/e2e/__baselines__/<name>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A test that a `tool: e2e-execute` step runs keeps its own baselines, and `--update-baselines` updates them too unless the step sets `updateBaselines` itself. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
 
 Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. For a Mac app, pass `--platform macos` and omit `--device`; the key holds the window size in points, so a new window size needs new baselines. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed snapshots' images and failed steps' screenshots under `<dir>/<name>/` for CI artifact upload.
+
+### Suites
+
+`argent e2e run <dir> [--recursive]` runs the tests of a directory. They are independent, and their order is not guaranteed. When a test needs the state that an earlier test leaves, make the directory a suite: add `suite.config.yaml` beside the tests.
+
+```yaml
+continueOnFailure: false # optional; true runs the later tests after a failure
+tests: # optional; default is file name order
+  - add-post
+  - delete-post
+```
+
+- A failed test skips the later tests of its suite (`skipped (earlier test failed)`). A `requires:` skip is not a failure.
+- With `tests:`, a test file in the directory that the list does not name does not run, and the run warns.
+- A suite holds only the test files directly in its directory. A subdirectory is a separate suite only with its own `suite.config.yaml`.
+- Quote a test name that YAML reads as a number or boolean: `- "2024"`.
+- An invalid file skips every test of its suite and the run exits 1. A run of one test ignores the file, so a test that needs the state of an earlier test fails alone: replay the suite directory.
 
 ## YAML safety
 

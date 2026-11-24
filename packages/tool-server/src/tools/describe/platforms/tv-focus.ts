@@ -66,15 +66,11 @@ function frameOf(element: TvElement): DescribeNode["frame"] {
 }
 
 /**
- * Synthetic trait marking the cursor. Carried in `role` — rather than only in
- * the `focused` field — so it does two jobs the field cannot:
- *
- *  - it is selectable, making "wait until focus lands on X" expressible as
- *    `{ selector: { text: "X", role: "focused" }, condition: "exists" }`, which
- *    is the wait a TV `run-sequence` actually needs between `tv-remote` and
- *    `select`;
- *  - it puts the cursor into the idle fingerprint, so a screen whose focus is
- *    still moving does not read as settled.
+ * Synthetic trait marking the cursor. Carried in `role` as well as the
+ * `focused` field so a selector can match it, making "wait until focus lands on
+ * X" expressible as `{ selector: { text: "X", role: "focused" }, condition:
+ * "exists" }`, which is the wait a TV `run-sequence` actually needs between
+ * `tv-remote` and `select`.
  *
  * Safe as a `role` token: role matching is a case-insensitive substring, and no
  * real trait on either backend contains "focused" (`_focusGuide` and

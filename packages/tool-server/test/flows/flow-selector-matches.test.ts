@@ -19,6 +19,9 @@ import {
   type FlowSelector,
 } from "../../src/tools/flows/flow-utils";
 import { createFlowTestHarness, label, n, screen } from "./harness";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const { run, runWithCalls, writeFlow } = createFlowTestHarness({
   tempDirectoryPrefix: "flow-sel-matches-",
@@ -249,6 +252,20 @@ describe("regex text selectors: parse/serialize", () => {
     expect(() =>
       parseFlow("steps:\n  - type: { into: { text: { matches: '(' } }, text: hi }\n")
     ).toThrow(/not a valid regular expression/i);
+  });
+
+  it("keeps the engine's message about an invalid pattern on one line", () => {
+    let message = "";
+    try {
+      parseFlow('steps:\n  - tap: { text: { matches: "(a\\nb\\e[31m" } }\n');
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(
+      "is not a valid regular expression: Invalid regular expression: /(a\\nb\\u001b[31m/"
+    );
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("\u001b");
   });
 });
 

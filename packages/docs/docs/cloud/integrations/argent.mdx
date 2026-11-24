@@ -14,7 +14,10 @@ Argent, the toolkit for AI agents, uses `sim-remote` to drive the hosted simulat
 2. Run `sim-remote login`.
 3. Ask the agent to list the devices.
 
-Argent finds the `sim-remote` binary on your `PATH` and reuses your session. If `sim-remote` is not installed or you are not logged in, Argent shows no hosted simulators and reports no error.
+Argent finds the `sim-remote` binary on your `PATH` and reuses your session. If `sim-remote` is not installed or you are not logged in, Argent shows no hosted simulators. In these cases, `list-devices` gives the agent a note:
+
+- On a computer that cannot run iOS simulators, the note tells the agent about Argent Cloud. The agent can then tell you about it when your task needs iOS.
+- When `sim-remote` is installed but you are not logged in, the note tells the agent to ask you to run `sim-remote login`.
 
 ## What the agent does on a hosted simulator
 
@@ -44,5 +47,6 @@ When the agent connects the debugger or starts Metro, Argent opens a reverse tun
 
 - Argent supports iOS simulators on Argent Cloud. There are no hosted Android devices at this moment.
 - The idle release of the machine also applies to the agent. See [Manage machines](/docs/cloud/guides/machines).
+- Argent does not mock audio on hosted simulators. The audio tools fail on a remote simulator.
 
 The [tools reference](/docs/reference/tools) lists the Argent tools. The [CLI reference](/docs/cloud/reference/cli) lists the `sim-remote` commands.
