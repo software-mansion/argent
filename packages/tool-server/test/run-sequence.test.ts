@@ -5,6 +5,13 @@ vi.mock("../src/utils/harmony-flag", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/harmony-flag")>()),
   isHarmonyEnabled: () => true,
 }));
+vi.mock("../src/tools/describe/platforms/ios", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tools/describe/platforms/ios")>()),
+  describeIos: async () => ({
+    source: "ax-service",
+    tree: { role: "Application", frame: { x: 0, y: 0, width: 1, height: 1 }, children: [] },
+  }),
+}));
 import { z } from "zod";
 import { Registry } from "@argent/registry";
 import type { ToolContext } from "@argent/registry";
