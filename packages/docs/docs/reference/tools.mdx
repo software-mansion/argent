@@ -574,6 +574,7 @@ These rules also apply:
 - The tool reads the `js` layer through the connection that the start opened to the JS runtime of the app. The tool does not connect again, and it does not install or resume the capture. After a reload, a relaunch or a restart of Metro, the tool cannot read the `js` layer. The `note` of the layer tells you to call `network-capture-start` again. Before the JavaScript loads, the tool cannot read the `js` layer either.
 - When the pause of an earlier stop is still in the JS runtime, the `js` layer records nothing, and the tool does not count it as armed. The `note` of the layer tells you to call `network-capture-start` again.
 - A start that did not read the mark of the `js` layer sets no mark, for example when the JS runtime did not answer. Then the tool does not read the `js` layer until a later start reads a mark.
+- On a Mac app, a start that finds the `macos-native` layer unavailable turns off the capture of an earlier start. This start also removes the mark of the `macos-native` layer, except after a stop.
 - `stop-all-simulator-servers` and a stop of the services of the device remove the marks of the native layers. `stop-all-simulator-servers` also removes the mark of the `js` layer when it reaches the JS runtime. A stop of the tool-server removes each mark.
 - The layers keep only the most recent requests. A request that a layer removed does not match. See [Limits](/docs/features/network#limits).
 

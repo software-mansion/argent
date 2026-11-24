@@ -232,8 +232,8 @@ export interface MacosAppApi {
   /**
    * Turns off the capture that an earlier start left on for the app's next
    * connection, as before any start, when a later start finds that argent
-   * cannot capture the copy that runs. A stop stays, and so do the records.
-   * Does nothing while the app is connected.
+   * cannot capture the copy that runs. A stop stays, and so do the records
+   * and the stop's mark. Does nothing while the app is connected.
    */
   forgetNetworkCaptureStart(): void;
   isNetworkCaptureStarted(): boolean;
@@ -1922,11 +1922,13 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       }
     },
     forgetNetworkCaptureStart() {
-      // A connected app is a copy that argent captures.
-      if (liveChannel()) return;
+      // A connected app is a copy that argent captures, and a stop keeps its mark.
+      if (liveChannel() || !captureStarted) return;
       captureStarted = false;
       captureGap = false;
       armedSinceLaunch = false;
+      // await-network-request reads no layer whose capture is off.
+      captureMark = undefined;
     },
     isNetworkCaptureStarted: () => captureStarted,
     isNetworkCaptureStopped: () => captureStopped,
