@@ -49,29 +49,8 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
   killChromiumByPort: vi.fn(),
 }));
 
-// Five tests here drive the launch gate's real 1.5 s settle plus the whole
-// connect wait in fake time, pumping a real event-loop turn between advances so
-// the run's disk I/O can settle. Each pump is a real macrotask, so the cost is
-// the pump count, not the fake duration — under full-suite load it outruns
-// vitest's 5 s default. Widening the advance is NOT the fix: coarser steps
-// starve that I/O and take longer in real time (measured: 1 s steps took the
-// file from 46 s to 52 s). Budget the pumping, and prefer unit-testing the pure
-// message mapping over driving the whole runner once per case.
+// Runner tests here wait out real-time sleeps of several seconds.
 vi.setConfig({ testTimeout: 60_000 });
-
-/**
- * Ceiling on those pumps. The loop has to cover the settle plus the entire
- * connect wait in fake time — one 250 ms advance each — and still have turns
- * spare for the real-async steps interleaved between them, which multiply as
- * parallel workers contend for the disk.
- *
- * Derived from the connect budget rather than fixed, because running out is
- * silent and mimics nothing else: the run never settles, the loop abandons it
- * pending, and the test hangs on `await pending` until the timeout — so it reads
- * as slowness, and no timeout value fixes it. A settled run leaves the loop
- * immediately, so the headroom costs nothing.
- */
-const PUMP_LIMIT = Math.ceil(NATIVE_READY_TIMEOUT_MS / 250) * 10;
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 let tmpDir: string;
@@ -3199,19 +3178,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
         "launch:pass",
@@ -3244,19 +3219,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps[0].status).toBe("pass");
       expect(appConnectionState).not.toHaveBeenCalled();
@@ -3509,22 +3480,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    // Leave setImmediate real: the run reads the flow off disk between sleeps,
-    // and that I/O needs actual event-loop turns. Pumping one between advances
-    // elapses the 1.5 s settle and 8 s connect wait in fake time.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps[0].status).toBe("error");
       expect(result.steps[0].reason).toContain(
@@ -3578,19 +3542,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps[0].status).toBe("error");
       expect(result.steps[0].reason).toContain(`${CAPTURE_WAIT_MS + LAUNCH_TO_VERDICT_MS} ms`);
@@ -3606,8 +3566,7 @@ describe("flow composition (run:)", () => {
   // back the relaunch that just ran, which re-runs into the identical state.
   //
   // Exercised directly rather than through the runner: it is a pure function of
-  // (bundleId, state), and each runner pass costs ~9 s of pumped fake time. The
-  // end-to-end test above proves the gate reaches it at all.
+  // (bundleId, state). The end-to-end test above proves the gate reaches it at all.
   describe("flowLaunchGateReason", () => {
     it.each([
       // `not_running` is the sharpest: a relaunch is what produced the state
@@ -3703,19 +3662,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps[0].status).toBe("pass");
       expect(result.ok).toBe(true);
@@ -3752,19 +3707,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
         "launch:error",
