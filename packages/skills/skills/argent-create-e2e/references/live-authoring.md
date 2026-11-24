@@ -146,13 +146,13 @@ A warning does not reject the step. If `e2e-finish-recording` reports dropped wa
 
 ### Network capture
 
-On iOS, Android, and Mac apps, record a capture start before reading network logs. A `tool:` step can pass even when the log says capture is off. On Chromium, `view-network-logs` lists every request of the tab from the first tool call. There, `network-capture-start` and `network-capture-stop` only mark where the capture window begins and ends, and `bundleId` is any name.
+On iOS, Android, and Mac apps, record a capture start before reproducing the request. On Chromium, record `view-network-logs` before the action if you only need to inspect requests. Use start and stop steps when the test needs a capture window. The Chromium log includes requests outside that window.
 
-1. Record `network-capture-start` through `e2e-add-step` after the launch and its first-screen wait, before the action whose requests the test reads. A launch ends the capture of the JS layer. A start before `launch:` makes the test a fragment.
-2. Before a recorded `network-capture-stop`, record a wait for the screen that shows the result of the request. On iOS, Android, and Mac apps, Argent records no request that the app sends after the stop.
-3. If a read says that capture is not started, do not answer it with a direct `network-capture-start` call: the replay does not have that call. Record the start, then record the action and the read again.
+1. Add `network-capture-start` through `e2e-add-step` after the launch and first-screen wait, if present, and before the action. A relaunch ends JS capture. A start before `launch:` makes the test a fragment.
+2. Record a wait for the screen that shows the request result before adding `network-capture-stop`.
+3. If a read reports that capture never started, record the start through `e2e-add-step`, then re-record the action and the read. Replay only runs the steps you recorded.
 4. A `tool:` step keeps its recorded `bundleId` on every platform. Only `launch:` takes an id per platform. If the app id differs by platform, add a top-level `requires:` block with the recording platform (see [File shape and test type](e2e-yaml.md#file-shape-and-test-type)). Record a separate test for each other platform.
-5. A `tool: network-capture-start` or `tool: network-capture-stop` step passes whatever its `armed` says. A start that armed no layer passes, and so does a stop whose JS layer stays `armed: true`. After each replay, read `armed` and `reason` of each layer in the step's `result`. If the start did not arm the layer that the test reads, or the stop did not disarm it, the reads after it prove nothing.
+5. After replay, check `armed` and `reason` for the layer the test uses in each step's `result`. A passed step can report an unarmed start or an unconfirmed stop. A Chromium stop reports `armed: false` even when `reason` says no capture window was started. Fix the reported problem and replay before relying on the capture.
 
 ### Wrong turns
 

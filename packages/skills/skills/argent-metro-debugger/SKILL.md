@@ -10,7 +10,7 @@ Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`
 - **React Native (iOS / Android)**: Metro running (default `localhost:8081`) and the app connected to it. Verify with `debugger-status`.
 - **Android**: a physical device, a TV emulator, or a dev client that loads from `localhost` needs `adb -s <serial> reverse tcp:<port> tcp:<port>` (default 8081). If `list-devices` returns a note about the adb server, prefix the command as the note shows. Run it again after a reboot or an adb restart; Argent doesn't restore it. A bare RN app on a phone emulator uses `10.0.2.2` and doesn't need it; `react-native run-android` and `expo run:android` set it up themselves.
 - **Vega (Fire TV)**: a **Debug `.vpkg`** (a Release build never attaches) and Metro reachable from the device (`vega device start-port-forwarding --port 8081 --forward false`). `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools are unavailable there; see `references/vega.md` of the `argent-tv-interact` skill.
-- **Chromium (CDP)**: an Electron app booted with `boot-device` `electronAppPath`, or a Chromium browser exposing a CDP port (`list-devices` finds it). Pass its `chromium-cdp-<port>` id as `device_id`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry`, `view-network-logs` and `view-network-request-details` work there; the other debugger and profiler tools are React Native only. Chromium records the tab's requests from the first tool call, and `view-network-logs` keeps listing every request; `network-capture-start` and `network-capture-stop` there only mark where the capture window begins and ends.
+- **Chromium (CDP)**: an Electron app booted with `boot-device` `electronAppPath`, or a Chromium browser exposing a CDP port (`list-devices` finds it). Pass its `chromium-cdp-<port>` id as `device_id`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry`, `view-network-logs` and `view-network-request-details` work there; the other debugger and profiler tools are React Native only.
 
 ## 2. Tools
 
@@ -36,7 +36,9 @@ On iOS, Android, and Mac apps, call `network-capture-start` before reproducing t
 
 Use the device ID as `udid` for start and stop. If shared Metro requires a logical ID on iOS or Android, pass it as `logicalDeviceId` for start and stop, and as `device_id` when reading. Keep the Metro port consistent across calls.
 
-On Vega, call `view-network-logs` before reproducing the request and again after a reload. On Chromium and Electron, capture starts when Argent attaches to the page.
+On Vega, call `view-network-logs` before reproducing the request and again after a reload.
+
+On Chromium and Electron, call `view-network-logs` before reproducing the request so Argent connects to the page. Use `network-capture-start` and `network-capture-stop` to mark a capture window when needed. The log includes requests outside that window.
 
 ### React Native Mac apps
 

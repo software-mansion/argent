@@ -59,7 +59,7 @@ A request that runs at the stop completes in the list on iOS, on a Mac app and i
 
 On Vega, ask the agent to read the JS network log before you reproduce the request. The first read starts capture. A reload or restart clears the log and ends capture. Read the log again to resume capture. The app keeps recording if Argent disconnects or stops.
 
-On Chromium and Electron, Argent records from the first Chromium tool call until it disconnects from the page. The agent can also start and stop the capture there. A start marks where a capture window begins. A stop marks where the capture window ends. The network log continues to show each request of the page, also after a stop.
+On Chromium and Electron, Argent records requests while it is connected to the page. Ask the agent to open the network log before you reproduce the request. Start and stop mark a capture window. The log also includes requests outside that window. See the [Chromium capture reference](/docs/reference/tools#network-capture-on-chromium-and-electron).
 
 ## Native network capture on Android
 
@@ -103,7 +103,7 @@ Argent captures native `URLSession` requests from Mac and Mac Catalyst apps that
 
 Apple apps and builds that the hardened runtime prevents Argent from launching are unavailable for native capture. A supported React Native build that you start from Xcode can still use JavaScript capture through Metro. For Electron, use Chromium network capture.
 
-See the [capture reference](/docs/reference/tools#network-capture-on-ios-android-mac-apps-and-chromium) for startup and recovery steps.
+See the [capture reference](/docs/reference/tools#network-capture-on-ios-android-and-mac-apps) for startup and recovery steps.
 
 The app can run before the capture starts. Then the header line of the first result tells that Argent did not record the earlier requests.
 
