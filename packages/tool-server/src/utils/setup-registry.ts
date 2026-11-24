@@ -63,6 +63,7 @@ import { createUiTreeTool } from "../tools/ui-tree";
 import { createForegroundAppTool } from "../tools/foreground-app";
 import { createFillTool } from "../tools/fill";
 import { createAwaitUiElementTool } from "../tools/await-ui-element";
+import { createAwaitNetworkRequestTool } from "../tools/await-network-request";
 import { createAwaitScreenIdleTool } from "../tools/await-screen-idle";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
@@ -196,6 +197,7 @@ export function createRegistry(): Registry {
   registry.registerTool(networkRequestTool);
   registry.registerTool(createNetworkCaptureStartTool(registry));
   registry.registerTool(createNetworkCaptureStopTool(registry));
+  registry.registerTool(createAwaitNetworkRequestTool(registry));
   registry.registerTool(createDescribeTool(registry));
   registry.registerTool(createUiTreeTool(registry));
   registry.registerTool(createForegroundAppTool(registry));

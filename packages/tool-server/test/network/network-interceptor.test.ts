@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkLogReadScript,
+  makeNetworkWaitReadScript,
   makeNetworkDetailReadScript,
   NETWORK_CAPTURE_MARK_SCRIPT,
   NETWORK_CAPTURE_END_SCRIPT,
@@ -5157,6 +5158,43 @@ describe("makeNetworkLogReadScript", () => {
       request: { url: "https://api.test/old" },
       response: { url: "https://api.test/new" },
     });
+  });
+});
+
+describe("makeNetworkWaitReadScript", () => {
+  it("lists the requests after the mark in the mark's context, every one of another, minus Metro's", async () => {
+    const rt = createRuntime();
+    rt.install();
+    await xhrRoundTrip(rt, "https://api.test/before", "b");
+    const mark = markOf(rt);
+    for (const url of ["https://api.test/after", "http://localhost:8081/symbolicate"]) {
+      await xhrRoundTrip(rt, url, "a");
+    }
+    const read = (m: Parameters<typeof makeNetworkWaitReadScript>[0]) =>
+      JSON.parse(rt.run(makeNetworkWaitReadScript(m, 8081)) as string) as {
+        installed: boolean;
+        token: string;
+        entries: Array<Record<string, unknown>>;
+      };
+
+    const answer = read(mark);
+    expect(answer).toMatchObject({ installed: true, token: mark.install });
+    // The list fields only: a body stays in the app.
+    expect(answer.entries).toEqual([
+      {
+        requestId: "rn-net-2",
+        state: "finished",
+        method: "GET",
+        url: "https://api.test/after",
+        status: 200,
+        durationMs: expect.any(Number),
+        timestamp: expect.any(Number),
+      },
+    ]);
+    // A reload gives the context another token, and its ids start at 1 again.
+    expect(
+      read({ install: "a-context-before-the-reload", lastId: 99 }).entries.map((e) => e.url)
+    ).toEqual(["https://api.test/before", "https://api.test/after"]);
   });
 });
 

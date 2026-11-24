@@ -195,7 +195,7 @@ export async function resolveDebuggerService(
 /**
  * A not_connected result is a successful tool return, but a flow step using
  * these tools as a connectivity gate must not green-pass on it. Mirrors
- * isUnmetUiWaitResult for await-ui-element.
+ * isUnmetWaitResult for the wait tools.
  */
 export function isDebuggerNotConnectedResult(
   toolId: string,
