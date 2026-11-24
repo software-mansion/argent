@@ -46,6 +46,8 @@ The installation wizard:
 - detects your editor and registers the MCP server,
 - copies skills into your workspace.
 
+The wizard installs the skills with the `skills` CLI through `npx`. When `npx` is not on `PATH`, for example when pnpm manages Node.js and npm is not installed, the wizard uses `pnpm dlx` instead. `argent update` does the same when it updates the skills. With neither `npx` nor `pnpm` on `PATH`, the wizard prints the commands to copy the skills manually.
+
 The MCP server gives the agent its usage guidance in the server instructions. When the wizard configures the MCP server globally, it writes no rule file. When the wizard configures the MCP server for one project, it also writes a short rule into that project. This rule tells the agent what to do when the project uses Argent but Argent is not installed.
 
 <Video
