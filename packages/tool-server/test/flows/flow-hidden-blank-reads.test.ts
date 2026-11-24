@@ -19,6 +19,9 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -309,6 +312,31 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     expect(result.steps[0].reason).not.toMatch(/no element matched/);
   });
 
+  it("lands the final poll on the deadline, not a poll interval past it", async () => {
+    // The dark tail runs to the final poll, so the last sleep is clamped to the
+    // deadline: unclamped, the 300ms polls of a 1000ms window end at 1200ms.
+    const readsAt: number[] = [];
+    currentFetch = () => {
+      readsAt.push(Date.now());
+      return {
+        tree: screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+
+    await writeFlow("clamped-await", {
+      executionPrerequisite: "",
+      steps: [{ kind: "await", condition: "exists", selector: { text: "Done" }, timeout: 1000 }],
+    });
+
+    const result = await run("clamped-await");
+
+    expect(result.steps[0].status).toBe("fail");
+    const span = readsAt.at(-1)! - readsAt[0]!;
+    expect(span).toBeGreaterThan(900);
+    expect(span).toBeLessThan(1_200);
+  });
+
   it("assert text: does not quote stale element text from before the reads went dark", async () => {
     // Read 1 sees the banner saying "Loading"; then the source dies. Quoting
     // `its text was "Loading"` at the deadline would present a first-poll
@@ -382,6 +410,66 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     expect(result.steps[0].reason).toMatch(/no element matched/);
     expect(result.steps[0].reason).toMatch(
       /final poll could not read the UI tree: native devtools disconnected/
+    );
+  });
+
+  // Trusted reads of `nodes` until 950ms into the 1s assert window, then empty
+  // trees: blind once the selector has matched, and inside the dark-tail
+  // tolerance. `quotable` reads carry a quotableTree, as after a typed secret.
+  function blankFrom950ms(nodes: DescribeNode[], quotable = false): void {
+    let firstReadAt: number | undefined;
+    currentFetch = () => {
+      firstReadAt ??= Date.now();
+      const tree = Date.now() - firstReadAt >= 950 ? screen([]) : screen(nodes);
+      return { tree, ...(quotable ? { quotableTree: tree } : {}), source: "native-devtools" };
+    };
+  }
+
+  async function assertOnce(step: Record<string, unknown>): Promise<FlowRunResult> {
+    await writeFlow("blank-blip", {
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", selector: { identifier: "total" }, ...step }],
+    } as Parameters<typeof serializeFlow>[0]);
+    return run("blank-blip");
+  }
+
+  it.each([false, true])(
+    "assert text: an empty final poll within the tolerance keeps the trusted text mismatch (quotable tree: %s)",
+    async (quotable) => {
+      blankFrom950ms(
+        [
+          n({
+            identifier: "total",
+            label: "Total $41.50",
+            frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 },
+          }),
+        ],
+        quotable
+      );
+
+      const result = await assertOnce({
+        condition: "text",
+        expectedText: "Total $42.00",
+        textMatch: "equals",
+      });
+
+      expect(result.steps[0].status).toBe("fail");
+      expect(result.steps[0].reason).toBe(
+        'element matched id="total" but its text was "Total $41.50" (wanted to equal "Total $42.00")'
+      );
+    }
+  );
+
+  it("assert visible: an empty final poll within the tolerance keeps the trusted zero-area match", async () => {
+    blankFrom950ms([
+      n({ identifier: "total", label: "Total", frame: { x: 0.1, y: 0.1, width: 0, height: 0 } }),
+    ]);
+
+    const result = await assertOnce({ condition: "visible" });
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toBe(
+      'element(s) matched id="total" but none was visible (zero-area frame)'
     );
   });
 });

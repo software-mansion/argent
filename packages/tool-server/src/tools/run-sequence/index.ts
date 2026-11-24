@@ -5,7 +5,11 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
-import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import {
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
+  AWAIT_UI_ELEMENT_TOOL_ID,
+  isUnmetWaitResult,
+} from "../../utils/wait-result";
 import { isUnlandedKeyboardTextResult } from "../keyboard";
 import { unmetWaitReason } from "../../utils/tool-result-verdict";
 
@@ -35,6 +39,9 @@ export const ALLOWED_TOOLS = new Set([
   "fold",
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
+  // Returns its match or near misses, never an image: after network-capture-start, an
+  // action and its wait run as one sequence, and an unmet wait stops it.
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
 ]);
 
 type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
@@ -97,7 +104,7 @@ export function createRunSequenceTool(
     id: "run-sequence",
     description: `Execute several device interaction steps in one call.
 Use when every step is known in advance and you do not need to see the screen between steps (e.g. scrolling several times, typing then pressing enter). If a step depends on the result of an earlier one (e.g. a menu item that appears only after a tap), make separate calls instead.
-Steps run in order. If a step fails (an error, a tool that is not allowed or not supported on the target, an await-ui-element that returns success=false, or a keyboard step returning verified: false), the sequence stops there and later steps do NOT run. Returns { completed, total, steps } with a result or an error for each step that ran, so a stopped sequence returns partial results.
+If a step fails, the sequence stops. This includes an unsupported tool, a wait step that returns success=false, or a keyboard step that returns verified=false. Returns { completed, total, steps } with a result or error for each step attempted.
 One screenshot and element tree are captured after the whole sequence, not per step: call screenshot separately only for a baseline before it or to see an intermediate step. A \`{{secret:...}}\` in any step skips that capture, so type a secret and submit it in one sequence.
 On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
 
@@ -106,7 +113,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
   gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
   gesture-scroll: x, y, deltaX?, deltaY? (signed; positive scrolls down), durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
   gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
-  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?  [ios/android]
+  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge? (local iOS simulator system gesture)  [ios/android]
   gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
   gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
   button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]
@@ -118,7 +125,8 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
   fold: posture? "closed"|"half-open"|"open", or angle? 0–180, exactly one (later steps land on the new panel, whose coordinates differ)  [foldable ios sim/android emu]
   tv-remote: button (one button, or an array run as a path in one step), repeat?  [apple tv/android tv/vega]
     buttons: up/down/left/right/select/back/home/menu/playPause; rewind/fastForward/next/previous/volumeUp/volumeDown/mute on Android TV and Vega only
-  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText? (for "text"), textMatch?, timeoutMs?, pollIntervalMs?  [all]`,
+  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText? (for "text"), textMatch?, timeoutMs?, pollIntervalMs?  [all]
+  await-network-request: bundleId, url, plus the standalone tool's optional args. Call network-capture-start before the sequence.  [ios sim/android/chromium<flag:macos-apps>/macos</flag:macos-apps>]`,
     zodSchema,
     alwaysLoad: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
@@ -177,8 +185,8 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
 
         try {
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
-          if (isUnmetUiWaitResult(step.tool, result)) {
-            results.push({ tool: step.tool, error: unmetWaitReason(result) });
+          if (isUnmetWaitResult(step.tool, result)) {
+            results.push({ tool: step.tool, error: unmetWaitReason(step.tool, result) });
             break;
           }
           if (isUnlandedKeyboardTextResult(step.tool, result)) {

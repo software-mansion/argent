@@ -283,6 +283,50 @@ describe("run-sequence", () => {
     expect(result.steps.every((s) => "result" in s)).toBe(true);
   });
 
+  it("allows await-network-request, and stops the sequence at an unmet one", async () => {
+    const note =
+      'No request since network-capture-start matched within this 2000 ms wait (wanted: GET, URL containing "/v1/login", complete).';
+    const registry = mockRegistry((id: string) =>
+      id === "await-network-request"
+        ? { success: false, elapsed: 2000, cause: "unmet", note }
+        : { tapped: true }
+    );
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+          {
+            tool: "await-network-request",
+            args: { bundleId: "com.example.shop", url: "/v1/login", method: "GET" },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      }
+    );
+
+    expect(vi.mocked(registry.invokeTool).mock.calls.map(([id]) => id)).toEqual([
+      "gesture-tap",
+      "await-network-request",
+    ]);
+    // The step got the shared udid like any other.
+    expect(vi.mocked(registry.invokeTool).mock.calls[1]![1]).toEqual({
+      udid: IOS,
+      bundleId: "com.example.shop",
+      url: "/v1/login",
+      method: "GET",
+    });
+    expect(result.steps[1]).toEqual({
+      tool: "await-network-request",
+      error: `await-network-request condition not met: ${note}`,
+    });
+    expect(result.completed).toBe(1);
+    expect(result.total).toBe(3);
+  });
+
   it("only the await-ui-element tool's success:false halts — other tools are unaffected", async () => {
     // A non-wait step returning a success:false-shaped object must NOT stop the run.
     const registry = mockRegistry(() => ({ success: false }));

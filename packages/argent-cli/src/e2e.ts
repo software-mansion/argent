@@ -8,6 +8,7 @@ import {
   E2E_DIRS,
   FAILURE_CODES,
   FLOW_NAME_PATTERN,
+  SELECTABLE_PLATFORMS,
   e2eShadowWarning,
   resolveE2eFile,
 } from "@argent/registry";
@@ -24,6 +25,13 @@ import {
 import { isFeatureEnabled } from "@argent/configuration-core";
 import { FlagParseException } from "./flag-parser.js";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
+import {
+  SUITE_CONFIG_FILE,
+  planDirectoryRun,
+  unlistedWarning,
+  type RunPlanEntry,
+  type Suite,
+} from "./e2e-suite.js";
 
 export interface E2eCommandOptions {
   paths: ToolsServerPaths;
@@ -136,7 +144,8 @@ async function offersMacosPlatform(): Promise<boolean> {
 
 async function printHelp(toStderr = false): Promise<void> {
   const print = toStderr ? console.error : console.log;
-  const macos = (await offersMacosPlatform()) ? " macos |" : "";
+  const offersMacos = await offersMacosPlatform();
+  const platforms = SELECTABLE_PLATFORMS.filter((p) => p !== "macos" || offersMacos);
   print(`Usage: argent e2e <subcommand> [options]
 
 Run a YAML e2e test without an LLM in the loop. \`run\` takes any of these forms:
@@ -149,7 +158,8 @@ Run a YAML e2e test without an LLM in the loop. \`run\` takes any of these forms
            directory. It must not contain ".." segments (pass the resolved
            path instead); a path is what reaches e2e tests kept elsewhere, and
            what \`argent e2e list\` prints for nested ones
-  a dir    Every e2e test in that directory, run sequentially
+  a dir    The e2e tests in that directory, in no guaranteed order. To set
+           the order, add an optional suite.config.yaml file (see below)
 
 For a name and for a file path alike, the
 filename (minus .yaml) names the run's report and artifacts, so it must
@@ -164,8 +174,8 @@ a running instance.
 
 A directory run prints only the steps that need attention (each failure, each
 warning, and each script step's output), then its outcome. After the last test
-it lists every failed test with its reason and a command that re-runs that test
-alone, then a final summary; --recursive walks subdirectories too
+it lists every failed test with its reason and a command that re-runs it,
+then a final summary; --recursive walks subdirectories too
 (__baselines__, node_modules and dot-directories other than .argent are
 skipped). A directory run and list skip a YAML file that is not an e2e test.
 A test that fails its steps keeps the batch running, as does one the
@@ -173,6 +183,15 @@ server rejects up front — an invalid file, or a device it cannot resolve. A
 transport failure, a rejection the server does not mark as validation, or a
 reply that is not a report stops the batch and counts the remaining tests
 skipped.
+
+A directory that holds a suite.config.yaml file is a suite: its tests run in
+the order of its \`tests:\` list, or in file name order without one, and a failed
+test skips the later tests of the suite unless the file sets
+\`continueOnFailure: true\`. A test file that the \`tests:\` list does not name
+does not run. list prints the tests of a suite in run order. It leaves out a
+test file that the \`tests:\` list does not name and the tests of a suite with
+an invalid suite.config.yaml file, and names them on stderr; list --json keeps
+those tests and gives each a warning code.
 
 A test can declare a \`requires:\` block (platform, runtimeKind) that names the
 targets it supports. A directory run skips each test whose requirements the
@@ -202,18 +221,19 @@ Without a link, all step kinds run.
 
 Subcommands:
   run <test|test.yaml|dir>   Run a saved e2e test by name, a YAML file by path,
-                             or every test in a directory, and report pass/fail
+                             or the tests in a directory, and report pass/fail
                              (exit reflects result)
   list [dir] [-r] [--json]   List runnable YAML paths in dir (-r: also in its
                              subdirectories), or in .argent/e2e and
                              .argent/flows (legacy) with notes on stderr.
                              --json prints { "e2eTests": [...] } instead, with
-                             path and an optional warning per entry, plus name,
-                             legacy and shadowedBy when no dir is given
+                             path and an optional warning and suite per entry,
+                             plus name, legacy and shadowedBy when no dir is
+                             given
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega |${macos} ios-remote — narrow
+  --platform <p>         ${platforms.join(" | ")} — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,
@@ -250,7 +270,9 @@ const RUN_OPTIONS = {
   "json-stream": { kind: "boolean" },
   "recursive": { kind: "boolean", alias: "r" },
   "device": { kind: "value" },
-  "platform": { kind: "value" },
+  // The tool-server's schema rejection carries no error_kind, so in a directory
+  // run it would stop the whole batch.
+  "platform": { kind: "value", choices: SELECTABLE_PLATFORMS },
   "output": { kind: "value" },
 } as const satisfies OptionSpecs;
 
@@ -299,7 +321,7 @@ export function parseRunArgs(argv: string[]): {
     jsonStream: options["json-stream"] === true,
   };
   // Their reads are truthy-guarded, so "" would be silently dropped.
-  for (const name of ["device", "platform", "output"] as const) {
+  for (const name of ["device", "output"] as const) {
     if (options[name] === "") throw new FlagParseException(`--${name} requires a value`);
   }
   if (positionals[0] !== undefined) out.flowRef = positionals[0];
@@ -478,20 +500,25 @@ interface FailedFlow {
 
 /**
  * Why a report failed: its first failing step, numbered as renderFailedSteps
- * numbers it so the recap, the per-flow block, and a single rerun agree. The
- * reason is wire data, so it is stringified the way renderStepLine's template
- * does rather than trusted to be a string.
+ * numbers it so the recap, the per-flow block, and a single rerun agree, else
+ * the baselines this client could not write. A failing step's detail names
+ * those baselines too. The reason is wire data, so it is stringified the way
+ * renderStepLine's template does rather than trusted to be a string.
  */
 export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline" | "detail"> {
+  const unwritten = unwrittenBaselines(report);
   let n = 0;
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
     if (s.status === "fail" || s.status === "error") {
-      const detail = s.reason ? String(s.reason) : undefined;
+      const lines = s.reason ? [String(s.reason)] : [];
+      for (const line of unwritten) lines.push(`baseline not written: ${line}`);
+      const detail = lines.length ? lines.join("\n") : undefined;
       return { headline: `step ${n} ${stepLabel(s, e2eTestOf(report))}`, detail };
     }
   }
+  if (unwritten.length) return { headline: "baselines not written", detail: unwritten.join("\n") };
   return { headline: "failed with no failing step" };
 }
 
@@ -568,10 +595,14 @@ function rerunCommand(
   args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform" | "output" | "updateBaselines">
 ): string {
   const pathArg = (p: string) => shellQuoteArg(optionSafePath(p));
-  const fromCwd = path.relative(projectRoot, flowPath);
+  const fromCwd = path.relative(projectRoot, flowPath) || ".";
   const shown =
     path.isAbsolute(fromCwd) || fromCwd.split(/[\\/]+/).includes("..") ? flowPath : fromCwd;
-  const parts = ["argent e2e run", pathArg(shown)];
+  // `run` reads a bare word as a saved test name, not as a directory.
+  const parts = [
+    "argent e2e run",
+    pathArg(SAFE_FLOW_NAME.test(shown) ? `.${path.sep}${shown}` : shown),
+  ];
   if (args.device) parts.push("--device", shellQuoteArg(args.device));
   if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
   if (args.updateBaselines) parts.push("--update-baselines");
@@ -1126,16 +1157,17 @@ async function savedFlowHint(projectRoot: string, missingPath: string): Promise<
 }
 
 /**
- * Runnable e2e tests under `dir`, sorted by path relative to it. Used by both
- * `list` and a directory `run`. The recursive walk skips `__baselines__`,
- * dot-directories other than `.argent`, node_modules and directory symlinks
- * below `dir`.
+ * Runnable e2e tests and suite manifests under `dir`, sorted by path relative
+ * to it. Used by both `list` and a directory `run`. The recursive walk skips
+ * `__baselines__`, dot-directories other than `.argent`, node_modules and
+ * directory symlinks below `dir`.
  */
 async function collectFlowFiles(
   dir: string,
   recursive: boolean
-): Promise<{ path: string; warning?: E2eFileWarning }[]> {
+): Promise<{ files: { path: string; warning?: E2eFileWarning }[]; manifests: string[] }> {
   const found: { path: string; warning?: E2eFileWarning }[] = [];
+  const manifests: string[] = [];
   const walk = async (current: string, rel: string): Promise<void> => {
     for (const entry of await fsp.readdir(current, { withFileTypes: true })) {
       const entryRel = rel ? path.join(rel, entry.name) : entry.name;
@@ -1152,6 +1184,10 @@ async function collectFlowFiles(
         }
         continue;
       }
+      if (entry.name === SUITE_CONFIG_FILE) {
+        manifests.push(entryRel);
+        continue;
+      }
       if (!entry.name.endsWith(".yaml")) continue;
       if (!SAFE_FLOW_NAME.test(path.basename(entry.name, ".yaml"))) continue;
       const filePath = path.join(current, entry.name);
@@ -1162,7 +1198,10 @@ async function collectFlowFiles(
     }
   };
   await walk(dir, "");
-  return found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return {
+    files: found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+    manifests: manifests.sort(),
+  };
 }
 
 /**
@@ -1418,18 +1457,29 @@ interface BatchFlowResult {
   error?: string;
   error_code?: string;
   error_kind?: string;
-  /** Why a skipped test did not run, when it was skipped for its `requires:`. */
+  /** Why a skipped test did not run; absent when the batch stopped. */
   reason?: string;
 }
 
+/** One `[i/n]` entry of a directory run. */
+type BatchEntry =
+  | { kind: "test"; path: string; suite?: Suite; invalidManifest?: string }
+  | Extract<RunPlanEntry, { kind: "invalid-suite" }>;
+
+const INVALID_SUITE_SIGNAL = {
+  error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+  error_kind: "validation",
+};
+
 /**
- * Run every discovered flow in `dir` sequentially. Prints each flow's failing
+ * Run the discovered flows in `dir` sequentially. Prints each flow's failing
  * steps and warnings, then its outcome (no live step lines), then a flow-level
  * summary; a flow failing its steps — or one the tool-server rejects up front
  * (a bad YAML, an unparseable step, a device it cannot resolve, a refused
  * upload of one of its files) — lets the batch continue, while a transport
  * throw, a rejection the server does not mark as validation, or a reply that
- * is not a report stops it and counts the remaining flows skipped.
+ * is not a report stops it and counts the remaining flows skipped. The run
+ * order and the suites come from planDirectoryRun.
  */
 async function runFlowDirectory(
   dir: string,
@@ -1448,18 +1498,39 @@ async function runFlowDirectory(
     printError(message);
     return exitAfterFlush(2);
   };
-  let flows: string[];
+  let found: Awaited<ReturnType<typeof collectFlowFiles>>;
   try {
-    flows = (await collectFlowFiles(dir, args.recursive)).map((file) => file.path);
+    found = await collectFlowFiles(dir, args.recursive);
   } catch {
     return reject(`Could not read e2e test directory: ${dir}`);
   }
-  if (flows.length === 0) {
+  const plan = await planDirectoryRun(
+    dir,
+    found.files.map((file) => file.path),
+    found.manifests
+  );
+  if (plan.entries.length === 0) {
     return reject(
       `No e2e tests found in ${dir}` +
         (args.recursive ? "" : "\nPass -r/--recursive to include subdirectories.")
     );
   }
+  printWarnings(
+    plan.unlisted.map((file) => unlistedWarning(file.path, file.suite.manifest)),
+    args.json
+  );
+  const runOrder = plan.entries.flatMap<BatchEntry>((entry) =>
+    entry.kind === "test"
+      ? [entry]
+      : [
+          entry,
+          ...entry.tests.map((rel) => ({
+            kind: "test" as const,
+            path: rel,
+            invalidManifest: entry.manifest,
+          })),
+        ]
+  );
 
   const { callTool, baseUrl } = runToolsClient(args, options);
 
@@ -1467,6 +1538,22 @@ async function runFlowDirectory(
   const results: BatchFlowResult[] = [];
   const failures: FailedFlow[] = [];
   const batchStartedAt = Date.now();
+  // The first failed test of each suite, whose later tests then do not run.
+  const failedInSuite = new Map<Suite, string>();
+  const recordRun = (result: BatchFlowResult, suite: Suite | undefined): void => {
+    results.push(result);
+    if (result.status === "fail" && suite && !suite.continueOnFailure) {
+      failedInSuite.set(suite, result.path);
+    }
+  };
+  const skip = (rel: string, outcome: string, reason?: string): void => {
+    results.push({ path: rel, status: "skip", ...(reason !== undefined && { reason }) });
+    if (!args.json) {
+      console.log(
+        `  ${STATUS_GLYPH.skip} ${outcome}${reason === undefined ? "" : `\n    ${reason}`}`
+      );
+    }
+  };
   // A validation rejection is scoped to the one call, so the batch keeps
   // going. Anything the server does not mark that way — another kind, or none
   // at all — stops it, as does a transport throw: each remaining flow would
@@ -1475,11 +1562,37 @@ async function runFlowDirectory(
   // An unreachable tool-server stops the batch as a setup error (exit 2): the
   // flows after it would fail to connect the same way.
   let unreachable = false;
-  for (const [i, rel] of flows.entries()) {
-    if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
+  for (const [i, entry] of runOrder.entries()) {
+    const rel = entry.kind === "test" ? entry.path : entry.manifest;
+    if (!args.json) console.log(`[${i + 1}/${runOrder.length}] ${rel}`);
+    if (entry.kind === "invalid-suite") {
+      const verdict = "not run (invalid suite config)";
+      if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
+      console.error(
+        args.json
+          ? JSON.stringify({ event: "error", error: entry.message, ...INVALID_SUITE_SIGNAL })
+          : entry.message
+      );
+      results.push({ path: rel, status: "fail", error: entry.message, ...INVALID_SUITE_SIGNAL });
+      failures.push({
+        path: rel,
+        headline: verdict,
+        detail: entry.message,
+        rerun: rerunCommand(path.join(dir, entry.dir), rel, projectRoot, args),
+      });
+      continue;
+    }
     if (stopped) {
-      results.push({ path: rel, status: "skip" });
-      if (!args.json) console.log(`  ${STATUS_GLYPH.skip} not run (batch stopped)`);
+      skip(rel, "not run (batch stopped)");
+      continue;
+    }
+    if (entry.invalidManifest !== undefined) {
+      skip(rel, "skipped (invalid suite config)", `invalid suite config: ${entry.invalidManifest}`);
+      continue;
+    }
+    const failedEarlier = entry.suite && failedInSuite.get(entry.suite);
+    if (failedEarlier !== undefined) {
+      skip(rel, "skipped (earlier test failed)", `earlier test failed: ${failedEarlier}`);
       continue;
     }
     const flowPath = path.join(dir, rel);
@@ -1496,10 +1609,7 @@ async function runFlowDirectory(
       const toolErr = err instanceof ToolInvocationError ? err : undefined;
       if (toolErr?.errorCode === FAILURE_CODES.FLOW_REQUIREMENTS_UNMET) {
         // A skip is an outcome, not a tool error, so drop the tool-server's `[Tool:<id>] ` prefix.
-        const reason = message.replace(/^\[Tool:[^\]]+\] /, "");
-        results.push({ path: rel, status: "skip", reason });
-        if (!args.json)
-          console.log(`  ${STATUS_GLYPH.skip} skipped (requires not met)\n    ${reason}`);
+        skip(rel, "skipped (requires not met)", message.replace(/^\[Tool:[^\]]+\] /, ""));
         continue;
       }
       const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
@@ -1516,7 +1626,7 @@ async function runFlowDirectory(
       // single-flow runner prints them, so a merged log reads the same way.
       if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
       printError(message, err);
-      results.push({ path: rel, status: "fail", error: message, ...failureSignal(err) });
+      recordRun({ path: rel, status: "fail", error: message, ...failureSignal(err) }, entry.suite);
       failures.push({ path: rel, headline: verdict, detail: message, rerun });
       if (!rejectedThisFlowOnly) stopped = true;
       if (unreachableErr) unreachable = true;
@@ -1527,7 +1637,7 @@ async function runFlowDirectory(
       const verdict = "did not finish (no run report)";
       if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
       printError(message);
-      results.push({ path: rel, status: "fail", error: message });
+      recordRun({ path: rel, status: "fail", error: message }, entry.suite);
       failures.push({ path: rel, headline: verdict, detail: message, rerun });
       stopped = true;
       continue;
@@ -1541,17 +1651,8 @@ async function runFlowDirectory(
       flowPath,
       baseUrl
     );
-    const unwritten = unwrittenBaselines(report);
-    results.push({ path: rel, status: report.ok && !unwritten.length ? "pass" : "fail", report });
+    recordRun({ path: rel, status: report.ok ? "pass" : "fail", report }, entry.suite);
     if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });
-    else if (unwritten.length) {
-      failures.push({
-        path: rel,
-        headline: "baselines not written",
-        detail: unwritten.join("\n"),
-        rerun,
-      });
-    }
     if (!args.json) {
       for (const line of renderFailedSteps(report)) console.log(line);
       console.log(`  ${renderSummary(report, { withDevice: true })}`);
@@ -1643,20 +1744,23 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
           "Pass the fully resolved path to the directory."
       );
     }
-    const entries: {
+    type ListEntry = {
       path: string;
       name?: string;
       legacy?: boolean;
       shadowedBy?: string;
-      warning?: E2eFileWarning;
-    }[] = [];
+      suite?: string;
+      warning?: E2eFileWarning | "invalid-suite-config" | "not-in-suite";
+    };
+    // Plain mode leaves out of stdout the tests a suite config keeps from running.
+    const rows: { entry: ListEntry; listed: boolean; notes: string[] }[] = [];
     const byName = new Map<string, string>();
     let anyDir = false;
     const dirs = listDir === undefined ? E2E_DIRS : [listDir];
     for (const dir of dirs) {
-      let files: Awaited<ReturnType<typeof collectFlowFiles>>;
+      let found: Awaited<ReturnType<typeof collectFlowFiles>>;
       try {
-        files = await collectFlowFiles(path.resolve(dir), listDir === undefined || recursive);
+        found = await collectFlowFiles(path.resolve(dir), listDir === undefined || recursive);
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
         if (listDir === undefined && (code === "ENOENT" || code === "ENOTDIR")) continue;
@@ -1669,36 +1773,102 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
         );
       }
       anyDir = true;
-      for (const { path: rel, warning } of files) {
-        const shown = path.join(dir, rel);
-        const warningField = warning !== undefined && { warning };
+      const fileWarnings = new Map(found.files.map((file) => [file.path, file.warning]));
+      const plan = await planDirectoryRun(
+        path.resolve(dir),
+        found.files.map((file) => file.path),
+        found.manifests
+      );
+      const show = (rel: string): string => optionSafePath(path.join(dir, rel));
+      const add = (
+        rel: string,
+        inSuite: boolean,
+        notRun?: { warning: "invalid-suite-config" | "not-in-suite"; notes: string[] }
+      ): void => {
+        const shown = show(rel);
+        const fileWarning = fileWarnings.get(rel);
+        const warning = notRun?.warning ?? fileWarning;
+        let entry: ListEntry;
         if (listDir !== undefined) {
-          entries.push({ path: optionSafePath(shown), ...warningField });
+          entry = { path: shown };
+        } else {
+          // Only a file directly in the directory is reachable by name.
+          const name = path.dirname(rel) === "." ? path.basename(rel, ".yaml") : undefined;
+          const shadowedBy = name === undefined ? undefined : byName.get(name);
+          if (name !== undefined && shadowedBy === undefined) byName.set(name, shown);
+          entry = {
+            path: shown,
+            ...(name !== undefined && { name }),
+            legacy: dir !== E2E_DIR,
+            ...(shadowedBy !== undefined && { shadowedBy }),
+          };
+        }
+        if (inSuite) entry.suite = optionSafePath(path.dirname(path.join(dir, rel)));
+        if (warning !== undefined) entry.warning = warning;
+        const notes = notRun?.notes ?? [
+          ...(entry.shadowedBy === undefined
+            ? []
+            : [`warning: ${shown} is shadowed by ${entry.shadowedBy} when run by name`]),
+          ...(fileWarning === undefined
+            ? []
+            : [`warning: ${shown} ${E2E_FILE_WARNING_TEXT[fileWarning]}`]),
+        ];
+        rows.push({ entry, listed: notRun === undefined, notes });
+      };
+      for (const [i, entry] of plan.entries.entries()) {
+        if (entry.kind === "invalid-suite") {
+          const manifest = show(entry.manifest);
+          if (entry.tests.length === 0) {
+            // With no test to carry the warning, the manifest gets its own entry.
+            rows.push({
+              entry: {
+                path: manifest,
+                ...(listDir === undefined && { legacy: dir !== E2E_DIR }),
+                suite: show(entry.dir),
+                warning: "invalid-suite-config",
+              },
+              listed: false,
+              notes: [`warning: ${manifest}: ${entry.error}`],
+            });
+          }
+          for (const [j, rel] of entry.tests.entries()) {
+            add(rel, true, {
+              warning: "invalid-suite-config",
+              notes: [
+                ...(j === 0 ? [`warning: ${manifest}: ${entry.error}`] : []),
+                `  not listed: ${show(rel)}`,
+              ],
+            });
+          }
           continue;
         }
-        // Only a file directly in the directory is reachable by name.
-        const name = path.dirname(rel) === "." ? path.basename(rel, ".yaml") : undefined;
-        const shadowedBy = name === undefined ? undefined : byName.get(name);
-        if (name !== undefined && shadowedBy === undefined) byName.set(name, shown);
-        entries.push({
-          path: shown,
-          ...(name !== undefined && { name }),
-          legacy: dir !== E2E_DIR,
-          ...(shadowedBy !== undefined && { shadowedBy }),
-          ...warningField,
-        });
+        add(entry.path, entry.suite !== undefined);
+        const next = plan.entries[i + 1];
+        if (entry.suite === undefined || (next?.kind === "test" && next.suite === entry.suite)) {
+          continue;
+        }
+        for (const file of plan.unlisted.filter((f) => f.suite === entry.suite)) {
+          add(file.path, true, {
+            warning: "not-in-suite",
+            notes: [`warning: ${unlistedWarning(show(file.path), show(file.suite.manifest))}`],
+          });
+        }
       }
     }
     if (json) {
-      const doc = { e2eTests: entries, ...(!anyDir && { warning: "no-e2e-directory" }) };
+      const doc = {
+        e2eTests: rows.map((row) => row.entry),
+        ...(!anyDir && { warning: "no-e2e-directory" }),
+      };
       console.log(JSON.stringify(doc, null, 2));
       return;
     }
+    const listed = rows.filter((row) => row.listed).map((row) => row.entry);
     if (!anyDir) {
       console.error(
         `warning: no ${E2E_DIRS.join(" or ")} directory in the current working directory`
       );
-    } else if (entries.length === 0) {
+    } else if (rows.length === 0) {
       // Stdout stays empty so `list | xargs -n1 run` runs nothing.
       console.error(
         `No e2e tests found in ${listDir ?? E2E_DIRS.join(" or ")}` +
@@ -1708,16 +1878,9 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
       );
     } else {
       // Bare paths on stdout so `list | xargs -n1 run` works; notes go to stderr.
-      console.log(entries.map((entry) => entry.path).join("\n"));
-      for (const entry of entries) {
-        if (entry.shadowedBy !== undefined)
-          console.error(
-            `warning: ${entry.path} is shadowed by ${entry.shadowedBy} when run by name`
-          );
-        if (entry.warning !== undefined)
-          console.error(`warning: ${entry.path} ${E2E_FILE_WARNING_TEXT[entry.warning]}`);
-      }
-      const legacyCount = entries.filter((entry) => entry.legacy).length;
+      if (listed.length > 0) console.log(listed.map((entry) => entry.path).join("\n"));
+      for (const note of rows.flatMap((row) => row.notes)) console.error(note);
+      const legacyCount = listed.filter((entry) => entry.legacy).length;
       if (legacyCount > 0) {
         console.error(
           `note: ${legacyCount} test${legacyCount === 1 ? "" : "s"} listed from .argent/flows (legacy); move ${legacyCount === 1 ? "it" : "them"} to .argent/e2e`
@@ -2087,11 +2250,5 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   } else {
     console.log(renderReport(report));
   }
-
-  const unwritten = unwrittenBaselines(report);
-  if (!args.json && !args.jsonStream) {
-    for (const line of unwritten)
-      console.log(`  ${STATUS_GLYPH.error} baseline not written: ${line}`);
-  }
-  return exitAfterFlush(report.ok && unwritten.length === 0 ? 0 : 1);
+  return exitAfterFlush(report.ok ? 0 : 1);
 }

@@ -35,11 +35,12 @@ import {
   type RecordingSession,
 } from "./flow-utils";
 import {
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
   AWAIT_UI_ELEMENT_TOOL_ID,
-  isUnmetUiWaitResult,
-  unmetUiWaitCause,
-  type UnmetUiWaitCause,
-} from "../await-ui-element";
+  isUnmetWaitResult,
+  type UnmetWaitCause,
+} from "../../utils/wait-result";
+import { unmetWaitCause } from "../../utils/tool-result-verdict";
 import { isUnlandedKeyboardTextResult } from "../keyboard";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import {
@@ -62,6 +63,7 @@ import {
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
+import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
@@ -230,13 +232,14 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
     }
     return (
       settle +
-      // Name both axes: `normRect` clamps each edge on its own, so a
+      // Name both axes: the walker clips each edge on its own, so a
       // horizontally scrolled node comes back zero-WIDTH at a normal height.
-      "A zero-area frame in `describe` means off-viewport — zero height for a node above or " +
-      "below the viewport, zero width for one left or right of it, since the walker clamps " +
-      "each edge on its own — and the fix there is a `scroll-to` before the check rather than " +
-      "a different selector; a password field reaches the runner under the name `[password]`, " +
-      "so only an `id`/`role` selector can match it"
+      "A zero-area frame in `describe` means off-viewport, clipped by an `overflow` ancestor " +
+      "or inside a closed `<details>` (its `<summary>` opens it) — zero height for a node cut " +
+      "off above or below, zero width for one cut off left or right, since the walker clips " +
+      "each edge on its own — and the fix for a scrolled-out node is a `scroll-to` before the " +
+      "check rather than a different selector; a password field reaches the runner under the " +
+      "name `[password]`, so only an `id`/`role` selector can match it"
     );
   }
   if (platform === "macos") {
@@ -311,8 +314,9 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "Both read the same DOM but project it differently, and here it is the RUNNER's side to " +
       "check: the live wait passed, so the recorder's tree did hold a matching element and its " +
       "5000-node walk limit is not what went wrong. The runner tree keeps only addressable nodes " +
-      "(id, label, value, clickable or focused) whose frame the walker did not clamp to zero " +
-      "area for being off-viewport, and it redacts a password field's name to `[password]`." +
+      "(id, label, value, clickable or focused) whose frame the walker did not clip to zero " +
+      "area (off-viewport, or cut off by an `overflow` ancestor), and it redacts a password " +
+      "field's name to `[password]`." +
       SCREEN_MAY_HAVE_MOVED
     );
   }
@@ -440,7 +444,7 @@ const UNMET_WAIT_WARNING =
 
 /**
  * The same `success: false`, reached without a trustworthy read of the tree —
- * see {@link unmetUiWaitCause}. It must not reuse the unmet text, which asserts
+ * see `unmetUiWaitCause` in await-ui-element. It must not reuse the unmet text, which asserts
  * that the wait never held: nothing judged the condition here, so the step may
  * be perfectly good.
  */
@@ -461,15 +465,41 @@ const CANCELLED_WAIT_WARNING =
   "the e2e test anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
   "The cross-tree re-probe was skipped for the same reason";
 
-const UNLANDED_TEXT_WARNING =
-  "recorded, but the text did not land in the field (`toolResult.note` says how). At replay " +
-  "this step FAILS and stops the run, so re-record it once the text lands";
-
-function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
+function unmetWaitWarningFor(cause: UnmetWaitCause): string {
   if (cause === "unreadable") return UNREADABLE_WAIT_WARNING;
   if (cause === "cancelled") return CANCELLED_WAIT_WARNING;
   return UNMET_WAIT_WARNING;
 }
+
+/**
+ * The same three warnings for `await-network-request`, which reads the capture
+ * layers rather than the UI tree, and has no `await:` form to re-probe.
+ */
+const UNMET_NETWORK_WAIT_WARNING =
+  "recorded, but the wait never held: `await-network-request` returned success:false, and at " +
+  "replay an unmet wait FAILS the step. `toolResult.nearMisses` lists the closest requests and " +
+  "the criteria each missed: fix the matcher, or record the action that sends the request, then " +
+  "record the wait again. Delete the failed step after `e2e-finish-recording`, not mid-recording";
+
+const UNREADABLE_NETWORK_WAIT_WARNING =
+  "recorded, but no armed capture layer was read near the deadline, so the request was never " +
+  "judged and whether it is sent is UNKNOWN: `toolResult.layers` says why. Get the layer back (for " +
+  "example call network-capture-start again once the app's JavaScript has loaded) and record the " +
+  "wait again. Do not delete the step on this warning alone";
+
+const CANCELLED_NETWORK_WAIT_WARNING =
+  "recorded, but this wait was cancelled before its deadline, so whether the request is sent is " +
+  "UNKNOWN: record the step again to find out";
+
+function unmetNetworkWaitWarningFor(cause: UnmetWaitCause): string {
+  if (cause === "unreadable") return UNREADABLE_NETWORK_WAIT_WARNING;
+  if (cause === "cancelled") return CANCELLED_NETWORK_WAIT_WARNING;
+  return UNMET_NETWORK_WAIT_WARNING;
+}
+
+const UNLANDED_TEXT_WARNING =
+  "recorded, but the text did not land in the field (`toolResult.note` says how). At replay " +
+  "this step FAILS and stops the run, so re-record it once the text lands";
 
 // The indeterminate reason is quoted verbatim, and it carries whatever recovery
 // fits: on iOS `queryFullHierarchyTree` writes one per failure branch, having
@@ -1055,14 +1085,12 @@ const RUN_TARGET_COMMAND = "e2e-execute";
  * Rewrite a nested `flow-execute` target from `e2e_test_path` to the equivalent
  * `name`, in place — or reject the call before anything runs.
  *
- * `flow-add-step` forwards the nested call's arguments as opaque JSON, so a
- * `e2e_test_path` inside them never crosses flow-execute's file-input boundary and
- * `resolveFlowSource` would reject it outright. A sibling of the recording, or
- * a test in the project's other e2e test directory, is the one target with a
- * boundary-verified equivalent: the same file the `name` + `project_root` pair
- * already resolves to, beside a directory flow-start-recording established
- * through its own boundary. Every other e2e_test_path is refused here —
- * a raw `tool:` step has no boundary to resolve a path through at replay either.
+ * The recorder keeps a nested `e2e_test_path` only as the `name` it equals. A
+ * sibling of the recording, or a test in the project's other e2e test
+ * directory, is the one target with such a name: the same file the `name` +
+ * `project_root` pair already resolves to, beside a directory
+ * flow-start-recording established through its own boundary. Every other
+ * e2e_test_path is refused here.
  * The on-disk spelling is the answer of `project`, on the client over a link;
  * a linked call whose client sent no files has no answer to give, and is
  * refused.
@@ -1079,10 +1107,10 @@ async function rewriteSiblingFlowPath(
 
   const invalid = (detail: string): FailureError =>
     new FailureError(
-      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": ${detail}. e2e_test_path carries no ` +
-        `file-input resolution through e2e-add-step's opaque args — pass name + project_root ` +
-        `for an e2e test saved beside the recording, or add a \`run: <relative path>.yaml\` step to ` +
-        `the e2e test YAML by hand for a cross-directory target.`,
+      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": ${detail}. The recorder keeps ` +
+        `an e2e_test_path only as the name it equals — pass name + project_root for an e2e test saved ` +
+        `beside the recording, or add a \`run: <relative path>.yaml\` step to the e2e test YAML ` +
+        `by hand for a cross-directory target.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_add_step_flow_path",
@@ -1131,7 +1159,11 @@ async function rewriteSiblingFlowPath(
   ) {
     throw invalid(
       `it is not in the recording's e2e test directory ("${flowsDir}") or the project's other ` +
-        `e2e test directory, and a raw tool: step has no boundary to resolve a path through at replay`
+        `e2e test directory` +
+        (path.isAbsolute(flowPath)
+          ? ""
+          : `, as the tool server resolves a relative path against its own cwd ("${process.cwd()}"), ` +
+            `not the calling agent's - pass the absolute path`)
     );
   }
   // basename leaves a suffix in place when stripping it would leave nothing, and
@@ -1580,8 +1612,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         ? new ClientProjectAccess(stepFiles)
         : new HostProjectAccess();
 
-      // A nested flow-execute must never carry a raw e2e_test_path into the live
-      // invoke — it has no boundary metadata there and would be rejected.
       if (command === RUN_TARGET_COMMAND) {
         await rewriteSiblingFlowPath(session, args, project, linked);
       }
@@ -1707,6 +1737,20 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           }
         );
       }
+      if (isDebuggerNotConnectedResult(params.command, toolResult)) {
+        // debugger-log-registry's note is consumed as it is read, so this
+        // message is the only place it can still reach the agent.
+        const note = (toolResult as { note?: unknown }).note;
+        throw new FailureError(
+          `${params.command}: debugger not connected (${toolResult.reason}) - nothing was recorded. ${toolResult.detail} ${toolResult.guidance}${typeof note === "string" ? ` ${note}` : ""}`,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_NOT_CONNECTED,
+            failure_stage: "flow_add_step_debugger_not_connected",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          }
+        );
+      }
 
       // A wait that HELD is asked the runner's tree as well, so the author
       // learns now — rather than after polish — whether the conversion is safe.
@@ -1718,17 +1762,19 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // The two are filed under different kinds because only the probe's answer
       // is about converting the step, and the finish counts them separately.
       let stepWarning: { warning: string; kind: "conversion" | "wait" | "text" } | undefined;
-      if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
-        if (isUnmetUiWaitResult(params.command, toolResult)) {
-          stepWarning = {
-            warning: unmetWaitWarningFor(unmetUiWaitCause(toolResult)),
-            kind: "wait",
-          };
-        } else {
-          const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
-          if (probed) stepWarning = { warning: probed, kind: "conversion" };
-        }
-      } else if (isUnlandedKeyboardTextResult(params.command, toolResult)) {
+      if (isUnmetWaitResult(command, toolResult)) {
+        const cause = unmetWaitCause(command, toolResult);
+        stepWarning = {
+          warning:
+            command === AWAIT_NETWORK_REQUEST_TOOL_ID
+              ? unmetNetworkWaitWarningFor(cause)
+              : unmetWaitWarningFor(cause),
+          kind: "wait",
+        };
+      } else if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
+        const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
+        if (probed) stepWarning = { warning: probed, kind: "conversion" };
+      } else if (isUnlandedKeyboardTextResult(command, toolResult)) {
         stepWarning = { warning: UNLANDED_TEXT_WARNING, kind: "text" };
       }
 

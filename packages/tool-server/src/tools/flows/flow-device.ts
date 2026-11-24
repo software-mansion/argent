@@ -1,5 +1,5 @@
 import type { DeviceInfo, FailureCode, Platform, Registry, ToolContext } from "@argent/registry";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type SelectablePlatform } from "@argent/registry";
 import { getAndroidRuntimeKind } from "../../utils/adb";
 import { MACOS_APPS_FLAG_OFF_REASON, macosAppsUnavailableReason } from "../../utils/capability";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
@@ -13,11 +13,10 @@ import {
   type FlowRequires,
   type FlowRuntimeKind,
   type FlowStep,
-  type SelectablePlatform,
 } from "./flow-utils";
 
 /**
- * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in flow-utils.
+ * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in @argent/registry.
  * Wider than the authoring set by `ios-remote`: a remote simulator is a device
  * a run can select, never something a flow file names.
  */

@@ -11,6 +11,7 @@ import { tvControlBlueprint } from "../blueprints/tv-control";
 import { androidTvControlBlueprint } from "../blueprints/android-tv-control";
 import { macosAppBlueprint } from "../blueprints/macos-app";
 import { androidNetworkInspectorBlueprint } from "../blueprints/android-network-inspector";
+import { androidNetworkShaperBlueprint } from "../blueprints/android-network-shaper";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { createNativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
@@ -42,6 +43,7 @@ import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
 import { createRotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
+import { networkConditionsTool } from "../tools/network-conditions";
 import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
@@ -54,11 +56,14 @@ import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-e
 import { createDebuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
+import { createNetworkCaptureStartTool } from "../tools/network/network-capture-start";
+import { createNetworkCaptureStopTool } from "../tools/network/network-capture-stop";
 import { createDescribeTool } from "../tools/describe";
 import { createUiTreeTool } from "../tools/ui-tree";
 import { createForegroundAppTool } from "../tools/foreground-app";
 import { createFillTool } from "../tools/fill";
 import { createAwaitUiElementTool } from "../tools/await-ui-element";
+import { createAwaitNetworkRequestTool } from "../tools/await-network-request";
 import { createAwaitScreenIdleTool } from "../tools/await-screen-idle";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
@@ -145,6 +150,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(androidTvControlBlueprint);
   registry.registerBlueprint(macosAppBlueprint);
   registry.registerBlueprint(androidNetworkInspectorBlueprint);
+  registry.registerBlueprint(androidNetworkShaperBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
@@ -176,6 +182,7 @@ export function createRegistry(): Registry {
   registry.registerTool(menuBarTool);
   registry.registerTool(createRotateTool(registry));
   registry.registerTool(shakeTool);
+  registry.registerTool(networkConditionsTool);
   registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));
@@ -188,6 +195,9 @@ export function createRegistry(): Registry {
   registry.registerTool(createDebuggerLogRegistryTool(registry));
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
+  registry.registerTool(createNetworkCaptureStartTool(registry));
+  registry.registerTool(createNetworkCaptureStopTool(registry));
+  registry.registerTool(createAwaitNetworkRequestTool(registry));
   registry.registerTool(createDescribeTool(registry));
   registry.registerTool(createUiTreeTool(registry));
   registry.registerTool(createForegroundAppTool(registry));

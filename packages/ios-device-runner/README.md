@@ -51,11 +51,12 @@ build-for-testing` (signed with the user's team; see the environment
    Xcode's settings cannot move the products out of that directory.
 2. Per session it launches `xcodebuild test-without-building` detached;
    testmanagerd installs and starts the runner on the device. The runner
-   binds a system-assigned loopback port and logs it as
+   binds a system-assigned port on loopback (USB) or the CoreDevice tunnel address and logs it as
    `ARGENT_RUNNER_LISTENING port=N`; the tool-server reads that line from
    the launch log before it sends the first command.
-3. Commands travel as one HTTP POST per command over usbmux (USB cable
-   only). `PROTOCOL.md` documents the contract.
+3. Commands travel as one HTTP POST per command over usbmux for USB devices,
+   or IPv6 TCP for connected CoreDevice network devices.
+   `PROTOCOL.md` documents the contract.
 
 ## Build-time configuration
 
@@ -88,7 +89,7 @@ Management.
 The Xcode project itself needs no locating either: it always sits next to the
 bundled tool-server. An npm install of `@swmansion/argent` ships these Swift
 sources there (the build step copies `ArgentRunner/` next to the bundle), and
-in the argent repo `npm run build` in `packages/argent` produces the same
+in the argent repo `bun run build` in `packages/argent` produces the same
 layout.
 `ARGENT_IOS_RUNNER_PROJECT` overrides the location for tool-server runs
 outside the bundle (ts-node, tests) or unusual layouts.
