@@ -821,8 +821,17 @@ describe("boot-device Android — readOnly and port", () => {
     }
   });
 
-  it.each([5555, 5552, 5586])("rejects port %i in the schema", (port) => {
+  it.each([5555, 5552, 5586])("refuses port %i on Android without spawning", async (port) => {
+    expect(await failureCode(boot({ port }))).toBe("BOOT_ANDROID_PORT_INVALID");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a non-Android target through with a port outside the emulator range", () => {
+    // An agent may echo the `port` of a Chromium result, such as 9222; the key
+    // is ignored off Android, so it must not fail validation there.
     const tool = createBootDeviceTool(registry);
-    expect(tool.zodSchema!.safeParse({ avdName: AVD, port }).success).toBe(false);
+    expect(tool.zodSchema!.safeParse({ electronAppPath: "/tmp/App.app", port: 9222 }).success).toBe(
+      true
+    );
   });
 });

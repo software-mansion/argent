@@ -91,6 +91,8 @@ On Android, `boot-device` accepts two parameters that let several emulators run 
 | `readOnly`              | Boot the emulator with `-read-only`. Defaults to `false`. The emulator saves no snapshot, and it loses its changes when it exits.                                                         |
 | `port`                  | The console port of the emulator, an even number from 5554 to 5584. adb finds emulators only in that range. The serial is `emulator-<port>`. Without `port`, the emulator selects a port. |
 
+An Android boot fails with `BOOT_ANDROID_PORT_INVALID` when `port` is not in that range. On other platforms, Argent ignores `port`.
+
 With `port`, Argent also starts the gRPC server of the emulator on the console port plus 3000, for example 8584 for port 5584. Argent needs that server for screenshots and gestures. The boot fails with `BOOT_ANDROID_PORT_IN_USE` when the gRPC port is in use.
 
 The emulator runs an AVD writable one time, or read-only any number of times. It never runs both at the same time. Thus:
@@ -114,6 +116,9 @@ On Windows, Argent cannot read the command lines of the emulators. There:
 
 - A read-only boot reuses only an emulator that the running tool-server started.
 - Argent tells its emulator from another emulator of the AVD by the AVD name. Thus, do not start other emulators of the AVD while Argent boots one.
+- Argent knows only the emulators started with `-port` that it booted itself. A writable boot without `port` can reuse a read-only emulator that someone else started with `-port`, or stop it with `force: true`.
+
+On macOS and Linux, the last item also applies to a boot for which `ps` fails.
 
 Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 

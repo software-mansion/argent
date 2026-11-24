@@ -2753,6 +2753,20 @@ function nonIosUdidHint(
   );
 }
 
+/**
+ * Why `port` cannot be an emulator console port, or `undefined` when it can.
+ * The emulator's own range for `-port` is 5554-5584, which is also the range
+ * adb scans: an emulator above 5584 drops out of adb when the adb server
+ * restarts. The console port is even; the adb port is the next odd one.
+ */
+function androidPortError(port: number): string | undefined {
+  if (Number.isInteger(port) && port >= 5554 && port <= 5584 && port % 2 === 0) return undefined;
+  return (
+    `\`port\` ${port} is not an emulator console port. ` +
+    "Pass an even number from 5554 to 5584, the range adb finds emulators in, or omit `port`."
+  );
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
@@ -2776,7 +2790,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Android: AVD to start, the `avdName` of a `list-devices` entry with kind 'avd'. An emulator already running from it is reused."
+      "Android: AVD to start, the `avdName` of a `list-devices` entry with kind 'avd'. A running emulator of it is reused when it fits the call: see `readOnly` and `port`."
     ),
   vvdImage: z
     .string()
@@ -2824,17 +2838,15 @@ const zodSchema = z.object({
     .describe(
       "Android only: boot the emulator with `-read-only`, so that several emulators can run one AVD at once, for example one per agent. Defaults to false. A read-only emulator saves no snapshot and loses its changes when it exits, so the AVD and its quickboot snapshot stay as they were. The emulator runs an AVD either writable once or read-only any number of times, never both, so the boot fails while the AVD runs writable, and a writable boot fails while the AVD runs in any instance it cannot reuse. A read-only boot reuses only a running read-only emulator. Ignored on other platforms."
     ),
+  // The range is checked on the Android path only (`androidPortError`): off
+  // Android the key is ignored, so an agent echoing a Chromium `port` such as
+  // 9222 must not fail validation.
   port: z
     .number()
     .int()
-    .min(5554)
-    // The emulator's own range for `-port`, and the range adb scans: an
-    // emulator above 5584 drops out of adb when the adb server restarts.
-    .max(5584)
-    .multipleOf(2)
     .optional()
     .describe(
-      "Android only: the emulator's console port, an even number from 5554 to 5584 (`emulator -port`), the range adb finds emulators in; its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. The gRPC server Argent needs for screenshots and gestures goes on the port plus 3000, which must be free too. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there writable on a read-only boot and `force` is not set. A read-only emulator started with `-port` belongs to the calls that give that port: a call without `port` never reuses or shuts it down. A writable one is still reused, or with `force` shut down, by a writable call without `port`, since the AVD runs one writable emulator at a time. `force` shuts nothing down when another emulator of the AVD would still block the boot. Ignored on other platforms."
+      "Android only: the emulator's console port, an even number from 5554 to 5584 (`emulator -port`), the range adb finds emulators in; its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. The gRPC server Argent needs for screenshots and gestures goes on the port plus 3000, which must be free too. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there writable on a read-only boot and `force` is not set. A read-only emulator started with `-port` belongs to the calls that give that port: a call without `port` never reuses or shuts it down. Where the process list cannot be read (Windows, or a failed `ps`), Argent knows only the pinned emulators it booted itself, so a writable call without `port` can reuse, or with `force` shut down, one that someone else pinned. A writable one is still reused, or with `force` shut down, by a writable call without `port`, since the AVD runs one writable emulator at a time. `force` shuts nothing down when another emulator of the AVD would still block the boot. Ignored on other platforms."
     ),
   headless: z
     .boolean()
@@ -3006,6 +3018,15 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
         return bootIos(params.udid!, registry, params.force, params.headless);
       }
       if (hasAvd) {
+        if (params.port !== undefined) {
+          const reason = androidPortError(params.port);
+          if (reason) {
+            throw new InvalidToolInputError(reason, {
+              error_code: FAILURE_CODES.BOOT_ANDROID_PORT_INVALID,
+              failure_stage: "boot_android_port",
+            });
+          }
+        }
         return bootAndroid({
           avdName: params.avdName!,
           bootTimeoutMs: params.bootTimeoutMs ?? 480_000,
