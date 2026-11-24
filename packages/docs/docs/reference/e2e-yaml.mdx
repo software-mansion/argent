@@ -77,7 +77,7 @@ On an iOS simulator, local or remote, the version sets how Argent runs the e2e t
 - A `run:` fragment resolves its selectors on the tree of the e2e test that runs it, with the rules of that e2e test. Only its coordinates follow its own version. An e2e test that a `tool: e2e-execute` step runs uses its own version.
 - When you record `e2e-execute` of a version 1 e2e test on an iOS simulator, the recorder writes a `run:` step. That step replays the e2e test on the accessibility tree. The message of `e2e-add-step` warns about this difference.
 - A selector from `describe` can miss in a version 1 e2e test.
-- On an iOS simulator, the steps of a version 1 e2e test do not get the rules that came with version 2. For example, a run of whitespace does not match one space in `id` and `text`, and a toggle does not have the role `AXSwitch`. For text fields, see [Conditions](#conditions). A `tool:` step runs the tool itself: for example, `tool: await-ui-element` reads the `describe` tree in a version 1 e2e test too.
+- On an iOS simulator, the steps of a version 1 e2e test do not get the rules that came with version 2. For example, a run of whitespace does not match one space in `id` and `text`, and a toggle does not have the role `AXSwitch`. The rules for the [on-screen keyboard](#on-screen-keyboard) do not apply either. For text fields, see [Conditions](#conditions). A `tool:` step runs the tool itself: for example, `tool: await-ui-element` reads the `describe` tree in a version 1 e2e test too.
 
 To change a version 1 e2e test:
 
@@ -165,10 +165,10 @@ A bare string, for example `tap: Save`, is a loose selector. It tries `id` first
 
 When several elements match:
 
-| Directive type                                                                | Chosen element                                                                                                                     |
-| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: exact text or id, then the smallest frame, then reading order                                     |
-| Condition (`await`, `assert`)                                                 | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match |
+| Directive type                                                                | Chosen element                                                                                                                                             |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: an app element before a key of the on-screen keyboard, then exact text or id, then the smallest frame, then reading order |
+| Condition (`await`, `assert`)                                                 | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match                         |
 
 ### Relational scopes
 
@@ -214,9 +214,37 @@ On an iOS simulator and on a physical iPhone, the runner and `describe` read one
 - The runner keeps the unlabeled containers that carry an id. `describe` does not show them.
 - A selector does not match a text field by the text in the field. `describe` shows that text as the field's `value`. After a step types `Paris`, `tap: { text: Paris }` taps the element that shows `Paris`, not the field. Select the field by its id, its label or its role. Select an empty field also by its placeholder. To check the text in the field, use a `text` condition on the field. The `into` of a `type` step can also select the field by the text in it.
 
-When the software keyboard shows, its keys are in both trees. An exact text match wins over a substring match. Thus `tap: { text: next }` taps the return key `next`, not a button `Continue to next step`. Use the full text or the id of the button.
-
 On Android and on Chromium, an id absent from `describe` can still resolve in an e2e test. Verify the id in a scratch fragment.
+
+### On-screen keyboard
+
+When the on-screen keyboard shows, its elements are in the runner tree and in the `describe` tree. These elements are the keys, the prediction bar and the other buttons of the keyboard. On iOS, the input accessory view above the keys is part of the app, for example a toolbar with a `Done` button.
+
+The runner applies these rules to the elements of the keyboard:
+
+- An action takes an app element before a key, also when the key is an exact match and the app element is a substring match. Thus `tap: { text: Done }` taps the `Done` button of the app, not the return key `done`. And `tap: { text: Go }` taps a link `Google`, not the return key `go`.
+- An action targets a key only when no app element matches.
+- A bare string tries `text` when its `id` finds only keys. Thus on iOS, `tap: Delete` taps the `Delete` button of the app, not the delete key with the id `delete`.
+- A condition (`await`, `assert`, `when:`) does not see the keyboard. Thus `assert: { hidden: { text: Done } }` passes when only the return key shows `done`.
+- An action does not press an app element under the keyboard. An element is under the keyboard when its center is in the area of the keys, gaps included.
+- `tap`, `long-press`, `type`, `pinch`, `rotate` and the `from` end of `swipe` wait until the keyboard does not cover their element. When the keyboard still covers the element at the end of the wait, the step fails. It does not use a different match.
+- `scroll-to` does not stop on a key or on a covered target. It fails when its swipe point, the center of the screen or of `within`, is under the keyboard. It also fails when the scroll ends and the keyboard still covers the target.
+- `any: true` takes an app element before a key.
+
+To wait for the keyboard, use a `tool: await-ui-element` step. That tool reads the `describe` tree, which shows the keys.
+
+To act on an app element under the keyboard, close the keyboard in an earlier step, or move the element above the keyboard with `scroll-to`.
+
+To target a key, select it by its id:
+
+| Platform | Key id                                                                                                                                                                                         |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS      | The return key has the id of its type, for example `Done` or `Go`. On the letter keyboard, the delete key has the id `delete`. The ids stay in English when the keyboard uses another language |
+| Android  | Gboard gives an id to some keys, for example `key_pos_ime_action` to the action key and `key_pos_del` to the delete key                                                                        |
+
+A key without an id, for example the delete key of a number pad, needs a scope. Record the tap: the recorder adds the scope.
+
+To enter text, use a `type` step, not taps on the letter keys. The `type` step also presses Enter, unless `submit: false`.
 
 ### Selectors on Mac apps
 

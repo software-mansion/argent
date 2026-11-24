@@ -332,6 +332,8 @@ struct SnapshotNodePayload: Encodable {
     let selected: Bool?
     let depth: Int
     let parentIndex: Int?
+    /// In a window that holds the on-screen keyboard; absent elsewhere.
+    let keyboard: Bool?
 }
 
 struct SnapshotQualityPayload: Encodable {

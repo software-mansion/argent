@@ -590,3 +590,101 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([]);
   });
 });
+
+describe("flow-add-step tap capture on the on-screen keyboard", () => {
+  const key = (label: string, x: number, y: number) =>
+    n({ role: "AXButton", label, keyboard: true, frame: { x, y, width: 0.1, height: 0.06 } });
+
+  it("records the app's Done by its text while a key also says done", async () => {
+    const done = { x: 0.7, y: 0.05, width: 0.28, height: 0.06 };
+    setTree([n({ role: "AXButton", label: "Done", frame: done }), key("done", 0.8, 0.9)]);
+
+    await recordTap({ x: 0.84, y: 0.08 });
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Done" } }]);
+  });
+
+  it("does not record a key by a text that an app element behind it shares", async () => {
+    // Replay would take the app's Delete, under the key.
+    const behind = { x: 0.75, y: 0.88, width: 0.2, height: 0.1 };
+    setTree([n({ role: "AXButton", label: "Delete", frame: behind }), key("Delete", 0.8, 0.9)]);
+
+    await recordTap({ x: 0.85, y: 0.93 });
+
+    expect(await recordedSteps()).toEqual([
+      { kind: "tap", selector: { text: "Delete", within: { text: "Delete" } } },
+    ]);
+  });
+
+  it("records the tapped key, not a smaller app element behind it", async () => {
+    setTree([
+      n({ role: "AXImage", label: "Star", frame: { x: 0.03, y: 0.73, width: 0.02, height: 0.02 } }),
+      key("Q", 0, 0.72),
+      key("W", 0.1, 0.72),
+    ]);
+
+    await recordTap({ x: 0.04, y: 0.74 });
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Q" } }]);
+  });
+
+  it("keeps coordinates for a tap between keys, whose container centres on another key", async () => {
+    const container = { x: 0, y: 0.7, width: 1, height: 0.3 };
+    setTree([
+      n({ identifier: "UIKeyboardLayoutStar Preview", keyboard: true, frame: container }),
+      key("A", 0.05, 0.75),
+      key("G", 0.45, 0.82),
+    ]);
+
+    const result = await recordTap({ x: 0.02, y: 0.77 });
+
+    expect(result.message).toContain("the tap is between elements of the on-screen keyboard");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.02, y: 0.77 }]);
+  });
+
+  it("records a key tapped beside the label it holds", async () => {
+    // The label is nested in the key, not beside it: replay on the centre presses the key.
+    setTree([
+      n({
+        identifier: "key-a",
+        keyboard: true,
+        frame: { x: 0.1, y: 0.8, width: 0.1, height: 0.06 },
+      }),
+      n({
+        role: "AXStaticText",
+        label: "a",
+        keyboard: true,
+        frame: { x: 0.13, y: 0.81, width: 0.04, height: 0.04 },
+      }),
+      key("s", 0.2, 0.8),
+    ]);
+
+    await recordTap({ x: 0.11, y: 0.83 });
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { identifier: "key-a" } }]);
+  });
+
+  it("keeps coordinates for a tap above the keys on an element they cover the centre of", async () => {
+    setTree([
+      n({ label: "Messages", frame: { x: 0, y: 0.6, width: 0.16, height: 0.3 } }),
+      key("Q", 0, 0.72),
+      key("W", 0.1, 0.72),
+    ]);
+
+    const result = await recordTap({ x: 0.08, y: 0.65 });
+
+    expect(result.message).toContain("the on-screen keyboard covers the centre of");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.08, y: 0.65 }]);
+  });
+
+  it("records a suggestion whose frame holds the dividers at its edges", async () => {
+    // Side by side, but the centre of the suggestion is the suggestion.
+    const divider = (x: number) =>
+      n({ role: "AXImage", keyboard: true, frame: { x, y: 0.62, width: 0.003, height: 0.03 } });
+    setTree([key("found", 0.35, 0.61), divider(0.35), divider(0.447), key("Q", 0, 0.72)]);
+
+    await recordTap({ x: 0.4, y: 0.64 });
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "found" } }]);
+  });
+});

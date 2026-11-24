@@ -50,7 +50,7 @@ A top-level `requires:` block limits the targets a test runs on: `platform` (`io
 
 ### Old e2e tests
 
-A file without `version`, or with `version: 1`, is an old e2e test. On an iOS simulator, an old e2e test resolves its selectors on the view hierarchy of the app, not on the `describe` tree. A selector that you record or copy from `describe` can miss there. With a landscape or upside-down UI, its `tap`, `long-press`, `swipe` and `tool:` coordinates also use the portrait axes of the screen, not the UI as the user sees it. The other rules that came with `version: 2` do not apply to its steps either, also in the `run:` fragments that it runs, for example the whitespace rule for `id` and `text`, the `AXSwitch` role of a toggle and the text-field rules of `matches`. A `tool:` step runs the tool itself, so `tool: await-ui-element` still reads the `describe` tree. As a `run:` fragment of a `version: 2` e2e test, an old e2e test gets the tree and the rules of that test, but keeps its own coordinates.
+A file without `version`, or with `version: 1`, is an old e2e test. On an iOS simulator, an old e2e test resolves its selectors on the view hierarchy of the app, not on the `describe` tree. A selector that you record or copy from `describe` can miss there. With a landscape or upside-down UI, its `tap`, `long-press`, `swipe` and `tool:` coordinates also use the portrait axes of the screen, not the UI as the user sees it. The other rules that came with `version: 2` do not apply to its steps either, also in the `run:` fragments that it runs, for example the whitespace rule for `id` and `text`, the `AXSwitch` role of a toggle, the text-field rules of `matches` and the on-screen keyboard rules. A `tool:` step runs the tool itself, so `tool: await-ui-element` still reads the `describe` tree. As a `run:` fragment of a `version: 2` e2e test, an old e2e test gets the tree and the rules of that test, but keeps its own coordinates.
 
 To replay an old e2e test, do not change it. To change an old e2e test, edit the YAML manually:
 
@@ -94,16 +94,22 @@ On iOS, find selectors with `describe`. An `id`, `text`, or `role` that `describ
 
 On Android and Chromium, an id absent from `describe` can still resolve in an e2e test. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 
-For the recorder's cross-tree warning on a recorded wait, see [Live waits and checks](live-authoring.md#live-waits-and-checks). On iOS and Vega both read the same source, so a mismatch usually means the screen changed or a `text` check selected a different element.
+For the recorder's cross-tree warning on a recorded wait, see [Live waits and checks](live-authoring.md#live-waits-and-checks). On iOS and Vega both read the same source, so a mismatch usually means the screen changed or a `text` check selected a different element. On iOS and Android it also means the wait matched only a key of the on-screen keyboard, which conditions do not see.
 
 On an iOS simulator, each tree read after a `launch:` expects the launched app in the foreground. If another app is in front, the step fails and names it. When the switch is intended, add a `tool: launch-app` step before that step. Later reads then expect the app that step started. A `launch:` step restarts the app.
 
-With the software keyboard up, its keys are selector targets. An exact text match wins over a substring, so `{ text: next }` taps the return key, not a `Continue to next step` button. Use the button's full text or id.
+With the on-screen keyboard up, its keys, prediction bar and other buttons are in the runner tree. On iOS the input accessory toolbar above the keys belongs to the app.
+
+- An action takes an app element over any key, also when only the key matches exactly: `{ text: Done }` taps the app's `Done` button, not the return key `done`, and `{ text: Go }` taps a `Google` link, not the return key `go`.
+- A key is the target only when no app element matches. Select a key by its id. A bare string tries `text` when its `id` finds only keys, so on iOS `tap: Delete` means the app's `Delete`, not the delete key (id `delete`).
+- Conditions (`await`, `assert`, `when:`) do not see the keyboard, and `scroll-to` does not stop on a key: `assert: { hidden: { text: Done } }` passes while the return key shows `done`. To wait for the keyboard itself, use a `tool: await-ui-element` step: it reads the `describe` tree, which has the keys.
+- An action never presses an app element whose centre is under the keyboard (gaps between keys included): `tap`, `long-press`, `type`, `pinch`, `rotate` and a swipe's `from` wait for the keyboard to uncover the element, fail when it still covers it at the end of the wait, and never fall back to another match. Close the keyboard in an earlier step, or `scroll-to` the element; `scroll-to` fails when its swipe point is under the keyboard, or when the scroll ends with the element still under it.
+- To target a key, select it by id: on iOS `Done`, `Go` or the letter keyboard's `delete` (English in every keyboard language), on Android Gboard's `key_pos_ime_action` or `key_pos_del`. A key without an id, such as a number pad's delete key, needs a scope; recording the tap adds one. Enter text with `type`, not with taps on letter keys.
 
 When several nodes match, the directive decides:
 
-- **Actions** (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) take the most specific visible match: exact text/id beats substring, then the smallest frame, then reading order.
-- **Conditions** (`await`, `assert`) do not rank. `exists`/`visible` hold if any match qualifies and `hidden` only if none does; `text` reads the first visible match in reading order.
+- **Actions** (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) take the most specific visible match: an app element beats a keyboard key, then exact text/id beats substring, then the smallest frame, then reading order.
+- **Conditions** (`await`, `assert`, `when:`) do not rank, and do not see the keyboard. `exists`/`visible` hold if any match qualifies and `hidden` only if none does; `text` reads the first visible match in reading order.
 
 A container that aggregates a child's text therefore splits them: `tap` hits the leaf while `text.in` reads the container, so `equals` fails against correct UI. Use an `id` or a [relational scope](#relational-scopes) when an action and a check must agree, and a stricter selector when ranking can still choose the wrong element.
 
@@ -123,7 +129,7 @@ YAML selectors support frame-based `within`, `after`, and `next` in every select
 
 Scopes can combine and nest, with at most six scope keys. Use strict selectors for anchors. Scope through a trusted container when a missing control must fail instead of reaching another row.
 
-`any: true` selects any element and needs a scope. It takes no `id`, `text`, or `role`. For example, `{ any: true, within: { id: results-list } }` selects the first element in reading order inside that container.
+`any: true` selects any element and needs a scope. It takes no `id`, `text`, or `role`. For example, `{ any: true, within: { id: results-list } }` selects the first element in reading order inside that container, an app element before a keyboard key.
 
 ## Directives
 

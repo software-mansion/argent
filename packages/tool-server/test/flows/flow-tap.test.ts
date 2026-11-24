@@ -448,6 +448,78 @@ describe("tap times: execution", () => {
   });
 });
 
+describe("tap with the on-screen keyboard up", () => {
+  afterEach(() => vi.useRealTimers());
+
+  // Two keys over the bottom quarter; the right one, smaller than any app element, takes `right`.
+  const keys = (right: Partial<DescribeNode> = {}) => [
+    n({ label: "q", keyboard: true, frame: { x: 0, y: 0.75, width: 0.5, height: 0.25 } }),
+    n({ keyboard: true, frame: { x: 0.75, y: 0.875, width: 0.25, height: 0.125 }, ...right }),
+  ];
+  const top = (label: string) => n({ label, frame: { x: 0, y: 0, width: 0.5, height: 0.5 } });
+  // Centre (0.25, 0.8125), on the "q" key.
+  const save = n({ label: "Save", frame: { x: 0, y: 0.75, width: 0.5, height: 0.125 } });
+  const tapAt = (x: number, y: number) => ({ tool: "gesture-tap", args: { udid: DEVICE, x, y } });
+  async function runSteps(steps: Parameters<typeof serializeFlow>[0]["steps"]) {
+    await writeFlow("kb", { executionPrerequisite: "", steps });
+    return run("kb");
+  }
+  /** Serve `next()` per read, 2s of fake Date apart, so the 7.5s action wait ends in a few reads. */
+  function serveReads(next: () => DescribeNode): void {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    currentTree = () => {
+      vi.setSystemTime(Date.now() + 2000);
+      return next();
+    };
+  }
+
+  it("taps the app's Done, not a smaller key labelled done", async () => {
+    currentTree = () => screen([top("Done"), ...keys({ label: "done" })]);
+    const result = await runSteps([{ kind: "tap", selector: { text: "Done" } }]);
+    expect(result.calls).toEqual([tapAt(0.25, 0.25)]);
+  });
+
+  it("goes on past an id lookup that finds only a key: bare `tap: Delete`", async () => {
+    currentTree = () => screen([top("Delete"), ...keys({ identifier: "delete" })]);
+    const result = await runSteps([{ kind: "tap", selector: { text: "Delete", loose: true } }]);
+    expect(result.calls).toEqual([tapAt(0.25, 0.25)]);
+  });
+
+  it("a condition does not see keys: hidden passes while only a key says done", async () => {
+    currentTree = () => screen([top("Title"), ...keys({ label: "done" })]);
+    const result = await runSteps([
+      { kind: "assert", condition: "hidden", selector: { text: "done" } },
+    ]);
+    expect(result.steps.map((s) => s.status)).toEqual(["pass"]);
+  });
+
+  it("fails a tap on an element under the keys and taps nothing", async () => {
+    serveReads(() => screen([save, ...keys()]));
+    const result = await runSteps([{ kind: "tap", selector: { text: "Save" } }]);
+    expect(result.steps[0]!.reason).toContain("under the on-screen keyboard");
+    expect(result.calls.filter((c) => c.tool === "gesture-tap")).toEqual([]);
+  });
+
+  it("taps the covered element once the keyboard closes during the wait", async () => {
+    let reads = 0;
+    serveReads(() => screen(reads++ < 2 ? [save, ...keys()] : [save]));
+    const result = await runSteps([{ kind: "tap", selector: { text: "Save" } }]);
+    expect(result.calls).toEqual([tapAt(0.25, 0.8125)]);
+    expect(reads).toBeGreaterThan(2);
+  });
+
+  it("swipes to an element under the keys, but not from one", async () => {
+    serveReads(() => screen([top("Card"), save, ...keys()]));
+    const card = { selector: { text: "Card" } };
+    const covered = { selector: { text: "Save" } };
+    const from = await runSteps([{ kind: "swipe", from: covered, to: card }]);
+    expect(from.steps[0]!.reason).toContain("under the on-screen keyboard");
+    expect(from.calls.filter((c) => c.tool === "gesture-swipe")).toEqual([]);
+    const to = await runSteps([{ kind: "swipe", from: card, to: covered }]);
+    expect(to.steps[0]!.status).toBe("pass");
+  });
+});
+
 describe("tap modifiers: execution on a Mac app", () => {
   useMacosAppsFlag();
   const MAC = "macos-app-com.example.app";

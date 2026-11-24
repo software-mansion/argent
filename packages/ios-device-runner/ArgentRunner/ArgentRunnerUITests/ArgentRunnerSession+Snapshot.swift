@@ -177,7 +177,9 @@ extension ArgentRunnerSession {
     /// agent can name or act on, assigns indices and parent links in emission
     /// order, and dedupes mirror elements. `hosted` trees of view services
     /// presenting over the app are emitted first under the root, within
-    /// their own share of the node budget.
+    /// their own share of the node budget. Every node emitted from a window
+    /// that holds the on-screen keyboard, of the app or of a hosted view
+    /// service, is marked `keyboard`.
     static func flatten(
         _ root: XCUIElementSnapshot,
         hosted: [XCUIElementSnapshot] = []
@@ -187,16 +189,20 @@ extension ArgentRunnerSession {
             let rawDepth: Int
             let emittedDepth: Int
             let parentIndex: Int
+            let keyboard: Bool
             var hosted = false
         }
 
         let viewport = root.frame
-        var nodes = [makeNode(root, index: 0, depth: 0, parentIndex: nil)]
+        var nodes = [makeNode(root, index: 0, depth: 0, parentIndex: nil, keyboard: false)]
         var seen: Set<String> = [identity(root)]
         var hostedEmitted = 0
 
         var stack = root.children.reversed().map {
-            WorkItem(snapshot: $0, rawDepth: 1, emittedDepth: 1, parentIndex: 0)
+            WorkItem(
+                snapshot: $0, rawDepth: 1, emittedDepth: 1, parentIndex: 0,
+                keyboard: holdsKeyboard($0)
+            )
         }
 
         // Pushed last so they are walked first: they cover the screen, and the
@@ -205,7 +211,7 @@ extension ArgentRunnerSession {
             contentsOf: hosted.reversed().map {
                 WorkItem(
                     snapshot: $0, rawDepth: 1, emittedDepth: 1, parentIndex: 0,
-                    hosted: true
+                    keyboard: false, hosted: true
                 )
             }
         )
@@ -239,7 +245,8 @@ extension ArgentRunnerSession {
                         snapshot,
                         index: index,
                         depth: item.emittedDepth,
-                        parentIndex: item.parentIndex
+                        parentIndex: item.parentIndex,
+                        keyboard: item.keyboard
                     )
                 )
 
@@ -255,6 +262,10 @@ extension ArgentRunnerSession {
                         rawDepth: item.rawDepth + 1,
                         emittedDepth: childEmittedDepth,
                         parentIndex: childParentIndex,
+                        // A hosted tree is an application: its windows are
+                        // one level further down than the app's own.
+                        keyboard: item.keyboard
+                            || (item.hosted && item.rawDepth == 1 && holdsKeyboard(child)),
                         hosted: item.hosted
                     )
                 )
@@ -262,6 +273,26 @@ extension ArgentRunnerSession {
         }
 
         return nodes
+    }
+
+    /// Whether a window of the app (a child of its root) is the on-screen
+    /// keyboard: it holds an element of type keyboard. The whole window is
+    /// keyboard, not only that element: the prediction bar and the globe and
+    /// dictation keys sit beside it. The keyboard element itself has no label,
+    /// so the flatten drops it and its window, and this is the only place the
+    /// boundary survives. A keyboard element that is a child of the root holds
+    /// itself.
+    static func holdsKeyboard(_ window: XCUIElementSnapshot) -> Bool {
+        var stack: [(snapshot: XCUIElementSnapshot, depth: Int)] = [(window, 1)]
+        while let item = stack.popLast() {
+            if item.snapshot.elementType == .keyboard { return true }
+            if item.depth < rawDepthLimit {
+                for child in item.snapshot.children {
+                    stack.append((child, item.depth + 1))
+                }
+            }
+        }
+        return false
     }
 
     /// Whether an element earns a node: interactive, a scroll container, or
@@ -279,7 +310,8 @@ extension ArgentRunnerSession {
         _ snapshot: XCUIElementSnapshot,
         index: Int,
         depth: Int,
-        parentIndex: Int?
+        parentIndex: Int?,
+        keyboard: Bool
     ) -> SnapshotNodePayload {
         let frame = snapshot.frame
 
@@ -302,7 +334,8 @@ extension ArgentRunnerSession {
             focused: snapshot.hasFocus ? true : nil,
             selected: snapshot.isSelected ? true : nil,
             depth: depth,
-            parentIndex: parentIndex
+            parentIndex: parentIndex,
+            keyboard: keyboard ? true : nil
         )
     }
 

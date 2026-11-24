@@ -85,6 +85,7 @@ import {
 } from "../describe/contract";
 import {
   nodeAtPoint,
+  underKeyboard,
   deriveSelector,
   deriveUniqueSelector,
   selectorToFrame,
@@ -269,6 +270,14 @@ const SCREEN_MAY_HAVE_MOVED =
   "that out first.";
 
 /**
+ * Where the runner's tree marks the on-screen keyboard (iOS, Android), its
+ * conditions do not see it, while the live wait does.
+ */
+const KEYBOARD_CLAUSE =
+  " The runner's conditions do not see the on-screen keyboard: a wait on a key holds only as " +
+  "the raw `tool:` step.";
+
+/**
  * WHY the two trees can disagree. The story differs per platform, and it must
  * not name the side that lost the element: on Chromium either side can.
  */
@@ -280,6 +289,7 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "view and what a system alert covers, and keeps unlabelled scrolling containers " +
       "`describe` does not print. On an iOS simulator, a runner selector does not match a text " +
       "field by the text in the field: check that text with a `text` condition on the field." +
+      KEYBOARD_CLAUSE +
       SCREEN_MAY_HAVE_MOVED
     );
   }
@@ -341,6 +351,7 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "text into an unlabelled clickable's own label — where the runner adapter keeps every view " +
       "with a `resource-id` or a label, and asks for 12000 nodes against the helper's 5000 " +
       "default. So each holds elements the other drops." +
+      KEYBOARD_CLAUSE +
       SCREEN_MAY_HAVE_MOVED
     );
   }
@@ -735,6 +746,24 @@ function inTextArea(tree: DescribeNode, node: DescribeNode): boolean {
 }
 
 /**
+ * Whether `node` holds two elements of the on-screen keyboard side by side,
+ * neither inside the other: a container of keys, not a key with its label or icon.
+ */
+function holdsKeys(tree: DescribeNode, node: DescribeNode): boolean {
+  const inside: DescribeNode[] = [];
+  const walk = (n: DescribeNode): void => {
+    if (n.keyboard === true && isVisible(n) && frameWithin(n.frame, node.frame)) {
+      inside.push(n);
+    }
+    n.children.forEach(walk);
+  };
+  tree.children.forEach(walk);
+  return inside.some((a) =>
+    inside.some((b) => !frameWithin(a.frame, b.frame) && !frameWithin(b.frame, a.frame))
+  );
+}
+
+/**
  * Whether a click is away from the centre of `frame` by more than `tolerance`:
  * the rounding of describe's 3-decimal frames (0.0015), or of a centre that an
  * agent rounds to 2 decimals as well (0.006).
@@ -803,6 +832,25 @@ async function captureTapSelector(
     }
     // The frame replay acts on: the derived selector resolves to it.
     const resolved = selectorToFrame(tree, selector) ?? node.frame;
+    // Replay does not press an element whose centre the on-screen keyboard
+    // covers, so a tap on the part of it above the keys replays as coordinates.
+    if (underKeyboard(tree, node)) {
+      return {
+        warning: `the on-screen keyboard covers the centre of ${describeSelector(selector)}, where replay taps; kept coordinates (brittle)`,
+      };
+    }
+    // Replay taps the centre. A tap between keys finds the container of the
+    // keys, whose centre is another key. A key keeps its selector: the label or
+    // icon at its centre is part of the key.
+    if (
+      node.keyboard === true &&
+      nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node &&
+      holdsKeys(tree, node)
+    ) {
+      return {
+        warning: `the tap is between elements of the on-screen keyboard, and replay taps the centre of ${describeSelector(selector)}, where another element lies; kept coordinates (brittle)`,
+      };
+    }
     // Replay clicks the centre. On a Mac app, a click anywhere else on a slider,
     // a stepper, a text view or the text in it, a disclosure group, a canvas,
     // chart, map or seek bar, or a container's empty space does something else

@@ -4,6 +4,7 @@ import type { IosDeviceRunnerApi } from "../../src/blueprints/ios-device-runner"
 import type { DescribeNode } from "../../src/tools/describe/contract";
 import type { RunnerSnapshotNode } from "../../src/utils/ios-device/runner-commands";
 import { setCurrentIosDeviceApp } from "../../src/utils/ios-device/app-session";
+import { describeIosDevice } from "../../src/tools/describe/platforms/ios-device";
 import { queryIosDeviceFlowTree } from "../../src/tools/flows/flow-ios-tree";
 import {
   assertText,
@@ -270,5 +271,18 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
     expect(JSON.stringify(tree)).not.toContain("Load more");
     // Siblings outside the scroller are never clipped by it.
     expect(findAll(tree, { text: "Continue" })).toHaveLength(1);
+  });
+
+  it("carries the runner's keyboard mark into the flow tree, never into describe's", async () => {
+    const nodes = [
+      ...snapshot(),
+      node({ index: 7, depth: 1, parentIndex: 0, type: "Key", label: "done", keyboard: true }),
+    ];
+    const tree = await flowTree(nodes);
+    expect(findAll(tree, { text: "done" }).map((n) => n.keyboard)).toEqual([true]);
+    expect(findAll(tree, { text: "Continue" }).map((n) => n.keyboard)).toEqual([undefined]);
+    const run = vi.fn(async () => ({ nodes, quality: null }));
+    const described = await describeIosDevice(registryFor({ udid: DEVICE_UDID, run }), IOS_DEVICE);
+    expect(JSON.stringify(described.tree)).not.toContain('"keyboard"');
   });
 });

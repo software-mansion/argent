@@ -113,7 +113,7 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 Treat a role alone and a kept point alike. Restore the source screen with direct MCP calls, record a corrected tap, then remove the weak step after finishing. Keep a point or a bare role only through the [coordinate fallback gate](reliability-and-recovery.md#coordinate-fallback-gate). During polish, replace a data anchor, such as a username, with a stable one.
 
-Never tap the on-screen keyboard through the recorder. Some platforms expose it as one large node, so replay can tap the wrong key while reporting success. Record text with `keyboard`.
+Record text with `keyboard`, never with taps on the letter keys of the on-screen keyboard. A tap on one key, such as the return or delete key, can go through the recorder. Read its `recorded` line: it must name that key, by its id or by its text with a scope. Some platforms expose the keyboard as one large node. There the line names that node or keeps a point, and replay can tap the wrong key while reporting success. Remove that step and record `keyboard` with `key` instead.
 
 ### Typing
 
