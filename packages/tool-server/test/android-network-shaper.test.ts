@@ -18,6 +18,7 @@ vi.mock("../src/utils/android-global-proxy", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/android-global-proxy")>()),
   setArgentProxy: vi.fn(async () => {}),
   clearArgentProxy: vi.fn(async () => {}),
+  listAdbReverses: vi.fn(async () => new Map([[3000, 4000]])),
 }));
 
 import { androidNetworkShaperBlueprint } from "../src/blueprints/android-network-shaper";
@@ -40,7 +41,7 @@ describe("the Android network shaper", () => {
   it("shapes through its proxy and points the emulator at it", async () => {
     const { api } = await instantiate();
 
-    await api.throttle({ latencyMs: 400 });
+    await api.throttle({ latencyMs: 400 }, 8081);
 
     expect(proxy.setConditions).toHaveBeenCalledWith({ latencyMs: 400 });
     expect(setArgentProxy).toHaveBeenCalledWith(SERIAL, 50000);
@@ -61,7 +62,7 @@ describe("the Android network shaper", () => {
     vi.mocked(setArgentProxy).mockImplementation(async () => void order.push("set"));
     vi.mocked(clearArgentProxy).mockImplementation(async () => void order.push("clear"));
 
-    const throttle = instance.api.throttle({ latencyMs: 400 });
+    const throttle = instance.api.throttle({ latencyMs: 400 }, 8081);
     await Promise.all([throttle, instance.dispose()]);
 
     expect(order).toEqual(["set", "clear"]);
@@ -77,7 +78,7 @@ describe("the Android network shaper", () => {
     expect(proxy.close).toHaveBeenCalled();
   });
 
-  it("sends 10.0.2.2 to the host's loopback and any other host as named", async () => {
+  it("sends 10.0.2.2 to the host's loopback and the device's loopback through adb reverse", async () => {
     await instantiate();
     const { resolveTarget } = proxy.options!;
 
@@ -85,9 +86,26 @@ describe("the Android network shaper", () => {
       host: "127.0.0.1",
       port: 3000,
     });
+    await expect(resolveTarget("127.0.0.1", 3000)).resolves.toEqual({
+      host: "localhost",
+      port: 4000,
+    });
+    await expect(resolveTarget("localhost", 5000)).resolves.toBeNull();
     await expect(resolveTarget("example.com", 443)).resolves.toEqual({
       host: "example.com",
       port: 443,
     });
+  });
+
+  it("leaves the Metro port of the latest throttle unshaped on the host and the device's loopback", async () => {
+    const { api } = await instantiate();
+    await api.throttle({ latencyMs: 400 }, 8081);
+    await api.throttle({ latencyMs: 400 }, 8082);
+    const { bypass } = proxy.options!;
+
+    expect(bypass("10.0.2.2", 8082)).toBe(true);
+    expect(bypass("localhost", 8082)).toBe(true);
+    expect(bypass("10.0.2.2", 8081)).toBe(false);
+    expect(bypass("example.com", 8082)).toBe(false);
   });
 });

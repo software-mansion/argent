@@ -1,35 +1,56 @@
 import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import type { NetworkConditions } from "../utils/network-conditions";
-import { startShapingProxy } from "../utils/network-shaping-proxy";
+import { startShapingProxy, type ProxyTarget } from "../utils/network-shaping-proxy";
 import {
   EMULATOR_HOST_ALIAS,
   clearArgentProxy,
+  listAdbReverses,
   setArgentProxy,
 } from "../utils/android-global-proxy";
 import { withKeyedLock } from "../utils/keyed-lock";
 
-const ANDROID_NETWORK_SHAPER_NAMESPACE = "AndroidNetworkShaper";
+export const ANDROID_NETWORK_SHAPER_NAMESPACE = "AndroidNetworkShaper";
 
-interface AndroidNetworkShaperApi {
-  throttle(conditions: NetworkConditions): Promise<void>;
+export function androidNetworkShaperRef(serial: string): string {
+  return `${ANDROID_NETWORK_SHAPER_NAMESPACE}:${serial}`;
+}
+
+export interface AndroidNetworkShaperApi {
+  throttle(conditions: NetworkConditions, metroPort: number): Promise<void>;
   clear(): Promise<void>;
+}
+
+function isLoopback(host: string): boolean {
+  return host === "localhost" || host === "::1" || host.startsWith("127.");
+}
+
+/** The device's loopback is the device itself: only ports that adb reverse forwards reach the host. */
+async function resolveDeviceTarget(
+  serial: string,
+  host: string,
+  port: number
+): Promise<ProxyTarget | null> {
+  if (host === EMULATOR_HOST_ALIAS) return { host: "127.0.0.1", port };
+  if (!isLoopback(host)) return { host, port };
+  const hostPort = (await listAdbReverses(serial)).get(port);
+  return hostPort === undefined ? null : { host: "localhost", port: hostPort };
 }
 
 export const androidNetworkShaperBlueprint: ServiceBlueprint<AndroidNetworkShaperApi, string> = {
   namespace: ANDROID_NETWORK_SHAPER_NAMESPACE,
 
   getURN(serial: string) {
-    return `${ANDROID_NETWORK_SHAPER_NAMESPACE}:${serial}`;
+    return androidNetworkShaperRef(serial);
   },
 
   async factory(_deps, serial) {
+    let metroPort = 0;
     let proxyOnDevice = false;
     const locks = new Map<string, Promise<unknown>>();
     const proxy = await startShapingProxy({
-      resolveTarget: async (host, port) => ({
-        host: host === EMULATOR_HOST_ALIAS ? "127.0.0.1" : host,
-        port,
-      }),
+      resolveTarget: (host, port) => resolveDeviceTarget(serial, host, port),
+      bypass: (host, port) =>
+        port === metroPort && (host === EMULATOR_HOST_ALIAS || isLoopback(host)),
     });
 
     const clear = async (): Promise<void> => {
@@ -39,8 +60,9 @@ export const androidNetworkShaperBlueprint: ServiceBlueprint<AndroidNetworkShape
     };
 
     const api: AndroidNetworkShaperApi = {
-      throttle: (conditions) =>
+      throttle: (conditions, port) =>
         withKeyedLock(locks, serial, async () => {
+          metroPort = port;
           proxy.setConditions(conditions);
           proxyOnDevice = true;
           await setArgentProxy(serial, proxy.port);

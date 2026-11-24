@@ -132,7 +132,7 @@ export function createNativeNetworkLogsTool(
 Use when inspecting native-level HTTP traffic that view-network-logs cannot see: requests that never pass through JS XMLHttpRequest or fetch.
 On iOS<flag:macos-apps> and Mac apps</flag:macos-apps> it sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code<flag:macos-apps>, and react-native-macos fetch</flag:macos-apps>. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing.
 Returns { status, header, armed, count, total, requests }: one line per request, oldest first, with its id (ios-3f9a-12, android-3f9a-12<flag:macos-apps>, macos-3f9a-12</flag:macos-apps>), method, URL, state (pending, headers, complete or failed), status, mimeType, durationMs and errorText. The header says whether capture is armed, how many requests there are and the app's pid once read, and why capture is not armed when it is not. Requests to Metro on \`port\` are left out. Pass a request's id to view-network-request-details for its headers and bodies, and on Android its redirects. The history is kept across relaunches of the app, except on a device whose devtools agent argent attached to.
-This tool only reads and never starts capture: call network-capture-start for the app first, then repeat the action whose requests you need. Before a start it returns started: false and a header that says capture is not started; on iOS and Android, after a start that found the native layer unavailable, started: false and a header that gives the reason of that start; after network-capture-stop it returns stopped: true and still lists what was captured.
+Call network-capture-start before triggering requests. This tool reads existing records, including after network-capture-stop. Check the header for readiness or the reason capture is unavailable.<flag:macos-apps> If the Mac native header says stopped after a failed start, check the start result for the reason.</flag:macos-apps>
 On iOS: when capture started while the app was already running, the header of the first answer says that the app's launch was not recorded; to capture the launch, call restart-app, then network-capture-start (a relaunch ends JS capture), then this tool, unless the header says the launch cannot be recorded on that device. On a local simulator, launch-app and restart-app return networkCapture saying whether capture is armed in the new process.
 <flag:macos-apps>On a Mac app: when capture started while the app was already running, the header of the first answer says that its requests before the start were not recorded. Capture stays on across restart-app, and requests sent while the app starts can be missing.
 </flag:macos-apps>On iOS: If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
@@ -166,7 +166,12 @@ Android results also carry capture and captureDetail. When capture is active, ca
         );
         // network-capture-start fails for an Apple app, so pointing at it would loop.
         if (!isInjectableBundleId(params.bundleId)) throw macosNotInjectable(params.bundleId);
-        return listMacosNative(app, params, port);
+        return listMacosNative(
+          app,
+          params,
+          port,
+          nativeUnavailableReason(device.id, params.bundleId)
+        );
       }
 
       if (device.platform === "android") {
@@ -258,7 +263,13 @@ function listStopped(
  * A Mac app's records: argent connects to the app itself, so a read needs no
  * connection check, and the header names the pid from the app's handshake.
  */
-function listMacosNative(app: MacosAppApi, params: Params, port: number): NativeListing {
+function listMacosNative(
+  app: MacosAppApi,
+  params: Params,
+  port: number,
+  /** Why the last network-capture-start found the native layer unavailable, if it did. */
+  unavailable: string | undefined
+): NativeListing {
   const store = app.networkRecords();
   if (app.isNetworkCaptureStopped()) {
     return listStopped(
@@ -269,7 +280,11 @@ function listMacosNative(app: MacosAppApi, params: Params, port: number): Native
       stoppedDetail(app.isNetworkCaptureStopUnconfirmed())
     );
   }
-  if (!app.isNetworkCaptureStarted()) return notStarted("macos-native", params.bundleId);
+  if (!app.isNetworkCaptureStarted()) {
+    return unavailable
+      ? unavailableListing("macos-native", unavailable)
+      : notStarted("macos-native", params.bundleId);
+  }
   const state = store.state();
   const detail: string[] = [];
   if (state.pid !== undefined) detail.push(`pid ${state.pid}`);
