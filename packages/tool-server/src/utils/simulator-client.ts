@@ -15,6 +15,7 @@ import {
 import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
 import { captureOnDemandDropped } from "./profiling-devices";
+import { takeHeldTouch } from "./held-touch";
 import { resolveLivePanel, screenLabel, unresolvedPanelNote, type FoldablePanel } from "./foldable";
 import { isIosSimulator, resolveDevice } from "./device-info";
 import {
@@ -337,6 +338,13 @@ export async function sendCommand(
   // read of the orientation is stale.
   if ((cmd.cmd === "rotate" || cmd.cmd === "button") && api.deviceId) {
     forgetUiOrientation(api.deviceId);
+  }
+  // One touch sequence at a time: a new Down first lifts a finger that a
+  // gesture-custom train left down (utils/held-touch.ts).
+  if ((cmd.cmd === "touch" || cmd.cmd === "edgeTouch") && cmd.type === "Down" && api.deviceId) {
+    await takeHeldTouch(api.deviceId)
+      ?.release()
+      .catch(() => {});
   }
   const { cmd: native, warning: turnWarning } = await withNativeTouchSpace(api, cmd);
   // MoQ carries no screen: a remote simulator is driven on its main screen.

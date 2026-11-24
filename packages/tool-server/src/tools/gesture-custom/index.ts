@@ -15,6 +15,7 @@ import { trainPaths } from "../../utils/ios-device/touch-paths";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { InvalidToolInputError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
+import { HELD_TOUCH_TIMEOUT_MS, holdTouch, takeHeldTouch } from "../../utils/held-touch";
 import { interpolateEvents } from "../../utils/gesture-utils";
 
 import { screenEdges } from "../../utils/ui-orientation";
@@ -23,6 +24,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface Result {
   events: number;
+  /**
+   * Simulator/emulator only: the train ended without an Up, so the finger is
+   * still down. A later gesture-custom call lifts it. Set only when true.
+   */
+  held?: true;
   /**
    * Physical iOS only: the target app was backgrounded and the runner
    * re-fronted it to run this gesture, so the foreground screen changed as a
@@ -43,6 +49,17 @@ const capability: ToolCapability = {
 const SAME_POINT_EPSILON = 0.005;
 
 type GestureEvent = Params["events"][number];
+
+function liftCommand(event: GestureEvent): Record<string, unknown> {
+  return {
+    cmd: "touch",
+    type: "Up",
+    x: event.x,
+    y: event.y,
+    second_x: event.x2 ?? null,
+    second_y: event.y2 ?? null,
+  };
+}
 
 type IosDeviceGesturePlan =
   | { kind: "gesture"; down: GestureEvent; hold?: GestureEvent; up: GestureEvent }
@@ -82,7 +99,8 @@ function planIosDeviceGesture(events: Params["events"]): IosDeviceGesturePlan {
       kind: "unsupported",
       reason:
         "gesture-custom on a physical iOS device takes a Down, any number of Moves, then an Up " +
-        "(a second finger rides along as x2/y2 on those events).",
+        "(a second finger rides along as x2/y2 on those events). Leaving a finger down " +
+        "between calls works only on a simulator or emulator.",
     };
   }
   const twoFingers = events.some((e) => e.x2 !== undefined || e.y2 !== undefined);
@@ -208,10 +226,14 @@ For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
 On a local iOS simulator, set edge to the starting side for a system gesture. To move a full-screen app into Split View on an open Duo, set edge:"bottom". In one continuous contact move from bottom center to center, pause there, drag to the requested side, and release. See the device-interact foldables reference for coordinates and timing.
 All x/y values are fractions of the screen width/height (not pixels).
 Physical iOS: a Down, any Moves, then an Up; x2/y2 adds a second finger. A plain Down then Up: same point = press-hold, other point = drag (Up delayMs = rest before the move); one Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). Any other train plays as timed paths, each event waiting its delayMs, and needs the app drawn in portrait.
+Simulator/emulator: a train that ends without an Up leaves the finger down and returns { held: true }, so screenshot, describe or await-ui-element can observe a pressed state. The next gesture-custom call continues that contact (start it with Move or Up); any new Down (this tool, gesture-tap, gesture-swipe) first lifts the held finger. Argent lifts a held finger after ${HELD_TOUCH_TIMEOUT_MS / 1000} s. Not with edge, not on physical iOS.
 Returns { events: number } with the total count of events dispatched. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the target device is not booted or an event type is invalid.
 
 Example long-press at center:
   [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}]
+
+Example hold, observe, then release (simulator/emulator; two calls with a screenshot between):
+  [{"type":"Down","x":0.5,"y":0.5}]  then  [{"type":"Up","x":0.5,"y":0.5}]
 
 Example pick up a list item with a long press, then drag it up:
   [{"type":"Down","x":0.5,"y":0.6},{"type":"Move","x":0.5,"y":0.6,"delayMs":800},{"type":"Up","x":0.5,"y":0.3,"delayMs":500}]
@@ -265,7 +287,11 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
         : params.events;
 
     let warning: string | undefined;
-    let edgeContact: GestureEvent | undefined;
+    // The finger this call has down: one an earlier train left held, then the
+    // last non-Up event this train sent. A train starting with Down gets a
+    // held finger lifted by sendCommand before its Down goes out.
+    let contact: GestureEvent | undefined =
+      events[0]?.type === "Down" ? undefined : takeHeldTouch<GestureEvent>(device.id)?.contact;
     try {
       for (const event of events) {
         await sleep(event.delayMs ?? 16);
@@ -277,21 +303,32 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
           x: event.x,
           y: event.y,
         });
-        if (params.edge) edgeContact = event.type === "Up" ? undefined : event;
+        contact = event.type === "Up" ? undefined : event;
         warning ??= sent.warning;
       }
     } catch (error) {
-      if (edgeContact) {
-        // Release a contact that the simulator acknowledged before a later waypoint failed.
-        await sendCommand(api, {
-          cmd: "edgeTouch",
-          edge: params.edge,
-          type: "Up",
-          x: edgeContact.x,
-          y: edgeContact.y,
-        }).catch(() => {});
+      if (contact) {
+        // Release a contact that the device acknowledged before a later event failed.
+        await sendCommand(
+          api,
+          params.edge
+            ? { cmd: "edgeTouch", edge: params.edge, type: "Up", x: contact.x, y: contact.y }
+            : liftCommand(contact)
+        ).catch(() => {});
       }
       throw error;
+    }
+    if (contact) {
+      const last = contact;
+      holdTouch(device.id, {
+        contact: last,
+        release: () => sendCommand(api, liftCommand(last)),
+      });
+      return {
+        events: events.length,
+        held: true,
+        ...(warning !== undefined ? { warning } : {}),
+      };
     }
     return { events: events.length, ...(warning !== undefined ? { warning } : {}) };
   },
