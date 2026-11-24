@@ -88,6 +88,27 @@ describe("run-sequence settle", () => {
     }
   );
 
+  it("holds typing until two reads agree on the focused field", async () => {
+    const fieldsFocusedAt = (focused: number): DescribeTreeData => ({
+      source: "uiautomator",
+      tree: {
+        role: "Application",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [0, 1, 2].map((i) => ({
+          role: "TextField",
+          frame: { x: 0, y: 0.2 * (i + 1), width: 1, height: 0.1 },
+          ...(i === focused ? { focused: true } : {}),
+          children: [],
+        })),
+      },
+    });
+    treeSequence(fieldsFocusedAt(0), fieldsFocusedAt(1), fieldsFocusedAt(2), fieldsFocusedAt(2));
+
+    await run(ANDROID, [tap, { tool: "keyboard", args: { text: "hello" }, delayMs: 0 }]);
+
+    expect(log).toEqual(["gesture-tap", "read", "read", "read", "read", "keyboard"]);
+  });
+
   it("waits after enter, escape and a submitted text, not after other keys or text", async () => {
     const key = (k: string) => ({ tool: "keyboard", args: { key: k }, delayMs: 0 });
     const text = (t: string) => ({ tool: "keyboard", args: { text: t }, delayMs: 0 });

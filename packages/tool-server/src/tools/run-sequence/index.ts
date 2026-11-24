@@ -11,7 +11,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, settleWithin, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { treeFingerprint } from "../../utils/ui-tree-match";
-import type { DescribeTreeData } from "../describe/contract";
+import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos } from "../describe/platforms/ios";
 import { queryAndroidFullHierarchy } from "../flows/flow-android-tree";
 import { queryChromiumTree } from "../flows/flow-chromium-tree";
@@ -148,13 +148,17 @@ function settleTreeReader(registry: Registry, device: DeviceInfo): ReadTree | un
   return undefined;
 }
 
+function settleFingerprint(root: DescribeNode): string {
+  return `${treeFingerprint(root)}\nfocus:${treeFingerprint(root, (node) => node.focused === true)}`;
+}
+
 async function waitForStillTree(readTree: ReadTree, signal?: AbortSignal): Promise<void> {
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   let previous: string | undefined;
   while (Date.now() < deadline) {
     const read = await settleWithin(readTree(), deadline - Date.now(), signal);
     if (read.type !== "value") return;
-    const fingerprint = treeFingerprint(read.value.tree);
+    const fingerprint = settleFingerprint(read.value.tree);
     if (fingerprint === previous) return;
     previous = fingerprint;
     if (!(await sleepOrAbort(SETTLE_POLL_MS, signal))) return;
