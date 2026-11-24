@@ -1487,11 +1487,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // The cap ELIDES THE MIDDLE: the note about a dark final poll lives at the END.
   it("keeps the tail of an over-long reason, where the final-poll note lives", async () => {
     const wall = "Lorem ipsum dolor sit amet ".repeat(60);
-    // Trusted reads keep the condition false, then the source dies on the last
-    // poll. That tail is inside CONDITION_DARK_TAIL_TOLERANCE_MS, so it stays firm.
-    const probeStartedAt = Date.now();
+    // Trusted reads keep the condition false; the source dies at 900ms, so the
+    // dark tail runs from the 600ms read: 400ms, past one poll interval but
+    // inside CONDITION_DARK_TAIL_TOLERANCE_MS, so the verdict stays firm.
+    let firstReadAt: number | undefined;
     fetchRunnerTree = async () => {
-      if (Date.now() - probeStartedAt > 900) throw new Error("native devtools went away");
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 900) throw new Error("native devtools went away");
       return { tree: iosRunnerTree([iosLabel(`Total ${wall}`)]), source: "native-devtools" };
     };
     await startRecording("tail");
@@ -2166,6 +2168,43 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(() =>
       assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
     ).not.toThrow();
+  });
+});
+
+// `await-network-request` reads the capture layers, not a UI tree, and has no
+// `await:` form to convert to, so an unmet one is never re-probed.
+describe("a recorded network wait", () => {
+  it("keeps an unmet await-network-request as a wait step, with the wait warning and no re-probe", async () => {
+    const args = { bundleId: "com.acme.app", method: "POST", url: "/v1/auth/login" };
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "await-network-request") {
+          return { success: false, elapsed: 10_000, cause: "unmet", note: "No request matched." };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    await startRecording("netunmet");
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "netunmet",
+        project_root: tmpDir,
+        command: "await-network-request",
+        args: JSON.stringify({ udid: IOS, ...args }),
+      }
+    );
+
+    const warning = warningOf(result, "netunmet");
+    expect(warning).toContain("the wait never held");
+    expect(warning).toContain("at replay an unmet wait FAILS the step");
+    expect(warning).not.toMatch(/re-probe|UI tree/);
+    expect(fetchCount).toBe(0);
+    expect(await recordedSteps("netunmet")).toEqual([
+      { kind: "tool", name: "await-network-request", args, delayMs: undefined },
+    ]);
   });
 });
 

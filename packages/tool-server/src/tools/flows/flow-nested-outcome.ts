@@ -13,7 +13,7 @@ import type { StepStatus } from "./flow-run";
  * "`ok: false` fails the step" rule: the generic `tool` step dispatches results
  * typed `unknown`, several carrying app-derived payloads, and a blanket rule
  * would bind all of them — and every tool added later — to "a key called `ok`
- * decides my flow's verdict". `isUnmetUiWaitResult` set the precedent for
+ * decides my flow's verdict". `isUnmetWaitResult` set the precedent for
  * naming the tool instead.
  *
  * Results cross the registry boundary as `unknown`: a shape not recognised

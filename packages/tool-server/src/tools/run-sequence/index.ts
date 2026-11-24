@@ -16,7 +16,11 @@ import { describeIos } from "../describe/platforms/ios";
 import { queryAndroidFullHierarchy } from "../flows/flow-android-tree";
 import { queryChromiumTree } from "../flows/flow-chromium-tree";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
-import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import {
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
+  AWAIT_UI_ELEMENT_TOOL_ID,
+  isUnmetWaitResult,
+} from "../../utils/wait-result";
 import { unmetWaitReason } from "../../utils/tool-result-verdict";
 
 // No tool here returns an image or an artifact handle — that is what keeps a
@@ -45,6 +49,9 @@ export const ALLOWED_TOOLS = new Set([
   "fold",
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
+  // Returns its match, never an image: after network-capture-start, an
+  // action and its wait run as one sequence, and an unmet wait stops it.
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
 ]);
 
 const SETTLE_TIMEOUT_MS = 1000;
@@ -162,7 +169,7 @@ export function createRunSequenceTool(
     description: `Run several device interaction steps in one call.
 Use when every step is known in advance (e.g. several scrolls, or typing then enter). If a step depends on what an earlier one shows, make separate calls.
 Steps run in order. After a step that can change the screen, the next one waits up to 1000ms for the element tree to settle (see \`settle\`); keep an await-ui-element before a step that needs the new screen.
-If a step fails (an error, a tool not allowed or not supported on the target, or an await-ui-element with success=false), the sequence stops there. Returns { completed, total, steps } with a result or error for each step that ran.
+If a step fails (an error, a tool not allowed or not supported on the target, or a wait step that returns success=false), the sequence stops there. Returns { completed, total, steps } with a result or error for each step that ran.
 One screenshot and element tree are captured after the last step, not per step. A \`{{secret:...}}\` in any step skips that capture, so type and submit a secret in one sequence.
 
 Allowed tools, args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles in degrees, durations in ms.
@@ -180,8 +187,8 @@ Allowed tools, args (? = optional) and targets. Positions and distances are 0–
   shake: count?  [ios sim/android emu]
   fold: posture? "closed"|"half-open"|"open" or angle? 0–180 (later steps land on the new panel)  [foldable ios sim/android emu]
   tv-remote: button (one, or an array run as a path), repeat?  [apple tv/android tv/vega]
-    buttons: up/down/left/right/select/back/home/menu/playPause; rewind/fastForward/next/previous/volumeUp/volumeDown/mute on Android TV and Vega only
-  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText?, textMatch?, timeoutMs?, pollIntervalMs?  [all]`,
+  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText?, textMatch?, timeoutMs?, pollIntervalMs?  [all]
+  await-network-request: bundleId, url, plus the standalone tool's optional args. Call network-capture-start before the sequence.  [ios sim/android/chromium<flag:macos-apps>/macos</flag:macos-apps>]`,
     zodSchema,
     alwaysLoad: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
@@ -242,8 +249,8 @@ Allowed tools, args (? = optional) and targets. Positions and distances are 0–
 
         try {
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
-          if (isUnmetUiWaitResult(step.tool, result)) {
-            results.push({ tool: step.tool, error: unmetWaitReason(result) });
+          if (isUnmetWaitResult(step.tool, result)) {
+            results.push({ tool: step.tool, error: unmetWaitReason(step.tool, result) });
             break;
           }
           results.push({ tool: step.tool, result });
