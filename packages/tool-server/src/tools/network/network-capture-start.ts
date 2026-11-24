@@ -199,8 +199,10 @@ async function startMacosLayer(
   bundleId: string,
   port: number
 ): Promise<StartedLayer> {
-  // Capture stays off here, so a read says why, rather than to call this tool again.
+  // Capture is off after this start, also one that an earlier start left on for
+  // the next copy argent starts, so a read and a stop say what this start found.
   const notTurnedOn = (reason: string): StartedLayer => {
+    app.forgetNetworkCaptureStart();
     setNativeUnavailable(device.id, bundleId, reason);
     return unavailable("macos-native", reason);
   };
