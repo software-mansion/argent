@@ -16,7 +16,7 @@ export {
   globalInstallCommand,
   projectInstallCommand,
   formatShellCommand,
-  findJsoncSyntaxErrorLine,
+  findConfigSyntaxErrorLine,
   RULES_DIR,
 } from "./utils.js";
 export {
@@ -24,7 +24,6 @@ export {
   detectAdapters,
   findConfiguredAdapterScopes,
   getManagedContentTargets,
-  hasCustomizingEnv,
   isPinnedGlobalEntry,
   type McpServerEntry,
 } from "./mcp-configs.js";

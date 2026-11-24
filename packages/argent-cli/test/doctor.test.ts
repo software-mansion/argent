@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import {
   classifyMcpEntry,
+  configuredFor,
+  xcodesIn,
   editorsSection,
   findConfigured,
   globalInstallFix,
@@ -29,6 +31,7 @@ afterEach(() => {
 function ctx(overrides: Partial<EntryContext> = {}): EntryContext {
   return {
     projectRoot,
+    cwd: projectRoot,
     globalOnPath: true,
     localInstalled: false,
     argentCommand: "argent",
@@ -51,9 +54,18 @@ describe("classifyMcpEntry", () => {
     expect(result.fix).toBe("npm install -g @swmansion/argent");
   });
 
-  it("only warns when the entry's own env may let the editor find argent", () => {
-    const entry = { ...bare, env: { PATH: "/custom/bin" } };
-    expect(classifyMcpEntry(entry, ctx({ globalOnPath: false })).status).toBe("warn");
+  it("does not judge an entry that sets its own PATH", () => {
+    const ownPath = { env: { PATH: path.join(projectRoot, "bin") } };
+    const pnpm = { command: "pnpm", args: ["dlx", "@swmansion/argent", "mcp"] };
+    for (const entry of [bare, pnpm]) {
+      const result = classifyMcpEntry({ ...entry, ...ownPath }, ctx({ globalOnPath: false }));
+      expect(result.status).toBe("info");
+      expect(result.label).toContain("sets its own PATH, not checked");
+    }
+  });
+
+  it("fails an argent entry that does not start the MCP server", () => {
+    expect(classifyMcpEntry({ command: "argent", args: ["serve"] }, ctx()).status).toBe("error");
   });
 
   it("checks a node entry's script relative to the project root", () => {
@@ -66,6 +78,17 @@ describe("classifyMcpEntry", () => {
     fs.mkdirSync(path.dirname(path.join(projectRoot, script)), { recursive: true });
     fs.writeFileSync(path.join(projectRoot, script), "");
     expect(classifyMcpEntry(entry, ctx()).status).toBe("ok");
+
+    const subfolder = path.join(projectRoot, "src");
+    fs.mkdirSync(subfolder);
+    const fromSubfolder = classifyMcpEntry(entry, ctx({ cwd: subfolder }));
+    expect(fromSubfolder.status).toBe("error");
+    expect(fromSubfolder.fix).toBe(`Start the editor in ${projectRoot}`);
+  });
+
+  it("asks to rerun init, not to install the project, for a missing absolute script", () => {
+    const entry = { command: "node", args: [path.join(projectRoot, "gone", "cli.js"), "mcp"] };
+    expect(classifyMcpEntry(entry, ctx()).fix).toBe("argent init");
   });
 
   it("needs a local or global install for `npx argent mcp` but not for the scoped package", () => {
@@ -114,20 +137,32 @@ describe("classifyMcpEntry", () => {
       process.env.PATH = realPath;
     });
 
-    it("fails a runner that is on neither the shell's nor the entry's PATH", () => {
+    it("fails a runner that is not on PATH and accepts one that is", () => {
       process.env.PATH = path.join(projectRoot, "shell");
-      const missing = classifyMcpEntry({ ...entry, env: { PATH: "/opt/x:${PATH}" } }, ctx());
+      const missing = classifyMcpEntry(entry, ctx());
       expect(missing.status).toBe("error");
       expect(missing.label).toContain("`pnpm` is not on PATH");
+      process.env.PATH = projectRoot;
+      fs.writeFileSync(path.join(projectRoot, pnpm), "", { mode: 0o755 });
+      expect(classifyMcpEntry(entry, ctx()).status).toBe("ok");
     });
 
-    it("accepts a runner on the entry's PATH or on the shell's PATH it expands", () => {
-      process.env.PATH = path.join(projectRoot, "shell");
-      fs.writeFileSync(path.join(projectRoot, pnpm), "");
-      expect(classifyMcpEntry({ ...entry, env: { PATH: projectRoot } }, ctx()).status).toBe("ok");
+    it.skipIf(process.platform === "win32")("skips a runner that is not executable", () => {
       process.env.PATH = projectRoot;
-      const expanded = { ...entry, env: { PATH: "/opt/x:${PATH}" } };
-      expect(classifyMcpEntry(expanded, ctx()).status).toBe("ok");
+      fs.writeFileSync(path.join(projectRoot, pnpm), "", { mode: 0o644 });
+      expect(classifyMcpEntry(entry, ctx()).status).toBe("error");
+      fs.mkdirSync(path.join(projectRoot, "later"));
+      fs.writeFileSync(path.join(projectRoot, "later", pnpm), "", { mode: 0o755 });
+      process.env.PATH = [projectRoot, path.join(projectRoot, "later")].join(path.delimiter);
+      expect(classifyMcpEntry(entry, ctx()).status).toBe("ok");
+    });
+
+    it("names the package that ships the runner", () => {
+      process.env.PATH = path.join(projectRoot, "shell");
+      const bunx = { command: "bunx", args: ["@swmansion/argent", "mcp"] };
+      expect(classifyMcpEntry(bunx, ctx()).fix).toBe(
+        "Install Bun, or put `bunx` on the PATH the entry runs with"
+      );
     });
   });
 
@@ -173,10 +208,39 @@ describe("toolchainChecks", () => {
         firstLaunch: null,
       },
     };
-    expect(toolchainChecks(report, ["Xcode-26.6.app"])[0]!.fix).toBe(
+    expect(toolchainChecks(report, ["/Applications/Xcode-26.6.app"])[0]!.fix).toBe(
       "Run sudo xcode-select -s /Applications/Xcode-26.6.app/Contents/Developer"
     );
     expect(toolchainChecks(report, [])[0]!.fix).toContain("Install Xcode from the App Store");
+    expect(toolchainChecks(report, ["/Applications/Xcode 26.1.app"])[0]!.fix).toBe(
+      'Run sudo xcode-select -s "/Applications/Xcode 26.1.app/Contents/Developer"'
+    );
+  });
+
+  describe("with toolchain env vars set", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("asks to unset DEVELOPER_DIR, which xcode-select cannot override", () => {
+      vi.stubEnv("DEVELOPER_DIR", "/nonexistent");
+      const [ios] = toolchainChecks(
+        { adb, xcode: { developerDir: "/nonexistent", simctl: false, firstLaunch: null } },
+        ["/Applications/Xcode.app"]
+      );
+      expect(ios!.fix).toBe(
+        "Unset DEVELOPER_DIR (it overrides xcode-select), then run sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+      );
+    });
+
+    it("names an ANDROID_HOME that has no adb", () => {
+      vi.stubEnv("ANDROID_SDK_ROOT", undefined);
+      vi.stubEnv("ANDROID_HOME", "/nonexistent/sdk");
+      const [, android] = toolchainChecks({ adb: null, xcode: null });
+      expect(android!.detail).toBe(
+        "ANDROID_HOME is /nonexistent/sdk, which has no platform-tools/adb"
+      );
+    });
   });
 
   it("warns while Xcode has not finished its first launch", () => {
@@ -197,6 +261,17 @@ describe("toolchainChecks", () => {
     expect(ios!.status).toBe("info");
     expect(android!.status).toBe("warn");
     expect(android!.fix).toContain("ANDROID_HOME");
+  });
+
+  it("finds renamed Xcode apps but not other apps whose name starts with Xcode", () => {
+    for (const app of ["Xcode.app", "Xcode-26.6.app", "Xcode 26.1.app", "Xcodes.app"]) {
+      fs.mkdirSync(path.join(projectRoot, app));
+    }
+    expect(
+      xcodesIn(projectRoot)
+        .map((p) => path.basename(p))
+        .sort()
+    ).toEqual(["Xcode 26.1.app", "Xcode-26.6.app", "Xcode.app"]);
   });
 });
 
@@ -232,14 +307,29 @@ describe("resolveDoctorRoot", () => {
     expect(resolveDoctorRoot(repo, homeDir)).toBe(repo);
   });
 
-  it("keeps the git root over a stale parent config when a global entry covers it", () => {
+  it("counts only Claude Code's config above the git root, since Claude Code reads it", () => {
     const homeDir = path.join(projectRoot, "home");
-    const app = path.join(homeDir, "Developer", "app");
-    fs.mkdirSync(path.join(app, ".git"), { recursive: true });
-    writeArgentEntry(path.join(homeDir, "Developer", ".mcp.json"));
+    const ws = path.join(homeDir, "ws");
+    const src = path.join(ws, "repo-a", "src");
+    fs.mkdirSync(src, { recursive: true });
+    fs.mkdirSync(path.join(ws, "repo-a", ".git"));
+    writeArgentEntry(path.join(ws, ".mcp.json"));
+    writeArgentEntry(path.join(ws, ".cursor", "mcp.json"));
+    process.env.HOME = homeDir;
+    expect(resolveDoctorRoot(src, homeDir)).toBe(ws);
+    expect(configuredFor(ws, src).map((c) => c.adapter.name)).toEqual(["Claude Code"]);
+  });
+
+  it("keeps looking for the repo's config when a global entry exists", () => {
+    const homeDir = path.join(projectRoot, "home");
+    const mono = path.join(projectRoot, "mono");
+    const web = path.join(mono, "apps", "web");
+    fs.mkdirSync(path.join(mono, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(web, ".vscode"), { recursive: true });
+    writeArgentEntry(path.join(mono, ".mcp.json"));
     writeArgentEntry(path.join(homeDir, ".cursor", "mcp.json"));
     process.env.HOME = homeDir;
-    expect(resolveDoctorRoot(app, homeDir)).toBe(app);
+    expect(resolveDoctorRoot(web, homeDir)).toBe(mono);
   });
 
   it("keeps the git root when no parent has a config", () => {
@@ -269,10 +359,80 @@ describe("editorsSection", () => {
     process.env.HOME = realHome;
   });
 
-  function editorChecks(root: string) {
-    return editorsSection({ ...ctx({ projectRoot: root }), configured: findConfigured(root) })
+  function editorChecks(root: string, cwd = root) {
+    return editorsSection({ ...ctx({ projectRoot: root, cwd }), configured: findConfigured(root) })
       .checks;
   }
+
+  function writeEntry(configPath: string, container: string, server: object): void {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ [container]: { argent: server } }));
+  }
+
+  it("checks a relative script from this folder only for editors started in it", () => {
+    process.env.HOME = path.join(projectRoot, "home");
+    const script = "node_modules/@swmansion/argent/dist/cli.js";
+    fs.mkdirSync(path.dirname(path.join(projectRoot, script)), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, script), "");
+    const entry = { command: "node", args: [script, "mcp"] };
+    writeEntry(path.join(projectRoot, ".mcp.json"), "mcpServers", entry);
+    writeEntry(path.join(projectRoot, ".cursor", "mcp.json"), "mcpServers", entry);
+    fs.mkdirSync(path.join(projectRoot, ".codex"));
+    fs.writeFileSync(
+      path.join(projectRoot, ".codex", "config.toml"),
+      `[mcp_servers.argent]\ncommand = "node"\nargs = ["${script}", "mcp"]\n`
+    );
+    const src = path.join(projectRoot, "src");
+    fs.mkdirSync(src);
+    const checks = editorChecks(projectRoot, src);
+    expect(checks.find((c) => c.label.startsWith("Claude Code"))!.status).toBe("error");
+    expect(checks.find((c) => c.label.startsWith("Codex"))!.status).toBe("error");
+    expect(checks.find((c) => c.label.startsWith("Cursor"))!.status).toBe("ok");
+  });
+
+  it("still reports no entry when only an unrelated global config is broken", () => {
+    const homeDir = path.join(projectRoot, "home");
+    process.env.HOME = homeDir;
+    fs.mkdirSync(path.join(homeDir, ".config", "zed"), { recursive: true });
+    fs.writeFileSync(path.join(homeDir, ".config", "zed", "settings.json"), '{"a": 1 "b": 2}');
+    const labels = editorChecks(projectRoot)
+      .filter((c) => c.status === "error")
+      .map((c) => c.label);
+    expect(labels).toEqual([
+      "Zed: the config has a JSON syntax error on line 1",
+      "No editor has an argent MCP entry for this project",
+    ]);
+  });
+
+  it("points at a broken global config that holds the argent entry instead of init", () => {
+    const homeDir = path.join(projectRoot, "home");
+    process.env.HOME = homeDir;
+    fs.mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
+    fs.writeFileSync(
+      path.join(homeDir, ".codex", "config.toml"),
+      'model = gpt-5\n[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n'
+    );
+    const labels = editorChecks(projectRoot)
+      .filter((c) => c.status === "error")
+      .map((c) => c.label);
+    expect(labels).toEqual(["Codex: the config has a TOML syntax error on line 1"]);
+  });
+
+  it("ignores broken configs above the git root that only Claude Code would read past", () => {
+    const homeDir = path.join(projectRoot, "home");
+    process.env.HOME = homeDir;
+    const ws = path.join(projectRoot, "code");
+    const repo = path.join(ws, "newrepo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    writeArgentEntry(path.join(ws, ".mcp.json"));
+    fs.mkdirSync(path.join(ws, ".gemini"));
+    fs.writeFileSync(path.join(ws, ".gemini", "settings.json"), '{"mcpServers": {"x": 1,}}');
+    const checks = editorsSection({
+      ...ctx({ projectRoot: ws, cwd: repo }),
+      configured: configuredFor(ws, repo),
+    }).checks;
+    expect(checks.filter((c) => c.status === "error")).toEqual([]);
+  });
 
   it("fails a config the editor rejects even when the entry itself reads fine", () => {
     process.env.HOME = path.join(projectRoot, "home");
@@ -296,12 +456,42 @@ describe("editorsSection", () => {
     expect(checks.find((c) => c.label.startsWith("Gemini"))!.status).toBe("ok");
   });
 
+  it("fails a broken TOML or YAML config while another editor is fine", () => {
+    const homeDir = path.join(projectRoot, "home");
+    process.env.HOME = homeDir;
+    writeArgentEntry(path.join(homeDir, ".cursor", "mcp.json"));
+    fs.mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
+    fs.writeFileSync(
+      path.join(homeDir, ".codex", "config.toml"),
+      'model = gpt-5\n[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n'
+    );
+    fs.mkdirSync(path.join(homeDir, ".hermes"), { recursive: true });
+    fs.writeFileSync(path.join(homeDir, ".hermes", "config.yaml"), "a: 1\nfoo: [\nb: 2\n");
+    const checks = editorChecks(projectRoot);
+    expect(checks.filter((c) => c.status === "error").map((c) => c.label)).toEqual([
+      "Codex: the config has a TOML syntax error on line 1",
+      "Hermes: the config has a YAML syntax error on line 3",
+    ]);
+    expect(checks.find((c) => c.label.startsWith("Detected"))?.label ?? "").not.toMatch(
+      /Codex|Hermes/
+    );
+  });
+
   it("points at the broken line when the config cannot be parsed at all", () => {
     process.env.HOME = path.join(projectRoot, "home");
     fs.writeFileSync(path.join(projectRoot, ".mcp.json"), '{ "mcpServers": oops');
     const checks = editorChecks(projectRoot).filter((c) => c.status === "error");
     expect(checks.map((c) => c.label)).toEqual([
       "Claude Code: the config has a JSON syntax error on line 1",
+    ]);
+  });
+
+  it("reports an empty config as no entry, as the editor does", () => {
+    process.env.HOME = path.join(projectRoot, "home");
+    fs.writeFileSync(path.join(projectRoot, ".mcp.json"), "\n");
+    const checks = editorChecks(projectRoot).filter((c) => c.status === "error");
+    expect(checks.map((c) => c.label)).toEqual([
+      "No editor has an argent MCP entry for this project",
     ]);
   });
 

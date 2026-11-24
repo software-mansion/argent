@@ -11,13 +11,12 @@ import {
   detectGlobalPackageManager,
   detectProjectPackageManager,
   findConfiguredAdapterScopes,
-  findJsoncSyntaxErrorLine,
+  findConfigSyntaxErrorLine,
   formatShellCommand,
   getGloballyInstalledVersion,
   getInstalledVersion,
   getManagedContentTargets,
   globalInstallCommand,
-  hasCustomizingEnv,
   isGloballyInstalled,
   isPinnedGlobalEntry,
   listBundledSkills,
@@ -26,6 +25,7 @@ import {
   resolveInstallMode,
   resolveProjectRoot,
   MCP_BINARY_NAME,
+  MCP_SERVER_KEY,
   PACKAGE_NAME,
   RULES_DIR,
   type McpServerEntry,
@@ -36,9 +36,15 @@ const execFileAsync = promisify(execFile);
 const CHECK_DEPS_TIMEOUT_MS = 30_000;
 type ConfiguredAdapterScope = ReturnType<typeof findConfiguredAdapterScopes>[number];
 
-const PACKAGE_RUNNERS = new Set(["npx", "yarn", "pnpm", "bunx"]);
+const RUNNER_PACKAGES: Record<string, string> = {
+  npx: "Node.js",
+  yarn: "Yarn",
+  pnpm: "pnpm",
+  bunx: "Bun",
+};
+const LAUNCH_DIR_EDITORS = new Set(["Claude Code", "opencode", "Codex"]);
 const JSONC_OPTIONS = { allowTrailingComma: true };
-const EDITOR_JSON_OPTIONS: Record<string, Parameters<typeof findJsoncSyntaxErrorLine>[1]> = {
+const EDITOR_JSON_OPTIONS: Record<string, Parameters<typeof findConfigSyntaxErrorLine>[1]> = {
   "Claude Code": { disallowComments: true },
   "Gemini": {},
 };
@@ -70,6 +76,7 @@ interface HostDepsReport {
 
 interface DoctorContext {
   projectRoot: string;
+  cwd: string;
   configured: ConfiguredAdapterScope[];
   running: string;
   paths: ToolsServerPaths;
@@ -84,6 +91,7 @@ interface DoctorContext {
 export type EntryContext = Pick<
   DoctorContext,
   | "projectRoot"
+  | "cwd"
   | "globalOnPath"
   | "localInstalled"
   | "argentCommand"
@@ -145,13 +153,12 @@ function entryCheck(
 }
 
 function classifyArgentOnPath(entry: McpServerEntry, ctx: EntryContext): DoctorCheck {
-  if (ctx.globalOnPath) return entryCheck("ok", entry);
-  if (hasCustomizingEnv(entry)) {
-    return entryCheck("warn", entry, "`argent` is not on this shell's PATH", {
-      detail: "the entry sets its own env, which may still let the editor find it",
-      fix: ctx.globalInstallFix,
+  if (entry.args[0] !== "mcp") {
+    return entryCheck("error", entry, "expected `argent mcp`", {
+      fix: `${ctx.argentCommand} init`,
     });
   }
+  if (ctx.globalOnPath) return entryCheck("ok", entry);
   return entryCheck("error", entry, "`argent` is not on PATH, so this entry cannot start", {
     fix: ctx.globalInstallFix,
   });
@@ -160,9 +167,23 @@ function classifyArgentOnPath(entry: McpServerEntry, ctx: EntryContext): DoctorC
 function classifyNodeScript(entry: McpServerEntry, ctx: EntryContext): DoctorCheck {
   const script = entry.args.find((arg) => !arg.startsWith("-"));
   if (!script) return entryCheck("info", entry, "custom command, not checked");
-  return fs.existsSync(path.resolve(ctx.projectRoot, script))
-    ? entryCheck("ok", entry)
-    : entryCheck("error", entry, `${script} does not exist`, { fix: ctx.projectInstallFix });
+  if (path.isAbsolute(script)) {
+    return fs.existsSync(script)
+      ? entryCheck("ok", entry)
+      : entryCheck("error", entry, `${script} does not exist`, {
+          fix: `${ctx.argentCommand} init`,
+        });
+  }
+  if (!fs.existsSync(path.resolve(ctx.projectRoot, script))) {
+    return entryCheck("error", entry, `${script} does not exist`, { fix: ctx.projectInstallFix });
+  }
+  if (!fs.existsSync(path.resolve(ctx.cwd, script))) {
+    return entryCheck("error", entry, `${script} is relative to ${home(ctx.projectRoot)}`, {
+      detail: "an editor started in this folder cannot find it",
+      fix: `Start the editor in ${home(ctx.projectRoot)}`,
+    });
+  }
+  return entryCheck("ok", entry);
 }
 
 function classifyPinnedEntry(entry: McpServerEntry, initFix: string): DoctorCheck {
@@ -172,23 +193,32 @@ function classifyPinnedEntry(entry: McpServerEntry, initFix: string): DoctorChec
     : entryCheck("ok", entry);
 }
 
-function isOnPath(command: string, searchPath: string): boolean {
+function isRunnableFile(file: string): boolean {
+  try {
+    if (!fs.statSync(file).isFile()) return false;
+    if (process.platform !== "win32") fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isOnPath(command: string): boolean {
   const names =
     process.platform === "win32" ? [".cmd", ".exe"].map((ext) => command + ext) : [command];
-  return searchPath
+  return (process.env.PATH ?? "")
     .split(path.delimiter)
-    .some((dir) => dir !== "" && names.some((name) => fs.existsSync(path.join(dir, name))));
+    .some((dir) => dir !== "" && names.some((name) => isRunnableFile(path.join(dir, name))));
 }
 
 function classifyPackageRunner(entry: McpServerEntry, ctx: EntryContext): DoctorCheck {
-  const searchPath = [entry.env?.PATH, process.env.PATH].filter(Boolean).join(path.delimiter);
-  if (!isOnPath(entry.command, searchPath)) {
+  if (!isOnPath(entry.command)) {
     return entryCheck(
       "error",
       entry,
       `\`${entry.command}\` is not on PATH, so this entry cannot start`,
       {
-        fix: `Install ${entry.command}, or put it on the PATH the entry runs with`,
+        fix: `Install ${RUNNER_PACKAGES[entry.command]}, or put \`${entry.command}\` on the PATH the entry runs with`,
       }
     );
   }
@@ -205,11 +235,16 @@ function classifyPackageRunner(entry: McpServerEntry, ctx: EntryContext): Doctor
 export function classifyMcpEntry(entry: McpServerEntry, ctx: EntryContext): DoctorCheck {
   const initFix = `${ctx.argentCommand} init`;
   if (entry.command === "") {
-    return check("warn", "The argent entry could not be read", { fix: initFix });
+    return check("warn", "The argent entry has no command", { fix: initFix });
+  }
+  if (entry.command === "node") return classifyNodeScript(entry, ctx);
+  const resolvedOnPath =
+    entry.command === MCP_BINARY_NAME || Object.hasOwn(RUNNER_PACKAGES, entry.command);
+  if (resolvedOnPath && entry.env?.PATH !== undefined) {
+    return entryCheck("info", entry, "sets its own PATH, not checked");
   }
   if (entry.command === MCP_BINARY_NAME) return classifyArgentOnPath(entry, ctx);
-  if (entry.command === "node") return classifyNodeScript(entry, ctx);
-  if (PACKAGE_RUNNERS.has(entry.command)) return classifyPackageRunner(entry, ctx);
+  if (Object.hasOwn(RUNNER_PACKAGES, entry.command)) return classifyPackageRunner(entry, ctx);
   if (isPinnedGlobalEntry(entry)) return classifyPinnedEntry(entry, initFix);
   if (path.isAbsolute(entry.command) && !fs.existsSync(entry.command)) {
     return entryCheck("error", entry, `${entry.command} does not exist`, { fix: initFix });
@@ -226,13 +261,13 @@ function readEntry(adapter: (typeof ALL_ADAPTERS)[number], configPath: string): 
 }
 
 function syntaxCheck(adapterName: string, configPath: string): DoctorCheck | null {
-  if (!/\.jsonc?$/.test(configPath)) return null;
-  const line = findJsoncSyntaxErrorLine(
+  const line = findConfigSyntaxErrorLine(
     configPath,
     EDITOR_JSON_OPTIONS[adapterName] ?? JSONC_OPTIONS
   );
   if (line === null) return null;
-  return check("error", `the config has a JSON syntax error on line ${line}`, {
+  const format = path.extname(configPath).slice(1).toUpperCase();
+  return check("error", `the config has a ${format} syntax error on line ${line}`, {
     fix: `Fix line ${line} of ${home(configPath)}. The editor loads no MCP servers from it until then`,
   });
 }
@@ -256,13 +291,36 @@ function editorCheck(
   };
 }
 
-function brokenProjectConfigs(projectRoot: string, initFix: string): DoctorCheck[] {
-  return ALL_ADAPTERS.flatMap((adapter) => {
-    const configPath = adapter.projectPath(projectRoot);
-    if (!configPath) return [];
-    const result = syntaxCheck(adapter.name, configPath);
-    return result ? [editorCheck(result, { adapter, scope: "project", configPath }, initFix)] : [];
-  });
+function brokenUnconfiguredConfigs(
+  { projectRoot, cwd }: Pick<EntryContext, "projectRoot" | "cwd">,
+  configured: ConfiguredAdapterScope[]
+): Array<ConfiguredAdapterScope & { result: DoctorCheck }> {
+  const seen = new Set(configured.map((c) => path.resolve(c.configPath)));
+  const aboveRepo = crossesGitRoot(cwd, projectRoot);
+  return ALL_ADAPTERS.flatMap((adapter) =>
+    (["project", "global"] as const).flatMap((scope) => {
+      if (scope === "project" && !readsConfigAt(adapter.name, aboveRepo)) return [];
+      const configPath =
+        scope === "project" ? adapter.projectPath(projectRoot) : adapter.globalPath();
+      if (!configPath || seen.has(path.resolve(configPath))) return [];
+      seen.add(path.resolve(configPath));
+      const result = syntaxCheck(adapter.name, configPath);
+      return result ? [{ adapter, scope, configPath, result }] : [];
+    })
+  );
+}
+
+function mayHoldArgentEntry({ scope, configPath }: ConfiguredAdapterScope): boolean {
+  if (scope === "project") return true;
+  try {
+    return fs.readFileSync(configPath, "utf8").includes(MCP_SERVER_KEY);
+  } catch {
+    return false;
+  }
+}
+
+function editorEntryContext(ctx: EntryContext, editor: string): EntryContext {
+  return { ...ctx, cwd: LAUNCH_DIR_EDITORS.has(editor) ? ctx.cwd : ctx.projectRoot };
 }
 
 export function editorsSection(
@@ -275,20 +333,22 @@ export function editorsSection(
   for (const entry of configured) {
     const result =
       syntaxCheck(entry.adapter.name, entry.configPath) ??
-      classifyMcpEntry(readEntry(entry.adapter, entry.configPath), ctx);
+      classifyMcpEntry(
+        readEntry(entry.adapter, entry.configPath),
+        editorEntryContext(ctx, entry.adapter.name)
+      );
     checks.push(editorCheck(result, entry, initFix));
   }
 
-  if (configured.length === 0) {
-    const broken = brokenProjectConfigs(ctx.projectRoot, initFix);
+  const broken = brokenUnconfiguredConfigs(ctx, configured);
+  for (const { result, ...entry } of broken) checks.push(editorCheck(result, entry, initFix));
+  if (configured.length === 0 && !broken.some(mayHoldArgentEntry)) {
     checks.push(
-      ...(broken.length > 0
-        ? broken
-        : [check("error", "No editor has an argent MCP entry for this project", { fix: initFix })])
+      check("error", "No editor has an argent MCP entry for this project", { fix: initFix })
     );
   }
 
-  const configuredNames = new Set(configured.map((c) => c.adapter.name));
+  const configuredNames = new Set([...configured, ...broken].map((c) => c.adapter.name));
   const localMode = resolveInstallMode(ctx.projectRoot) === "local";
   const unconfigured = detectAdapters()
     .filter((a) => !configuredNames.has(a.name))
@@ -394,20 +454,31 @@ async function probeHostDeps(paths: ToolsServerPaths): Promise<HostDepsReport | 
   }
 }
 
-function installedXcodes(): string[] {
+export function xcodesIn(dir: string): string[] {
   try {
-    return fs.readdirSync("/Applications").filter((name) => /^Xcode.*\.app$/.test(name));
+    return fs
+      .readdirSync(dir)
+      .filter((name) => /^Xcode(?:[-_ ].*)?\.app$/.test(name))
+      .map((name) => path.join(dir, name));
   } catch {
     return [];
   }
 }
 
+function installedXcodes(): string[] {
+  return [...xcodesIn("/Applications"), ...xcodesIn(path.join(homedir(), "Applications"))];
+}
+
 function selectXcodeFix(xcodeApps: string[]): string {
-  const app = xcodeApps.includes("Xcode.app") ? "Xcode.app" : xcodeApps[0];
-  const select = `sudo xcode-select -s /Applications/${app ?? "Xcode.app"}/Contents/Developer`;
+  const app = xcodeApps.find((p) => path.basename(p) === "Xcode.app") ?? xcodeApps[0];
+  const developerDir = `${app ?? "/Applications/Xcode.app"}/Contents/Developer`;
+  const select = formatShellCommand({ bin: "sudo", args: ["xcode-select", "-s", developerDir] });
+  const run = process.env.DEVELOPER_DIR
+    ? `unset DEVELOPER_DIR (it overrides xcode-select), then run ${select}`
+    : `run ${select}`;
   return app
-    ? `Run ${select}`
-    : `Install Xcode from the App Store, open it once, then run ${select}`;
+    ? run.charAt(0).toUpperCase() + run.slice(1)
+    : `Install Xcode from the App Store, open it once, then ${run}`;
 }
 
 function iosCheck(xcode: HostDepsReport["xcode"], xcodeApps: string[]): DoctorCheck {
@@ -431,7 +502,9 @@ function iosCheck(xcode: HostDepsReport["xcode"], xcodeApps: string[]): DoctorCh
 
 function androidCheck(adb: string | null): DoctorCheck {
   if (adb) return check("ok", "Android", { detail: `adb at ${home(adb)}` });
+  const sdkVar = ["ANDROID_HOME", "ANDROID_SDK_ROOT"].find((name) => process.env[name]);
   return check("warn", "Android: adb not found", {
+    detail: sdkVar && `${sdkVar} is ${process.env[sdkVar]}, which has no platform-tools/adb`,
     fix: "Install Android SDK Platform Tools (Android Studio > SDK Manager), or set ANDROID_HOME to the SDK root",
   });
 }
@@ -472,8 +545,10 @@ function hasProjectConfig(dir: string): boolean {
   return findConfigured(dir).some((entry) => entry.scope === "project");
 }
 
-function hasAnyConfig(dir: string): boolean {
-  return findConfigured(dir).length > 0;
+function hasClaudeProjectConfig(dir: string): boolean {
+  return findConfigured(dir).some(
+    (entry) => entry.scope === "project" && entry.adapter.name === "Claude Code"
+  );
 }
 
 function ancestorsInRepo(dir: string, homeDir: string): string[] {
@@ -494,8 +569,30 @@ function ancestorsBelowHome(dir: string, homeDir: string): string[] {
 
 export function resolveDoctorRoot(cwd: string, homeDir: string = homedir()): string {
   const projectRoot = resolveProjectRoot(cwd, homeDir);
-  if (projectRoot === path.resolve(homeDir) || hasAnyConfig(projectRoot)) return projectRoot;
-  return ancestorsInRepo(projectRoot, path.resolve(homeDir)).find(hasProjectConfig) ?? projectRoot;
+  const resolvedHome = path.resolve(homeDir);
+  if (projectRoot === resolvedHome || hasProjectConfig(projectRoot)) return projectRoot;
+  return (
+    ancestorsInRepo(projectRoot, resolvedHome).find(hasProjectConfig) ??
+    ancestorsBelowHome(projectRoot, resolvedHome).find(hasClaudeProjectConfig) ??
+    projectRoot
+  );
+}
+
+function crossesGitRoot(cwd: string, projectRoot: string): boolean {
+  const dirs = [cwd, ...ancestorsBelowHome(cwd, path.resolve(homedir()))];
+  const rootIndex = dirs.indexOf(projectRoot);
+  return rootIndex > 0 && dirs.slice(0, rootIndex).some((d) => fs.existsSync(path.join(d, ".git")));
+}
+
+function readsConfigAt(editor: string, aboveRepo: boolean): boolean {
+  return !aboveRepo || editor === "Claude Code";
+}
+
+export function configuredFor(projectRoot: string, cwd: string): ConfiguredAdapterScope[] {
+  const aboveRepo = crossesGitRoot(cwd, projectRoot);
+  return findConfigured(projectRoot).filter(
+    (entry) => entry.scope === "global" || readsConfigAt(entry.adapter.name, aboveRepo)
+  );
 }
 
 function offPathBinDir(): string | null {
@@ -518,7 +615,8 @@ function buildContext(paths: ToolsServerPaths, cwd: string): DoctorContext {
   const local = probeLocalInstall(projectRoot);
   return {
     projectRoot,
-    configured: findConfigured(projectRoot),
+    cwd,
+    configured: configuredFor(projectRoot, cwd),
     running: paths.version ?? getInstalledVersion() ?? "unknown",
     paths,
     globalOnPath,
