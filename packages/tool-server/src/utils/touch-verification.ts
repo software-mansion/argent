@@ -20,6 +20,15 @@ import { sleep } from "./timing";
 const VERIFY_SCALE = 0.25;
 /** Let a touch's visual response begin before sampling the "after" frame. */
 export const VERIFY_SETTLE_MS = 250;
+/**
+ * A touch can land and still leave the frame unchanged at the first sample: a
+ * Settings pane pushed for the first time loads its bundle before it animates
+ * in, which takes longer than the settle. So an unchanged frame is re-sampled a
+ * few times before it counts as "no-change". This only costs time when the
+ * screen has not changed yet; a frame that changed returns at the first sample.
+ */
+export const VERIFY_RESAMPLE_MS = 250;
+export const VERIFY_RESAMPLES = 3;
 
 export type DeliveryVerdict = "landed" | "no-change" | "unknown" | "pointer-active";
 
@@ -108,7 +117,14 @@ export async function verifyTouchDelivery(
   const before = await captureFrameHash(api);
   await action();
   await sleep(VERIFY_SETTLE_MS);
-  const after = await captureFrameHash(api);
+  let after = await captureFrameHash(api);
+  for (let i = 0; i < VERIFY_RESAMPLES && before !== null && after === before; i++) {
+    await sleep(VERIFY_RESAMPLE_MS);
+    const next = await captureFrameHash(api);
+    // A failed re-sample adds nothing: keep the unchanged frame we already have.
+    if (next === null) break;
+    after = next;
+  }
   return classifyDelivery(before, after);
 }
 

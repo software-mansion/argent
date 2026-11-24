@@ -55,6 +55,8 @@ import {
   runWithDeliveryVerification,
   shouldAutoVerify,
   verifyTouchDelivery,
+  VERIFY_RESAMPLE_MS,
+  VERIFY_RESAMPLES,
   VERIFY_SETTLE_MS,
 } from "../../src/utils/touch-verification";
 import type { SimulatorServerApi } from "../../src/blueprints/simulator-server";
@@ -136,6 +138,38 @@ describe("verifyTouchDelivery", () => {
     });
     expect(injected).toBe(true); // the touch was injected
     expect(verdict).toBe("no-change"); // but the screen never changed
+  });
+
+  it("re-samples an unchanged frame, so a slow response still reads as 'landed'", async () => {
+    // A Settings pane pushed for the first time animates in later than the
+    // settle; one sample alone reported that real landing as "no-change".
+    frameQueue.push("before", "before", "after");
+    const verdict = await verifyTouchDelivery(apiA, async () => {
+      events.push("inject");
+    });
+    expect(verdict).toBe("landed");
+    expect(events).toEqual([
+      "capture",
+      "inject",
+      `settle:${VERIFY_SETTLE_MS}`,
+      "capture",
+      `settle:${VERIFY_RESAMPLE_MS}`,
+      "capture",
+    ]);
+  });
+
+  it("calls it 'no-change' only after every re-sample shows the same frame", async () => {
+    frameQueue.push(...Array<string>(VERIFY_RESAMPLES + 2).fill("frozen"));
+    const verdict = await verifyTouchDelivery(apiA, async () => {});
+    expect(verdict).toBe("no-change");
+    expect(events.filter((e) => e === "capture")).toHaveLength(VERIFY_RESAMPLES + 2);
+    expect(frameQueue).toHaveLength(0);
+  });
+
+  it("keeps 'no-change' when a re-sample capture fails", async () => {
+    frameQueue.push("frozen", "frozen", "THROW");
+    const verdict = await verifyTouchDelivery(apiA, async () => {});
+    expect(verdict).toBe("no-change");
   });
 
   it("degrades to 'unknown' when a frame cannot be captured", async () => {
