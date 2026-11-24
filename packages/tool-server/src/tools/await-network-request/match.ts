@@ -113,22 +113,30 @@ export function firstMatch(
 
 const MAX_NEAR_MISSES = 3;
 
+/** How far apart two layers' starts of one request can be: they record it within milliseconds. */
+const SAME_REQUEST_MS = 1_000;
+
 /** The same request as another layer recorded it, which also gives it the same mismatch. */
-function sameRequest(a: WaitRecord, b: WaitRecord): boolean {
+function sameRequest(a: LayerRecord, b: LayerRecord): boolean {
   return (
     a.layer !== b.layer &&
     a.method.toLowerCase() === b.method.toLowerCase() &&
     a.url === b.url &&
     a.status === b.status &&
-    a.state === b.state
+    a.state === b.state &&
+    // A retry with the same fields starts later.
+    (a.startedAt === undefined ||
+      b.startedAt === undefined ||
+      Math.abs(a.startedAt - b.startedAt) <= SAME_REQUEST_MS)
   );
 }
 
 /**
  * The requests that come closest: a matching URL first, then the fewest failed
  * criteria, then the newest by start, across layers. A request that the js
- * layer and a native layer both recorded is listed once. `records` is each
- * layer's list, oldest first.
+ * layer and a native layer both recorded is listed once: a listed record
+ * stands for one record of the other layer at most. `records` is each layer's
+ * list, oldest first.
  */
 export function nearMisses(criteria: RequestCriteria, records: readonly LayerRecord[]): NearMiss[] {
   const ranked = records
@@ -141,13 +149,14 @@ export function nearMisses(criteria: RequestCriteria, records: readonly LayerRec
         (b.record.startedAt ?? -Infinity) - (a.record.startedAt ?? -Infinity) ||
         b.index - a.index
     );
-  const misses: NearMiss[] = [];
+  const listed: { record: LayerRecord; mismatch: Criterion[]; twin: boolean }[] = [];
   for (const { record, mismatch } of ranked) {
-    if (misses.length === MAX_NEAR_MISSES) break;
-    if (misses.some((miss) => sameRequest(miss, record))) continue;
-    misses.push({ ...withoutStart(record), mismatch });
+    if (listed.length === MAX_NEAR_MISSES) break;
+    const of = listed.find((entry) => !entry.twin && sameRequest(entry.record, record));
+    if (of) of.twin = true;
+    else listed.push({ record, mismatch, twin: false });
   }
-  return misses;
+  return listed.map(({ record, mismatch }) => ({ ...withoutStart(record), mismatch }));
 }
 
 /** URLs in the note are cut to this many characters. */

@@ -697,6 +697,34 @@ describe("diagnostics: near misses and JS reinstall", () => {
     ]);
   });
 
+  it("lists twice a request that the layers recorded with the same fields more than a second apart", async () => {
+    await startIos();
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    const at = Date.UTC(2026, 10, 23, 12);
+    runtime.push(1, "/v1/login", 500, at + 100);
+    ios.add(11, { url: "/v1/login", status: 500, startedAt: at + 1_200 });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    expect(result.nearMisses?.map(({ id }) => id)).toEqual(["ios-t7-11", "rn-net-1"]);
+  });
+
+  it("takes one record of another layer at most as the same request", async () => {
+    await startIos();
+    const runtime = new FakeRuntime();
+    await startJs(runtime, { install: runtime.token, lastId: 0 });
+    const at = Date.UTC(2026, 10, 23, 12);
+    // Two tries of the login, and the native layer recorded only the second.
+    runtime.push(1, "/v1/login", 500, at + 100);
+    runtime.push(2, "/v1/login", 500, at + 300);
+    ios.add(11, { url: "/v1/login", status: 500, startedAt: at + 305 });
+
+    const result = await wait({ url: "/v1/login", status: 200 });
+
+    expect(result.nearMisses?.map(({ id }) => id)).toEqual(["ios-t7-11", "rn-net-1"]);
+  });
+
   it("installs the interceptor in a context that reloaded without it, and reads it next poll", async () => {
     const runtime = new FakeRuntime();
     await startJs(runtime, { install: runtime.token, lastId: 0 });
