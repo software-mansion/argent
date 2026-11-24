@@ -518,6 +518,13 @@ A simulator name with `&` or `+` never matches, because Metro lists it different
 
 After Argent finds a device by its name, the device ID stays bound to the app on that device. When that app exits, the `debugger-*` tools fail and do not use the other device. After the app starts again, the tools use it again. Argent confirms the app on each connect, so when the device ID names another device later, for example an emulator serial after the emulators restart on other ports, Argent finds the device by its name again.
 
+`debugger-log-registry` returns the counts, the clusters and the path of the log file. The result also contains `entries`: the newest console entries of the session, oldest first. These parameters change `entries`:
+
+- `tail`: the number of entries. The default is 20 and the maximum is 100.
+- `levels`: the console levels to return, for example `["warning", "error"]`. The levels are the CDP names, so `console.warn` is `warning`.
+
+Argent cuts each message in `entries` to 300 characters. The counts and the clusters do not change with these parameters. Argent stops the capture after 50,000 entries in one session.
+
 ### Wait for a request
 
 Start capture with `network-capture-start`, trigger the request, then call `await-network-request`. The wait can find a request that finished before you called it.
