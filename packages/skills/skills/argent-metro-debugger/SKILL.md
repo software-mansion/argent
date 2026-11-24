@@ -16,26 +16,27 @@ Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`
 
 Use the `device_id` from `list-devices` and keep the same ID and Metro port across calls. On shared Metro, if `debugger-connect` cannot match an iOS simulator UDID or Android serial, it lists logical IDs. Choose the requested device's `logicalDeviceId` for subsequent debugger calls. If you later tear down this session, include that ID in `stop-all-simulator-servers`'s `devices`.
 
-| Tool                                                 | Use for                                                                                                                                               |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-status`                                    | Diagnosing the connection. Call it first when anything fails                                                                                          |
-| `debugger-connect`                                   | Opening the session and starting console capture                                                                                                      |
-| `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                                                            |
-| `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                                                 |
-| `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                                               |
-| `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1                                |
-| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                                                        |
-| `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                                                            |
-| `view-network-logs` → `view-network-request-details` | Find a request and inspect its headers, timing, or body                                                                                               |
-| `await-network-request`                              | Wait for one request after `network-capture-start` and the action, instead of polling the logs. Pass its `match.id` to `view-network-request-details` |
+| Tool                                                 | Use for                                                                                                                |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `debugger-status`                                    | Diagnosing the connection. Call it first when anything fails                                                           |
+| `debugger-connect`                                   | Opening the session and starting console capture                                                                       |
+| `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                             |
+| `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                  |
+| `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                |
+| `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
+| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                         |
+| `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                             |
+| `view-network-logs` → `view-network-request-details` | Find a request and inspect its headers, timing, or body                                                                |
 
 A component missing from `debugger-component-tree`? `includeSkipped` only adds counts of what was pruned. Use `onScreenOnly: false` for one off screen, or `debugger-inspect-element` at its point for one on screen.
 
 ### Inspect HTTP requests
 
-On iOS, Android, and Mac apps, call `network-capture-start` before reproducing the request. Check that `js` reports `armed: true`. Start again after a reload or relaunch. Read the requests with `view-network-logs`, then call `network-capture-stop` when you have what you need. If the stop reports `armed: true`, follow its `reason` before relying on the stop.
+On iOS simulators, Android, and Mac apps, call `network-capture-start` before reproducing the request and check that `js` reports `armed: true`. Start again once JavaScript is ready after a reload or relaunch.
 
-Use the device ID as `udid` for start, stop, and `await-network-request`. If shared Metro requires a logical ID on iOS or Android, pass it as `logicalDeviceId` for start and stop, and as `device_id` when reading. `await-network-request` takes the `udid` alone. Keep the Metro port consistent across calls.
+After the action, use `await-network-request` if you know which request to check. Use `view-network-logs` to explore the traffic. Open the details with `view-network-request-details` when needed. Stop capture when you have what you need. If the stop still reports `armed: true`, follow its `reason`.
+
+Use the device ID as `udid` for start, stop, and the wait. On shared Metro, pass the logical ID as `logicalDeviceId` for start and stop, or `device_id` for the log tools. The wait reuses the Metro target from the start. Keep the Metro port consistent across the other calls.
 
 On Vega, call `view-network-logs` before reproducing the request and again after a reload.
 

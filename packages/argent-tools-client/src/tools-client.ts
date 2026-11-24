@@ -67,10 +67,9 @@ export interface ToolInvocationResult {
   /** The `outputHint` of the tool's listing entry, when it has one. */
   outputHint?: string;
   /**
-   * Why the call did not do what it was asked, when it returned anyway: the
-   * result reports a failure (an e2e test that did not pass, an unmet
-   * `await-ui-element` or `await-network-request`), or a baseline it returned was not written on this
-   * client.
+   * Reason for a failure reported with the result, such as a failed e2e test,
+   * an `await-ui-element` or `await-network-request` with `success: false`,
+   * or a baseline the client could not write.
    */
   failure?: string;
 }

@@ -117,7 +117,6 @@ run_phase() {
   local CAP="\"udid\":\"$DEV\",\"bundleId\":\"$PKG\",\"port\":$MPORT"
   assert_true "$P" network-capture-start capture-start "{$CAP}" 'any(.layers[]; .layer == "js" and .armed == true)'
   run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
-  # A miss is success:false with rc=0, so check the verdict, not only the reply.
   assert_true "$P" await-network-request await-net \
     "{\"udid\":\"$DEV\",\"bundleId\":\"$PKG\",\"url\":\"example.com\",\"outcome\":\"any\",\"timeoutMs\":15000}" '.success == true'
   sleep 2
