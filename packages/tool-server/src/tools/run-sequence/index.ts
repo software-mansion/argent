@@ -112,7 +112,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      `On a local iOS simulator, Android and Chromium, after a tap, button, enter/escape key, text with a newline or met await-ui-element step, wait up to ${SETTLE_TIMEOUT_MS}ms for the element tree to stop changing before the next step (not between two taps at the same point, so a double tap keeps its timing). The tree can read still while a transition is still moving. A screen that never stops changing costs the full wait after each such step. Default true; set false for back-to-back dispatch.`
+      `Wait up to ${SETTLE_TIMEOUT_MS}ms after a screen-changing step for the element tree to settle before the next step. Default true; set false on a screen that never stops changing.`
     ),
 });
 
