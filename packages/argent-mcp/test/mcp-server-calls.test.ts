@@ -401,7 +401,7 @@ describe("startMcpServer tool calls", () => {
     });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain('"reinstalled": true');
+    expect(textOf(result)).toContain('"reinstalled":true');
     expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
     const posts = requests.filter((r) => r.url === "/tools/reinstall-app");
     expect(posts).toHaveLength(1);
@@ -480,7 +480,7 @@ describe("startMcpServer tool calls", () => {
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
-    expect(textOf(result)).toContain('"ok": true');
+    expect(textOf(result)).toContain('"ok":true');
   });
 
   it("tells the agent what is new on the first call after an update, and only then", async () => {
@@ -760,13 +760,13 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content.map((c) => (c.type === "image" ? "image" : c.text!.split("\n")[0]))).toEqual([
-      "{",
+      '{"tapped":true}',
       "--- Screen after action ---",
       "image",
       "Saved: /tmp/shot.png",
       "--- Elements after action (describe) ---",
     ]);
-    expect(content[0]!.text).toContain('"tapped": true');
+    expect(content[0]!.text).toContain('"tapped":true');
     expect(content.at(-1)!.text).toContain("button Done");
   });
 
@@ -841,7 +841,7 @@ describe("startMcpServer screen capture after an interaction", () => {
       c.type === "image" ? "image" : c.text!.split("\n")[0]
     );
     expect(blocks.slice(0, 3)).toEqual([
-      "{",
+      '{"description":"button Done (0.1,0.2,0.3,0.1)"}',
       `Tree id: ${treeId(described)}`,
       "--- Screen after action ---",
     ]);
@@ -1001,7 +1001,7 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     expect(result.isError).toBeFalsy();
     const text = textOf(result);
-    expect(text).toContain('"tapped": true');
+    expect(text).toContain('"tapped":true');
     expect(text).not.toContain("--- Screen after action ---");
     expect(text).toContain("--- Elements after action (describe) ---");
   });
@@ -1035,7 +1035,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(result.isError).toBeFalsy();
     expect(toolCalls().filter((url) => url === "/tools/describe")).toHaveLength(1);
     const text = textOf(result);
-    expect(text).toContain('"tapped": true');
+    expect(text).toContain('"tapped":true');
     expect(text).toContain("--- Screen after action ---");
     expect(text).not.toContain(AUTO_DESCRIBE_HEADER);
   });
@@ -1297,7 +1297,7 @@ describe("startMcpServer with a local tool-server", () => {
     const result = await client.callTool({ name: "noted", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain('"ok": true');
+    expect(textOf(result)).toContain('"ok":true');
     const calls = postsTo(second, "/tools/noted");
     expect(calls).toHaveLength(1);
     expect(calls[0]!.headers.authorization).toBe("Bearer tok-2");

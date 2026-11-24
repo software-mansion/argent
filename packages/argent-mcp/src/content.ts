@@ -90,11 +90,115 @@ export async function toMcpContent(
 }
 
 /**
- * JSON.stringify(undefined) returns undefined, which would make an invalid MCP
- * text block; coerce to "null".
+ * Inline length past which containers break their entries onto separate lines
+ * (without indentation), keeping lists and nested trees scannable without the
+ * whitespace tax of pretty-printed JSON.
+ */
+const LINE_BREAK_THRESHOLD = 160;
+
+function isJsonOmitted(value: unknown): boolean {
+  return value === undefined || typeof value === "function" || typeof value === "symbol";
+}
+
+function isObjectWithoutToJson(value: unknown): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as { toJSON?: unknown }).toJSON !== "function"
+  );
+}
+
+function isMultilineText(value: unknown): value is string {
+  return typeof value === "string" && value.includes("\n") && value.trim().length > 0;
+}
+
+interface FormattedNode {
+  text: string;
+  multiline: boolean;
+}
+
+/**
+ * Single-pass compact JSON formatter that breaks long containers across lines
+ * without indentation:
+ * - Short values (<= LINE_BREAK_THRESHOLD) stay on one line.
+ * - Arrays of objects/arrays put one item per line; scalar arrays stay inline.
+ * - Leaf record objects (e.g. a network request row) stay on one line; top-level
+ *   objects and containers holding large nested values break one entry per line.
+ * Output is always valid JSON equivalent to JSON.stringify(value ?? null).
+ */
+function formatJsonNode(value: unknown, topLevel: boolean): FormattedNode {
+  if (isJsonOmitted(value)) return { text: "null", multiline: false };
+  if (Array.isArray(value)) {
+    if (value.length === 0) return { text: "[]", multiline: false };
+    const items = value.map((el) => formatJsonNode(el, false));
+    const anyMultiline = items.some((item) => item.multiline);
+    const hasStructured = value.some((el) => el !== null && typeof el === "object");
+    let flatLen = 2 + items.length - 1;
+    for (const item of items) flatLen += item.text.length;
+    if (!anyMultiline && (flatLen <= LINE_BREAK_THRESHOLD || !hasStructured)) {
+      return { text: `[${items.map((i) => i.text).join(",")}]`, multiline: false };
+    }
+    return { text: `[\n${items.map((i) => i.text).join(",\n")}\n]`, multiline: true };
+  }
+  if (isObjectWithoutToJson(value)) {
+    const entries = Object.entries(value).filter(([, v]) => !isJsonOmitted(v));
+    if (entries.length === 0) return { text: "{}", multiline: false };
+    const parts = entries.map(([k, v]) => ({
+      key: JSON.stringify(k),
+      val: formatJsonNode(v, false),
+      structured: v !== null && typeof v === "object",
+    }));
+    const anyMultiline = parts.some((p) => p.val.multiline);
+    const hasBigNested = parts.some(
+      (p) => p.val.multiline || (p.structured && p.val.text.length > LINE_BREAK_THRESHOLD)
+    );
+    let flatLen = 2 + parts.length - 1;
+    for (const p of parts) flatLen += p.key.length + 1 + p.val.text.length;
+    if (!anyMultiline && (flatLen <= LINE_BREAK_THRESHOLD || (!topLevel && !hasBigNested))) {
+      return {
+        text: `{${parts.map((p) => `${p.key}:${p.val.text}`).join(",")}}`,
+        multiline: false,
+      };
+    }
+    return {
+      text: `{\n${parts.map((p) => `${p.key}:${p.val.text}`).join(",\n")}\n}`,
+      multiline: true,
+    };
+  }
+  return { text: JSON.stringify(value) ?? "null", multiline: false };
+}
+
+/**
+ * Format a tool result for an MCP text block without wasting tokens on JSON
+ * escaping or indentation while keeping structured data easy for models to read:
+ * - Non-empty strings pass through raw (no quotes or `\n`/`\"` escaping).
+ * - Objects with top-level multi-line text fields (e.g. `describe`'s
+ *   `description`, profiler `report`) emit compact JSON metadata first — so
+ *   warnings/paths stay at the top — followed by each multi-line field raw.
+ * - Everything else uses compact line-broken JSON (`formatJsonNode`).
  */
 function stringifyForText(value: unknown): string {
-  return JSON.stringify(value ?? null, null, 2);
+  if (typeof value === "string") {
+    // Avoid emitting an empty MCP text block, which some model APIs reject.
+    return value.length > 0 ? value : '""';
+  }
+  if (isObjectWithoutToJson(value)) {
+    const entries = Object.entries(value).filter(([, v]) => !isJsonOmitted(v));
+    const multiline = entries.filter(([, v]) => isMultilineText(v)) as [string, string][];
+    if (multiline.length > 0) {
+      const rest = Object.fromEntries(entries.filter(([, v]) => !isMultilineText(v)));
+      const sections: string[] = [];
+      if (Object.keys(rest).length > 0) {
+        sections.push(formatJsonNode(rest, true).text);
+      }
+      for (const [k, v] of multiline) {
+        sections.push(`${k}:\n${v}`);
+      }
+      return sections.join("\n\n");
+    }
+  }
+  return formatJsonNode(value, true).text;
 }
 
 /**
@@ -123,7 +227,7 @@ async function legacyImageContent(
       },
     ];
   }
-  return [{ type: "text", text: JSON.stringify(result, null, 2) }];
+  return [{ type: "text", text: stringifyForText(result) }];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

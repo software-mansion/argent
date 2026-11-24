@@ -33,9 +33,99 @@ const mockOk = (bytes: number[]) =>
 // ── toMcpContent ─────────────────────────────────────────────────────
 
 describe("toMcpContent", () => {
-  it("returns JSON text block for plain results", async () => {
+  it("returns compact JSON text block for plain results", async () => {
     const result = await toMcpContent({ foo: "bar" });
-    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }, null, 2) }]);
+    expect(result).toEqual([{ type: "text", text: '{"foo":"bar"}' }]);
+  });
+
+  it("passes non-empty string results through without JSON escaping", async () => {
+    const log = '=== NETWORK LOGS ===\n{id: rn-net-1} "GET /api" 200 OK';
+    const result = await toMcpContent(log);
+    expect(result).toEqual([{ type: "text", text: log }]);
+  });
+
+  it("does not emit an empty text block for an empty string or undefined", async () => {
+    expect(await toMcpContent("")).toEqual([{ type: "text", text: '""' }]);
+    expect(await toMcpContent(undefined)).toEqual([{ type: "text", text: "null" }]);
+  });
+
+  it("unwraps top-level multi-line text fields after compact JSON metadata", async () => {
+    const result = await toMcpContent({
+      report: "# Report\n| Name | Ms |\n| `Row` | 12 |",
+      warning: "No source files found",
+      reportFile: "/tmp/report.md",
+    });
+    expect(result).toEqual([
+      {
+        type: "text",
+        text: [
+          '{"warning":"No source files found","reportFile":"/tmp/report.md"}',
+          "",
+          "report:",
+          "# Report",
+          "| Name | Ms |",
+          "| `Row` | 12 |",
+        ].join("\n"),
+      },
+    ]);
+  });
+
+  it("breaks arrays of objects onto one line per item as valid JSON", async () => {
+    const payload = {
+      status: "ok",
+      requests: [
+        {
+          id: "ios-1",
+          method: "GET",
+          url: "https://api.example.com/v1/users/profile",
+          status: 200,
+        },
+        {
+          id: "ios-2",
+          method: "POST",
+          url: "https://api.example.com/v1/orders/create",
+          status: 201,
+        },
+      ],
+    };
+    const result = await toMcpContent(payload);
+    const text = (result[0] as { text: string }).text;
+    expect(text).toBe(
+      [
+        "{",
+        '"status":"ok",',
+        '"requests":[',
+        '{"id":"ios-1","method":"GET","url":"https://api.example.com/v1/users/profile","status":200},',
+        '{"id":"ios-2","method":"POST","url":"https://api.example.com/v1/orders/create","status":201}',
+        "]",
+        "}",
+      ].join("\n")
+    );
+    expect(JSON.parse(text)).toEqual(payload);
+  });
+
+  it("preserves JSON.stringify semantics for nested containers, undefined elements, and toJSON", async () => {
+    const date = new Date("2026-11-24T12:00:00.000Z");
+    const payload = {
+      at: date,
+      skipped: undefined,
+      windows: [
+        {
+          className: "UIWindow",
+          frame: { x: 0, y: 0, width: 393, height: 852 },
+          subviews: [
+            { className: "RCTView", label: "A".repeat(80) },
+            undefined,
+            { className: "RCTTextView", label: "B".repeat(80) },
+          ],
+        },
+      ],
+    };
+    const result = await toMcpContent(payload);
+    const text = (result[0] as { text: string }).text;
+    expect(JSON.parse(text)).toEqual(JSON.parse(JSON.stringify(payload)));
+    // Each subview breaks onto its own line rather than collapsing into a single giant line.
+    expect(text.split("\n").length).toBeGreaterThan(5);
   });
 
   it("keeps a warning that sits beside a long report in the text an agent reads", async () => {
@@ -56,7 +146,7 @@ describe("toMcpContent", () => {
     expect(result).toEqual([
       {
         type: "text",
-        text: JSON.stringify({ url: "http://x" }, null, 2),
+        text: '{"url":"http://x"}',
       },
     ]);
   });
@@ -135,7 +225,7 @@ describe("toMcpContent", () => {
 
   it("falls back to text when outputHint is image but no url", async () => {
     const result = await toMcpContent({ foo: 1 }, "image");
-    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: 1 }, null, 2) }]);
+    expect(result).toEqual([{ type: "text", text: '{"foo":1}' }]);
   });
 
   // Regression for #255 — fetched bytes that aren't a PNG must NOT be shipped
@@ -898,7 +988,7 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] gesture-tap" });
     expect(blocks[2]).toEqual({
       type: "text",
-      text: JSON.stringify({ ok: true }, null, 2),
+      text: '{"ok":true}',
     });
   });
 
