@@ -49,6 +49,8 @@ const SLOW: NetworkThrottle = { conditions: SLOW_CONDITIONS, metroPort: 8081 };
 const ACTIVATE = ["CDP", "Network.enable", {}];
 const BYPASS_METRO = ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [8081] }];
 const EMULATE_SLOW = ["CDP", "Network.emulateNetworkConditions", SLOW_CONDITIONS];
+const CLEAR_BYPASS = ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [] }];
+const DISABLE = ["CDP", "Network.disable", {}];
 
 type Message = { type: string; payload: Record<string, any> };
 
@@ -214,9 +216,11 @@ describe("native devtools network conditions", () => {
     );
     const unanswered = { ...SLOW, conditions: { ...SLOW_CONDITIONS, latency: 900 } };
 
-    const first = api.setNetworkConditions(BUNDLE, unanswered);
+    const first = expect(api.setNetworkConditions(BUNDLE, unanswered)).rejects.toThrow(
+      /got no reply within 5000 ms/
+    );
     await api.setNetworkConditions(BUNDLE, SLOW);
-    await expect(first).rejects.toThrow(/got no reply within 5000 ms/);
+    await first;
     const relaunched = await connectAgent();
     agents.push(relaunched);
 
@@ -405,5 +409,65 @@ describe("native devtools network conditions", () => {
     void api.startNetworkCapture(BUNDLE, 8081);
 
     await vi.waitFor(() => expect(agent.received).toEqual([ACTIVATE]));
+  });
+
+  it("sends nothing on a reset with nothing set", async () => {
+    const { api, agent } = await setup();
+
+    await api.setNetworkConditions(BUNDLE, null);
+
+    expect(agent.received).toEqual([]);
+  });
+
+  describe("overlapping calls", () => {
+    it("removes the throttle when a reset overlaps the throttle before it", async () => {
+      const { api, agent } = await setup();
+
+      await Promise.all([
+        api.setNetworkConditions(BUNDLE, SLOW),
+        api.setNetworkConditions(BUNDLE, null),
+      ]);
+
+      expect(agent.received).toEqual([BYPASS_METRO, EMULATE_SLOW, CLEAR_BYPASS, DISABLE]);
+    });
+
+    it("keeps the throttle when it overlaps the reset before it", async () => {
+      const { api, agent } = await setup();
+      await api.setNetworkConditions(BUNDLE, SLOW);
+      agent.received.length = 0;
+
+      await Promise.all([
+        api.setNetworkConditions(BUNDLE, null),
+        api.setNetworkConditions(BUNDLE, SLOW),
+      ]);
+
+      expect(agent.received).toEqual([CLEAR_BYPASS, DISABLE, BYPASS_METRO, EMULATE_SLOW]);
+      const relaunched = await connectAgent();
+      agents.push(relaunched);
+      await vi.waitFor(() => expect(relaunched.received).toEqual([BYPASS_METRO, EMULATE_SLOW]));
+    });
+
+    it("runs the next call after one that fails", async () => {
+      let refuseEmulate = true;
+      const { api, agent } = await setup((msg) => {
+        if (msg.payload.method === "Network.emulateNetworkConditions" && refuseEmulate) {
+          refuseEmulate = false;
+          return { error: { message: "emulate failed" } };
+        }
+        return { result: {} };
+      });
+
+      const [first, second] = await Promise.allSettled([
+        api.setNetworkConditions(BUNDLE, SLOW),
+        api.setNetworkConditions(BUNDLE, null),
+      ]);
+
+      expect(first).toMatchObject({
+        status: "rejected",
+        reason: { message: expect.stringMatching(/emulate failed$/) },
+      });
+      expect(second).toEqual({ status: "fulfilled", value: undefined });
+      expect(agent.received).toEqual([BYPASS_METRO, EMULATE_SLOW, CLEAR_BYPASS, DISABLE]);
+    });
   });
 });
