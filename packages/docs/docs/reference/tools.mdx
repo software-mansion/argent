@@ -538,16 +538,11 @@ The wait searches retained requests that started after the last successful captu
 
 The wait can still find requests after a stop. Once all selected layers have stopped and have no requests in progress, a miss returns without waiting for the deadline. If a JavaScript stop could not reach the runtime, that layer can still record and match requests.
 
-If no usable capture window exists, the tool raises `NETWORK_CAPTURE_NOT_STARTED`. Start capture and repeat the action. If JavaScript capture stays unreadable after a reload, relaunch, or Metro restart, start again once JavaScript is ready.
+If no usable capture window exists, the tool raises `NETWORK_CAPTURE_NOT_STARTED`. Start capture and repeat the action.
 
-While JavaScript capture is started, the wait keeps that layer readable:
+With an active JavaScript capture window, the wait can reconnect after a relaunch or a Metro restart. It can restore recording after a reload or begin recording once JavaScript loads. It can also resume recording if an earlier stop left it paused. The wait needs an existing connection to read retained JavaScript requests after a stop.
 
-- After a relaunch or a Metro restart, the wait connects to the JavaScript runtime again. It starts no native service.
-- After a reload, or when the start ran before the JavaScript loaded, the wait installs capture in the runtime. Requests before the install are missing.
-- When the pause of an earlier stop is still in the runtime, the wait resumes capture. Requests during the pause are missing.
-- While `stop-all-simulator-servers` ends the capture of the device, the wait does not read the JavaScript layer.
-
-On a match, the `note` says when the wait installed or resumed capture.
+Argent misses requests while recording is off or paused. If the wait cannot restore capture, start it again once JavaScript is ready. Repeat the action if it ran before recording resumed. Use `network-capture-start` to start native capture or reopen a window after `stop-all-simulator-servers`.
 
 #### Result
 
@@ -555,13 +550,15 @@ On success, `match` contains the request's `id`, `layer`, `method`, `url` and `s
 
 When `success` is `false`, use `cause` to decide what to do:
 
-- `unmet`: Argent read an armed layer near the deadline or finished searching stopped layers. Check the request criteria and the action that should send it. `nearMisses` shows the closest requests and the criteria each one missed.
+- `unmet`: Argent read an armed layer near the deadline or finished searching stopped layers. Check the request criteria and the action that should send it.
 - `unreadable`: Argent could not confirm the capture was readable near the deadline. Use the layer notes to restore capture, then repeat the action and wait.
 - `cancelled`: The client ended the wait before a match. Retry if the check is still needed.
 
 `elapsed` is in milliseconds. For `unmet` and `unreadable`, `layers` reports each layer's state and last available request count for the window. `readable` means at least one read succeeded. A stopped layer can still show `armed: true` because its retained requests are readable.
 
-For `unmet` and `unreadable`, `nearMisses` lists up to 3 requests since the start that come nearest to a match. Each entry has the fields of `match` and `mismatch`, the criteria that the request misses: `url`, `method`, `status` or `outcome`. Its `state` can also be `pending`, `headers` or `lost`. Requests with a matching URL come first, then those that miss fewer criteria, then those that started most recently, across layers. When the JavaScript layer and a native layer both recorded a request, with the same method, URL, status and state and starts at most 1 second apart, the list has it once. Each record stands for one record of the other layer at most.
+For `unmet` and `unreadable`, `nearMisses` lists up to three requests from the capture window. Each entry has the same fields as `match`, including the full URL. The `mismatch` list names the criteria the request missed (`url`, `method`, `status` or `outcome`). The request state can also be `pending`, `headers` or `lost`. A `lost` state means Argent lost track of the request before it ended.
+
+Argent ranks requests by URL match first, then by the fewest missed criteria, then by most recent start. Similar records from different layers can appear as one entry. The `note` summarizes any near misses.
 
 In `run-sequence`, a wait with `success: false` stops later steps. For saved tests, see [Network checks in YAML](/docs/reference/e2e-yaml#network-checks).
 

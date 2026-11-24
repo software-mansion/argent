@@ -51,7 +51,7 @@ Use a native layer for requests from native code. In a react-native-macos app, b
 
 On iOS, Android and Mac apps, ask the agent to start capture before you reproduce the request. The agent can start and stop the JS runtime layer and the native layer together or separately. Argent reports which layers are ready and gives a reason for each layer that is not ready.
 
-After a reload or relaunch, ask the agent to start JS capture again. After a reload, a wait for a request can also start JS capture again. The requests before this start are missing. Native capture follows the app when Argent relaunches it. If your iOS simulator uses a device provider's socket, start native capture again after a relaunch.
+After a reload or relaunch, ask the agent to start JS capture again before you repeat the action. If the agent left JS capture on, a request wait can also restore it. Argent can miss requests until recording resumes. Native capture follows the app when Argent relaunches it. If your iOS simulator uses a device provider's socket, start native capture again after a relaunch.
 
 The agent stops these layers when it has the requests it needs or before a profile. Capture for other apps continues. If Argent cannot reach the JS runtime to stop capture, the result tells the agent to retry later. Argent keeps the captured requests after a stop. A reload or restart clears the JS log. After the next start, an old JS request ID can name a new request. Stopped layers stay off until the agent starts them again.
 
@@ -65,7 +65,7 @@ On Chromium and Electron, Argent records requests while it is connected to the p
 
 Ask the agent to wait for a specific request on an iOS simulator, Android, a Mac app, or Chromium. The agent starts capture before the action that sends the request. Argent searches from the latest capture start and returns a match when the request finishes. The agent can then open its details.
 
-If the wait finds no match, Argent reports what it could read. Argent also gives the requests nearest to a match and the criteria each one misses. Thus the agent can tell a wrong status from a request that the app did not send. If capture was interrupted, restart capture once the app is ready and repeat the action.
+If the wait finds no match, Argent reports what it could read and shows any near misses. For example, the report can show a request to the expected URL with an unexpected status. If capture was interrupted, start it again once the app is ready and repeat the action.
 
 An [e2e test](/docs/features/e2e) can use the same wait to verify a request. The check requires a match, so it cannot verify that the app sent no request.
 
