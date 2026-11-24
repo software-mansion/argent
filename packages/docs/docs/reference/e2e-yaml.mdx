@@ -229,7 +229,7 @@ An empty list leaves the tap unmodified. On other platforms, a nonempty list mak
 
 A direction in `swipe` and `scroll-to` is the direction that the user sees. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames, which is the UI as the user sees it. Both are also true for a landscape UI, for example on a rotated device or an unfolded foldable. See [Rotated devices](/docs/reference/tools#rotated-devices).
 
-A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time. The report of the step shows the placeholder, not the value. See [Secrets](/docs/reference/configuration#secrets) and [Typed secrets in a report](#typed-secrets-in-a-report). `await-network-request` does not fill secrets. Argent rejects its `url` when it contains a placeholder. See [Network checks](#network-checks).
+A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time. The report of the step shows the placeholder, not the value. See [Secrets](/docs/reference/configuration#secrets) and [Typed secrets in a report](#typed-secrets-in-a-report).
 
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
@@ -362,30 +362,23 @@ After a `fold` step:
 
 ### Network checks
 
-A `tool: await-network-request` step checks that the app sends a request. Put three steps in this order:
-
-1. `network-capture-start` after the launch.
-2. The action that sends the request.
-3. `await-network-request` with the method, the URL and the status.
-
-For example:
+Use `tool: await-network-request` to check that an action sends a request. Start capture after launch and before the action. Stop capture after the last network check.
 
 ```yaml
 - launch: com.example.app
+- await: { visible: { id: login-button } }
 - tool: network-capture-start
   args: { bundleId: com.example.app }
 - tap: { id: login-button }
 - tool: await-network-request
   args: { bundleId: com.example.app, method: POST, url: /v1/auth/login, status: 200 }
+- tool: network-capture-stop
+  args: { bundleId: com.example.app }
 ```
 
-- The step reads only the requests that the app sends after the last `network-capture-start` step. A request that starts before the start step does not match.
-- When no request matches before the timeout, the step fails. The reason gives the cause, the number of requests since the start and the nearest requests.
-- Without a start step, the step reports `error`. The reason says that network capture is not started.
-- `await-network-request` has no directive form. Keep the `tool:` step.
-- Do not put a `{{secret:NAME}}` placeholder in `url`. Match on a different part of the URL.
+The runner supplies the device ID. Keep the `tool:` form. Argent rejects secret placeholders in `url`. Match on a URL fragment that contains no secret. The result includes the full matched URL. When the step fails, the reason lists the nearest requests and the criteria each one misses.
 
-The [tools reference](/docs/reference/tools#wait-for-a-request) gives the parameters and the result.
+The step reports `fail` when the wait returns `success: false`. It reports `error` if capture has no start for the target. A failed step skips the remaining steps. If replay skips the stop, stop capture before you rerun the test. See [Wait for a request](/docs/reference/tools#wait-for-a-request).
 
 ## Conditions
 

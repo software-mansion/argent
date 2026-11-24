@@ -41,31 +41,27 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "Device id from list-devices: an iOS simulator UDID, an Android serial, a Chromium id<flag:macos-apps>, or a Mac app id</flag:macos-apps>. The same id network-capture-start got."
+        "Device ID passed as udid to network-capture-start, even if that call also used logicalDeviceId."
       ),
     bundleId: z
       .string()
       .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
       .describe(
-        "The app given to network-capture-start: its bundle id on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, its package name on Android. On Chromium, any name: the device id names the app."
+        "App ID passed to network-capture-start<flag:macos-apps>. On macOS it must match the app named by udid</flag:macos-apps>. On Chromium, use a valid placeholder such as argent.capture."
       ),
     url: z
       .string()
       .min(1)
       .describe(
-        'Matched against the request\'s URL (on Chromium, the final URL after a redirect), as urlMatch says, e.g. "/v1/auth/login". Takes no {{secret:...}} placeholder: match on another part of the URL.'
+        'URL text or pattern, such as "/v1/auth/login". Do not include secrets. The result includes the matched URL, and {{secret:...}} placeholders are rejected.'
       ),
     urlMatch: z
       .enum(["contains", "equals", "matches"])
       .optional()
       .describe(
-        "How url is compared: contains (default) is a case-insensitive substring, equals a case-insensitive full match, matches a case-sensitive JavaScript regular expression, unanchored (e.g. /users/\\d+)."
+        "contains (default) searches for a substring. equals compares the full URL. Both ignore case. matches uses a case-sensitive JavaScript regular expression without implicit anchors."
       ),
-    method: z
-      .string()
-      .min(1)
-      .optional()
-      .describe("HTTP method, compared case-insensitively, e.g. POST. Omit to match any method."),
+    method: z.string().min(1).optional().describe("HTTP method such as POST. Ignores case."),
     status: z
       .union([
         z.enum(STATUS_CLASSES as [string, ...string[]]),
@@ -73,13 +69,13 @@ const zodSchema = z
       ])
       .optional()
       .describe(
-        'Response status: an exact code such as 200, or a class "1xx" to "5xx". Omit to match any status. A failed request has one only when its response arrived before it failed.'
+        'Exact HTTP status such as 200 or a class such as "2xx". A failed request matches a status only if it received response headers.'
       ),
     outcome: z
       .enum(["complete", "failed", "any"])
       .optional()
       .describe(
-        "Which finished request matches: complete (default, the response arrived in full, whatever its status), failed (no response, an abort or a lost connection), or any. A request still in flight never matches, nor one whose end argent missed (state lost, as when capture stopped first)."
+        "complete (default) means the response finished, regardless of HTTP status. failed matches a request error such as an abort. any accepts either."
       ),
     timeoutMs: z
       .number()
@@ -87,14 +83,16 @@ const zodSchema = z
       .positive()
       .max(120_000)
       .optional()
-      .describe(`How long to wait for a matching request (default ${DEFAULT_TIMEOUT_MS}).`),
+      .describe(`Wait limit in milliseconds. Default ${DEFAULT_TIMEOUT_MS}.`),
     pollIntervalMs: z
       .number()
       .int()
       .min(50)
       .max(5000)
       .optional()
-      .describe(`How often to read the capture layers (default ${DEFAULT_POLL_INTERVAL_MS}).`),
+      .describe(
+        `Interval between capture reads in milliseconds. Default ${DEFAULT_POLL_INTERVAL_MS}.`
+      ),
   })
   .strict()
   .superRefine((params, ctx) => {
@@ -185,10 +183,9 @@ export function createAwaitNetworkRequestTool(
   return {
     // A literal, so scripts/extract-tools.mjs finds the description it scores.
     id: "await-network-request",
-    description: `Check that the app sent a request that matches a URL, and optionally a method and a status: blocks until such a request, sent after the last network-capture-start for the app, finishes, or the timeout elapses. Reads the native layer and, when that start named it, the JS runtime (on Chromium, the tab), and returns the first match.
-Use when you need to confirm that an action sent a request and how it ended: call network-capture-start, then the action, then this tool, also as a tool: step of an e2e test, where an unmet wait fails the step. Prefer it over polling view-network-logs or native-network-logs.
-Returns { success, elapsed, match?, note?, cause?, nearMisses?, layers? }. On a match, match is { id, layer, method, url, status?, state, durationMs?, errorText? }; pass match.id to view-network-request-details for headers and bodies. If nothing matches by the timeout, success is false and cause says why: unmet (an armed layer was read and no request matched; nearMisses lists up to 3 closest requests and the criteria each missed), unreadable (no armed layer was read near the deadline, so the end of the wait was not judged; layers says why) or cancelled. Only unmet licenses changing the matcher. When every marked layer is stopped and holds no request in flight, the wait returns at once.
-Fails with NETWORK_CAPTURE_NOT_STARTED when no network-capture-start marked a layer for the device and the app.`,
+    description: `Check whether a matching request finished. Use when an action should send a specific request. Call network-capture-start before the action, then call this tool. It searches requests started since the latest capture start and waits until a match finishes or the timeout expires. On Chromium, match the final URL, method and status after redirects.
+Returns the matching request. Pass match.id as requestId to view-network-request-details for headers and bodies. Requests whose outcome capture missed cannot match. When success is false, check cause. For unmet, check the action and criteria; nearMisses lists up to 3 closest requests and the criteria each missed. For unreadable, use the layer notes to restore capture. For cancelled, retry if needed. A false result fails an e2e step and stops a run-sequence.
+If capture has no start for the target, the tool raises NETWORK_CAPTURE_NOT_STARTED. Start capture and repeat the action. While JavaScript capture is started, the wait reconnects to the runtime and installs capture again after a reload; requests before that are missing.`,
     zodSchema,
     searchHint:
       "wait await network request http api call fetch xhr response status url match after capture start e2e assert",
