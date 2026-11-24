@@ -2,11 +2,11 @@
 
 `e2e-execute` sends an e2e test file without `version: 2` to this runner when the run's
 device is an iOS simulator (see the check in `../flow-run.ts`). The files here are main's
-files at `b6402f269`, unchanged except for import paths, so an old e2e test runs as main's
+files at `9aac29fc9`, unchanged except for import paths, so an old e2e test runs as main's
 runner at that commit ran it:
 
 ```sh
-git show b6402f269:packages/tool-server/src/tools/flows/flow-run.ts |
+git show 9aac29fc9:packages/tool-server/src/tools/flows/flow-run.ts |
   diff - packages/tool-server/src/tools/flows/version-1/flow-run.ts
 ```
 
