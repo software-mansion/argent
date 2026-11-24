@@ -105,7 +105,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      `After a tap, button, enter/escape key, text with a newline or met await-ui-element step, wait up to ${SETTLE_TIMEOUT_MS}ms for the element tree to stop changing before the next step (default true). Set false for back-to-back dispatch.`
+      `On a local iOS simulator, Android and Chromium, after a tap, button, enter/escape key, text with a newline or met await-ui-element step, wait up to ${SETTLE_TIMEOUT_MS}ms for the element tree to stop changing before the next step (not between two taps at the same point, so a double tap keeps its timing). The tree can read still while a transition is still moving. A screen that never stops changing costs the full wait after each such step. Default true; set false for back-to-back dispatch.`
     ),
 });
 
@@ -159,31 +159,29 @@ export function createRunSequenceTool(
 ): ToolDefinition<Params, RunSequenceResult> {
   return {
     id: "run-sequence",
-    description: `Execute several device interaction steps in one call.
-Use when every step is known in advance and you do not need to see the screen between steps (e.g. scrolling several times, typing then pressing enter). If a step depends on the result of an earlier one (e.g. a menu item that appears only after a tap), make separate calls instead.
-Steps run in order. On a local iOS simulator, Android and Chromium, a step after a tap, button, enter/escape key, text with a newline or met await-ui-element first waits up to 1000ms for the element tree to stop changing (not between two taps at the same point, so a double or triple tap keeps its timing). The tree can read still while a transition is still moving or before a late animation starts, so keep an await-ui-element before a step that needs the new screen. A screen that never stops changing costs the full 1000ms after each such step: pass settle: false to skip the wait.
-If a step fails (an error, a tool that is not allowed or not supported on the target, or an await-ui-element that returns success=false), the sequence stops there and later steps do NOT run. Returns { completed, total, steps } with a result or an error for each step that ran, so a stopped sequence returns partial results.
-One screenshot and element tree are captured after the whole sequence, not per step: call screenshot separately only for a baseline before it or to see an intermediate step. A \`{{secret:...}}\` in any step skips that capture, so type a secret and submit it in one sequence.
-On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
+    description: `Run several device interaction steps in one call.
+Use when every step is known in advance (e.g. several scrolls, or typing then enter). If a step depends on what an earlier one shows, make separate calls.
+Steps run in order. After a step that can change the screen, the next one waits up to 1000ms for the element tree to settle (see \`settle\`); keep an await-ui-element before a step that needs the new screen.
+If a step fails (an error, a tool not allowed or not supported on the target, or an await-ui-element with success=false), the sequence stops there. Returns { completed, total, steps } with a result or error for each step that ran.
+One screenshot and element tree are captured after the last step, not per step. A \`{{secret:...}}\` in any step skips that capture, so type and submit a secret in one sequence.
 
-Allowed tools, their args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles are in degrees, durations in ms.
-  gesture-tap: x, y, clickCount?<flag:macos-apps>, button? "left"|"right" (macos), modifiers? array of "control"|"option"|"shift"|"command" (macos)</flag:macos-apps>  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
+Allowed tools, args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles in degrees, durations in ms.
+  gesture-tap: x, y, clickCount?<flag:macos-apps>, button? "left"|"right", modifiers? ["control"|"option"|"shift"|"command"] (macos)</flag:macos-apps>  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
   gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-scroll: x, y, deltaX?, deltaY? (signed; positive scrolls down), durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
+  gesture-scroll: x, y, deltaX?, deltaY? (positive scrolls down), durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
   gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
-  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge? (local iOS simulator system gesture)  [ios/android]
+  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge?  [ios/android]
   gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
   gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
   button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]
-  keyboard: text? or key? (one per step; key e.g. "enter"), delayMs?  [all; Apple TV / Android TV: text only<flag:harmonyos>; harmony keys: enter/return, backspace/delete, space, arrow-left, arrow-right</flag:harmonyos>]
-    text may hold {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> or an argent secrets file (over a forward-secrets link, the client's first), so a credential never enters your context
-  paste: text (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP, else keyboard)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
+  keyboard: text? or key? (one per step, e.g. key "enter"), delayMs?; text may hold {{secret:<NAME>}} placeholders, resolved server-side  [all; Apple TV/Android TV: text only]
+  paste: text (only where a user would paste, e.g. an OTP)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
   rotate: orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown"  [ios sim/android]
   shake: count?  [ios sim/android emu]
-  fold: posture? "closed"|"half-open"|"open", or angle? 0–180, exactly one (later steps land on the new panel, whose coordinates differ)  [foldable ios sim/android emu]
-  tv-remote: button (one button, or an array run as a path in one step), repeat?  [apple tv/android tv/vega]
+  fold: posture? "closed"|"half-open"|"open" or angle? 0–180 (later steps land on the new panel)  [foldable ios sim/android emu]
+  tv-remote: button (one, or an array run as a path), repeat?  [apple tv/android tv/vega]
     buttons: up/down/left/right/select/back/home/menu/playPause; rewind/fastForward/next/previous/volumeUp/volumeDown/mute on Android TV and Vega only
-  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText? (for "text"), textMatch?, timeoutMs?, pollIntervalMs?  [all]`,
+  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText?, textMatch?, timeoutMs?, pollIntervalMs?  [all]`,
     zodSchema,
     alwaysLoad: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
