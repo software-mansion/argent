@@ -1416,8 +1416,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // A determinate verdict costs TWO full reads, so a ceiling of "grace plus one
   // read" turns a merely slow device into an indeterminate warning.
   it("still reaches a determinate verdict when each read is slower than the grace window", async () => {
-    // 1.9s per read is over the 1s grace, so the loop takes two reads, near 3.8s.
-    // Load only pushes that UP: above the 3500ms ceiling, under the 6000ms budget.
+    // 1.9s per read is over the 1s grace, so the loop takes two reads, 3.8s:
+    // above the 3500ms ceiling, under the 6000ms budget.
     fetchRunnerTree = async () => {
       await new Promise((resolve) => setTimeout(resolve, 1900));
       return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "native-devtools" };
@@ -1487,11 +1487,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // The cap ELIDES THE MIDDLE: the note about a dark final poll lives at the END.
   it("keeps the tail of an over-long reason, where the final-poll note lives", async () => {
     const wall = "Lorem ipsum dolor sit amet ".repeat(60);
-    // Trusted reads keep the condition false, then the source dies on the last
-    // poll. That tail is inside CONDITION_DARK_TAIL_TOLERANCE_MS, so it stays firm.
-    const probeStartedAt = Date.now();
+    // Trusted reads keep the condition false; the source dies at 900ms, so the
+    // dark tail runs from the 600ms read: 400ms, past one poll interval but
+    // inside CONDITION_DARK_TAIL_TOLERANCE_MS, so the verdict stays firm.
+    let firstReadAt: number | undefined;
     fetchRunnerTree = async () => {
-      if (Date.now() - probeStartedAt > 900) throw new Error("native devtools went away");
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 900) throw new Error("native devtools went away");
       return { tree: iosRunnerTree([iosLabel(`Total ${wall}`)]), source: "native-devtools" };
     };
     await startRecording("tail");
@@ -1504,10 +1506,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const warning = warningOf(result, "tail") ?? "";
 
     // This tier holds only while the dark tail is inside
-    // CONDITION_DARK_TAIL_TOLERANCE_MS (2 poll intervals, 600ms). Host load breaks it.
+    // CONDITION_DARK_TAIL_TOLERANCE_MS (2 poll intervals, 600ms).
     expect(
       warning,
-      "expected the blip tier: under host load the dark tail can exceed CONDITION_DARK_TAIL_TOLERANCE_MS, which turns this indeterminate"
+      "expected the blip tier: a dark tail past CONDITION_DARK_TAIL_TOLERANCE_MS turns this indeterminate"
     ).toContain("does NOT hold against the tree the runner resolves");
     expect(warning).toContain("Lorem ipsum");
     expect(warning).toContain("more chars)");
@@ -2166,6 +2168,43 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(() =>
       assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
     ).not.toThrow();
+  });
+});
+
+// `await-network-request` reads the capture layers, not a UI tree, and has no
+// `await:` form to convert to, so an unmet one is never re-probed.
+describe("a recorded network wait", () => {
+  it("keeps an unmet await-network-request as a wait step, with the wait warning and no re-probe", async () => {
+    const args = { bundleId: "com.acme.app", method: "POST", url: "/v1/auth/login" };
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "await-network-request") {
+          return { success: false, elapsed: 10_000, cause: "unmet", note: "No request matched." };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    await startRecording("netunmet");
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "netunmet",
+        project_root: tmpDir,
+        command: "await-network-request",
+        args: JSON.stringify({ udid: IOS, ...args }),
+      }
+    );
+
+    const warning = warningOf(result, "netunmet");
+    expect(warning).toContain("the wait never held");
+    expect(warning).toContain("at replay an unmet wait FAILS the step");
+    expect(warning).not.toMatch(/re-probe|UI tree/);
+    expect(fetchCount).toBe(0);
+    expect(await recordedSteps("netunmet")).toEqual([
+      { kind: "tool", name: "await-network-request", args, delayMs: undefined },
+    ]);
   });
 });
 

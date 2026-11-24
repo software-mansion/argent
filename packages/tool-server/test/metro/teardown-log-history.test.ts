@@ -527,7 +527,7 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 
       expect(fs.existsSync(result.file)).toBe(false);
       expect(result.note).toBe(
-        `No log file exists at ${result.file}, so there is nothing to grep: the counts and clusters are all that was captured. ` +
+        `No log file exists at ${result.file}, so there is nothing to grep: the counts, clusters and { entries } are all that was captured. ` +
           `Usually the disk was full or ~/.argent/tmp was not writable when this session started (if root owns ~/.argent: sudo chown -R "$USER" ~/.argent). ` +
           `Only a new debugger session gets a file: once that is fixed, call stop-all-simulator-servers with devices: ["${LOGICAL_ID}"], then debugger-connect again.`
       );
@@ -673,3 +673,43 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     });
   }
 );
+
+describe("debugger-log-registry entries", () => {
+  type EntriesResult = { entries: Array<{ id: number; level: string }> };
+  const readEntries = async (params: object) =>
+    (
+      (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: LOGICAL_ID,
+        ...params,
+      })) as EntriesResult
+    ).entries.map((e) => e.id);
+
+  it("returns no entries for a connected session that has logged nothing", async () => {
+    await connectAndCapture(LOGICAL_ID, 0);
+
+    expect(await readEntries({})).toEqual([]);
+  });
+
+  it("returns the newest entries, honouring tail and levels", async () => {
+    const urn = await connectAndCapture(LOGICAL_ID, 30);
+
+    expect(await readEntries({})).toEqual(Array.from({ length: 20 }, (_, i) => i + 10));
+    expect(await readEntries({ tail: "3" })).toEqual([27, 28, 29]);
+
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    api.logWriter.write({
+      id: 30,
+      timestamp: new Date(1710000030000).toISOString(),
+      level: "error",
+      message: "boom",
+    });
+    api.logWriter.write({
+      id: 31,
+      timestamp: new Date(1710000031000).toISOString(),
+      level: "log",
+      message: "after",
+    });
+    expect(await readEntries({ levels: ["error"] })).toEqual([30]);
+  });
+});

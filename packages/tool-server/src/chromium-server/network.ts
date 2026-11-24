@@ -25,14 +25,33 @@ export interface NetworkRequestRecord {
   durationMs?: number;
   fromCache?: boolean;
   encodedDataLength?: number;
+  /** Network.loadingFinished arrived: the whole response was received. */
+  finished?: boolean;
   failed?: boolean;
   errorText?: string;
+}
+
+/**
+ * Where the last network-capture-start began in this tab's log, as a sequence
+ * number: a record numbered higher was created after it. A stop keeps the
+ * mark and adds where it ended, so a wait reads only the records between.
+ */
+interface ChromiumCaptureMark {
+  lastSeq: number;
+  stoppedSeq?: number;
 }
 
 export interface NetworkManager {
   /** Oldest first; capped at MAX_RECORDS, evicting the oldest. */
   requests(): NetworkRequestRecord[];
+  /** The kept records created after sequence number `seq`, oldest first, each with its number. */
+  requestsAfter(seq: number): Array<{ seq: number; record: NetworkRequestRecord }>;
   get(requestId: string): NetworkRequestRecord | undefined;
+  /** Marks where a capture starts: the records created from now on come after it. */
+  startCapture(): ChromiumCaptureMark;
+  /** Marks where the started capture ends; undefined when it was never started. */
+  stopCapture(): ChromiumCaptureMark | undefined;
+  captureMark(): ChromiumCaptureMark | undefined;
   /** Enables the Network domain; called on connect and after a tab switch. */
   reattach(): Promise<void>;
   /** Conditions are per target, so `reattach` applies them again to the new tab. */
@@ -51,6 +70,10 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
   const { cdp } = deps;
   const order: string[] = [];
   const byId = new Map<string, NetworkRequestRecord>();
+  // The sequence number of each kept record, in creation order.
+  const seqOf = new Map<string, number>();
+  let lastSeq = 0;
+  let mark: ChromiumCaptureMark | undefined;
   let conditions: CdpNetworkConditions | null = null;
 
   function record(requestId: string): NetworkRequestRecord {
@@ -58,10 +81,14 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
     if (!rec) {
       rec = { requestId, method: "", url: "", startedDateTime: "", startTs: 0 };
       byId.set(requestId, rec);
+      seqOf.set(requestId, ++lastSeq);
       order.push(requestId);
       if (order.length > MAX_RECORDS) {
         const evicted = order.shift();
-        if (evicted) byId.delete(evicted);
+        if (evicted) {
+          byId.delete(evicted);
+          seqOf.delete(evicted);
+        }
       }
     }
     return rec;
@@ -129,6 +156,7 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
       case "Network.loadingFinished": {
         const rec = byId.get(params.requestId as string);
         if (rec) {
+          rec.finished = true;
           rec.encodedDataLength = params.encodedDataLength as number;
           if (rec.startTs) rec.durationMs = ((params.timestamp as number) - rec.startTs) * 1000;
         }
@@ -150,7 +178,19 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
 
   return {
     requests: () => order.map((id) => byId.get(id)).filter((r): r is NetworkRequestRecord => !!r),
+    requestsAfter: (seq) =>
+      order.flatMap((id) => {
+        const at = seqOf.get(id);
+        const rec = byId.get(id);
+        return at !== undefined && at > seq && rec ? [{ seq: at, record: rec }] : [];
+      }),
     get: (requestId: string) => byId.get(requestId),
+    startCapture: () => (mark = { lastSeq }),
+    stopCapture: () => {
+      if (mark && mark.stoppedSeq === undefined) mark = { ...mark, stoppedSeq: lastSeq };
+      return mark;
+    },
+    captureMark: () => mark,
     reattach: async () => {
       await cdp.send("Network.enable").catch(() => {});
       if (conditions) {

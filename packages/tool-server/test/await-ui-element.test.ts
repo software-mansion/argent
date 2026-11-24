@@ -942,8 +942,7 @@ describe("await-ui-element tool", () => {
     // read as "nothing was ever compared", for a step that hard-fails at
     // replay. The trusted read is one clamped sleep back, inside the tolerance.
     // `pollIntervalMs` is above `timeoutMs` on purpose: the sleep clamps to the
-    // deadline, and the 2000ms ceiling absorbs scheduler slip. At 500 a ~400ms
-    // slip flipped the cause under load.
+    // deadline.
     const tool = createAwaitUiElementTool(makeMockRegistry({}));
 
     const result = await tool.execute(
@@ -1097,8 +1096,6 @@ describe("await-ui-element tool", () => {
   // The tolerance, bracketed. Each case has one trusted read at t≈0, so the
   // dark tail is `timeoutMs` and only its span in poll intervals varies. 1.3
   // intervals must stay a blip and 2.6 must not, which pins the multiple to 2.
-  // Scheduler slip only lengthens a tail, and the first case has 700ms of
-  // headroom.
   it.each([
     { intervals: "1.3", timeoutMs: 1300, cause: "unmet" },
     { intervals: "2.6", timeoutMs: 2600, cause: "unreadable" },
