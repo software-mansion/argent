@@ -79,10 +79,10 @@ export function createNetworkCaptureStartTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StartedLayer>> {
   return {
     id: "network-capture-start",
-    description: `Start network capture on iOS simulators and Android<flag:macos-apps> (also on Mac apps)</flag:macos-apps>. Use when you are about to trigger requests you need to inspect or wait for with await-network-request, including in an e2e test. Repeating the call keeps requests already captured, and await-network-request then reads only the requests after it. Capture can slow the app.
+    description: `Start network capture on iOS simulators and Android<flag:macos-apps> (also on Mac apps)</flag:macos-apps>. Use when you need to inspect requests from an upcoming action or wait for one with await-network-request, including in an e2e test. A new start keeps existing requests, and await-network-request then reads only the requests after it. Capture can slow the app.
+On Chromium, Argent connects if needed and marks the start of a capture window in the network log, which await-network-request reads. Recording continues while connected.
 The JavaScript layer needs an app connected to Metro. Start again after its JavaScript loads, including after a reload or relaunch. Android native capture needs a debuggable build.<flag:macos-apps> For a supported React Native app launched from Xcode, use layer js and form udid as macos-app-<bundle id>. Native capture needs a supported build launched through Argent.</flag:macos-apps>
 Returns { status, layers }: check armed and reason for each requested layer. A pending native layer can become ready when Argent launches or reconnects to the app. On a device whose devtools agent Argent attached to, start native capture again after a relaunch.
-On Chromium, this marks where the active tab's capture window begins. Argent records the tab from the first tool call on the app, and bundleId can be any name.
 When every requested layer is unavailable, the call fails with NETWORK_CAPTURE_UNAVAILABLE or TOOL_DEPENDENCY_MISSING.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
