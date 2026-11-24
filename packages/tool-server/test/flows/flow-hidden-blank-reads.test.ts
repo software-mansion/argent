@@ -19,6 +19,9 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -307,6 +310,31 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     expect(result.steps[0].reason).toMatch(/unreadable for the final \d+ms/i);
     expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
     expect(result.steps[0].reason).not.toMatch(/no element matched/);
+  });
+
+  it("lands the final poll on the deadline, not a poll interval past it", async () => {
+    // The dark tail runs to the final poll, so the last sleep is clamped to the
+    // deadline: unclamped, the 300ms polls of a 1000ms window end at 1200ms.
+    const readsAt: number[] = [];
+    currentFetch = () => {
+      readsAt.push(Date.now());
+      return {
+        tree: screen([n({ label: "Home", frame: { x: 0, y: 0, width: 1, height: 0.1 } })]),
+        source: "native-devtools",
+      };
+    };
+
+    await writeFlow("clamped-await", {
+      executionPrerequisite: "",
+      steps: [{ kind: "await", condition: "exists", selector: { text: "Done" }, timeout: 1000 }],
+    });
+
+    const result = await run("clamped-await");
+
+    expect(result.steps[0].status).toBe("fail");
+    const span = readsAt.at(-1)! - readsAt[0]!;
+    expect(span).toBeGreaterThan(900);
+    expect(span).toBeLessThan(1_200);
   });
 
   it("assert text: does not quote stale element text from before the reads went dark", async () => {

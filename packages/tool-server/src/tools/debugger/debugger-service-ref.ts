@@ -6,7 +6,7 @@ import { metroPort } from "../../utils/debugger/metro-port";
 
 /**
  * For tools that work on every platform including Chromium: iOS / Android /
- * Vega go through Metro, Chromium goes direct over CDP.
+ * Vega / Mac apps go through Metro, Chromium goes direct over CDP.
  *
  * Vega (Fire TV) works because everything in this matrix needs only
  * `Runtime.evaluate`, which the legacy Hermes inspector in its RN 0.72 fork
@@ -21,6 +21,7 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  macos: { app: true, catalyst: true },
 };
 
 /**
@@ -32,6 +33,12 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
  * Remote (cloud) sims ARE supported: the JsRuntimeDebugger blueprint opens a
  * sim-remote reverse tunnel to the developer's local Metro lazily, so no
  * per-tool transport plumbing is needed here.
+ *
+ * Mac apps are supported: a Debug build of a react-native-macos app, or of
+ * React Native built for Mac Catalyst, serves the same Hermes runtime through
+ * Metro, and `selectTarget` finds it by the bundle id in the Mac app id (and a
+ * Mac Catalyst app's identifierForVendor). The React profiler tools and the
+ * `profiler-*` tools that read their data use this capability too.
  *
  * Vega is deliberately absent even though the plain debugger-* tools do work
  * there (see DEBUGGER_TOOL_CAPABILITY), for two different reasons:
@@ -49,17 +56,6 @@ export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
-};
-
-/**
- * For the `react-profiler-*` tools and the `profiler-*` tools that read their
- * data: RN_ONLY_TOOL_CAPABILITY plus Mac apps. A Debug build of a
- * react-native-macos app, or of React Native built for Mac Catalyst, serves the
- * same Hermes runtime through Metro, and `selectTarget` finds it by the bundle
- * id in the Mac app id (and a Mac Catalyst app's identifierForVendor).
- */
-export const REACT_PROFILER_TOOL_CAPABILITY: ToolCapability = {
-  ...RN_ONLY_TOOL_CAPABILITY,
   macos: { app: true, catalyst: true },
 };
 

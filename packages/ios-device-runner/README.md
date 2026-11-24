@@ -89,7 +89,7 @@ Management.
 The Xcode project itself needs no locating either: it always sits next to the
 bundled tool-server. An npm install of `@swmansion/argent` ships these Swift
 sources there (the build step copies `ArgentRunner/` next to the bundle), and
-in the argent repo `npm run build` in `packages/argent` produces the same
+in the argent repo `bun run build` in `packages/argent` produces the same
 layout.
 `ARGENT_IOS_RUNNER_PROJECT` overrides the location for tool-server runs
 outside the bundle (ts-node, tests) or unusual layouts.

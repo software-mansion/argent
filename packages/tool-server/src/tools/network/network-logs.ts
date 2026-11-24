@@ -292,7 +292,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect."
+      "Device id from list-devices, or the logicalDeviceId used to start an iOS or Android capture on shared Metro<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   // `.default` covers only an omitted param, and `z.coerce.number()` reads null as 0, so
   // null would return the oldest page. Agents send null for "not set": read it as "latest".
@@ -312,7 +312,9 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 A size with "~" is estimated from the body's length in characters; on React Native, "→ <url>" is the final URL after a redirect.
 Pass an entry's requestId to view-network-request-details for full details.
-On React Native (iOS / Android / Vega) an interceptor injected into the JS runtime records each request once, from XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and, in a Metro development build, a fetch library that sends through React Native's network module itself, such as react-native-fetch-api. On iOS and Android this tool only reads: call network-capture-start first, then repeat the action; until then it says capture is not started. A reload clears the requests and stops recording until network-capture-start runs again, which the answer says. On Vega capture starts at the first network-tool call. On Chromium it reads the CDP Network domain of the active tab (all request types).
+On React Native, lists XMLHttpRequest (including axios), React Native fetch, Expo fetch, and requests from libraries such as react-native-fetch-api that call React Native's network module in a Metro development build.
+For JavaScript capture on iOS and Android<flag:macos-apps> (and on Mac apps)</flag:macos-apps>, use network-capture-start before triggering requests and after a reload. On Vega, the first read starts capture. Read again after a reload to resume capture.<flag:macos-apps> Use native-network-logs for native URLSession traffic on Mac apps. Both logs can show the same fetch request.</flag:macos-apps>
+On Chromium, lists all request types for the active tab.
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   zodSchema,
@@ -330,7 +332,7 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
       return { chromium: chromiumCdpRef(device) };
     }
     const payload = jsCapturePayload(jsReadPort(params), canonicalDeviceId(params.device_id)!);
-    // Vega has no network-capture-start, so its read still installs the interceptor.
+    // JS capture starts on read for Vega, which network-capture-start does not cover.
     if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
     // A read never starts capture: before a start it reaches nothing in the app.
     const capture = jsCapture(payload);

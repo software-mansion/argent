@@ -2225,7 +2225,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`)."
+      "Android: AVD to start, the `avdName` of a `list-devices` entry with kind 'avd'. An emulator already running from it is reused."
     ),
   vvdImage: z
     .string()
@@ -2298,7 +2298,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Mac app: path to the .app bundle to start with the argent library; its device id is `macos-app-<bundle id>`. A Release build with the hardened runtime cannot be driven; a hardened Debug build needs the step the error names."
+      "Mac app: path to the .app bundle to start with the argent library; its device id is `macos-app-<bundle id>`. An exported or notarized Release build with the hardened runtime cannot be driven without extra entitlements; a hardened Debug build needs the step the error names."
     )
     .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
   macosAppArgs: z
