@@ -37,18 +37,20 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 - An Android AVD that does not run is an entry with kind `avd`, state `stopped` and no serial. `boot-device` starts it by its `avdName`.
 - An AVD that runs is listed once, as its emulator with kind `emulator` and a serial.
 - A Chromium app has kind `app`. An iOS simulator, local or remote, has kind `simulator`.
+- On a shared machine with a [`devices.claimProvider`](/docs/reference/configuration#available-keys), a device that the provider reports has a `claim` field: `owner` names who holds it, and `mine` says whether the caller holds it. Devices that someone else holds come after the free devices in the same state.
 
 `notes` is a list of short texts for the agent. Each note applies only to this call:
 
-| Note                                                                       | When                                                                              |
-| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| iOS simulators cannot run on this machine, with Argent Cloud as the option | The host is not a Mac, or the Mac has no Xcode, and `sim-remote` is not installed |
-| `sim-remote` is installed but not logged in                                | `sim-remote` reports no session                                                   |
-| No Android SDK found                                                       | Argent finds neither `adb` nor `emulator`                                         |
-| The iOS list can be incomplete                                             | `simctl list` does not answer within 10 seconds                                   |
-| Xcode must install its components                                          | Xcode waits for its first launch                                                  |
-| The rules for a device of another application                              | The list has an `external` device                                                 |
-| The prefix for `adb` commands                                              | Argent uses an adb server that is not the default one                             |
+| Note                                                                        | When                                                                              |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| iOS simulators cannot run on this machine, with Argent Cloud as the option  | The host is not a Mac, or the Mac has no Xcode, and `sim-remote` is not installed |
+| `sim-remote` is installed but not logged in                                 | `sim-remote` reports no session                                                   |
+| No Android SDK found                                                        | Argent finds neither `adb` nor `emulator`                                         |
+| The iOS list can be incomplete                                              | `simctl list` does not answer within 10 seconds                                   |
+| Xcode must install its components                                           | Xcode waits for its first launch                                                  |
+| The rules for a device of another application                               | The list has an `external` device                                                 |
+| Prefer your own or free devices, and treat devices that others hold as busy | A device in the list has a `claim`                                                |
+| The prefix for `adb` commands                                               | Argent uses an adb server that is not the default one                             |
 
 Through the MCP server, `list-devices` returns a shorter text than the SDK and `argent run`:
 

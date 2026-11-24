@@ -43,6 +43,7 @@ import {
   type VegaDevice,
 } from "../../utils/vega-devices";
 import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
+import { readDeviceClaims, type DeviceClaim } from "../../utils/device-claims";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -173,8 +174,14 @@ type ListedDevice =
   | MacosAppDevice
   | VegaDevice;
 
+/**
+ * `claim` is present only when the host's `devices.claimProvider` reported one
+ * for this row's udid, serial or id.
+ */
+type ClaimedListedDevice = ListedDevice & { claim?: DeviceClaim };
+
 type ListDevicesResult = {
-  devices: ListedDevice[];
+  devices: ClaimedListedDevice[];
   /**
    * Present only when one applies, unlike the description, which is read once
    * per session: a platform this machine cannot reach and what would change
@@ -231,6 +238,39 @@ const EXTERNAL_DEVICES_HINT =
   `drops argent's cached handles, which is the recovery when calls keep failing against an endpoint the provider has ` +
   `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
   `withheld fails with a clear message naming the provider.`;
+
+/** Given only when the claim provider reported at least one listed device. */
+const DEVICE_CLAIMS_HINT =
+  `Some entries carry 'claim': this machine is shared, and its device registry says who holds that device. ` +
+  `Prefer a ready device with 'claim.mine: true', then one with no 'claim'. Treat 'claim.mine: false' as busy: ` +
+  `'claim.owner' is using it, so do not drive, boot or stop it unless the user asks for that device.`;
+
+/** The key other tools take for this row, which is also what a claim is keyed by. */
+function deviceKey(d: ListedDevice): string | null {
+  if ("udid" in d && typeof d.udid === "string") return d.udid;
+  if ("serial" in d && typeof d.serial === "string") return d.serial;
+  if ("id" in d && typeof d.id === "string") return d.id;
+  return null;
+}
+
+/**
+ * Attach each row's claim and move devices held by someone else after the free
+ * ones of the same readiness. Stable, so the existing order holds otherwise.
+ */
+export function applyDeviceClaims(
+  devices: readonly ListedDevice[],
+  claims: ReadonlyMap<string, DeviceClaim>
+): ClaimedListedDevice[] {
+  if (claims.size === 0) return [...devices];
+  const busyRank = (d: ClaimedListedDevice) => (d.claim && !d.claim.mine ? 1 : 0);
+  return devices
+    .map((d): ClaimedListedDevice => {
+      const key = deviceKey(d);
+      const claim = key === null ? undefined : claims.get(key);
+      return claim ? { ...d, claim } : d;
+    })
+    .sort((a, b) => readinessRank(a) - readinessRank(b) || busyRank(a) - busyRank(b));
+}
 
 function iosListTimedOutHint(): string {
   return `iOS simulators may be missing from this list: ${simctlListTimeoutAdvice("list-devices")}`;
@@ -483,7 +523,7 @@ const zodSchema = z.object({});
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
   description: `List the targets argent can drive or start: iOS simulators and iPhones, Android emulators, AVDs and phones, Chromium (CDP) apps, Vega (Fire TV) devices, <flag:harmonyos>HarmonyOS phones and emulators, </flag:harmonyos><flag:macos-apps>Mac apps argent started, </flag:macos-apps>and iOS simulators hosted on Argent Cloud.
-Returns { devices, notes? }. Each device has a 'platform', a 'kind' and a 'state'. Pass its 'udid' (iOS<flag:harmonyos>, HarmonyOS</flag:harmonyos>), 'serial' (Android, Vega) or 'id' (Chromium<flag:macos-apps>, Mac app</flag:macos-apps>) to the other tools. Ready devices come first.
+Returns { devices, notes? }. Each device has a 'platform', a 'kind' and a 'state'. Pass its 'udid' (iOS<flag:harmonyos>, HarmonyOS</flag:harmonyos>), 'serial' (Android, Vega) or 'id' (Chromium<flag:macos-apps>, Mac app</flag:macos-apps>) to the other tools. Ready devices come first. On a shared machine a 'claim' says who holds a device; 'notes' explains it.
 Start a stopped device with boot-device: an iOS simulator by 'udid', an Android AVD (kind 'avd', no serial until it runs) by 'avdName', a Vega VVD by 'vvdImage'. A physical phone (kind 'device') needs no boot; use one only when the user asks for it. A physical iPhone is usable only in state 'connected'.
 <flag:harmonyos>HarmonyOS kind 'device' is an \`hdc\` target that the tools drive; kind 'emulator' is a DevEco Studio instance that boot-device starts, and a running one is listed as both.
 </flag:harmonyos>platform 'ios-remote' is an iOS simulator hosted on Argent Cloud, usable from Linux too (https://argent.swmansion.com/cloud/); drive it with the same tools by its 'remote:' udid. A 'deviceSet' simulator (e.g. from Radon IDE) runs headless.
@@ -521,6 +561,7 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
       harmonyTargets,
       external,
       macos,
+      claims,
     ] = await Promise.all([
       xcodeInstallPending.includes("simctl")
         ? { simulators: [], timedOut: false }
@@ -584,6 +625,8 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
         [],
         "macos"
       ),
+      // Unset key: no process and an empty map. Bounded by its own 2 s limit.
+      readDeviceClaims(),
     ]);
 
     const externalShadows = externalShadowIds(external);
@@ -692,6 +735,7 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
       ...external.map(toListedExternal),
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
+    const listed = applyDeviceClaims(devices, claims);
 
     const [localIos, androidSdk] = await Promise.all([
       xcodeInstallPending.includes("simctl") ? true : canRunLocalIos(ios.simulators.length > 0),
@@ -709,9 +753,10 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
       ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
       ...(ios.timedOut ? [iosListTimedOutHint()] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
+      ...(listed.some((d) => d.claim) ? [DEVICE_CLAIMS_HINT] : []),
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];
 
-    return { devices, ...(notes.length > 0 ? { notes } : {}) };
+    return { devices: listed, ...(notes.length > 0 ? { notes } : {}) };
   },
 };

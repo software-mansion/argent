@@ -267,6 +267,16 @@ export function getAndroidAdbServerPort(options: ConfigPathOptions = {}): number
   return typeof value === "number" ? value : null;
 }
 
+const DEVICES_CLAIM_PROVIDER_KEY = "devices.claimProvider";
+
+/** The configured device-claim provider as an absolute path (`~` expanded), or null when unset. */
+export function getDeviceClaimProvider(options: ConfigPathOptions = {}): string | null {
+  const value = getConfigValueByKey(DEVICES_CLAIM_PROVIDER_KEY, options);
+  if (typeof value !== "string") return null;
+  if (value.startsWith("~/")) return path.resolve(resolveHomeDir(options), value.slice(2));
+  return path.resolve(value);
+}
+
 const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
 
 /**

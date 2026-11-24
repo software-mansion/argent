@@ -176,6 +176,26 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     merge: "prioritize-local",
     example: "5038",
   },
+  // Global-scope only: the value is a command argent runs, and a checked-in
+  // `.argent/config.json` must not be able to make every teammate run one.
+  {
+    key: "devices.claimProvider",
+    description:
+      "Executable that list-devices runs (no arguments, 2 s limit) to learn who holds each " +
+      "device on a shared machine. It prints a JSON object keyed by udid, serial or id: " +
+      '`{ "<id>": { "owner": "<label>", "mine": true|false } }`. A non-zero exit, a timeout or ' +
+      "output that is not such an object means no claims. Absolute or `~/`-prefixed.",
+    scopes: ["global"],
+    parse: (raw) => {
+      const value = asString(raw);
+      return value !== undefined && (value.startsWith("~/") || isAbsolute(value))
+        ? value
+        : undefined;
+    },
+    expected: "an absolute path, or one starting with `~/`",
+    merge: "prioritize-global",
+    example: "~/bin/device-claims",
+  },
   {
     key: "recordings.directory",
     description:

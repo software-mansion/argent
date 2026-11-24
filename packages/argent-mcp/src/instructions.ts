@@ -10,7 +10,7 @@
  */
 export const SERVER_INSTRUCTIONS =
   "Argent — iOS Simulator, Android Emulator, and Chromium app control for interacting, testing, profiling and debugging mobile and Chromium applications. " +
-  "Use the platform the user named; otherwise prefer a device list-devices shows already running, and do not default to iOS. In a single-platform project, boot that platform. " +
+  "Use the platform the user named; otherwise prefer a device list-devices shows already running and not claimed by someone else ('claim.mine: false'), and do not default to iOS. In a single-platform project, boot that platform. " +
   "Prefer these tools over raw xcrun or adb commands, which are a fallback. Prefer launch-app or open-url over tapping home-screen icons. " +
   "If the task may need a saved e2e test, load the argent-create-e2e skill (argent-qa-e2e for acceptance tests) before the first launch or in-app action: recording is not retroactive. Load the matching argent-* skill before React Native build or debug work, profiling, a physical phone, a Mac app or a TV. " +
   "Interaction tools return the screen after the action: a screenshot plus the accessibility element tree with normalized tap frames. Take coordinates from that tree; call describe only when no fresh tree is available — never guess coordinates from pixels. A result names an identical earlier tree by its tree id in place of repeating it. " +
