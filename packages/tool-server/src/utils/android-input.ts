@@ -21,7 +21,7 @@ export const androidDisplayIdSchema = z
   .min(0)
   .optional()
   .describe(
-    "Android only: id of the display to send the input to, e.g. a secondary display or a scrcpy " +
+    "Android 10 or later only: id of the display to send the input to, e.g. a secondary display or a scrcpy " +
       "virtual display (ids from `adb shell dumpsys display`; passed as `adb shell input -d <id>`). " +
       "Omit it to keep Android's default routing (the focused display). Ignored on other platforms."
   );
@@ -30,6 +30,32 @@ export const androidDisplayIdSchema = z
 // a key event carries INVALID_DISPLAY and goes to whichever display has focus.
 function inputCommand(displayId: number | undefined): string {
   return displayId === undefined ? "input" : `input -d ${displayId}`;
+}
+
+// `input -d` first appears in Android 10 (API 29). Android 9's `input` answers
+// `-d` with "Unknown command" and its usage text but exits 0, so `adbShell`
+// would report success while nothing reached the device. Read the API level
+// first and refuse, so the agent learns the input was not sent.
+const MIN_DISPLAY_ID_SDK = 29;
+
+async function assertDisplayIdSupported(
+  serial: string,
+  displayId: number | undefined
+): Promise<void> {
+  if (displayId === undefined) return;
+  const sdk = parseInt(
+    (
+      await adbShell(serial, "getprop ro.build.version.sdk", { timeoutMs: ADB_INPUT_TIMEOUT_MS })
+    ).trim(),
+    10
+  );
+  // An unreadable level is not proof of an old device: let `input` decide.
+  if (Number.isFinite(sdk) && sdk < MIN_DISPLAY_ID_SDK) {
+    throw new InvalidToolInputError(
+      `\`displayId\` needs Android 10 (API 29) or later; this device runs API ${sdk}, ` +
+        "whose `input` has no `-d` option. Omit `displayId` to send the input to the focused display."
+    );
+  }
 }
 
 // android.view.KeyEvent keycodes; must cover every key in
@@ -131,6 +157,7 @@ export async function injectAndroidText(
   displayId?: number
 ): Promise<void> {
   assertTypeableAndroidText(text);
+  if (text !== "") await assertDisplayIdSupported(serial, displayId);
   // One call per segment (see `splitForVerbatimPercent`). "" yields no segments,
   // so the no-op for "" needs no separate guard.
   for (const segment of splitForVerbatimPercent(text)) {
@@ -146,6 +173,7 @@ export async function injectAndroidKeycode(
   keycode: number,
   displayId?: number
 ): Promise<void> {
+  await assertDisplayIdSupported(serial, displayId);
   await adbShell(serial, `${inputCommand(displayId)} keyevent ${keycode}`, {
     timeoutMs: ADB_INPUT_TIMEOUT_MS,
   });

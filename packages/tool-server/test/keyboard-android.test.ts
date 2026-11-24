@@ -42,6 +42,7 @@ import {
   ANDROID_NAMED_KEYCODES,
   ANDROID_BUTTON_KEYCODES,
   assertTypeableAndroidText,
+  injectAndroidKeycode,
   injectAndroidText,
   injectAndroidNamedKey,
 } from "../src/utils/android-input";
@@ -168,6 +169,7 @@ describe("android-input — injection", () => {
     adbShell.mockClear();
     await injectAndroidText(SERIAL, "100%safe", 117);
     expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+      "getprop ro.build.version.sdk",
       "input -d 117 text '100%'",
       "input -d 117 text 'safe'",
     ]);
@@ -177,8 +179,48 @@ describe("android-input — injection", () => {
     adbShell.mockClear();
     await injectAndroidNamedKey(SERIAL, "enter", 0);
     expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+      "getprop ro.build.version.sdk",
       `input -d 0 keyevent ${ANDROID_NAMED_KEYCODES.enter}`,
     ]);
+  });
+
+  // Android 9's `input` answers `-d` with "Unknown command" but exits 0, so the
+  // call would report success while nothing reached the device.
+  it("refuses `displayId` below Android 10 without sending any input", async () => {
+    adbShell.mockClear();
+    adbShell.mockImplementation(async (_serial, cmd) =>
+      cmd === "getprop ro.build.version.sdk" ? "28\n" : ""
+    );
+    try {
+      await expect(injectAndroidText(SERIAL, "12", 0)).rejects.toThrow(/Android 10 \(API 29\)/);
+      await expect(injectAndroidNamedKey(SERIAL, "enter", 0)).rejects.toThrow(/API 28/);
+      expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+        "getprop ro.build.version.sdk",
+        "getprop ro.build.version.sdk",
+      ]);
+      // Without `displayId` the old device is driven as before, with no probe.
+      adbShell.mockClear();
+      await injectAndroidText(SERIAL, "12");
+      expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text '12'"]);
+    } finally {
+      adbShell.mockImplementation(async () => "");
+    }
+  });
+
+  it("sends `-d` on Android 10 and later", async () => {
+    adbShell.mockClear();
+    adbShell.mockImplementation(async (_serial, cmd) =>
+      cmd === "getprop ro.build.version.sdk" ? "29\n" : ""
+    );
+    try {
+      await injectAndroidKeycode(SERIAL, 4, 2);
+      expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+        "getprop ro.build.version.sdk",
+        "input -d 2 keyevent 4",
+      ]);
+    } finally {
+      adbShell.mockImplementation(async () => "");
+    }
   });
 
   it("does not shell out for empty text", async () => {
@@ -427,7 +469,9 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     await impl.handler({}, { udid: SERIAL, text: "hi", displayId: 2 } as KeyboardParams, phone);
     await impl.handler({}, { udid: SERIAL, key: "tab", displayId: 2 } as KeyboardParams, phone);
     expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+      "getprop ro.build.version.sdk",
       "input -d 2 text 'hi'",
+      "getprop ro.build.version.sdk",
       "input -d 2 keyevent 61",
     ]);
   });
