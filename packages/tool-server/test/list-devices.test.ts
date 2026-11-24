@@ -110,7 +110,7 @@ vi.mock("../src/utils/ios-devices", async () => {
 
   return {
     ...actual,
-    isFoldableSimulator: vi.fn(async () => false),
+    checkFoldableSimulator: vi.fn(async () => false),
     scanIosSimulators: vi.fn(actual.scanIosSimulators),
   };
 });
@@ -141,7 +141,7 @@ import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import {
   __resetSimulatorRuntimeKindCacheForTesting,
-  isFoldableSimulator,
+  checkFoldableSimulator,
   scanIosSimulators,
 } from "../src/utils/ios-devices";
 import { xcodeFirstLaunchHint, xcodeInstallInstruction } from "../src/utils/xcode-first-launch";
@@ -984,7 +984,7 @@ describe("list-devices — external provider shadows", () => {
     process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
     __resetExternalDeviceCacheForTesting();
     __resetProviderWarningsForTesting();
-    vi.mocked(isFoldableSimulator).mockClear();
+    vi.mocked(checkFoldableSimulator).mockClear();
   });
 
   afterEach(async () => {
@@ -1037,7 +1037,7 @@ describe("list-devices — external provider shadows", () => {
       return { stderr: "", stdout: "" };
     });
 
-    vi.mocked(isFoldableSimulator).mockResolvedValueOnce(true);
+    vi.mocked(checkFoldableSimulator).mockResolvedValueOnce(true);
 
     const result = await listDevicesTool.execute!({}, {});
 
@@ -1046,7 +1046,7 @@ describe("list-devices — external provider shadows", () => {
     );
 
     expect(claimed).toMatchObject({ external: true, foldable: true });
-    expect(isFoldableSimulator).toHaveBeenCalledWith(`ext:acme-3f2a9c:${CLAIMED_UDID}`);
+    expect(checkFoldableSimulator).toHaveBeenCalledWith(`ext:acme-3f2a9c:${CLAIMED_UDID}`);
   });
 
   it("leaves foldable off a claimed simulator that is not foldable", async () => {
@@ -1070,7 +1070,7 @@ describe("list-devices — external provider shadows", () => {
 
     expect(claimed).toBeDefined();
     expect(claimed).not.toHaveProperty("foldable");
-    expect(isFoldableSimulator).toHaveBeenCalledWith(`ext:acme-3f2a9c:${CLAIMED_UDID}`);
+    expect(checkFoldableSimulator).toHaveBeenCalledWith(`ext:acme-3f2a9c:${CLAIMED_UDID}`);
   });
 
   it("checks foldables while the plain simulator listing is still running", async () => {
@@ -1089,7 +1089,7 @@ describe("list-devices — external provider shadows", () => {
         })
     );
 
-    vi.mocked(isFoldableSimulator).mockImplementationOnce(async () => {
+    vi.mocked(checkFoldableSimulator).mockImplementationOnce(async () => {
       releaseListing?.();
       return true;
     });
@@ -1137,7 +1137,7 @@ describe("list-devices — external provider shadows", () => {
       checkStarted = resolve;
     });
 
-    vi.mocked(isFoldableSimulator).mockImplementationOnce(() => {
+    vi.mocked(checkFoldableSimulator).mockImplementationOnce(() => {
       checkStarted?.();
       return new Promise<boolean>(() => {});
     });
@@ -1190,13 +1190,42 @@ describe("list-devices — external provider shadows", () => {
     expect(result.notes ?? []).not.toContainEqual(expect.stringContaining("foldable check"));
   });
 
+  it("adds the foldable retry notice when the set listing times out inside the budget", async () => {
+    /**
+     * A retry joins the listing the previous call left running, which can be
+     * killed at its own timeout inside this call's budget. The device is then
+     * unknown, not "not foldable".
+     */
+    vi.mocked(checkFoldableSimulator).mockResolvedValueOnce("timed-out");
+
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const claimed = result.devices.find(
+      (device) => "udid" in device && device.udid === `ext:acme-3f2a9c:${CLAIMED_UDID}`
+    );
+
+    expect(claimed).toBeDefined();
+    expect(claimed).not.toHaveProperty("foldable");
+    expect(result.notes).toContainEqual(
+      expect.stringContaining("The foldable check did not finish in time for iPhone 16")
+    );
+  });
+
   it("lists every device when the foldable check rejects", async () => {
     /**
      * While Xcode's component install is pending, reading the provider's set
      * throws. The external branch catches errors before this check, so a
      * rejection that escaped would fail the whole call, plain devices included.
      */
-    vi.mocked(isFoldableSimulator).mockRejectedValueOnce(
+    vi.mocked(checkFoldableSimulator).mockRejectedValueOnce(
       new XcodeFirstLaunchPendingError("simctl")
     );
 
@@ -1227,7 +1256,7 @@ describe("list-devices — external provider shadows", () => {
      * A real `simctl` call settles on a later macrotask, not in microtasks, so
      * the budget has to leave it room. A budget near zero would drop the flag.
      */
-    vi.mocked(isFoldableSimulator).mockImplementationOnce(
+    vi.mocked(checkFoldableSimulator).mockImplementationOnce(
       () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 20))
     );
 
@@ -1292,7 +1321,7 @@ describe("list-devices — external provider shadows", () => {
       expect.arrayContaining(["ext:acme-3f2a9c:emulator-5554", "ext:acme-3f2a9c:R58M123ABCD"])
     );
     expect(lent.some((device) => "foldable" in device)).toBe(false);
-    expect(isFoldableSimulator).not.toHaveBeenCalled();
+    expect(checkFoldableSimulator).not.toHaveBeenCalled();
   });
 
   it("leaves an unclaimed simulator in the plain listing", async () => {

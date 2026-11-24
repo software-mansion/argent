@@ -12,7 +12,7 @@ import {
 import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import {
-  isFoldableSimulator,
+  checkFoldableSimulator,
   scanIosSimulators,
   simctlListTimeoutAdvice,
   simulatorRuntimeKind,
@@ -480,8 +480,8 @@ function toListedExternal(device: ExternalDevice, foldable: boolean): ExternalLi
 }
 
 /**
- * `foldableTimedOut`: the foldable check ran past its budget, so `foldable` is
- * unknown.
+ * `foldableTimedOut`: the foldable check ran past its budget or the listing of
+ * the provider's device set timed out, so `foldable` is unknown.
  */
 type ExternalEntry = { device: ExternalDevice; foldable: boolean; foldableTimedOut: boolean };
 
@@ -491,9 +491,10 @@ type ExternalEntry = { device: ExternalDevice; foldable: boolean; foldableTimedO
  * device type is seen) the device-type list and profile. Each of those `simctl`
  * and `plutil` calls has its own timeout and in series they can outlast
  * `BRANCH_DEADLINE_MS`, which would drop every lent device, Android ones
- * included. Past this budget a lent simulator is listed without the flag and
- * a note in the result says so. The check keeps running and caches what it finds,
- * so a later call gets the flag once the device set answers in time.
+ * included. Past this budget or when the listing of the set times out inside
+ * it, a lent simulator is listed without the flag and a note in the result
+ * says so. The check keeps running and caches what it finds, so a later call
+ * gets the flag once the device set answers in time.
  */
 export const EXTERNAL_FOLDABLE_BUDGET_MS = 5_000;
 
@@ -503,9 +504,10 @@ export const EXTERNAL_FOLDABLE_BUDGET_MS = 5_000;
  * `fold` applies, whoever drives the device. This runs inside the external
  * discovery branch, after the liveness probe, so it overlaps the other
  * branches. The branch's worst case is the probe plus
- * {@link EXTERNAL_FOLDABLE_BUDGET_MS}, under `BRANCH_DEADLINE_MS`.
- * `isFoldableSimulator` memoizes every verdict the device set answers, so a
- * simulator the set lists costs one `simctl` call per tool-server run.
+ * {@linkcode EXTERNAL_FOLDABLE_BUDGET_MS}, under
+ * {@linkcode BRANCH_DEADLINE_MS}. {@linkcode checkFoldableSimulator} memoizes
+ * every verdict the device set answers, so a simulator the set lists costs one
+ * `simctl` call per tool-server run.
  */
 async function withFoldableFlags(external: readonly ExternalDevice[]): Promise<ExternalEntry[]> {
   const simulators = external.filter(
@@ -535,7 +537,7 @@ async function withFoldableFlags(external: readonly ExternalDevice[]): Promise<E
          * before this step, so it would fail the whole call.
          */
         const verdict = await Promise.race([
-          isFoldableSimulator(device.id).catch(() => false),
+          checkFoldableSimulator(device.id).catch(() => false),
           budget,
         ]);
 

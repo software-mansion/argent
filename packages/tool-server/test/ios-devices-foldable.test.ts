@@ -50,6 +50,7 @@ vi.mock("../src/utils/ios-device-sets", async () => {
 
 import {
   __resetSimulatorRuntimeKindCacheForTesting,
+  checkFoldableSimulator,
   isFoldableDeviceType,
   isFoldableSimulator,
   listIosSimulators,
@@ -195,6 +196,32 @@ describe("foldable simulators", () => {
     /** A miss is not memoized, so the next round reads the set again, once. */
     expect(await Promise.all(missing.map((id) => isFoldableSimulator(id)))).toEqual([false, false]);
     expect(setListings()).toHaveLength(2);
+  });
+
+  it("answers unknown, not no, when the set listing times out", async () => {
+    const id = "ext:acme-3f2a9c:" + DUO;
+    const answered = execFileMock.getMockImplementation()!;
+
+    /** `execFile` kills a `simctl` call that runs past its timeout. */
+    execFileMock.mockImplementationOnce(() =>
+      Object.assign(new Error("simctl list timed out"), { killed: true })
+    );
+
+    expect(await checkFoldableSimulator(id)).toBe("timed-out");
+
+    /**
+     * Not memoized, so the next check reads the set again and gets the answer.
+     */
+    execFileMock.mockImplementation(answered);
+    expect(await checkFoldableSimulator(id)).toBe(true);
+  });
+
+  it("keeps a killed listing a plain no for other callers", async () => {
+    execFileMock.mockImplementationOnce(() =>
+      Object.assign(new Error("simctl list timed out"), { killed: true })
+    );
+
+    expect(await isFoldableSimulator("ext:acme-3f2a9c:" + DUO)).toBe(false);
   });
 
   it("answers no for an id that is not a local iOS simulator's without listing", async () => {

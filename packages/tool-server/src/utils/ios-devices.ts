@@ -208,16 +208,28 @@ export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | 
 }
 
 export async function findIosSimulator(udid: string): Promise<IosSimulator | undefined> {
+  return (await lookUpIosSimulator(udid)).found;
+}
+
+/**
+ * {@link findIosSimulator}, plus whether a listing that could have held the
+ * UDID timed out, so a miss is not evidence that the simulator is gone.
+ */
+async function lookUpIosSimulator(
+  udid: string
+): Promise<{ found: IosSimulator | undefined; timedOut: boolean }> {
   /**
    * An external provider's simulator is not in any configured set, so the
    * all-sets listing cannot see it. Scope to the set the provider declared and
    * match on the native UDID.
    */
-  const listing = isExternalId(udid)
-    ? (await listDeviceSetSimulators(await deviceSetForUdid(udid))).simulators
-    : await listIosSimulators();
+  const { simulators, timedOut } = isExternalId(udid)
+    ? await listDeviceSetSimulators(await deviceSetForUdid(udid))
+    : await scanIosSimulators();
+
   const native = externalNativeId(udid);
-  return listing.find((s) => s.udid === native);
+
+  return { found: simulators.find((s) => s.udid === native), timedOut };
 }
 
 /** True when the given iOS-shaped UDID is actually a tvOS (Apple TV) simulator. */
@@ -348,14 +360,24 @@ export async function isFoldableDeviceType(identifier: string): Promise<boolean>
  * False for a UDID no listing knows.
  */
 export async function isFoldableSimulator(udid: string): Promise<boolean> {
+  return (await checkFoldableSimulator(udid)) === true;
+}
+
+/**
+ * {@linkcode isFoldableSimulator} or `"timed-out"` when the UDID was not found
+ * because a `simctl list` that could have held it timed out. The answer is
+ * then unknown, not "not foldable".
+ */
+export async function checkFoldableSimulator(udid: string): Promise<boolean | "timed-out"> {
   const device = resolveDevice(udid);
   if (device.platform !== "ios" || device.kind !== "simulator") return false;
   const cached = foldableCache.get(udid);
   if (cached !== undefined) return cached;
-  const found = await findIosSimulator(udid);
-  const foldable = found?.foldable === true;
+  const { found, timedOut } = await lookUpIosSimulator(udid);
   // A listing that did not see the UDID at all is not evidence about it;
   // memoize only what a listing answered.
-  if (found) foldableCache.set(udid, foldable);
+  if (!found) return timedOut ? "timed-out" : false;
+  const foldable = found.foldable === true;
+  foldableCache.set(udid, foldable);
   return foldable;
 }

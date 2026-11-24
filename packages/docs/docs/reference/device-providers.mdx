@@ -53,12 +53,12 @@ Argent writes one line to `stderr` and reports no external device if the file is
 
 An external device appears in `list-devices` with the other devices. Its id starts with `ext:`. The entry contains these additional fields.
 
-| Field          | Content                                                                                                                                                                                                                    |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `external`     | Always `true`. It marks the device as the device of a provider.                                                                                                                                                            |
-| `provider`     | The id and the name of the provider, and the project that the provider opened.                                                                                                                                             |
-| `capabilities` | The mechanisms that the provider granted for this device.                                                                                                                                                                  |
-| `foldable`     | `true` for a foldable iOS simulator. Absent otherwise, and on a call where the check takes over 5 seconds. Then `notes` tells the agent to call again, and a later call adds the flag once the device set answers in time. |
+| Field          | Content                                                                                                                                                                                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `external`     | Always `true`. It marks the device as the device of a provider.                                                                                                                                                                                                       |
+| `provider`     | The id and the name of the provider, and the project that the provider opened.                                                                                                                                                                                        |
+| `capabilities` | The mechanisms that the provider granted for this device.                                                                                                                                                                                                             |
+| `foldable`     | `true` for a foldable iOS simulator. Absent otherwise, and on a call where the check takes over 5 seconds or the listing of the device set times out. Then `notes` tells the agent to call again, and a later call adds the flag once the device set answers in time. |
 
 The agent drives an external device with the usual tools. Two rules are different:
 
