@@ -1,6 +1,10 @@
 import * as path from "node:path";
 import { homedir } from "node:os";
-import { isFlagEnabled } from "@argent/configuration-core";
+import {
+  getAndroidAdbServerPort,
+  isFeatureEnabled,
+  isFlagEnabled,
+} from "@argent/configuration-core";
 import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
 import {
   init as telemetryInit,
@@ -19,6 +23,7 @@ import { createRegistry } from "./utils/setup-registry";
 import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
+import { configuredAdbServerPort } from "./utils/adb-server";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import {
   variantProposalStore,
@@ -27,8 +32,18 @@ import {
   type CliSessionStartedStats,
 } from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
+import { pauseJsCapturesOf } from "./blueprints/network-inspector";
+import { withCaptureSweep } from "./tools/network/network-capture";
+import { renderFlagGated } from "./utils/flag-gated-text";
 
 const PROCESS_TIMEOUT_MS = 5_000;
+/**
+ * How long the exit waits for a network capture start or stop under way, so
+ * the teardown after it can still end before a stop of the tool-server kills
+ * the process: the launcher sends SIGTERM, then SIGKILL after its
+ * SIGTERM_GRACE_MS (6 s, this file's PROCESS_TIMEOUT_MS plus a buffer).
+ */
+const EXIT_CAPTURE_WAIT_MS = 2_000;
 const DEFAULT_PORT = "3001";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_IDLE_TIMEOUT_MINUTES = "0";
@@ -79,6 +94,12 @@ function initializeStdioTimestampWrapper(): void {
 
 export function start(): void {
   initializeStdioTimestampWrapper();
+
+  const adbServerPort = configuredAdbServerPort(process.env, getAndroidAdbServerPort());
+  if (adbServerPort !== null) {
+    process.env.ANDROID_ADB_SERVER_PORT = adbServerPort;
+    process.stderr.write(`android.adbServerPort → ANDROID_ADB_SERVER_PORT=${adbServerPort}\n`);
+  }
 
   // Exit on uncaught errors (state may be corrupted), but clean up first so
   // child processes are not orphaned.
@@ -195,7 +216,7 @@ export function start(): void {
   const serverStartedAt = Date.now();
   const updateChecker = startUpdateChecker();
 
-  const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
+  const { stop: stopWatcher } = startSimulatorWatcher(registry);
 
   let server: ReturnType<typeof httpHandle.app.listen> | null = null;
 
@@ -293,6 +314,9 @@ export function start(): void {
     if (exitCode > finalExitCode) finalExitCode = exitCode;
     if (shuttingDown) return;
     shuttingDown = true;
+    // First, before any await: the watcher's simctl calls run in their own
+    // process groups, so only this abort reaps them if the exit is cut short.
+    stopWatcher();
 
     eventLog?.info({
       type: "tool_server.stopping",
@@ -322,17 +346,27 @@ export function start(): void {
 
     previewWindow.dispose();
     updateChecker.dispose();
-    stopWatcher();
     httpHandle.dispose();
 
-    // Dispose BEFORE recording toolserver:stop, so a crash escalating mid-teardown
-    // is reflected in the stop event's reason instead of being lost behind an
-    // already-sent reason:"signal". Guarded so a dispose failure cannot skip it.
-    try {
-      await registry.dispose();
-    } catch (err) {
-      process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
-    }
+    // A network capture start or stop under way ends first, as at
+    // stop-all-simulator-servers, but the exit waits for it only briefly.
+    await withCaptureSweep(undefined, { maxMs: EXIT_CAPTURE_WAIT_MS }, async () => {
+      // The JS network interceptor lives in the app, so the dispose below alone
+      // leaves it recording. Pause it and empty its log, as the native layers end
+      // their capture at their dispose, unless another tool-server still captures
+      // the app there. Each runtime gets at most 1 s.
+      await pauseJsCapturesOf(registry, undefined, { atExit: true }).catch(() => {});
+
+      // Dispose BEFORE recording toolserver:stop, so a crash escalating mid-teardown
+      // is reflected in the stop event's reason instead of being lost behind an
+      // already-sent reason:"signal". Guarded so a dispose failure cannot skip it.
+      try {
+        await registry.dispose();
+      } catch (err) {
+        process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
+      }
+    });
+
     try {
       await eventLog?.dispose();
     } catch (err) {
@@ -395,11 +429,15 @@ export function start(): void {
     },
   });
 
-  // Do not bind until the first watcher poll has attempted dylib injection for
-  // every booted simulator (so launch-app cannot race it) and the identity
-  // warm-up has settled (so the accept path never pays for it).
-  Promise.all([watcherReady, identityWarm])
+  // Bind once the identity warm-up settles, so the accept path never pays for it.
+  // Not on the watcher's first poll: on a cold CoreSimulatorService its
+  // `simctl list` runs to its 10s timeout, which with process startup can pass
+  // the launcher's 15s ready timeout. What can start an iOS app either arms
+  // injection itself (launch-app, restart-app) or waits for that poll
+  // (firstSimulatorPoll).
+  identityWarm
     .then(() => {
+      if (shuttingDown) return;
       server = httpHandle.app.listen(PORT, HOST, () => {
         // Past this point a crash is a serving-time fault, not a startup fault.
         listening = true;
@@ -502,8 +540,8 @@ export function start(): void {
           },
         });
         shutdownReason = "crash";
-        // The readiness gate rejected before the listener bound, so this is always
-        // a startup crash. Best-effort: fall back to phase-only if describeCrash
+        // Only a throw before the listener bound lands here, so this is always a
+        // startup crash. Best-effort: fall back to phase-only if describeCrash
         // itself throws.
         try {
           shutdownCrashDiagnostics = describeCrash(err, "startup");
@@ -543,7 +581,10 @@ export function getAvailableTools(): Array<{
   const registry = createRegistry();
   return registry.getSnapshot().tools.map((id) => {
     const def = registry.getTool(id)!;
-    return { id: def.id, description: def.description, inputSchema: def.inputSchema };
+    return renderFlagGated(
+      { id: def.id, description: def.description, inputSchema: def.inputSchema },
+      isFeatureEnabled
+    );
   });
 }
 

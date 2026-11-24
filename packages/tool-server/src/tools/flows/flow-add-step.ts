@@ -2,6 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  canonicalToolArgs,
   canonicalToolId,
   e2eFileCandidates,
   e2eRunFallbackDirs,
@@ -34,11 +35,12 @@ import {
   type RecordingSession,
 } from "./flow-utils";
 import {
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
   AWAIT_UI_ELEMENT_TOOL_ID,
-  isUnmetUiWaitResult,
-  unmetUiWaitCause,
-  type UnmetUiWaitCause,
-} from "../await-ui-element";
+  isUnmetWaitResult,
+  type UnmetWaitCause,
+} from "../../utils/wait-result";
+import { unmetWaitCause } from "../../utils/tool-result-verdict";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import {
   UPLOAD_STAGE_BY_KIND,
@@ -60,56 +62,49 @@ import {
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
+import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import { resolveDevice } from "../../utils/device-info";
+import { assertSupported, isFlagOffered } from "../../utils/capability";
+import { renderFlagGated } from "../../utils/flag-gated-text";
+import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
+import {
+  MACOS_DESCRIBE_LIMITS,
+  MACOS_JUDGING_LIMITS,
+  MACOS_LOCKED_HINT,
+} from "../describe/platforms/macos";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
-import type { DescribeSource } from "../describe/contract";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { IOS_TEXT_INPUT_ROLE } from "./flow-ios-tree";
+import {
+  getDescribeTapPoint,
+  type DescribeFrame,
+  type DescribeNode,
+  type DescribeSource,
+  type DescribeTreeData,
+} from "../describe/contract";
 import {
   nodeAtPoint,
   deriveSelector,
   selectorToFrame,
   frameContains,
+  frameWithin,
+  isVisible,
   type Selector,
   type TextMatchMode,
   type WaitCondition,
 } from "../../utils/ui-tree-match";
 
-const zodSchema = z.object({
-  name: z
-    .string()
-    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording. Together with `name` it identifies which recording this step belongs to."
-    ),
-  command: z
-    .string()
-    .describe(
-      'MCP tool to execute and record, for example "gesture-tap". Do not pass an e2e test directive or a recording tool. Call e2e-add-script directly for a requested script step.'
-    ),
-  args: z
-    .string()
-    .optional()
-    .describe(
-      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
-    ),
-  delayMs: z
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe("Milliseconds to sleep before executing this step during replay."),
-});
-
 // Replay gates on the platform's full-hierarchy source (`treeSourceGate` in
 // flow-run.ts) and refuses to degrade to the fallback tree, so a selector
 // derived from the fallback deserves a caveat even when it derives cleanly.
-// Chromium/Vega have a single source — no caveat.
+// Chromium/Vega have a single source — no caveat. A Mac app reads a different
+// tree ("macos-fallback") mostly while the Mac is locked, so a step recorded on
+// a locked Mac gets a caveat that says so.
 const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
   ios: "native-devtools",
   android: "android-devtools",
+  macos: "macos-devtools",
 };
 
 /**
@@ -126,11 +121,17 @@ function recordedLaunchedApp(session: RecordingSession, platform: string): strin
   return undefined;
 }
 
-function fallbackSourceWarning(source: DescribeSource, platform: string): string | undefined {
+function fallbackSourceWarning(
+  { source, hint }: DescribeTreeData,
+  platform: string
+): string | undefined {
   // Keyed by authoring platform: a remote simulator reads the same iOS full
   // hierarchy a local one does, so it earns the same caveat.
   const expected = REPLAY_TREE_SOURCES[authoringPlatform(platform)];
   if (!expected || source === expected) return undefined;
+  if (platform === "macos" && hint?.includes(MACOS_LOCKED_HINT)) {
+    return `selector captured while the Mac was locked (the ${source} tree, not ${expected}): a replay on an unlocked Mac reads the ${expected} tree, which may not match it`;
+  }
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
 }
 
@@ -142,10 +143,16 @@ function platformOf(udid: unknown): string | undefined {
   return typeof udid === "string" ? authoringPlatform(resolveDevice(udid).platform) : undefined;
 }
 
+/** Whether this device has a flow tree at all, so a silent source is absent rather than down. */
+function hasRunnerTree(udid: unknown): boolean {
+  return typeof udid === "string" && supportsFlowTree(resolveDevice(udid).platform);
+}
+
 /**
  * Fallback for a platform the clauses below do not name. Unreachable today: a
  * determinate verdict needs `fetchFlowTree`, which answers only on ios,
- * ios-remote, android, chromium and vega, and the clauses read ios-remote as ios.
+ * ios-remote, android, chromium, vega and macos, and the clauses read ios-remote
+ * as ios.
  */
 const UNSUPPORTED_PLATFORM = {
   divergence: "The recorder and the runner read different projections of the screen.",
@@ -173,8 +180,8 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
 }
 
 /**
- * How to read the tree the runner resolves against — or, on iOS, Android and
- * Chromium, that no read-only tool reports it. `describe` and the native
+ * How to read the tree the runner resolves against — or, on iOS, Android,
+ * Chromium and macOS, that no read-only tool reports it. `describe` and the native
  * readers each show a different projection, so naming one of them would point
  * the author at the wrong tree.
  *
@@ -224,13 +231,37 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
     }
     return (
       settle +
-      // Name both axes: `normRect` clamps each edge on its own, so a
+      // Name both axes: the walker clips each edge on its own, so a
       // horizontally scrolled node comes back zero-WIDTH at a normal height.
-      "A zero-area frame in `describe` means off-viewport — zero height for a node above or " +
-      "below the viewport, zero width for one left or right of it, since the walker clamps " +
-      "each edge on its own — and the fix there is a `scroll-to` before the check rather than " +
-      "a different selector; a password field reaches the runner under the name `[password]`, " +
-      "so only an `id`/`role` selector can match it"
+      "A zero-area frame in `describe` means off-viewport, clipped by an `overflow` ancestor " +
+      "or inside a closed `<details>` (its `<summary>` opens it) — zero height for a node cut " +
+      "off above or below, zero width for one cut off left or right, since the walker clips " +
+      "each edge on its own — and the fix for a scrolled-out node is a `scroll-to` before the " +
+      "check rather than a different selector; a password field reaches the runner under the " +
+      "name `[password]`, so only an `id`/`role` selector can match it"
+    );
+  }
+  if (platform === "macos") {
+    const settle =
+      "No read-only tool reports the runner's flat list on macOS: `describe` prints the nested " +
+      "tree, with the windows, scroll bars and unlabelled containers the runner drops, and it " +
+      `stops at ${MACOS_DESCRIBE_LIMITS.maxNodes} elements where the runner reads ` +
+      `${MACOS_JUDGING_LIMITS.maxNodes}. Settle it by running the conversion: put the ` +
+      "directive in an e2e test and `e2e-execute` it. ";
+    if (condition === "hidden") {
+      return (
+        settle +
+        "This verdict says that tree still HAS the element, so a switch to an `id`/`role` " +
+        "selector or a `scroll-to` before the check only makes the directive match more surely. " +
+        "Narrow the selector until it matches only what you expect to leave, or gate on " +
+        "something that does leave; or keep the step raw"
+      );
+    }
+    return (
+      settle +
+      "An element without an id, a label, a value, a clickable role or focus is not in the " +
+      "runner's list: retarget at an element that carries one; a password field reaches the " +
+      "runner under the name `[password]`, so only an `id`/`role` selector can match it"
     );
   }
   if (platform === "vega") {
@@ -282,8 +313,33 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "Both read the same DOM but project it differently, and here it is the RUNNER's side to " +
       "check: the live wait passed, so the recorder's tree did hold a matching element and its " +
       "5000-node walk limit is not what went wrong. The runner tree keeps only addressable nodes " +
-      "(id, label, value, clickable or focused) whose frame the walker did not clamp to zero " +
-      "area for being off-viewport, and it redacts a password field's name to `[password]`." +
+      "(id, label, value, clickable or focused) whose frame the walker did not clip to zero " +
+      "area (off-viewport, or cut off by an `overflow` ancestor), and it redacts a password " +
+      "field's name to `[password]`." +
+      SCREEN_MAY_HAVE_MOVED
+    );
+  }
+  if (platform === "macos") {
+    // Both sides take one read of the same elements; the flow tree then keeps
+    // a subset of the nodes, renamed only for a password. The condition says
+    // which side lost the element, as on Chromium.
+    if (condition === "hidden") {
+      return (
+        `Both read the same elements with the same limits (${MACOS_JUDGING_LIMITS.maxNodes} ` +
+        `elements, ${MACOS_JUDGING_LIMITS.maxItems} items per web view), both refuse an ` +
+        "incomplete read, and the runner's flat list only DROPS nodes from that read. Here it is " +
+        "the RECORDER that never saw the element: the live wait passed on absence, and this " +
+        "verdict says the runner's tree holds it, so nothing the runner tree drops can be the " +
+        "cause. What is left: the runner names a password field `[password]`, so a selector on " +
+        "that name matches only there." +
+        SCREEN_MAY_HAVE_MOVED
+      );
+    }
+    return (
+      "Both read the same elements, and here it is the RUNNER's side to check: the live wait " +
+      "passed, so the recorder's tree did hold a matching element. The runner tree keeps only " +
+      "addressable leaves (id, label, value, a clickable role or focus), never a window, scroll " +
+      "bar or value indicator, and it redacts a password field's name to `[password]`." +
       SCREEN_MAY_HAVE_MOVED
     );
   }
@@ -387,7 +443,7 @@ const UNMET_WAIT_WARNING =
 
 /**
  * The same `success: false`, reached without a trustworthy read of the tree —
- * see {@link unmetUiWaitCause}. It must not reuse the unmet text, which asserts
+ * see `unmetUiWaitCause` in await-ui-element. It must not reuse the unmet text, which asserts
  * that the wait never held: nothing judged the condition here, so the step may
  * be perfectly good.
  */
@@ -408,10 +464,36 @@ const CANCELLED_WAIT_WARNING =
   "the e2e test anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
   "The cross-tree re-probe was skipped for the same reason";
 
-function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
+function unmetWaitWarningFor(cause: UnmetWaitCause): string {
   if (cause === "unreadable") return UNREADABLE_WAIT_WARNING;
   if (cause === "cancelled") return CANCELLED_WAIT_WARNING;
   return UNMET_WAIT_WARNING;
+}
+
+/**
+ * The same three warnings for `await-network-request`, which reads the capture
+ * layers rather than the UI tree, and has no `await:` form to re-probe.
+ */
+const UNMET_NETWORK_WAIT_WARNING =
+  "recorded, but the wait never held: `await-network-request` returned success:false, and at " +
+  "replay an unmet wait FAILS the step. `toolResult.nearMisses` lists the closest requests and " +
+  "the criteria each missed: fix the matcher, or record the action that sends the request, then " +
+  "record the wait again. Delete the failed step after `e2e-finish-recording`, not mid-recording";
+
+const UNREADABLE_NETWORK_WAIT_WARNING =
+  "recorded, but no armed capture layer was read near the deadline, so the request was never " +
+  "judged and whether it is sent is UNKNOWN: `toolResult.layers` says why. Get the layer back (for " +
+  "example call network-capture-start again once the app's JavaScript has loaded) and record the " +
+  "wait again. Do not delete the step on this warning alone";
+
+const CANCELLED_NETWORK_WAIT_WARNING =
+  "recorded, but this wait was cancelled before its deadline, so whether the request is sent is " +
+  "UNKNOWN: record the step again to find out";
+
+function unmetNetworkWaitWarningFor(cause: UnmetWaitCause): string {
+  if (cause === "unreadable") return UNREADABLE_NETWORK_WAIT_WARNING;
+  if (cause === "cancelled") return CANCELLED_NETWORK_WAIT_WARNING;
+  return UNMET_NETWORK_WAIT_WARNING;
 }
 
 // The indeterminate reason is quoted verbatim, and it carries whatever recovery
@@ -519,6 +601,13 @@ async function probeAgainstRunnerTree(
     return {};
   }
   if (typeof args.udid !== "string") return {}; // nothing to probe against
+  if (!hasRunnerTree(args.udid)) {
+    return {
+      warning:
+        `this platform's e2e runner has no UI tree, so an \`await:\`/\`assert:\` conversion of ` +
+        `this step always fails there; keep it as a \`tool:\` step.`,
+    };
+  }
   // No try/catch: a tree read that fails throws inside `fetchFlowTree`, which
   // the probe already reports as indeterminate.
   const device = resolveDevice(args.udid);
@@ -638,6 +727,44 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
   );
 }
 
+/** Mac controls that act on where in them a click lands. */
+const MACOS_POINT_ROLES: ReadonlySet<string> = new Set(["AXSlider", "AXIncrementor", "AXTextArea"]);
+/**
+ * Mac controls that take a click only at one part of them: a SwiftUI
+ * DisclosureGroup is one element over its chevron and its label, and opens only
+ * at the chevron.
+ */
+const MACOS_PART_ROLES: ReadonlySet<string> = new Set(["AXDisclosureTriangle"]);
+/** Mac text, which takes a click the same anywhere in it. */
+const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading", "AXLink"]);
+
+/** Whether `node` is text in a text area of its own layer: a paragraph or a link of a web editor. */
+function inTextArea(tree: DescribeNode, node: DescribeNode): boolean {
+  if (!MACOS_TEXT_ROLES.has(node.role)) return false;
+  const walk = (n: DescribeNode): boolean =>
+    (n !== node &&
+      n.role === "AXTextArea" &&
+      isVisible(n) &&
+      (n.layer ?? 0) === (node.layer ?? 0) &&
+      frameWithin(node.frame, n.frame)) ||
+    n.children.some(walk);
+  return tree.children.some(walk);
+}
+
+/**
+ * Whether a click is away from the centre of `frame` by more than `tolerance`:
+ * the rounding of describe's 3-decimal frames (0.0015), or of a centre that an
+ * agent rounds to 2 decimals as well (0.006).
+ */
+function awayFromCentre(
+  point: { x: number; y: number },
+  frame: DescribeFrame,
+  tolerance: number
+): boolean {
+  const centre = getDescribeTapPoint(frame);
+  return Math.abs(point.x - centre.x) > tolerance || Math.abs(point.y - centre.y) > tolerance;
+}
+
 /**
  * The reason without the layers wrapped around it: the registry tags a service
  * failure with `[<namespace>:<id>] ` and the tree source prefixes its own
@@ -646,6 +773,19 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
 function innermostTreeReason(message: string): string {
   const unwrapped = /helper is unavailable:\s*(.+)/s.exec(message)?.[1] ?? message;
   return unwrapped.replace(/^\[[^\]]+\]\s*/, "").trim();
+}
+
+/**
+ * The node a recorded selector is derived from. On an iOS simulator the value
+ * of a text input is the text typed into it, and that text never becomes a
+ * selector: it does not name the field, and it can be the value of a
+ * `{{secret:…}}` placeholder, which must not reach the YAML. Without it the
+ * field records by its label, then by its role.
+ */
+function withoutTypedText(node: DescribeNode, { source }: DescribeTreeData): DescribeNode {
+  return source === "native-devtools" && node.role === IOS_TEXT_INPUT_ROLE
+    ? { ...node, value: undefined }
+    : node;
 }
 
 /**
@@ -677,23 +817,23 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source, uiOrientation } = await fetchFlowTree(
+    const data = await fetchFlowTree(
       registry,
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
     );
+    const { tree } = data;
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
-    const selector = deriveSelector(node);
+    const selector = deriveSelector(withoutTypedText(node, data));
     if (!selector)
       return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
     // Replay resolves through selectorToFrame, whose ranking (exact match →
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
     // winning frame to cover the tapped point, or the recorded step would
-    // silently retarget and coordinates are safer. Ranked in the reading order
-    // replay will rank in: the UI's, on a landscape UI.
-    const resolved = selectorToFrame(tree, selector, uiOrientation);
+    // silently retarget and coordinates are safer.
+    const resolved = selectorToFrame(tree, selector);
     if (!resolved) {
       // Defensive: a selector derived from a visible node matches that node
       // under matchNode's semantics, so this should be unreachable. Kept in
@@ -707,9 +847,30 @@ async function captureTapSelector(
         warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
+    // Replay clicks the centre. On a Mac app, a click anywhere else on a slider,
+    // a stepper, a text view or the text in it, a disclosure group, a canvas,
+    // chart, map or seek bar, or a container's empty space does something else
+    // there. So does a click on any element that is not clickable, text
+    // included, when another element lies at its centre.
+    const pointRole = MACOS_POINT_ROLES.has(node.role) || inTextArea(tree, node);
+    const pointMatters =
+      pointRole ||
+      MACOS_PART_ROLES.has(node.role) ||
+      (!node.clickable && !MACOS_TEXT_ROLES.has(node.role));
+    if (
+      device.platform === "macos" &&
+      // Coordinates on a slider replay the same point, so it keeps them for any click
+      // off its centre; elsewhere a tap at a rounded centre keeps the selector.
+      ((pointMatters && awayFromCentre(point, resolved, pointRole ? 0.0015 : 0.006)) ||
+        (!node.clickable && nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node))
+    ) {
+      return {
+        warning: `the click is away from the centre of ${describeSelector(selector)}, where replay clicks; kept coordinates (brittle)`,
+      };
+    }
     const warnings = [
       roleOnlySelectorWarning(selector),
-      fallbackSourceWarning(source, device.platform),
+      fallbackSourceWarning(data, device.platform),
     ].filter((w) => w !== undefined);
     return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
@@ -779,7 +940,7 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     rewriteCondition:
       "when the target resolves as a sibling e2e test in this recording's folder, on the computer " +
       "that has the project; a `name` that does not is kept as a raw `tool: e2e-execute` step, " +
-      "and a `flow_path` that is not a sibling is refused outright and records nothing",
+      "and an `e2e_test_path` that is not a sibling is refused outright and records nothing",
   },
   type: { tool: "keyboard", rewritten: false },
   await: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
@@ -831,11 +992,13 @@ export const UNHINTED_DIRECTIVE_KEYS: readonly string[] = [
 
 export function directiveCommandHint(command: string): string | undefined {
   if (command === "swipe") {
-    return (
+    return renderFlagGated(
       `"swipe" is an e2e test directive, not a tool. Record the movement by calling \`gesture-swipe\` ` +
-      `(\`gesture-drag\` on chromium, where gesture-swipe is not supported) through e2e-add-step. ` +
-      `It is stored as the raw \`tool:\` step for whichever one you called; converting it to ` +
-      `\`swipe:\` is part of the polish pass.`
+        `(\`gesture-drag\` on chromium<flag:macos-apps> and macOS</flag:macos-apps>, where ` +
+        `gesture-swipe is not supported) through e2e-add-step. ` +
+        `It is stored as the raw \`tool:\` step for whichever one you called; converting it to ` +
+        `\`swipe:\` is part of the polish pass.`,
+      isFlagOffered
     );
   }
   if (command === "echo") {
@@ -863,12 +1026,14 @@ export function directiveCommandHint(command: string): string | undefined {
     );
   }
   if (command === "scroll-to") {
-    return (
+    return renderFlagGated(
       `"scroll-to" is an e2e test directive, not a tool, and no tool records one — it SEARCHES, ` +
-      `scrolling until the target is visible, which no single recorded gesture reproduces. ` +
-      `Record the movement with \`gesture-swipe\` (\`gesture-scroll\` on chromium) if the path ` +
-      `needs it, then add the \`scroll-to:\` step by hand during polish and prove it with the ` +
-      `replay.`
+        `scrolling until the target is visible, which no single recorded gesture reproduces. ` +
+        `Record the movement with \`gesture-swipe\` (\`gesture-scroll\` on chromium` +
+        `<flag:macos-apps> and macOS</flag:macos-apps>) if the path ` +
+        `needs it, then add the \`scroll-to:\` step by hand during polish and prove it with the ` +
+        `replay.`,
+      isFlagOffered
     );
   }
   if (command === "snapshot") {
@@ -912,17 +1077,15 @@ export function directiveCommandHint(command: string): string | undefined {
 const RUN_TARGET_COMMAND = "e2e-execute";
 
 /**
- * Rewrite a nested `flow-execute` target from `flow_path` to the equivalent
+ * Rewrite a nested `flow-execute` target from `e2e_test_path` to the equivalent
  * `name`, in place — or reject the call before anything runs.
  *
- * `flow-add-step` forwards the nested call's arguments as opaque JSON, so a
- * `flow_path` inside them never crosses flow-execute's file-input boundary and
- * `resolveFlowSource` would reject it outright. A sibling of the recording, or
- * a test in the project's other e2e test directory, is the one target with a
- * boundary-verified equivalent: the same file the `name` + `project_root` pair
- * already resolves to, beside a directory flow-start-recording established
- * through its own boundary. Every other flow_path is refused here —
- * a raw `tool:` step has no boundary to resolve a path through at replay either.
+ * The recorder keeps a nested `e2e_test_path` only as the `name` it equals. A
+ * sibling of the recording, or a test in the project's other e2e test
+ * directory, is the one target with such a name: the same file the `name` +
+ * `project_root` pair already resolves to, beside a directory
+ * flow-start-recording established through its own boundary. Every other
+ * e2e_test_path is refused here.
  * The on-disk spelling is the answer of `project`, on the client over a link;
  * a linked call whose client sent no files has no answer to give, and is
  * refused.
@@ -933,16 +1096,16 @@ async function rewriteSiblingFlowPath(
   project: ProjectAccess,
   linked: boolean
 ): Promise<void> {
-  const flowPath = args.flow_path;
+  const flowPath = args.e2e_test_path;
   // A call naming both sources — or neither — is flow-execute's schema to judge.
   if (typeof flowPath !== "string" || args.name !== undefined) return;
 
   const invalid = (detail: string): FailureError =>
     new FailureError(
-      `Cannot record an e2e-execute of flow_path "${flowPath}": ${detail}. flow_path carries no ` +
-        `file-input resolution through e2e-add-step's opaque args — pass name + project_root ` +
-        `for an e2e test saved beside the recording, or add a \`run: <relative path>.yaml\` step to ` +
-        `the e2e test YAML by hand for a cross-directory target.`,
+      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": ${detail}. The recorder keeps ` +
+        `an e2e_test_path only as the name it equals — pass name + project_root for an e2e test saved ` +
+        `beside the recording, or add a \`run: <relative path>.yaml\` step to the e2e test YAML ` +
+        `by hand for a cross-directory target.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_add_step_flow_path",
@@ -991,7 +1154,11 @@ async function rewriteSiblingFlowPath(
   ) {
     throw invalid(
       `it is not in the recording's e2e test directory ("${flowsDir}") or the project's other ` +
-        `e2e test directory, and a raw tool: step has no boundary to resolve a path through at replay`
+        `e2e test directory` +
+        (path.isAbsolute(flowPath)
+          ? ""
+          : `, as the tool server resolves a relative path against its own cwd ("${process.cwd()}"), ` +
+            `not the calling agent's - pass the absolute path`)
     );
   }
   // basename leaves a suffix in place when stripping it would leave nothing, and
@@ -1036,7 +1203,7 @@ async function rewriteSiblingFlowPath(
   // link without the files of its step, and it sends no nested flow either.
   if (linked && project.mode === "host") {
     throw new FailureError(
-      `Cannot record an e2e-execute of flow_path "${flowPath}": the argent client sent no ` +
+      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": the argent client sent no ` +
         `files with this call, so the recorder cannot check that the file is a sibling of the ` +
         `recording. Update the argent CLI or MCP adapter on the client.`,
       {
@@ -1052,10 +1219,10 @@ async function rewriteSiblingFlowPath(
     ({ spelling } = await project.resolveFlowFile(flowDir, suppliedBase));
   } catch (err) {
     if (path.resolve(flowDir) === path.resolve(flowsDir)) throw err;
-    // An argent client older than this tool-server sends a flow_path for this
+    // An argent client older than this tool-server sends an e2e_test_path for this
     // check only beside the recording.
     throw invalid(
-      `over a link, this argent client sends a flow_path only for an e2e test beside the ` +
+      `over a link, this argent client sends an e2e_test_path only for an e2e test beside the ` +
         `recording; update the argent CLI or MCP adapter on the client ` +
         `(${err instanceof Error ? err.message : String(err)})`
     );
@@ -1063,12 +1230,12 @@ async function rewriteSiblingFlowPath(
   if (spelling.state !== "listed") {
     // Hint the real spelling only when this same ladder would accept it (a
     // stem-case slip like Sibling.yaml); an invalid real name (sibling.YAML)
-    // needs a rename, not a flow_path the extension arm will refuse.
+    // needs a rename, not an e2e_test_path the extension arm will refuse.
     const recovery =
       spelling.state === "absent"
         ? `pass the basename exactly as it appears on disk`
         : spelling.addressable
-          ? `pass flow_path with the on-disk basename "${spelling.actual}"`
+          ? `pass e2e_test_path with the on-disk basename "${spelling.actual}"`
           : `rename "${spelling.actual}" to "${suppliedBase}" to record it — e2e test files must be lowercase .yaml`;
     throw invalid(
       `the file must be named as it appears on disk — no directory entry is named ` +
@@ -1088,7 +1255,7 @@ async function rewriteSiblingFlowPath(
     }
   }
 
-  delete args.flow_path;
+  delete args.e2e_test_path;
   args.name = stem;
 }
 
@@ -1112,11 +1279,11 @@ async function rewriteSiblingFlowPath(
  * only when the target can't be resolved as a sibling, or the sibling is not
  * the file the live sub-invoke executed. `project` resolves the recording,
  * its sibling and the executed file where the project is: on this host, or
- * on the client over a link. A `flow_path` target reaches here as its sibling
+ * on the client over a link. An `e2e_test_path` target reaches here as its sibling
  * `name` or not at all — see {@link rewriteSiblingFlowPath}.
  *
  * "Resolved as a sibling" is the same two-part identity {@link
- * rewriteSiblingFlowPath} demands of a flow_path, asked of the name route: the
+ * rewriteSiblingFlowPath} demands of an e2e_test_path, asked of the name route: the
  * call's own `project_root` must resolve `name` to the very file `run:` will
  * resolve beside the recording's real file — compared canonically, since those
  * two anchors reach it by different spellings — and that directory must list
@@ -1272,7 +1439,7 @@ function replayRefusal(
         ? " Over a link, a nested e2e-execute runs only when the argent client sends the e2e test " +
           "it names with the call. Update the argent CLI or MCP adapter on the client."
         : " Over a link, a nested e2e-execute runs only when it names its e2e test with a test " +
-          "name in name, has an absolute project_root with no .. segment, and has no flow_path.";
+          "name in name, has an absolute project_root with no .. segment, and has no e2e_test_path.";
   } else if (issue.fixes.length === 0) {
     hint =
       " A replay without a link runs this step. To keep it, add it to the YAML by hand after " +
@@ -1298,6 +1465,24 @@ function replayRefusal(
 }
 
 /**
+ * The args of a recorded `file-panel` stub, with the panel kind the call used.
+ * Without `panelKind` the tool infers the kind from the file system: one path
+ * that does not exist yet is a save panel's file. The answer writes that file,
+ * so a replay would infer an open panel, and the save panel would stay open.
+ */
+function withRecordedPanelKind(
+  command: string,
+  args: Record<string, unknown>,
+  toolResult: unknown
+): Record<string, unknown> {
+  if (command !== "file-panel" || args.action !== "stub" || args.panelKind !== undefined) {
+    return args;
+  }
+  const panelKind = (toolResult as { panelKind?: unknown } | null)?.panelKind;
+  return panelKind === "open" || panelKind === "save" ? { ...args, panelKind } : args;
+}
+
+/**
  * Over a link, the argent client sends with the call the files the one
  * recorded step makes this tool read, as a replay over the same link reads
  * them: the file arguments of the step, the flow a nested `flow-execute` names
@@ -1308,6 +1493,34 @@ function replayRefusal(
 const fileInputs: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "probe", collect: "step" },
 ];
+
+const zodSchema = z.object({
+  name: z
+    .string()
+    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
+    ),
+  command: z
+    .string()
+    .describe(
+      'MCP tool to execute and record, for example "gesture-tap". Do not pass an e2e test directive or a recording tool. Call e2e-add-script directly for a requested script step.'
+    ),
+  args: z
+    .string()
+    .optional()
+    .describe(
+      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
+    ),
+  delayMs: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Milliseconds to sleep before executing this step during replay."),
+});
 
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<
   z.infer<typeof zodSchema>,
@@ -1323,6 +1536,10 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
 > {
   return {
     id: "e2e-add-step",
+    description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
+A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
+Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
+    zodSchema,
     aliases: ["flow-add-step"],
     interaction: {
       // Name the flow: recordings are concurrent, so several of these lines can
@@ -1335,16 +1552,12 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to e2e test ${params.name}: ${failureSignal.error_code}`,
     },
-    description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
-A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
-Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
     // The recorded tool RUNS here, so this call lasts as long as whatever it
     // wraps, and the three it most often wraps declare this too. Without it the
     // MCP adapter capped the POST at 30s and retried the identical body four
     // more times — and every retry re-runs the action and appends another step,
     // because an aborted request still appends its first.
     longRunning: true,
-    zodSchema,
     fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx) {
@@ -1378,6 +1591,11 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // miss can be re-rendered against the keys the author wrote. Shallow is
       // enough: `rewriteSiblingFlowPath` only deletes and adds top-level keys.
       const authoredArgs = { ...args };
+      try {
+        args = canonicalToolArgs(command, args);
+      } catch {
+        // Both names of one param: the step's own tool refuses the call.
+      }
 
       // Over a link the project is on the client, and the recorder records only
       // what a replay over the same link runs. One predicate decides "over a
@@ -1389,8 +1607,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         ? new ClientProjectAccess(stepFiles)
         : new HostProjectAccess();
 
-      // A nested flow-execute must never carry a raw flow_path into the live
-      // invoke — it has no boundary metadata there and would be rejected.
       if (command === RUN_TARGET_COMMAND) {
         await rewriteSiblingFlowPath(session, args, project, linked);
       }
@@ -1431,6 +1647,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
+        // Refused as the runner refuses a raw `tool:` step: a sub-invocation
+        // skips the HTTP capability gate.
+        const deviceId = args.udid ?? args.device_id;
+        const device = typeof deviceId === "string" ? resolveDevice(deviceId) : undefined;
+        if (device?.platform === "macos") {
+          assertSupported(params.command, registry.getTool(params.command)?.capability, device);
+        }
         prepared = await prepareToolStepInputs(registry, project, params.command, args);
         const nestedFromClient =
           command === RUN_TARGET_COMMAND && prepared.fileInputs !== undefined;
@@ -1496,14 +1719,28 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A blocked native-devtools precheck RESOLVES its block instead of
       // throwing, and returns before the tool does any work — so recording the
       // step would write an action the device never took, and the runner scores
-      // that same result a failure at replay (isNativeDevtoolsBlockResult in
-      // flow-run.ts). Refusing here keeps the two verdicts identical.
+      // that same result a failure at replay (toolResultVerdict in
+      // utils/tool-result-verdict.ts). Refusing here keeps the two verdicts identical.
       if (isNativeDevtoolsBlockResult(params.command, toolResult)) {
         throw new FailureError(
           `${params.command} did not run (${toolResult.status}): ${toolResult.message} — nothing was recorded, so the take still matches what is on screen; clear the block and call e2e-add-step again`,
           {
             error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
             failure_stage: "flow_add_step_native_devtools_block",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          }
+        );
+      }
+      if (isDebuggerNotConnectedResult(params.command, toolResult)) {
+        // debugger-log-registry's note is consumed as it is read, so this
+        // message is the only place it can still reach the agent.
+        const note = (toolResult as { note?: unknown }).note;
+        throw new FailureError(
+          `${params.command}: debugger not connected (${toolResult.reason}) - nothing was recorded. ${toolResult.detail} ${toolResult.guidance}${typeof note === "string" ? ` ${note}` : ""}`,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_NOT_CONNECTED,
+            failure_stage: "flow_add_step_debugger_not_connected",
             failure_area: "tool_server",
             error_kind: "not_found",
           }
@@ -1520,16 +1757,18 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // The two are filed under different kinds because only the probe's answer
       // is about converting the step, and the finish counts them separately.
       let waitWarning: { warning: string; kind: "conversion" | "wait" } | undefined;
-      if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
-        if (isUnmetUiWaitResult(params.command, toolResult)) {
-          waitWarning = {
-            warning: unmetWaitWarningFor(unmetUiWaitCause(toolResult)),
-            kind: "wait",
-          };
-        } else {
-          const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
-          if (probed) waitWarning = { warning: probed, kind: "conversion" };
-        }
+      if (isUnmetWaitResult(command, toolResult)) {
+        const cause = unmetWaitCause(command, toolResult);
+        waitWarning = {
+          warning:
+            command === AWAIT_NETWORK_REQUEST_TOOL_ID
+              ? unmetNetworkWaitWarningFor(cause)
+              : unmetWaitWarningFor(cause),
+          kind: "wait",
+        };
+      } else if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
+        const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
+        if (probed) waitWarning = { warning: probed, kind: "conversion" };
       }
 
       // Running a fragment via flow-execute mid-recording is recorded as a
@@ -1546,8 +1785,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // iOS device, which records as the `ios: { app, args }` entry beside a
       // `native` id so the flow still replays elsewhere; other extra args (e.g.
       // an Android `activity`) keep the raw tool step. An empty `launchArgs` is
-      // no args. `launch-app` is NOT rewritten — it foregrounds without
-      // terminating.
+      // no args. On a Mac app the step records the arguments the new process
+      // got, as a `macos: { app, args }` entry: without `launchArgs` the restart
+      // reuses those of the app's last start. `launch-app` is NOT rewritten — it
+      // foregrounds without terminating.
       const strippedArgs = stripDeviceKeys(args);
       const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
       const noLaunchArgs =
@@ -1559,12 +1800,14 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         platformOf(args.udid) === "ios"
           ? (launchArgs as string[])
           : undefined;
+      const isMacos = platformOf(args.udid) === "macos";
+      const macosArgs = isMacos ? (toolResult as { args?: string[] } | null)?.args : undefined;
       const isLaunch =
         command === "restart-app" &&
         params.delayMs === undefined &&
         typeof strippedArgs.bundleId === "string" &&
         Object.keys(extraLaunchArgs).length === 0 &&
-        (noLaunchArgs || iosArgs !== undefined);
+        (noLaunchArgs || iosArgs !== undefined || isMacos);
 
       // A recorded `fold` becomes the `fold:` directive, the same posture change
       // the tool made; args the directive does not take keep the raw tool step.
@@ -1581,22 +1824,46 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         isTap && typeof cc === "number" && Number.isInteger(cc) && cc >= 2 && cc <= 10
           ? { times: cc }
           : {};
+      // A right-click must survive it as `button`, or replay would left-click.
+      // Left is the default (absent).
+      const tapButton = isTap && args.button === "right" ? { button: "right" as const } : {};
+      const heldKeys = Array.isArray(args.modifiers)
+        ? MACOS_MODIFIERS.filter((m) => (args.modifiers as unknown[]).includes(m))
+        : [];
+      const tapModifiers = isTap && heldKeys.length > 0 ? { modifiers: heldKeys } : {};
 
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
-        step = { kind: "tap", selector: captured.selector, ...tapTimes };
+        step = {
+          kind: "tap",
+          selector: captured.selector,
+          ...tapTimes,
+          ...tapButton,
+          ...tapModifiers,
+        };
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`
         // directive so every tap reads uniformly.
-        step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };
+        step = {
+          kind: "tap",
+          x: args.x as number,
+          y: args.y as number,
+          ...tapTimes,
+          ...tapButton,
+          ...tapModifiers,
+        };
         warning = captured?.warning;
       } else if (isLaunch) {
         const bundleId = strippedArgs.bundleId as string;
         step = {
           kind: "launch",
-          app: iosArgs ? { native: bundleId, ios: { app: bundleId, args: iosArgs } } : bundleId,
+          app: iosArgs
+            ? { native: bundleId, ios: { app: bundleId, args: iosArgs } }
+            : macosArgs?.length
+              ? { macos: { app: bundleId, args: macosArgs } }
+              : bundleId,
         };
       } else if (foldStep) {
         step = foldStep;
@@ -1610,7 +1877,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = {
           kind: "tool",
           name: command,
-          args: strippedArgs,
+          args: withRecordedPanelKind(command, strippedArgs, toolResult),
           delayMs: params.delayMs,
         };
       }

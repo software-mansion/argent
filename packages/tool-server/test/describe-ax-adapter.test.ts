@@ -3,6 +3,7 @@ import {
   adaptAXElement,
   adaptAXDescribeToDescribeResult,
 } from "../src/tools/describe/platforms/ios/ios-ax-adapter";
+import { formatDescribeTree } from "../src/tools/describe/format-tree";
 import type { AXDescribeResponse } from "../src/blueprints/ax-service";
 
 describe("describe ax-service adapter", () => {
@@ -48,6 +49,84 @@ describe("describe ax-service adapter", () => {
     expect(idle?.focused).toBeUndefined();
     expect(editing?.role).toBe("AXTextField");
     expect(editing?.focused).toBe(true);
+  });
+
+  it("maps notEnabled to disabled and selected to selected, absent otherwise", () => {
+    const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+    expect(adaptAXElement({ frame, traits: ["button", "notEnabled"] })).toMatchObject({
+      disabled: true,
+    });
+    expect(adaptAXElement({ frame, traits: ["button", "selected"] })).toMatchObject({
+      selected: true,
+    });
+    const plain = adaptAXElement({ frame, traits: ["button"] });
+    expect(plain).not.toHaveProperty("disabled");
+    expect(plain).not.toHaveProperty("selected");
+  });
+
+  it("prints the disabled and selected states on the element's line", () => {
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          label: "Pay",
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          traits: ["button", "notEnabled", "selected"],
+        },
+      ],
+    });
+    expect(formatDescribeTree(root, { source: "ax-service" })).toContain(
+      'AXButton "Pay" [selected,disabled]'
+    );
+  });
+
+  it("carries the VoiceOver hint onto the element's line", () => {
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          label: "Merge",
+          hint: "Combines both accounts",
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          traits: ["button"],
+        },
+      ],
+    });
+    expect(root.children[0]?.hint).toBe("Combines both accounts");
+    expect(formatDescribeTree(root, { source: "ax-service" })).toContain(
+      'AXButton "Merge" hint="Combines both accounts"'
+    );
+  });
+
+  it("carries the hint of an element with no label, value or id", () => {
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          hint: "Opens the menu",
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          traits: [],
+        },
+      ],
+    });
+    expect(formatDescribeTree(root, { source: "ax-service" })).toContain(
+      'AXGroup hint="Opens the menu"'
+    );
+  });
+
+  it("prints no hint for a daemon that does not send the field", () => {
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          label: "Merge",
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          traits: ["button"],
+        },
+      ],
+    });
+    expect(root.children[0]?.hint).toBeUndefined();
+    expect(formatDescribeTree(root, { source: "ax-service" })).not.toContain("hint=");
   });
 
   it("defaults to AXGroup for empty traits", () => {

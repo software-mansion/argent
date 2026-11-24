@@ -120,19 +120,6 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     manageCommand: "argent telemetry",
   },
   {
-    key: "allowlist.enabled",
-    description:
-      "Whether `argent update` re-applies editor auto-approve allowlist rules. Unset (the " +
-      "default) keeps the current behavior: update refreshes the rules for editors that " +
-      "already have argent configured. Set to `false` to keep update from touching editor " +
-      "allowlists. `false` in either scope wins, so a committed project opt-out holds for " +
-      "every teammate.",
-    scopes: ["project", "global"],
-    parse: asBoolean,
-    merge: "prioritize-restrictive",
-    example: "false",
-  },
-  {
     key: "lens.agent",
     description: "Coding-agent id remembered by `argent lens` to skip the picker.",
     scopes: ["project", "global"],
@@ -171,6 +158,23 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     expected: "an absolute path, or one starting with `~/`",
     merge: "prioritize-local",
     example: "~/Library/Android/sdk",
+  },
+  {
+    key: "android.adbServerPort",
+    description:
+      "Port of the adb server argent uses, for hosts that run Android devices on a server other " +
+      "than the default 5037 (a device pool with its own server, for example). Applies when the " +
+      "tool-server starts, to the tool-server and every adb and simulator-server it runs. " +
+      "`ANDROID_ADB_SERVER_PORT` or `ADB_SERVER_SOCKET` in the tool-server's environment still " +
+      "wins, as it does for adb itself.",
+    scopes: ["project", "global"],
+    parse: (raw) => {
+      const value = asPositiveInteger(raw);
+      return value !== undefined && value < 65536 ? value : undefined;
+    },
+    expected: "a TCP port, 1-65535",
+    merge: "prioritize-local",
+    example: "5038",
   },
   {
     key: "recordings.directory",

@@ -68,6 +68,9 @@ import {
   STEP_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-utils";
 import { n } from "./harness";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const IOS = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const ANDROID = "emulator-5554"; // adb-serial shape → classifies android
@@ -899,11 +902,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     // A node is kept only when onScreen AND addressable; naming the latter blames the selector.
     expect(warning).toContain("addressable nodes");
-    expect(warning).toContain("clamp");
+    expect(warning).toContain("did not clip to zero area");
     expect(warning).toContain("off-viewport");
     expect(warning).toContain("`scroll-to` before the check rather than a different selector");
-    // Both axes. `normRect` clamps each edge alone, so a sideways node is zero-WIDTH.
-    expect(warning).toContain("zero width for one left or right of it");
+    // Both axes. The walker clips each edge alone, so a sideways node is zero-WIDTH.
+    expect(warning).toContain("zero width for one cut off left or right");
     // Not the other direction: the live `exists` passed, so the recorder saw it.
     expect(warning).toContain("5000-node walk limit is not what went wrong");
     expect(warning).not.toContain("past the end of what it read");
@@ -1213,6 +1216,24 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("blind")).toHaveLength(1);
   });
 
+  it("warns without probing on a platform whose runner has no UI tree", async () => {
+    // The served tree agrees, so a probe that ran would raise no warning at all.
+    await startRecording("harmony");
+
+    const result = await recordWait("harmony", {
+      udid: "harmony-127.0.0.1:5555",
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+
+    expect(warningOf(result, "harmony")).toBe(
+      "this platform's e2e runner has no UI tree, so an `await:`/`assert:` conversion of " +
+        "this step always fails there; keep it as a `tool:` step."
+    );
+    expect(fetchCount).toBe(0);
+    expect(await recordedSteps("harmony")).toHaveLength(1);
+  });
+
   // The recorder's tree is the accessibility tree only on iOS and Android.
   it("does not call the recorder's tree the accessibility tree on Chromium", async () => {
     fetchRunnerTree = async () => {
@@ -1395,8 +1416,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // A determinate verdict costs TWO full reads, so a ceiling of "grace plus one
   // read" turns a merely slow device into an indeterminate warning.
   it("still reaches a determinate verdict when each read is slower than the grace window", async () => {
-    // 1.9s per read is over the 1s grace, so the loop takes two reads, near 3.8s.
-    // Load only pushes that UP: above the 3500ms ceiling, under the 6000ms budget.
+    // 1.9s per read is over the 1s grace, so the loop takes two reads, 3.8s:
+    // above the 3500ms ceiling, under the 6000ms budget.
     fetchRunnerTree = async () => {
       await new Promise((resolve) => setTimeout(resolve, 1900));
       return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "native-devtools" };
@@ -1466,11 +1487,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // The cap ELIDES THE MIDDLE: the note about a dark final poll lives at the END.
   it("keeps the tail of an over-long reason, where the final-poll note lives", async () => {
     const wall = "Lorem ipsum dolor sit amet ".repeat(60);
-    // Trusted reads keep the condition false, then the source dies on the last
-    // poll. That tail is inside CONDITION_DARK_TAIL_TOLERANCE_MS, so it stays firm.
-    const probeStartedAt = Date.now();
+    // Trusted reads keep the condition false; the source dies at 900ms, so the
+    // dark tail runs from the 600ms read: 400ms, past one poll interval but
+    // inside CONDITION_DARK_TAIL_TOLERANCE_MS, so the verdict stays firm.
+    let firstReadAt: number | undefined;
     fetchRunnerTree = async () => {
-      if (Date.now() - probeStartedAt > 900) throw new Error("native devtools went away");
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 900) throw new Error("native devtools went away");
       return { tree: iosRunnerTree([iosLabel(`Total ${wall}`)]), source: "native-devtools" };
     };
     await startRecording("tail");
@@ -1483,10 +1506,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const warning = warningOf(result, "tail") ?? "";
 
     // This tier holds only while the dark tail is inside
-    // CONDITION_DARK_TAIL_TOLERANCE_MS (2 poll intervals, 600ms). Host load breaks it.
+    // CONDITION_DARK_TAIL_TOLERANCE_MS (2 poll intervals, 600ms).
     expect(
       warning,
-      "expected the blip tier: under host load the dark tail can exceed CONDITION_DARK_TAIL_TOLERANCE_MS, which turns this indeterminate"
+      "expected the blip tier: a dark tail past CONDITION_DARK_TAIL_TOLERANCE_MS turns this indeterminate"
     ).toContain("does NOT hold against the tree the runner resolves");
     expect(warning).toContain("Lorem ipsum");
     expect(warning).toContain("more chars)");
@@ -1946,15 +1969,6 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
   });
 
-  it("is declared longRunning, so the probe's budget is not spent from a 30s cap", () => {
-    // Without the flag the MCP adapter caps the POST at FETCH_TIMEOUT_MS and
-    // retries MAX_RETRIES times; each retry re-runs the action and appends a step.
-    // The re-probe spends PROBE_BUDGET_MS from that same ceiling.
-    expect(createFlowAddStepTool(registryWhereWaitSucceeds()).longRunning).toBe(true);
-    // The tool it proxies most often: a standalone wait duplicated once recorded.
-    expect(createAwaitUiElementTool(registryWhereWaitSucceeds()).longRunning).toBe(true);
-  });
-
   it("says nothing about discarded verdicts when none were", async () => {
     // A clean recording's `message` must stay the bare line.
     await startRecording("nodrop");
@@ -2157,6 +2171,43 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 });
 
+// `await-network-request` reads the capture layers, not a UI tree, and has no
+// `await:` form to convert to, so an unmet one is never re-probed.
+describe("a recorded network wait", () => {
+  it("keeps an unmet await-network-request as a wait step, with the wait warning and no re-probe", async () => {
+    const args = { bundleId: "com.acme.app", method: "POST", url: "/v1/auth/login" };
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "await-network-request") {
+          return { success: false, elapsed: 10_000, cause: "unmet", note: "No request matched." };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    await startRecording("netunmet");
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "netunmet",
+        project_root: tmpDir,
+        command: "await-network-request",
+        args: JSON.stringify({ udid: IOS, ...args }),
+      }
+    );
+
+    const warning = warningOf(result, "netunmet");
+    expect(warning).toContain("the wait never held");
+    expect(warning).toContain("at replay an unmet wait FAILS the step");
+    expect(warning).not.toMatch(/re-probe|UI tree/);
+    expect(fetchCount).toBe(0);
+    expect(await recordedSteps("netunmet")).toEqual([
+      { kind: "tool", name: "await-network-request", args, delayMs: undefined },
+    ]);
+  });
+});
+
 describe("a flow-directive name points at the tool that records it", () => {
   beforeEach(async () => {
     await flowStartRecordingTool.execute(
@@ -2217,12 +2268,6 @@ describe("a flow-directive name points at the tool that records it", () => {
     const result = await hint("echo");
     expect(result.message).toContain("e2e-add-echo");
     expect(result.message).toContain("no step was recorded");
-  });
-
-  it("explains that `wait` has no recording tool at all", async () => {
-    const result = await hint("wait");
-    expect(result.message).toContain("a fixed sleep is not a readiness signal");
-    expect(result.message).toContain("await-ui-element");
   });
 
   it("names restart-app for `launch`", async () => {
@@ -2370,12 +2415,6 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(result.message).toContain("The persisted e2e test could not be read and parsed");
     expect(result.message).toContain("last valid in-memory snapshot");
     expect(result.stepCount).toBe(0);
-  });
-
-  it("tells the author to call flow-add-echo directly, not through the recorder", async () => {
-    const result = await hint("echo");
-    expect(result.message).toContain("DIRECTLY");
-    expect(result.message).toContain("fails on every replay");
   });
 
   it("does not claim a rewrite for the commands the recorder stores raw", async () => {

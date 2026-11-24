@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
 import { createNetworkManager, type NetworkManager } from "../src/chromium-server/network";
+import { toCdpNetworkConditions } from "../src/utils/network-conditions";
 
 // A fake CDP client: a real event bus (so the manager's `event` listener fires)
 // plus a `send` spy that records commands.
@@ -137,6 +138,71 @@ describe("NetworkManager (recording)", () => {
     emitRequest(f.events, { id: "late", url: "https://x.test/late", status: 200 });
     expect(net.get("late")).toBeUndefined();
   });
+
+  it("reports throttled only while the stored conditions shape traffic", async () => {
+    expect(net.throttled()).toBe(false);
+    await net.setConditions(toCdpNetworkConditions({ latencyMs: 300 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ offline: true }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ downloadKbps: 500 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions(null));
+    expect(net.throttled()).toBe(false);
+  });
+
+  it("marks a record finished only once Network.loadingFinished arrives", () => {
+    emitRequest(f.events, { id: "open", url: "https://x.test/open", status: 200 });
+    emitRequest(f.events, { id: "failed", url: "https://x.test/boom", failed: "net::ERR_FAILED" });
+    emitRequest(f.events, { id: "done", url: "https://x.test/done", finished: true });
+
+    expect(net.get("open")?.finished).toBeUndefined();
+    expect(net.get("failed")?.finished).toBeUndefined();
+    expect(net.get("done")?.finished).toBe(true);
+  });
+
+  it("numbers the records in creation order, and requestsAfter lists the ones after a number", () => {
+    emitRequest(f.events, { id: "a", url: "https://x.test/a" });
+    emitRequest(f.events, { id: "b", url: "https://x.test/b" });
+    // A later event of a record keeps its number.
+    emitRequest(f.events, { id: "a", url: "https://x.test/a", status: 200, finished: true });
+
+    const after = (n: number) =>
+      net.requestsAfter(n).map(({ seq, record }) => `${seq}:${record.requestId}`);
+    expect(after(0)).toEqual(["1:a", "2:b"]);
+    expect(after(1)).toEqual(["2:b"]);
+    expect(net.requestsAfter(0)[0]!.record).toBe(net.get("a"));
+  });
+
+  it("marks where a capture starts and where its stop ends, and keeps the mark after the stop", () => {
+    // No mark before a start, and a stop without a start marks nothing.
+    emitRequest(f.events, { id: "before", url: "https://x.test/before" });
+    expect(net.stopCapture()).toBeUndefined();
+    expect(net.captureMark()).toBeUndefined();
+
+    expect(net.startCapture()).toEqual({ lastSeq: 1 });
+    emitRequest(f.events, { id: "during", url: "https://x.test/during" });
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+    emitRequest(f.events, { id: "after", url: "https://x.test/after" });
+    // A second stop keeps where the first one ended.
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+    expect(net.captureMark()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+
+    // A new start begins a new mark, without an end.
+    expect(net.startCapture()).toEqual({ lastSeq: 3 });
+    expect(net.captureMark()).toEqual({ lastSeq: 3 });
+  });
+
+  it("drops an evicted record's number, so requestsAfter never lists it", () => {
+    // The store keeps 1000 records.
+    for (let i = 1; i <= 1001; i++) {
+      emitRequest(f.events, { id: `r${i}`, url: `https://x.test/${i}` });
+    }
+
+    const kept = net.requestsAfter(0);
+    expect(kept).toHaveLength(1000);
+    expect(kept[0]).toMatchObject({ seq: 2, record: { requestId: "r2" } });
+  });
 });
 
 // ── view-network-logs / view-network-request-details: Chromium branch ────────
@@ -209,6 +275,28 @@ describe("view-network-logs (chromium branch)", () => {
     expect(out).toContain("=== NETWORK LOGS (page 1/1, 2 total) ===");
     expect(out).toContain('{id: 1} "GET /a" 200 OK');
     expect(out).toContain('{id: 2} "POST /api" 500 Err');
+  });
+
+  it("reads pageIndex null as the latest page, like an omitted pageIndex", async () => {
+    const requests = Array.from({ length: 60 }, (_, i) =>
+      rec({ requestId: String(i + 1), url: `https://x.test/r${i + 1}`, status: 200 })
+    );
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const render = async (pageIndex: unknown) => {
+      const params = networkLogsTool.zodSchema!.parse({
+        device_id: "chromium-cdp-9222",
+        port: 8081,
+        pageIndex,
+      });
+      return (await networkLogsTool.execute(
+        services,
+        params as Parameters<typeof networkLogsTool.execute>[1]
+      )) as string;
+    };
+    expect(await render(null)).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+    expect(await render(undefined)).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+    expect(await render(0)).toContain("=== NETWORK LOGS (page 1/2, 60 total) ===");
+    expect(await render("1")).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
   });
 
   it("reports no-traffic when the recording is empty", async () => {
@@ -333,5 +421,26 @@ describe("view-network-request-details (chromium branch)", () => {
       includeBody: true,
     });
     expect(out).toMatch(/not found/);
+  });
+
+  it.each(["false", "0", "true"])("rejects a string includeBody %j", (value) => {
+    const result = networkRequestTool.zodSchema!.safeParse({
+      device_id: "chromium-cdp-9222",
+      requestId: "r1",
+      includeBody: value,
+    });
+
+    expect(result.error?.issues).toMatchObject([{ code: "invalid_type", path: ["includeBody"] }]);
+  });
+
+  it.each([true, false])("accepts a boolean includeBody %j", (value) => {
+    const result = networkRequestTool.zodSchema!.safeParse({
+      device_id: "chromium-cdp-9222",
+      requestId: "r1",
+      includeBody: value,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.includeBody).toBe(value);
   });
 });

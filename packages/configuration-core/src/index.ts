@@ -17,6 +17,8 @@ export {
 export {
   argentHomeDir,
   resolveHomeDir,
+  isHomeDir,
+  canonicalPath,
   configDir,
   configFilePath,
   type ConfigPathOptions,
@@ -24,14 +26,23 @@ export {
 
 export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
 
+export { getWhatsNewSeenVersion, setWhatsNewSeenVersion } from "./whats-new.js";
+
 // Ordered environment + dotenv-file chain that `{{secret:…}}` placeholders and
 // `argent secrets` resolve names through.
 export {
   secretSources,
+  clientSecretSource,
+  decodeClientSecrets,
+  encodeClientSecrets,
   lookupSecret,
+  lookupPlaceholderSecret,
+  placeholderNames,
+  SECRET_PLACEHOLDER_RE,
   secretNames,
   describeSecretSources,
   secretPlacementAdvice,
+  clientSecretPlacementAdvice,
   SECRET_ENV_PREFIX,
   type SecretSource,
   type SecretSourceOptions,
@@ -73,6 +84,7 @@ export {
   clearRememberedAgent,
   getAdditionalIosDeviceSets,
   getAndroidSdkRoot,
+  getAndroidAdbServerPort,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,

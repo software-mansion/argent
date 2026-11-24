@@ -7,9 +7,9 @@
     "!packages/argent-alias"
   ],
   "scripts": {
-    "build": "npm run build:tool-args -w @swmansion/argent && tsc --build && node packages/tool-server/scripts/copy-build-assets.mjs",
-    "start": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
-    "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
+    "build": "bun run --filter @swmansion/argent build:tool-args && tsc --build && node packages/tool-server/scripts/copy-build-assets.mjs",
+    "start": "bun run --cwd packages/registry build && bun run --cwd packages/tool-server dev",
+    "start:tool-server": "bun run --cwd packages/registry build && bun run --cwd packages/tool-server dev",
     "download:simulator-server": "bash scripts/download-simulator-server.sh",
     "download:native-binaries": "bash scripts/download-native-binaries.sh",
     "download:trace-processor": "bash scripts/download-trace-processor.sh",
@@ -18,15 +18,18 @@
     "build:android-binaries": "bash packages/native-devtools-android/scripts/build.sh",
     "pack": "node scripts/pack-mcp.cjs",
     "pack:mcp": "node scripts/pack-mcp.cjs",
-    "pack:mcp:local": "npm run download:simulator-server && npm run build:ios-binaries && npm run build:ios-binaries:tcp && npm run build:android-binaries && npm run download:trace-processor && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
+    "pack:mcp:local": "bun run download:simulator-server && bun run build:ios-binaries && bun run build:ios-binaries:tcp && bun run build:android-binaries && bun run download:trace-processor && bun run build && bun run --filter @swmansion/argent build && bun pm pack --cwd packages/argent --destination \"$PWD\"",
     "dev": "node scripts/dev.cjs",
     "format": "prettier --write .",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "knip": "knip --include nsExports,nsTypes --max-issues 0",
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
-    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs scripts/extract-tools.test.mjs scripts/next-canary-version.test.mjs scripts/check-workspace-versions.test.mjs",
-    "check:versions": "node scripts/check-workspace-versions.mjs"
+    "test": "vitest run",
+    "test:scripts": "node --test scripts/sync-next-dist-tag.test.mjs scripts/extract-tools.test.mjs scripts/next-canary-version.test.mjs scripts/check-workspace-versions.test.mjs scripts/resolve-sim-server-release-tag.test.mjs",
+    "check:versions": "node scripts/check-workspace-versions.mjs",
+    "harness-check": "node scripts/harness-check/harness-check.mjs",
+    "render:agent-context": "node scripts/render-agent-context.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -37,6 +40,17 @@
     "prettier": "^3.9.10",
     "semver": "^7.8.5",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.70.1"
-  }
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.5"
+  },
+  "packageManager": "bun@1.4.5",
+  "trustedDependencies": [
+    "@fails-components/webtransport-transport-http3-quiche",
+    "dtrace-provider",
+    "esbuild",
+    "node-pty",
+    "tree-sitter",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript"
+  ]
 }

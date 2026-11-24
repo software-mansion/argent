@@ -1,5 +1,5 @@
 import { Registry, type ToolDefinition } from "@argent/registry";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { iosDeviceRunnerBlueprint } from "../blueprints/ios-device-runner";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
@@ -9,8 +9,11 @@ import { chromiumCdpBlueprint } from "../blueprints/chromium-cdp";
 import { chromiumJsRuntimeDebuggerBlueprint } from "../blueprints/chromium-js-runtime-debugger";
 import { tvControlBlueprint } from "../blueprints/tv-control";
 import { androidTvControlBlueprint } from "../blueprints/android-tv-control";
+import { macosAppBlueprint } from "../blueprints/macos-app";
+import { androidNetworkInspectorBlueprint } from "../blueprints/android-network-inspector";
+import { androidNetworkShaperBlueprint } from "../blueprints/android-network-shaper";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
-import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
+import { createNativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../tools/native-devtools/native-full-hierarchy";
 import { nativeDescribeScreenTool } from "../tools/native-devtools/native-describe-screen";
@@ -38,8 +41,9 @@ import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
-import { rotateTool } from "../tools/rotate";
+import { createRotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
+import { networkConditionsTool } from "../tools/network-conditions";
 import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
@@ -52,11 +56,14 @@ import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-e
 import { createDebuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
+import { createNetworkCaptureStartTool } from "../tools/network/network-capture-start";
+import { createNetworkCaptureStopTool } from "../tools/network/network-capture-stop";
 import { createDescribeTool } from "../tools/describe";
 import { createUiTreeTool } from "../tools/ui-tree";
 import { createForegroundAppTool } from "../tools/foreground-app";
 import { createFillTool } from "../tools/fill";
 import { createAwaitUiElementTool } from "../tools/await-ui-element";
+import { createAwaitNetworkRequestTool } from "../tools/await-network-request";
 import { createAwaitScreenIdleTool } from "../tools/await-screen-idle";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
@@ -69,8 +76,11 @@ import { reactProfilerFiberTreeTool } from "../tools/profiler/react/react-profil
 import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/native-profiler-start";
 import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
 import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
+import { nativeProfilerLaunchAnalysisTool } from "../tools/profiler/native-profiler/native-profiler-launch-analysis";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
+import { createAudioInputTool } from "../tools/audio/audio-input";
 import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
+import { iosAudioSessionBlueprint } from "../blueprints/ios-audio-session";
 import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
 import { screenRecordingStopTool } from "../tools/screen-recording/screen-recording-stop";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
@@ -97,20 +107,29 @@ import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
+import { filePanelTool } from "../tools/file-panel";
+import { menuBarTool } from "../tools/menu-bar";
 import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
 import { resolveDevice } from "./device-info";
 import { setLivePanelSourceProvider } from "./foldable";
+import { setUiOrientationSourceProvider } from "./ios-ui-orientation";
 
 export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
   // just the HTTP edge in http.ts. Re-read per invocation, so `argent
   // enable/disable <flag>` needs no tool-server restart.
-  const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
+  const registry = new Registry({ isFlagEnabled: (flag) => isFeatureEnabled(flag) });
 
   // The panel a foldable renders to is asked of the ax-service before every
   // touch and capture (`utils/foldable.ts`); that daemon is a service of this
   // registry, started on first use like a `describe` starts it.
   setLivePanelSourceProvider((udid) => {
+    const ref = axServiceRef(resolveDevice(udid));
+    return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
+  });
+  // The same daemon names the interface orientation, which the tools turn
+  // captures, frames and touches by on an iOS simulator (`utils/ios-ui-orientation.ts`).
+  setUiOrientationSourceProvider((udid) => {
     const ref = axServiceRef(resolveDevice(udid));
     return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
   });
@@ -121,6 +140,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(nativeProfilerSessionBlueprint);
   registry.registerBlueprint(screenRecordingSessionBlueprint);
+  registry.registerBlueprint(iosAudioSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
@@ -128,6 +148,9 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(chromiumJsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(tvControlBlueprint);
   registry.registerBlueprint(androidTvControlBlueprint);
+  registry.registerBlueprint(macosAppBlueprint);
+  registry.registerBlueprint(androidNetworkInspectorBlueprint);
+  registry.registerBlueprint(androidNetworkShaperBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
@@ -141,6 +164,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createScreenshotDiffTool(registry));
   registry.registerTool(createScreenRecordingStartTool(registry));
   registry.registerTool(screenRecordingStopTool);
+  registry.registerTool(createAudioInputTool(registry));
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);
   registry.registerTool(chromiumCookiesTool);
@@ -154,8 +178,11 @@ export function createRegistry(): Registry {
   registry.registerTool(buttonTool);
   registry.registerTool(createKeyboardTool(registry));
   registry.registerTool(createPasteTool(registry));
-  registry.registerTool(rotateTool);
+  registry.registerTool(filePanelTool);
+  registry.registerTool(menuBarTool);
+  registry.registerTool(createRotateTool(registry));
   registry.registerTool(shakeTool);
+  registry.registerTool(networkConditionsTool);
   registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));
@@ -163,11 +190,14 @@ export function createRegistry(): Registry {
   registry.registerTool(createDebuggerStatusTool(registry));
   registry.registerTool(debuggerEvaluateTool);
   registry.registerTool(debuggerReloadMetroTool);
-  registry.registerTool(createDebuggerComponentTreeTool(registry));
+  registry.registerTool(createDebuggerComponentTreeTool());
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(createDebuggerLogRegistryTool(registry));
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
+  registry.registerTool(createNetworkCaptureStartTool(registry));
+  registry.registerTool(createNetworkCaptureStopTool(registry));
+  registry.registerTool(createAwaitNetworkRequestTool(registry));
   registry.registerTool(createDescribeTool(registry));
   registry.registerTool(createUiTreeTool(registry));
   registry.registerTool(createForegroundAppTool(registry));
@@ -185,6 +215,7 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeProfilerStartTool);
   registry.registerTool(nativeProfilerStopTool);
   registry.registerTool(nativeProfilerAnalyzeTool);
+  registry.registerTool(nativeProfilerLaunchAnalysisTool);
   registry.registerTool(profilerCpuQueryTool);
   registry.registerTool(profilerCommitQueryTool);
   registry.registerTool(profilerStackQueryTool);
@@ -192,7 +223,7 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerLoadTool);
   registry.registerTool(gatherWorkspaceDataTool);
   registry.registerTool(nativeDevtoolsStatusTool);
-  registry.registerTool(nativeNetworkLogsTool);
+  registry.registerTool(createNativeNetworkLogsTool(registry));
   registry.registerTool(nativeFindViewsTool);
   registry.registerTool(nativeFullHierarchyTool);
   registry.registerTool(nativeDescribeScreenTool);

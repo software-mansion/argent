@@ -6,10 +6,10 @@
 import * as path from "node:path";
 import pc from "picocolors";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
+import { degenerateProjectScopeWarning } from "./project-scope.js";
 import {
   CONFIG_SCHEMA,
   configDir,
-  findProjectRoot,
   getConfigDefinition,
   getConfigValueByKey,
   getConfigValueAtScope,
@@ -55,7 +55,11 @@ Show every recognized configuration value, its effective (merged) value, and
 the raw value stored at each scope.`);
     return;
   }
-  const json = argv.includes("--json");
+  const { positionals, json } = parseArgs(argv, LIST_OPTIONS);
+  if (positionals.length > 0) {
+    console.error(`Error: unexpected extra argument "${positionals[0]}".`);
+    process.exit(2);
+  }
   const entries = listConfig();
 
   if (json) {
@@ -95,7 +99,7 @@ Print a configuration value. Without --scope, prints the effective value after
 merging project and global. With --scope, prints only that scope's stored value.`);
     return;
   }
-  const { positionals, scope, json } = parseArgs(argv);
+  const { positionals, scope, json } = parseArgs(argv, GET_OPTIONS);
   const key = positionals[0];
   if (!key) {
     console.error("Error: `argent config get` requires a <key>.");
@@ -131,7 +135,7 @@ write <project-root>/.argent/config.json. Booleans, numbers, and JSON arrays are
 parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a string.`);
     return;
   }
-  const { positionals, scope } = parseArgs(argv);
+  const { positionals, scope } = parseArgs(argv, WRITE_OPTIONS);
   const key = positionals[0];
   const rawValue = positionals[1];
   if (!key || rawValue === undefined) {
@@ -144,12 +148,14 @@ parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a stri
   }
 
   const targetScope: FlagScope = scope ?? "global";
-  const warning = degenerateProjectScopeWarning(targetScope);
+  const warning = projectConfigWarning(targetScope);
   try {
     // Report the value as normalized on write (trimmed, blanks dropped), not the input.
     const stored = setConfigValue(key, coerceCliValue(rawValue), targetScope);
     if (warning) console.error(pc.yellow(warning));
     console.log(`Set ${pc.bold(key)} = ${formatValuePlain(stored)} (${scopeLabel(targetScope)}).`);
+    const restart = restartHint(key);
+    if (restart) console.error(pc.yellow(restart));
   } catch (err) {
     // Built here, not in reportError: only this frame knows the value and scope typed.
     reportError(err, () => suggestCorrectedSet(err, key, rawValue, scope));
@@ -164,7 +170,7 @@ Remove a configuration value at a scope (default global). Falls back to the
 other scope / the default on the next read.`);
     return;
   }
-  const { positionals, scope } = parseArgs(argv);
+  const { positionals, scope } = parseArgs(argv, WRITE_OPTIONS);
   const key = positionals[0];
   if (!key) {
     console.error("Error: `argent config unset` requires a <key>.");
@@ -176,7 +182,7 @@ other scope / the default on the next read.`);
   }
 
   const targetScope: FlagScope = scope ?? "global";
-  const warning = degenerateProjectScopeWarning(targetScope);
+  const warning = projectConfigWarning(targetScope);
   try {
     const removed = unsetConfigValue(key, targetScope);
     if (removed && warning) console.error(pc.yellow(warning));
@@ -185,6 +191,8 @@ other scope / the default on the next read.`);
         ? `Unset ${pc.bold(key)} (${scopeLabel(targetScope)}).`
         : pc.dim(`${key} was not set at ${targetScope} scope.`)
     );
+    const restart = removed ? restartHint(key) : null;
+    if (restart) console.error(pc.yellow(restart));
   } catch (err) {
     reportError(err);
   }
@@ -196,14 +204,15 @@ interface ParsedArgs {
   json: boolean;
 }
 
-const CONFIG_OPTIONS = {
-  scope: { kind: "value", choices: ["global", "project"] },
-  json: { kind: "boolean" },
-} as const satisfies OptionSpecs;
+const SCOPE_OPTION = { kind: "value", choices: ["global", "project"] } as const;
+const JSON_OPTION = { kind: "boolean" } as const;
+const LIST_OPTIONS = { json: JSON_OPTION } as const satisfies OptionSpecs;
+const GET_OPTIONS = { scope: SCOPE_OPTION, json: JSON_OPTION } as const satisfies OptionSpecs;
+const WRITE_OPTIONS = { scope: SCOPE_OPTION } as const satisfies OptionSpecs;
 
-function parseArgs(argv: string[]): ParsedArgs {
+function parseArgs(argv: string[], specs: OptionSpecs): ParsedArgs {
   try {
-    const { positionals, options } = parseCommandArgs(argv, CONFIG_OPTIONS);
+    const { positionals, options } = parseCommandArgs(argv, specs);
     return {
       positionals,
       scope: (options.scope as FlagScope | undefined) ?? null,
@@ -226,31 +235,21 @@ function scopeLabel(scope: FlagScope): string {
   return `project: ${path.dirname(configDir("project"))}`;
 }
 
+function projectConfigWarning(scope: FlagScope): string | null {
+  return degenerateProjectScopeWarning(scope, path.join(configDir("project"), "config.json"));
+}
+
 /**
- * Warns when "project" resolves somewhere surprising: to the home directory
- * (`~/.argent` is itself a project marker, and there the project file IS the
- * global one), or to the bare cwd because no marker was found. Must run BEFORE
- * the write — a project-scope `set` creates `.argent` in the resolved root,
- * hiding the no-marker case afterwards.
+ * Every other key takes effect without a restart, but the tool-server applies
+ * `android.adbServerPort` once, at start: the adb server is its connection to
+ * every Android device, so a change waits for a restart.
  */
-function degenerateProjectScopeWarning(scope: FlagScope): string | null {
-  if (scope !== "project") return null;
-  const projDir = configDir("project");
-  if (path.resolve(projDir) === path.resolve(configDir("global"))) {
-    return (
-      `WARNING: no project found between ${process.cwd()} and your home directory — ` +
-      `"project" scope resolved to the home directory, so this writes the GLOBAL ` +
-      `config file (${path.join(projDir, "config.json")}).`
-    );
-  }
-  if (findProjectRoot(process.cwd()) === null) {
-    return (
-      `WARNING: no project markers (.argent, .git, package.json) found above ` +
-      `${process.cwd()} — treating it as the project root and creating ` +
-      `${path.join(projDir, "config.json")}.`
-    );
-  }
-  return null;
+function restartHint(key: string): string | null {
+  if (key !== "android.adbServerPort") return null;
+  return (
+    `The tool-server reads ${key} only when it starts. Apply the change with ` +
+    `\`argent server stop\`: this stops it for every session, and the next tool call starts it again.`
+  );
 }
 
 function formatValuePlain(value: unknown): string {

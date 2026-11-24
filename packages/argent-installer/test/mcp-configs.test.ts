@@ -13,10 +13,12 @@ import {
   removeClaudePermission,
   copyRulesAndAgents,
   findConfiguredAdapterScopes,
+  findRetiredRulesAndAgents,
   getManagedContentTargets,
   injectCodexRules,
   removeCodexRules,
 } from "../src/mcp-configs.js";
+import { hashBundledContent, readToml, writeToml, type RetiredBundledPath } from "../src/utils.js";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Allows individual tests to redirect homedir() to a temp path so that
@@ -30,6 +32,27 @@ vi.mock("node:os", async (importOriginal) => {
   return {
     ...original,
     homedir: vi.fn(() => homedirOverride ?? original.homedir()),
+  };
+});
+
+// The real retired list matches only the bytes argent shipped, so tests stand
+// in a list that matches their own copies.
+const retiredOverride = vi.hoisted(() => ({
+  agents: undefined as RetiredBundledPath[] | undefined,
+  globalRules: undefined as RetiredBundledPath[] | undefined,
+}));
+vi.mock("../src/utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return {
+    ...actual,
+    get RETIRED_BUNDLED_PATHS() {
+      return retiredOverride.agents
+        ? { agents: retiredOverride.agents, rules: [] }
+        : actual.RETIRED_BUNDLED_PATHS;
+    },
+    get RETIRED_GLOBAL_RULES() {
+      return retiredOverride.globalRules ?? actual.RETIRED_GLOBAL_RULES;
+    },
   };
 });
 
@@ -69,6 +92,11 @@ function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function writeJsonFile(filePath: string, data: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
+}
+
 // JSONC-tolerant variant for tests that read back files the Zed adapter
 // wrote — those preserve user comments and trailing commas, so strict
 // JSON.parse rejects them.
@@ -96,6 +124,8 @@ afterEach(() => {
   // neutralizes the home-branch of every later detection/adapter test (and
   // conversely, tests passing only thanks to the leak).
   homedirOverride = undefined;
+  retiredOverride.agents = undefined;
+  retiredOverride.globalRules = undefined;
 });
 
 // ── isArgentManagedEntry ──────────────────────────────────────────────────────
@@ -134,6 +164,12 @@ describe("isArgentManagedEntry", () => {
       })
     ).toBe(true);
     expect(isArgentManagedEntry({ command: "yarn", args: ["argent", "mcp"] })).toBe(true);
+    expect(
+      isArgentManagedEntry({
+        command: "/opt/homebrew/bin/node",
+        args: ["/opt/homebrew/lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(true);
     // The shape argent itself wrote up to v0.9.x (env dropped in 0.10 by
     // #238): still argent-authored, still repairable.
     expect(
@@ -167,6 +203,25 @@ describe("isArgentManagedEntry", () => {
     expect(isArgentManagedEntry({ command: "", args: [] })).toBe(false);
     expect(isArgentManagedEntry(null)).toBe(false);
     expect(isArgentManagedEntry({ command: "docker", args: ["run", "argent", "mcp"] })).toBe(false);
+    // Near misses of the absolute-path global pin.
+    const absCli = "/usr/lib/node_modules/@swmansion/argent/dist/cli.js";
+    expect(isArgentManagedEntry({ command: "/usr/bin/node", args: [absCli, "mcp", "--x"] })).toBe(
+      false
+    );
+    expect(isArgentManagedEntry({ command: "/usr/bin/bun", args: [absCli, "mcp"] })).toBe(false);
+    expect(isArgentManagedEntry({ command: "node", args: [absCli, "mcp"] })).toBe(false);
+    expect(
+      isArgentManagedEntry({
+        command: "/usr/bin/node",
+        args: ["/Users/me/dev/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(false);
+    expect(
+      isArgentManagedEntry({
+        command: "/usr/bin/node",
+        args: ["../node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(false);
   });
 });
 
@@ -216,6 +271,148 @@ describe("global-only allowlists honor the cleanup scope", () => {
     cursor.removeAllowlist!(tmpDir, "global");
     expect(fs.existsSync(permPath)).toBe(false);
     homedirOverride = undefined;
+  });
+});
+
+// ── Allowlists: written once by init, never re-added by update ───────────────
+
+describe("Cursor permissions.json is never created", () => {
+  const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+  const permPath = () => path.join(tmpDir, ".cursor", "permissions.json");
+
+  beforeEach(() => {
+    homedirOverride = tmpDir;
+  });
+
+  it("skips and writes nothing when the file is missing", () => {
+    expect(cursor.allowlistSkipReason!(tmpDir, "global")).toMatch(/Run Everything/);
+    cursor.addAllowlist!(tmpDir, "global");
+    expect(fs.existsSync(permPath())).toBe(false);
+  });
+
+  it("skips and leaves the file alone when it has no mcpAllowlist", () => {
+    writeJsonFile(permPath(), { terminalAllowlist: ["ls"] });
+    const before = fs.readFileSync(permPath(), "utf8");
+    expect(cursor.allowlistSkipReason!(tmpDir, "global")).not.toBeNull();
+    cursor.addAllowlist!(tmpDir, "global");
+    expect(fs.readFileSync(permPath(), "utf8")).toBe(before);
+  });
+
+  it("appends to an mcpAllowlist the user already keeps", () => {
+    writeJsonFile(permPath(), { mcpAllowlist: ["other:*"] });
+    expect(cursor.allowlistSkipReason!(tmpDir, "global")).toBeNull();
+    cursor.addAllowlist!(tmpDir, "global");
+    expect(readJsonFile(permPath()).mcpAllowlist).toEqual(["other:*", "argent:*"]);
+  });
+});
+
+describe("update's entry rewrite keeps the approval state the user has", () => {
+  const cases = [
+    { name: "Devin Desktop", key: "alwaysAllow", changed: [] as unknown, global: true },
+    { name: "Gemini", key: "trust", changed: false as unknown, global: false },
+    { name: "Kiro", key: "autoApprove", changed: ["describe"] as unknown, global: false },
+  ];
+
+  for (const { name, key, changed, global } of cases) {
+    describe(name, () => {
+      const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
+      const scope = global ? "global" : "local";
+      const configPath = () =>
+        (global ? adapter.globalPath() : adapter.projectPath(tmpDir)) as string;
+      const entryValue = () =>
+        (
+          (readJsoncFile(configPath()).mcpServers as Record<string, Record<string, unknown>>)
+            .argent as Record<string, unknown>
+        )[key];
+
+      beforeEach(() => {
+        homedirOverride = tmpDir;
+      });
+
+      it(`keeps ${key} that init added`, () => {
+        adapter.write(configPath(), getMcpEntry());
+        adapter.addAllowlist!(tmpDir, scope);
+        const added = entryValue();
+        expect(added).toBeDefined();
+
+        adapter.write(configPath(), getMcpEntry());
+        expect(entryValue()).toEqual(added);
+      });
+
+      it(`keeps ${key} the user changed`, () => {
+        adapter.write(configPath(), getMcpEntry());
+        adapter.addAllowlist!(tmpDir, scope);
+        const config = readJsoncFile(configPath());
+        (
+          (config.mcpServers as Record<string, Record<string, unknown>>).argent as Record<
+            string,
+            unknown
+          >
+        )[key] = changed;
+        writeJsonFile(configPath(), config);
+
+        adapter.write(configPath(), getMcpEntry());
+        expect(entryValue()).toEqual(changed);
+      });
+
+      it(`adds no ${key} the user never had`, () => {
+        adapter.write(configPath(), getMcpEntry());
+        adapter.write(configPath(), getMcpEntry());
+        expect(entryValue()).toBeUndefined();
+      });
+    });
+  }
+
+  it("Codex keeps its tools table", () => {
+    const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    codex.write(configPath, getMcpEntry());
+    codex.addAllowlist!(tmpDir, "local");
+    const before = (readToml(configPath).mcp_servers as Record<string, Record<string, unknown>>)
+      .argent!.tools;
+
+    codex.write(configPath, getMcpEntry());
+    const after = (readToml(configPath).mcp_servers as Record<string, Record<string, unknown>>)
+      .argent!.tools;
+    expect(after).toEqual(before);
+  });
+});
+
+describe("Codex refreshAllowlist", () => {
+  const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+  const configPath = () => path.join(tmpDir, ".codex", "config.toml");
+  const tools = () =>
+    (readToml(configPath()).mcp_servers as Record<string, Record<string, unknown>>).argent!
+      .tools as Record<string, { approval_mode: string }> | undefined;
+  // The stubbed tool server lists tool-a, tool-b and tool-c.
+  function writeTools(table: Record<string, { approval_mode: string }> | undefined): void {
+    codex.write(configPath(), getMcpEntry());
+    if (!table) return;
+    const config = readToml(configPath()) as { mcp_servers: { argent: Record<string, unknown> } };
+    config.mcp_servers.argent.tools = table;
+    writeToml(configPath(), config);
+  }
+
+  it("approves tools a new version added and keeps the user's modes", () => {
+    writeTools({ "tool-a": { approval_mode: "approve" }, "tool-b": { approval_mode: "prompt" } });
+    codex.refreshAllowlist!(tmpDir, "local");
+    expect(tools()).toEqual({
+      "tool-a": { approval_mode: "approve" },
+      "tool-b": { approval_mode: "prompt" },
+      "tool-c": { approval_mode: "approve" },
+    });
+  });
+
+  it("leaves a table with no approved tool alone", () => {
+    writeTools({ "tool-a": { approval_mode: "prompt" } });
+    codex.refreshAllowlist!(tmpDir, "local");
+    expect(tools()).toEqual({ "tool-a": { approval_mode: "prompt" } });
+  });
+
+  it("adds no table the user does not have", () => {
+    writeTools(undefined);
+    codex.refreshAllowlist!(tmpDir, "local");
+    expect(tools()).toBeUndefined();
   });
 });
 
@@ -367,26 +564,6 @@ describe("resolveLocalCommandMode", () => {
   });
 });
 
-// ── Adapter registry ──────────────────────────────────────────────────────────
-
-describe("ALL_ADAPTERS", () => {
-  it("contains all ten adapters", () => {
-    const names = ALL_ADAPTERS.map((a) => a.name);
-    expect(names).toEqual([
-      "Cursor",
-      "Claude Code",
-      "VS Code",
-      "Windsurf",
-      "Zed",
-      "Gemini",
-      "Codex",
-      "Hermes",
-      "opencode",
-      "Kiro",
-    ]);
-  });
-});
-
 // ── Cursor adapter ────────────────────────────────────────────────────────────
 
 describe("Cursor adapter", () => {
@@ -515,7 +692,7 @@ describe("VS Code adapter", () => {
 // ── Windsurf adapter ─────────────────────────────────────────────────────────
 
 describe("Windsurf adapter", () => {
-  const adapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Devin Desktop")!;
 
   afterEach(() => {
     homedirOverride = undefined;
@@ -569,6 +746,81 @@ describe("Windsurf adapter", () => {
     const servers2 = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
     expect(servers2).toHaveProperty("myserver");
     expect(servers2.argent as Record<string, unknown>).not.toHaveProperty("alwaysAllow");
+  });
+
+  // Devin Desktop's agent ignores alwaysAllow; it only auto-approves tools listed
+  // in permissions.allow of its own user config.
+  describe("Devin agent permission", () => {
+    let home: string;
+    let devinConfig: string;
+
+    beforeEach(() => {
+      home = path.join(tmpDir, "home");
+      homedirOverride = home;
+      devinConfig = path.join(home, ".config", "devin", "config.json");
+      adapter.write(path.join(home, ".codeium", "windsurf", "mcp_config.json"), getMcpEntry());
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("adds mcp__argent__* next to the user's own settings, once", () => {
+      writeJsonFile(devinConfig, { version: 1, permissions: { allow: ["mcp__github__*"] } });
+
+      adapter.addAllowlist!(tmpDir, "global");
+      adapter.addAllowlist!(tmpDir, "global");
+
+      expect(readJsonFile(devinConfig)).toEqual({
+        version: 1,
+        permissions: { allow: ["mcp__github__*", "mcp__argent__*"] },
+      });
+    });
+
+    it("removeAllowlist drops only argent's rule", () => {
+      writeJsonFile(devinConfig, { version: 1, permissions: { allow: ["mcp__github__*"] } });
+      adapter.addAllowlist!(tmpDir, "global");
+
+      adapter.removeAllowlist!(tmpDir, "global");
+
+      expect(readJsonFile(devinConfig)).toEqual({
+        version: 1,
+        permissions: { allow: ["mcp__github__*"] },
+      });
+    });
+
+    it("removes a Devin config that held only argent's rule", () => {
+      adapter.addAllowlist!(tmpDir, "global");
+      expect(readJsonFile(devinConfig)).toEqual({ permissions: { allow: ["mcp__argent__*"] } });
+
+      adapter.removeAllowlist!(tmpDir, "global");
+
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
+
+    it("leaves the Devin config alone on a scope-local cleanup", () => {
+      adapter.addAllowlist!(tmpDir, "global");
+      adapter.removeAllowlist!(tmpDir, "local");
+      expect(fs.existsSync(devinConfig)).toBe(true);
+    });
+
+    it("writes nothing when argent is not configured for Windsurf", () => {
+      fs.rmSync(path.join(home, ".codeium"), { recursive: true, force: true });
+      adapter.addAllowlist!(tmpDir, "global");
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
+
+    it("follows XDG_CONFIG_HOME like Devin does", () => {
+      const xdg = path.join(tmpDir, "xdg");
+      vi.stubEnv("XDG_CONFIG_HOME", xdg);
+
+      adapter.addAllowlist!(tmpDir, "global");
+
+      expect(readJsonFile(path.join(xdg, "devin", "config.json"))).toEqual({
+        permissions: { allow: ["mcp__argent__*"] },
+      });
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
   });
 });
 
@@ -1598,6 +1850,7 @@ describe("addClaudePermission / removeClaudePermission", () => {
 describe("getManagedContentTargets", () => {
   afterEach(() => {
     homedirOverride = undefined;
+    vi.unstubAllEnvs();
   });
 
   it("derives local managed paths from adapter definitions", () => {
@@ -1684,6 +1937,41 @@ describe("getManagedContentTargets", () => {
     expect(targets.ruleTargets).toEqual([]);
     expect(targets.agentTargets).toEqual([]);
   });
+
+  it("lists .devin/skills as a Devin Desktop skill target (local)", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([".agents/skills", ".devin/skills"]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists ~/.config/devin/skills as a Devin Desktop skill target (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([
+      "~/.agents/skills",
+      "~/.config/devin/skills",
+    ]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("resolves Devin's global skills dir from XDG_CONFIG_HOME, like the skills CLI", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const xdg = path.join(tmpDir, "xdg");
+    vi.stubEnv("XDG_CONFIG_HOME", xdg);
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.targetPath)).toEqual([
+      path.join(homedirOverride, ".agents", "skills"),
+      path.join(xdg, "devin", "skills"),
+    ]);
+  });
 });
 
 describe("copyRulesAndAgents", () => {
@@ -1740,7 +2028,7 @@ describe("copyRulesAndAgents", () => {
   });
 
   it("returns empty array for adapters without rules/agents targets", () => {
-    const windsurfAdapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+    const windsurfAdapter = ALL_ADAPTERS.find((a) => a.name === "Devin Desktop")!;
     const results = copyRulesAndAgents([windsurfAdapter], tmpDir, "local", rulesDir, agentsDir);
     expect(results).toHaveLength(0);
   });
@@ -1756,16 +2044,54 @@ describe("copyRulesAndAgents", () => {
     );
   });
 
-  it("copies rules and agents to ~/.gemini/ for Gemini adapter (global)", () => {
+  it("copies agents but no rule to ~/.gemini/ for Gemini adapter (global)", () => {
     const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
     homedirOverride = path.join(tmpDir, "home");
     const results = copyRulesAndAgents([geminiAdapter], tmpDir, "global", rulesDir, agentsDir);
-    expect(results.some((r) => r.includes("rules"))).toBe(true);
+    expect(results.some((r) => r.includes("rules"))).toBe(false);
     expect(results.some((r) => r.includes("agents"))).toBe(true);
-    expect(fs.existsSync(path.join(homedirOverride, ".gemini", "rules", "argent.md"))).toBe(true);
+    expect(fs.existsSync(path.join(homedirOverride, ".gemini", "rules"))).toBe(false);
     expect(
       fs.existsSync(path.join(homedirOverride, ".gemini", "agents", "environment-inspector.md"))
     ).toBe(true);
+  });
+
+  // The MCP server's instructions carry the usage guidance, so a global rule
+  // would only repeat them in every session of every project.
+  it("writes no global rule for Claude Code or Cursor", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Claude Code" || a.name === "Cursor");
+    homedirOverride = path.join(tmpDir, "home");
+
+    const results = copyRulesAndAgents(adapters, tmpDir, "global", rulesDir, agentsDir);
+
+    expect(results.some((r) => r.includes("rules"))).toBe(false);
+    expect(fs.existsSync(path.join(homedirOverride, ".claude", "rules"))).toBe(false);
+    expect(fs.existsSync(path.join(homedirOverride, ".cursor", "rules"))).toBe(false);
+  });
+
+  it("removes argent's section from the global Codex config and keeps the user's", () => {
+    const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, 'developer_instructions = "Always use TypeScript."\n');
+    injectCodexRules(configPath, rulesDir);
+
+    const results = copyRulesAndAgents([codexAdapter], tmpDir, "global", rulesDir, agentsDir);
+
+    expect(results).toEqual([`  Removed argent rules from ${configPath} (developer_instructions)`]);
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("Always use TypeScript.");
+    expect(content).not.toContain("argent rules");
+  });
+
+  it("still injects the rule into a project Codex config", () => {
+    const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+
+    copyRulesAndAgents([codexAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    const content = fs.readFileSync(path.join(tmpDir, ".codex", "config.toml"), "utf8");
+    expect(content).toContain("# Rule");
   });
 
   // Issue #701: a `.claude/agents -> ../.agents/agents` layout keeps one
@@ -1805,6 +2131,75 @@ describe("copyRulesAndAgents", () => {
       expect(agentsLine).toContain(`.claude/agents -> ${path.join(".agents", "agents")}`);
     });
 
+    // homedir() is the link; project roots and realpath'd targets are physical.
+    describe("under a home reached through a symlink", () => {
+      let realHome: string;
+
+      beforeEach(() => {
+        realHome = path.join(fs.realpathSync(tmpDir), "realhome");
+        fs.mkdirSync(realHome);
+        fs.symlinkSync("realhome", path.join(tmpDir, "home"));
+        homedirOverride = path.join(tmpDir, "home");
+      });
+
+      it("labels a global write-through target and its destination with ~", () => {
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+        fs.mkdirSync(path.join(realHome, ".agents", "agents"), { recursive: true });
+        fs.mkdirSync(path.join(realHome, ".claude"));
+        fs.symlinkSync("../.agents/agents", path.join(realHome, ".claude", "agents"));
+
+        const results = copyRulesAndAgents([claudeAdapter], tmpDir, "global", rulesDir, agentsDir);
+
+        expect(results).toContain("  Copied agents to ~/.claude/agents -> ~/.agents/agents");
+      });
+
+      it("labels a global target with ~ when HOME ends in a separator", () => {
+        homedirOverride = `${homedirOverride}${path.sep}`;
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+
+        const results = copyRulesAndAgents([claudeAdapter], tmpDir, "global", rulesDir, agentsDir);
+
+        expect(results).toContain("  Copied agents to ~/.claude/agents");
+      });
+
+      it("labels a project under home with ~", () => {
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+        const projectRoot = path.join(realHome, "Dev", "app");
+        fs.mkdirSync(projectRoot, { recursive: true });
+
+        const results = copyRulesAndAgents(
+          [claudeAdapter],
+          projectRoot,
+          "local",
+          rulesDir,
+          agentsDir
+        );
+
+        expect(results).toContain("  Copied rules to ~/Dev/app/.claude/rules");
+      });
+    });
+
+    it.skipIf(!fs.existsSync(os.tmpdir().toUpperCase()))(
+      "labels a project under a home spelled in a different case with ~",
+      () => {
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+        const realHome = fs.realpathSync(tmpDir);
+        homedirOverride = realHome.toUpperCase();
+        const projectRoot = path.join(realHome, "Dev", "app");
+        fs.mkdirSync(projectRoot, { recursive: true });
+
+        const results = copyRulesAndAgents(
+          [claudeAdapter],
+          projectRoot,
+          "local",
+          rulesDir,
+          agentsDir
+        );
+
+        expect(results).toContain("  Copied rules to ~/Dev/app/.claude/rules");
+      }
+    );
+
     it("installs rules into a symlinked .claude/rules", () => {
       const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
       const canonical = path.join(tmpDir, ".agents", "rules");
@@ -1816,6 +2211,32 @@ describe("copyRulesAndAgents", () => {
 
       expect(fs.existsSync(path.join(canonical, "argent.md"))).toBe(true);
     });
+  });
+
+  // A release that ships no agents at all must not leave an empty
+  // .claude/agents at every target, nor claim to have copied agents.
+  it("writes and reports nothing for an agents bundle with no files", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    fs.rmSync(agentsDir, { recursive: true });
+    fs.mkdirSync(path.join(agentsDir, "references"), { recursive: true });
+
+    const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(results).toEqual([`  Copied rules to ${path.join(".claude", "rules")}`]);
+    expect(fs.existsSync(path.join(tmpDir, ".claude", "agents"))).toBe(false);
+  });
+
+  // init and update ask before removing retired files (see retired-files.ts),
+  // so the copy itself must only add.
+  it("leaves files the bundle no longer ships in place", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const retired = path.join(tmpDir, ".claude", "agents", "argent-environment-inspector.md");
+    fs.mkdirSync(path.dirname(retired), { recursive: true });
+    fs.writeFileSync(retired, "---\nname: argent-environment-inspector\n---\n");
+
+    copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(fs.existsSync(retired)).toBe(true);
   });
 
   it("injects Codex rules into developer_instructions in config.toml (local)", () => {
@@ -1830,6 +2251,203 @@ describe("copyRulesAndAgents", () => {
     const content = fs.readFileSync(configPath, "utf8");
     expect(content).toContain("argent rules");
     expect(content).toContain("developer_instructions");
+  });
+});
+
+// ── findRetiredRulesAndAgents ────────────────────────────────────────────────
+
+describe("findRetiredRulesAndAgents", () => {
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n\nInspects.\n";
+  const CHECKLIST = "## Quality control checklist\n\nFields.\n";
+  const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+  const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+  const opencodeAdapter = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+  let rulesDir: string;
+  let agentsDir: string;
+
+  function stageRetired(targetDir: string): void {
+    fs.mkdirSync(path.join(targetDir, "references"), { recursive: true });
+    fs.writeFileSync(path.join(targetDir, "argent-environment-inspector.md"), INSPECTOR);
+    fs.writeFileSync(path.join(targetDir, "references", "quality-control-checklist.md"), CHECKLIST);
+  }
+
+  function find(
+    adapters: typeof ALL_ADAPTERS,
+    scopes: Array<"local" | "global"> = ["local"],
+    root = tmpDir
+  ) {
+    return findRetiredRulesAndAgents(
+      scopes.map((scope) => ({ adapters, scope })),
+      root,
+      rulesDir,
+      agentsDir
+    );
+  }
+
+  beforeEach(() => {
+    // A release that ships neither retired agent.
+    rulesDir = path.join(tmpDir, "src-rules");
+    agentsDir = path.join(tmpDir, "src-agents");
+    fs.mkdirSync(rulesDir, { recursive: true });
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(path.join(rulesDir, "argent.md"), "# Rule");
+    fs.writeFileSync(path.join(agentsDir, "argent-current.md"), "# Agent");
+    retiredOverride.agents = [
+      { path: "argent-environment-inspector.md", shipped: [hashBundledContent(INSPECTOR)] },
+      { path: "references/quality-control-checklist.md", shipped: [hashBundledContent(CHECKLIST)] },
+    ];
+  });
+
+  it("finds retired agents the bundle no longer ships", () => {
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    const found = find([claudeAdapter]);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ kind: "agents", location: path.join(".claude", "agents") });
+    expect(found[0].files.map((f) => f.relativePath)).toEqual([
+      "argent-environment-inspector.md",
+      "references/quality-control-checklist.md",
+    ]);
+  });
+
+  it("finds none while the bundle still ships them", () => {
+    fs.writeFileSync(path.join(agentsDir, "argent-environment-inspector.md"), INSPECTOR);
+    fs.mkdirSync(path.join(agentsDir, "references"));
+    fs.writeFileSync(path.join(agentsDir, "references", "quality-control-checklist.md"), CHECKLIST);
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    expect(find([claudeAdapter])).toEqual([]);
+  });
+
+  it("finds them when the bundle ships no agents dir at all", () => {
+    fs.rmSync(agentsDir, { recursive: true });
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    expect(find([claudeAdapter])[0].files).toHaveLength(2);
+  });
+
+  it("skips the user's own agents, at a retired name too", () => {
+    const agents = path.join(tmpDir, ".claude", "agents");
+    fs.mkdirSync(agents, { recursive: true });
+    fs.writeFileSync(path.join(agents, "my-agent.md"), INSPECTOR);
+    fs.writeFileSync(path.join(agents, "argent-environment-inspector.md"), "name: my-inspector");
+
+    expect(find([claudeAdapter])).toEqual([]);
+  });
+
+  it("looks in every agent target, global ones included", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    for (const dir of [
+      path.join(homedirOverride, ".claude", "agents"),
+      path.join(homedirOverride, ".gemini", "agents"),
+      path.join(homedirOverride, ".config", "opencode", "agents"),
+    ]) {
+      stageRetired(dir);
+    }
+
+    const found = find([claudeAdapter, geminiAdapter, opencodeAdapter], ["global"]);
+
+    expect(found.map((f) => f.location)).toEqual([
+      path.join("~", ".claude", "agents"),
+      path.join("~", ".gemini", "agents"),
+      path.join("~", ".config", "opencode", "agents"),
+    ]);
+  });
+
+  it("lists a dir once when run from the home dir, where local and global are one", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    stageRetired(path.join(homedirOverride, ".claude", "agents"));
+
+    const found = find([claudeAdapter], ["local", "global"], homedirOverride);
+
+    expect(found).toHaveLength(1);
+    expect(found[0].files).toHaveLength(2);
+  });
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  it.skipIf(process.platform === "win32")(
+    "lists a dir once when the local target links to the global one",
+    () => {
+      homedirOverride = path.join(tmpDir, "home");
+      const global = path.join(homedirOverride, ".claude", "agents");
+      stageRetired(global);
+      fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+      fs.symlinkSync(global, path.join(tmpDir, ".claude", "agents"));
+
+      const found = find([claudeAdapter], ["local", "global"]);
+
+      expect(found).toHaveLength(1);
+      expect(found[0].location).toBe(`.claude/agents -> ${path.join("~", ".claude", "agents")}`);
+    }
+  );
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  it.skipIf(process.platform === "win32")(
+    "names where a linked target leads, and lists a dir two targets share once",
+    () => {
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      stageRetired(canonical);
+      for (const base of [".claude", ".gemini"]) {
+        fs.mkdirSync(path.join(tmpDir, base), { recursive: true });
+        fs.symlinkSync(path.join("..", ".agents", "agents"), path.join(tmpDir, base, "agents"));
+      }
+
+      const found = find([claudeAdapter, geminiAdapter]);
+
+      expect(found.map((f) => f.location)).toEqual([
+        `.claude/agents -> ${path.join(".agents", "agents")}`,
+      ]);
+    }
+  );
+
+  describe("global rules", () => {
+    const OLD_RULE = "---\nalwaysApply: true\n---\n\nArgent - general rules:\n";
+    const cursorAdapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+
+    beforeEach(() => {
+      homedirOverride = path.join(tmpDir, "home");
+      retiredOverride.globalRules = [
+        { path: "argent.md", shipped: [hashBundledContent(OLD_RULE)] },
+      ];
+    });
+
+    function stageRule(dir: string, content = OLD_RULE): void {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "argent.md"), content);
+    }
+
+    it("finds a shipped rule in every global rule dir, though the bundle still ships argent.md", () => {
+      for (const base of [".claude", ".cursor", ".gemini"]) {
+        stageRule(path.join(homedirOverride!, base, "rules"));
+      }
+
+      const found = find([claudeAdapter, cursorAdapter, geminiAdapter], ["global"]);
+
+      expect(found.map((f) => [f.kind, f.location, f.files.map((x) => x.relativePath)])).toEqual([
+        ["rules", path.join("~", ".claude", "rules"), ["argent.md"]],
+        ["rules", path.join("~", ".cursor", "rules"), ["argent.md"]],
+        ["rules", path.join("~", ".gemini", "rules"), ["argent.md"]],
+      ]);
+    });
+
+    it("keeps the project rule", () => {
+      stageRule(path.join(tmpDir, ".claude", "rules"));
+
+      expect(find([claudeAdapter], ["local"])).toEqual([]);
+    });
+
+    it("keeps a global rule the user edited", () => {
+      stageRule(path.join(homedirOverride!, ".claude", "rules"), OLD_RULE + "My note.\n");
+
+      expect(find([claudeAdapter], ["global"])).toEqual([]);
+    });
+
+    it("keeps the current rule a project at the home dir copied there", () => {
+      stageRule(path.join(homedirOverride!, ".claude", "rules"), "# Rule");
+
+      expect(find([claudeAdapter], ["global", "local"], homedirOverride)).toEqual([]);
+    });
   });
 });
 
@@ -2183,7 +2801,7 @@ describe("installer preserves foreign MCP config", () => {
   // editJsoncFile, so a hand-authored comment and a pre-existing foreign server
   // survive an argent `write` — the old readJson → writeJson path reduced the
   // commented file to {} and rewrote it with only the argent entry.
-  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+  for (const name of ["Cursor", "Claude Code", "Devin Desktop", "Gemini", "Kiro"]) {
     it(`${name} write preserves a comment and a foreign server in a JSONC file`, () => {
       const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
       const dir = mintTempDir("argent-fc-");
@@ -2225,7 +2843,7 @@ describe("installer preserves foreign MCP config", () => {
     expect(fs.existsSync(configPath)).toBe(true);
   });
 
-  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+  for (const name of ["Cursor", "Claude Code", "Devin Desktop", "Gemini", "Kiro"]) {
     it(`${name} remove preserves a comment and a foreign server (uninstall round-trip)`, () => {
       const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
       const dir = mintTempDir("argent-fc-");
@@ -2494,7 +3112,7 @@ describe("detection evidence", () => {
   const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
   const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
   const vscode = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
-  const windsurf = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+  const windsurf = ALL_ADAPTERS.find((a) => a.name === "Devin Desktop")!;
   const zed = ALL_ADAPTERS.find((a) => a.name === "Zed")!;
   const gemini = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
   const hermes = ALL_ADAPTERS.find((a) => a.name === "Hermes")!;

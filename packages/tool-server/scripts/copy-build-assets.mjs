@@ -15,6 +15,9 @@ const ASSETS = [
   "src/tools/flows/script/flow-script-runner.mjs",
   "src/tools/flows/script/flow-script-watchdog-lifeline.mjs",
   "src/tools/flows/script/flow-script-watchdog-deadline.mjs",
+  // Compiled on the user's Mac on first use; see ios-screen-stream.ts.
+  "src/tools/screen-recording/ios-device-stream/ios-screen-stream.swift",
+  "src/tools/screen-recording/ios-device-stream/Info.plist",
 ];
 
 for (const asset of ASSETS) {

@@ -11,7 +11,7 @@ export async function readApkPackageName(apkPath: string): Promise<string> {
   return parseManifestPackage(await readZipEntry(apkPath, "AndroidManifest.xml"));
 }
 
-async function readZipEntry(zipPath: string, entryName: string): Promise<Buffer> {
+export async function readZipEntry(zipPath: string, entryName: string): Promise<Buffer> {
   const file = await open(zipPath, "r");
   try {
     const read = async (position: number, length: number): Promise<Buffer> => {

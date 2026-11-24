@@ -63,9 +63,43 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
       "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, macOS only, and never affects whether the underlying action succeeds. Off by default.",
   },
   {
+    name: "harmonyos",
+    description:
+      "HarmonyOS support: list, boot and drive HarmonyOS phones and DevEco Studio emulators over `hdc`. Off by default while the platform is experimental.",
+  },
+  {
+    name: "forward-secrets",
+    description:
+      "Over `argent link` or ARGENT_TOOLS_URL, resolve each `{{secret:NAME}}` a call names on this machine and send the value with the call, so a remote tool-server can type a secret it does not hold. The linked tool-server then receives every secret of this machine that a call names, so link only one you trust with all of them. Values go only over https:// with the certificate checked, or to a loopback address. Off by default.",
+  },
+  {
+    name: "ios-audio-always-inserted",
+    description:
+      "Insert the iOS audio hook (libArgentAudio.dylib) into every app an armed simulator launches, so " +
+      "audio-input works without restart-app. Dormant until the app opens audio. " +
+      "On by default; `argent disable ios-audio-always-inserted` inserts it only on the first audio tool call, " +
+      "for apps launched after that call.",
+    defaultEnabled: true,
+  },
+  {
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",
+    defaultEnabled: true,
+  },
+  {
+    name: "whats-new",
+    description:
+      "After an update, tell the agent the highlights of the new Argent version on its first tool call. " +
+      "On by default; turn it off with `argent disable whats-new`.",
+    defaultEnabled: true,
+  },
+  {
+    name: "macos-apps",
+    description:
+      "Control native Mac apps, including Mac Catalyst. " +
+      "Adds the macos platform to list-devices and boot-device, and the file-panel and menu-bar tools. " +
+      "On by default; turn it off with `argent disable macos-apps`.",
     defaultEnabled: true,
   },
 ];

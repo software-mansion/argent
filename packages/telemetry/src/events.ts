@@ -18,8 +18,10 @@ export const PLATFORMS = [
   "android",
   "chromium",
   "vega",
+  "harmony",
   "tvos",
   "android-tv",
+  "macos",
 ] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
@@ -33,6 +35,7 @@ export const DEVICE_KINDS = [
   "vvd",
   "device",
   "app",
+  "catalyst",
 ] as const satisfies readonly DeviceKind[];
 export type TelemetryDeviceKind = (typeof DEVICE_KINDS)[number];
 
@@ -78,6 +81,8 @@ interface InstallationEditorsSelectProps {
 
 interface InstallationAllowlistDecisionProps {
   is_enabled: boolean;
+  /** `flag` = --no-allowlist, `default` = no prompt shown (-y, or no editor supports it). */
+  decided_by: "flag" | "default" | "prompt";
 }
 
 // Post-write sweep in init/update: argent config in other scopes that would
@@ -92,6 +97,12 @@ interface InstallationSkillInstallProps {
   is_online: boolean;
   has_offline_cache: boolean;
   outcome: "success" | "failure" | "skipped";
+  /** Which source the skills came from: the pinned ref or the bundled copy. */
+  source?: "pinned" | "bundled";
+  /** True when the pinned source failed and the bundled copy rescued the install. */
+  used_fallback?: boolean;
+  /** Why the pinned source lost, when it did. */
+  fallback_reason?: "ref_missing" | "unclassified";
 }
 
 interface InstallationSkillRefreshResultProps extends FailureTelemetryProps {

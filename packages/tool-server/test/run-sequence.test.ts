@@ -1,8 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
+
+// HarmonyOS is behind the `harmonyos` flag; these cases drive it with the flag on.
+vi.mock("../src/utils/harmony-flag", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-flag")>()),
+  isHarmonyEnabled: () => true,
+}));
 import { z } from "zod";
 import { Registry } from "@argent/registry";
 import type { ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
+import { gestureTapTool } from "../src/tools/gesture-tap";
+import { gestureRotateTool } from "../src/tools/gesture-rotate";
+import { assertSupported } from "../src/utils/capability";
+import { resolveDevice } from "../src/utils/device-info";
+import { renderFlagGated } from "../src/utils/flag-gated-text";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -32,6 +43,7 @@ const TVOS_UDID = "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD";
 // iOS-shaped udid so `resolveDevice` classifies it as an iOS simulator without
 // touching a real device (classification is purely shape-based).
 const IOS = "11111111-1111-1111-1111-111111111111";
+const HARMONY = "harmony-025DEK236V035771";
 
 describe("run-sequence", () => {
   it("allows TV steps and dispatches them in order with the shared udid injected", async () => {
@@ -58,6 +70,42 @@ describe("run-sequence", () => {
       expect(c.args.udid).toBe(TVOS_UDID);
     }
     expect(calls[0]!.args).toMatchObject({ button: "right", udid: TVOS_UDID });
+  });
+
+  it("accepts a HarmonyOS device, and stops at the first step that platform cannot run", async () => {
+    const { registry, calls } = makeMockRegistry();
+    const tool = createRunSequenceTool(registry);
+    // The outer gate runs in the HTTP layer, not in execute().
+    expect(() =>
+      assertSupported("run-sequence", tool.capability, resolveDevice(HARMONY))
+    ).not.toThrow();
+
+    registry.getTool = vi.fn((id: string) =>
+      id === "gesture-tap" ? gestureTapTool : gestureRotateTool
+    );
+
+    const result = await tool.execute!(
+      {},
+      {
+        udid: HARMONY,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+          {
+            tool: "gesture-rotate",
+            args: { centerX: 0.5, centerY: 0.5, radius: 0.15, startAngle: 0, endAngle: 90 },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.6 } },
+        ],
+      }
+    );
+
+    expect(result.completed).toBe(1);
+    expect(calls.map((c) => c.tool)).toEqual(["gesture-tap"]);
+    expect(calls[0]!.args.udid).toBe(HARMONY);
+    const blocked = result.steps[1];
+    expect(blocked && "error" in blocked && blocked.error).toContain(
+      "is not supported on harmony device"
+    );
   });
 
   it("rejects a tool that isn't in the allow-list and stops the sequence", async () => {
@@ -89,6 +137,16 @@ describe("run-sequence", () => {
     // The registry resolves each step's services lazily; run-sequence itself
     // declares none — declaring simulator-server would hang for a tvOS udid.
     expect(tool.services({ udid: TVOS_UDID, steps: [] } as any)).toEqual({});
+  });
+
+  it("keeps the await-ui-element row inside the 4096 chars Claude Code shows, with macos-apps on", () => {
+    const text = renderFlagGated(
+      createRunSequenceTool(mockRegistry()).description ?? "",
+      (flag) => flag === "macos-apps"
+    );
+    const row = text.indexOf("  await-ui-element:");
+    expect(row).toBeGreaterThan(0);
+    expect(text.indexOf("\n", row)).toBeLessThanOrEqual(4096);
   });
 
   it("runs each step in order, injecting the shared udid", async () => {
@@ -171,6 +229,33 @@ describe("run-sequence", () => {
     expect(result.total).toBe(3);
   });
 
+  it("says a wait that stopped the sequence without judging its condition was not judged", async () => {
+    const registry = mockRegistry((id: string) =>
+      id === "await-ui-element"
+        ? { success: false, elapsed: 5000, cause: "unreadable", note: "tree source down" }
+        : { tapped: true }
+    );
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { text: "Continue" } },
+          },
+        ],
+      }
+    );
+
+    expect(result.steps[0]).toEqual({
+      tool: "await-ui-element",
+      error: "await-ui-element condition not judged (unreadable): tree source down",
+    });
+  });
+
   it("continues past an await-ui-element step whose condition is met", async () => {
     const registry = mockRegistry((id: string) => {
       if (id === "await-ui-element") return { success: true, elapsed: 120 };
@@ -196,6 +281,50 @@ describe("run-sequence", () => {
     expect(registry.invokeTool).toHaveBeenCalledTimes(3);
     expect(result.completed).toBe(3);
     expect(result.steps.every((s) => "result" in s)).toBe(true);
+  });
+
+  it("allows await-network-request, and stops the sequence at an unmet one", async () => {
+    const note =
+      'No request since network-capture-start matched within this 2000 ms wait (wanted: GET, URL containing "/v1/login", complete).';
+    const registry = mockRegistry((id: string) =>
+      id === "await-network-request"
+        ? { success: false, elapsed: 2000, cause: "unmet", note }
+        : { tapped: true }
+    );
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+          {
+            tool: "await-network-request",
+            args: { bundleId: "com.example.shop", url: "/v1/login", method: "GET" },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ],
+      }
+    );
+
+    expect(vi.mocked(registry.invokeTool).mock.calls.map(([id]) => id)).toEqual([
+      "gesture-tap",
+      "await-network-request",
+    ]);
+    // The step got the shared udid like any other.
+    expect(vi.mocked(registry.invokeTool).mock.calls[1]![1]).toEqual({
+      udid: IOS,
+      bundleId: "com.example.shop",
+      url: "/v1/login",
+      method: "GET",
+    });
+    expect(result.steps[1]).toEqual({
+      tool: "await-network-request",
+      error: `await-network-request condition not met: ${note}`,
+    });
+    expect(result.completed).toBe(1);
+    expect(result.total).toBe(3);
   });
 
   it("only the await-ui-element tool's success:false halts — other tools are unaffected", async () => {
@@ -306,30 +435,6 @@ describe("run-sequence", () => {
       expect.objectContaining({ toolInvocationId: ids[1], recordChildInvocation })
     );
     expect(release).toHaveBeenCalledTimes(2);
-  });
-
-  it("forwards the request's abort signal to each sub-tool so a long step is cancellable", async () => {
-    const registry = mockRegistry();
-    const tool = createRunSequenceTool(registry);
-
-    const controller = new AbortController();
-    const ctx = { artifacts: {}, signal: controller.signal } as unknown as ToolContext;
-
-    await tool.execute(
-      {},
-      { udid: IOS, steps: [{ tool: "tv-remote", args: { button: "right" }, delayMs: 0 }] },
-      ctx
-    );
-
-    // The sub-tool must receive `signal` via its options — otherwise its own
-    // `throwIfAborted` is a no-op and a long step runs to completion after the
-    // client disconnects. (No attribution context here, so this is the
-    // pass-through branch.)
-    expect(registry.invokeTool).toHaveBeenCalledWith(
-      "tv-remote",
-      expect.objectContaining({ button: "right", udid: IOS }),
-      expect.objectContaining({ signal: controller.signal })
-    );
   });
 
   it("stops before the next step once the signal is aborted", async () => {

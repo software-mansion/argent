@@ -150,3 +150,33 @@ describe("renderLeakStacksIos — capture-mode-aware unattributed note", () => {
     expect(unescapedPipes(row!)).toBe(unescapedPipes(header!));
   });
 });
+
+describe("renderLeakStacksIos on a Mac app", () => {
+  // Without malloc stack logging, Instruments still records a backtrace for each
+  // object a Mac app allocates after the start, so attributed groups prove nothing.
+  it("says only newer objects have a backtrace, and does not claim malloc stack logging", () => {
+    for (const mallocStackLogging of [false, null]) {
+      const out = renderLeakStacksIos(
+        [ATTRIBUTED_SMALL, noise(0)],
+        undefined,
+        10,
+        mallocStackLogging,
+        true,
+        true
+      );
+      expect(out).toContain(
+        "> 🟡 1 of 2 group(s) are unattributed (`<Call stack limit reached>`, no library). " +
+          "On a Mac app without malloc stack logging, only an object allocated after the start"
+      );
+      expect(out).toContain("`malloc_stack_logging: true`");
+      expect(out).not.toContain("the capture ran with malloc stack logging");
+      expect(out).not.toContain("--attach");
+    }
+  });
+
+  it("keeps the malloc capture's note when malloc_stack_logging was on", () => {
+    const out = renderLeakStacksIos([noise(0)], undefined, 10, true, true, true);
+    expect(out).toContain("the capture ran with malloc stack logging");
+    expect(out).not.toContain("On a Mac app");
+  });
+});

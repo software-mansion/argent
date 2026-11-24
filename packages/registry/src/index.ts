@@ -1,5 +1,6 @@
 export { TypedEventEmitter } from "./event-emitter";
 export {
+  CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
   ServiceState,
@@ -36,6 +37,7 @@ export {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_EXTENSIONS,
   SCRIPT_FILE_NAME_PATTERN,
   TOOL_FILE_EXTENSIONS,
   isFileInputWire,
@@ -43,8 +45,11 @@ export {
   interpolateFileInputPath,
   hasToolFileExtension,
   isClientFileArgument,
+  isUnexpandedPath,
   toolStepFiles,
 } from "./file-inputs";
+export { LAUNCH_PLATFORMS, SELECTABLE_PLATFORMS } from "./flow-platforms";
+export type { SelectablePlatform } from "./flow-platforms";
 export type {
   FileInputWire,
   FileInputKind,
@@ -62,6 +67,7 @@ export {
   collectFlowRequests,
   completeRunExtension,
   flowMemberKey,
+  flowYamlSource,
   MAX_RUN_DEPTH,
   nestedFlowTarget,
   resolveFlowRelativeFile,
@@ -82,7 +88,15 @@ export {
 } from "./e2e-dirs";
 export type { ResolvedE2eFile } from "./e2e-dirs";
 export { parseURN } from "./urn";
-export { TOOL_ID_ALIASES, canonicalToolId } from "./tool-ids";
+export {
+  TOOL_ID_ALIASES,
+  TOOL_PARAM_ALIASES,
+  ToolParamAliasError,
+  canonicalToolArgs,
+  canonicalToolId,
+  toolParamAliases,
+  withFormerParamSpecs,
+} from "./tool-ids";
 export {
   ServiceNotFoundError,
   ServiceInitializationError,
