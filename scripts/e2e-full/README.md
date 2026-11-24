@@ -98,6 +98,6 @@ lib/common.sh       logging, argent_cli/run_tool, assert_* helpers, server + scr
 lib/discover-tools.sh   parses `argent tools describe` into per-tool arg models
 lib/report.py       JSONL -> markdown (per-phase + per-tool coverage matrix + failures)
 phases/*.sh         one run_phase() per phase
-harness.test.mjs    phase helpers under stubbed tool calls, in `npm run test:scripts` (needs `npm run build`)
+harness.test.mjs    phase helpers under stubbed tool calls, in `bun run test:scripts` (needs `bun run build`)
 results/            generated JSONL + report (gitignored)
 ```

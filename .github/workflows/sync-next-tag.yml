@@ -38,7 +38,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
 
-      # Dependency-free script — no `npm ci` needed.
+      # Dependency-free script: no install step.
       - name: Sync 'next' dist-tag to highest published version
         run: node scripts/sync-next-dist-tag.mjs ${{ inputs.dry_run && '--dry-run' || '' }}
         env:

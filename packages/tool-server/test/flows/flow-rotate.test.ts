@@ -275,9 +275,7 @@ describe("rotate: execution", () => {
     const args = result.calls[0]!.args;
     expect(args.radius).toBeGreaterThan(0);
     expect(args.durationMs).toBe(300); // max(1, 45/90) floors at one 90° unit
-    // Generous budget: this is the run's first settle, so it pays the whole
-    // window before giving up and dispatching anyway.
-  }, 15_000);
+  });
 
   it("fails only when no on-screen orbit radius exists — and never blames target size", async () => {
     // Target centered inside the 2% screen inset: no circle fits around it.

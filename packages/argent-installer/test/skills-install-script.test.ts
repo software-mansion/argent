@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-// packages/skills/scripts/install.js, run as `npm run install-skills`.
+// packages/skills/scripts/install.js, run as `bun run install-skills`.
 const SKILLS_PKG = path.resolve(__dirname, "..", "..", "skills");
 const SCRIPT = path.join(SKILLS_PKG, "scripts", "install.js");
 const BUNDLED_SKILLS = path.join(SKILLS_PKG, "skills");

@@ -2,7 +2,7 @@
  * The e2e-full harness's own logic, which otherwise runs only against devices:
  * phase helpers sourced under bash with `run_tool` stubbed, and run-e2e.sh over
  * a stub argent. Tool-server replies come from packages/tool-server/dist, so
- * `npm run build` has to run first.
+ * `bun run build` has to run first.
  *
  * Run: node --test scripts/e2e-full/harness.test.mjs
  */
