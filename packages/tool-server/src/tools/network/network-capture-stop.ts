@@ -60,10 +60,10 @@ export function createNetworkCaptureStopTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StoppedLayer>> {
   return {
     id: "network-capture-stop",
-    description: `Stop network capture for an app on every layer and keep what was captured. Pass layer js or native to stop only that layer; the other layer keeps capturing.
-Use when you have the requests you need, before you profile, or to end capture in an e2e test. Unlike stop-all-simulator-servers, the requests stay listed in native-network-logs and view-network-logs, and their ids keep working in view-network-request-details (a view-network-logs id until the app's JS runtime reloads).
-Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. On Chromium, argent still records the tab's requests for view-network-logs, and the stop marks where the requests that await-network-request reads end. A request in flight at the stop completes in the list on iOS<flag:macos-apps> and Mac apps</flag:macos-apps> and in the JS runtime. When the stop covers the native layer on Android, the list marks such a request failed, while the app's own request goes on, and a body that view-network-request-details did not read before the stop is no longer available.
-Returns { status, layers }: per layer the call stopped, armed (false once the layer confirmed the stop), total (the requests it keeps for the app, or 0 when the stop could not count them, as on a JS runtime it did not reach) and a reason when the layer was not reached or was not started.`,
+    description: `Stop network capture and keep the recorded requests. Use when you have the requests you need, before profiling, or to end capture in an e2e test.
+On Chromium, mark the end of the capture window that await-network-request reads, using the existing connection. view-network-logs still includes requests outside the window. If the reason says capture was not started, call network-capture-start before reproducing the request.
+On other supported targets, read the retained requests with native-network-logs or view-network-logs. Use view-network-request-details with an ID from the log. JS request IDs expire on reload. Capture stays off until network-capture-start, including after relaunch. In-flight requests can finish in the log. Stopping Android native capture marks them failed in the log without interrupting the app's requests. Only bodies read before that stop remain available.
+Returns { status, layers }. Check armed and reason to confirm the stop. If the stop fails to reach the JS runtime, retry once the app reconnects to Metro. total counts the retained requests, or is 0 when the stop cannot count them.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
     interaction: {
