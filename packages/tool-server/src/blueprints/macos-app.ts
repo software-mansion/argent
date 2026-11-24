@@ -50,6 +50,7 @@ import {
 import type { MacosAppKind } from "../utils/macos-app-kind";
 import {
   createIosNetworkRecords,
+  lastIosRecordNumber,
   type IosNetworkCaptureState,
   type IosNetworkRecords,
 } from "./ios-network-records";
@@ -217,9 +218,10 @@ export interface MacosAppApi {
    * connection, also the one to a restarted app, is armed when argent adopts
    * it. Resolves armed once the app's connection acknowledges Network.enable,
    * and with a reason when it does not within 5 s or the app does not run.
-   * Never rejects.
+   * Marks where the start begins, with the caller's Metro port, before the
+   * enable, so a request during the arming counts. Never rejects.
    */
-  startNetworkCapture(): Promise<{ armed: boolean; reason?: string }>;
+  startNetworkCapture(metroPort: number): Promise<{ armed: boolean; reason?: string }>;
   /**
    * Stops native network capture and keeps the records: no new request is
    * recorded, and no later connection is armed until the next start. A
@@ -227,8 +229,17 @@ export interface MacosAppApi {
    * Never rejects.
    */
   stopNetworkCapture(): Promise<{ confirmed: boolean; reason?: string }>;
+  /**
+   * Turns off the capture that an earlier start left on for the app's next
+   * connection, as before any start, when a later start finds that argent
+   * cannot capture the copy that runs. A stop stays, and so do the records
+   * and the stop's mark. Does nothing while the app is connected.
+   */
+  forgetNetworkCaptureStart(): void;
   isNetworkCaptureStarted(): boolean;
   isNetworkCaptureStopped(): boolean;
+  /** Where the last start began: records numbered higher came after it. A stop keeps it. */
+  networkCaptureMark(): { lastRecord: number; metroPort: number } | undefined;
   /**
    * The connected process did not acknowledge the last stop's
    * Network.disable, so it may still intercept its requests. A late
@@ -393,24 +404,30 @@ async function noLaunchedCopyError(bundleId: string): Promise<FailureError> {
 
 /**
  * Why argent refuses to start the app, so that no launch arms its capture: an
- * Electron app or a build that the hardened runtime keeps the library out of. Undefined while argent's own copy runs, and when argent
- * cannot tell, for example when Spotlight does not know the app. Before argent
- * started the app, Spotlight's copy is only a guess at the build that runs
- * next, so its hardened runtime does not refuse: a Debug build can still run.
+ * Electron app or a build that the hardened runtime keeps the library out of.
+ * Undefined while argent's own copy runs, and when argent cannot tell, for
+ * example when Spotlight does not know the app. The build is the one argent
+ * started last. Before argent started the app, it is the build of a copy that
+ * runs without the library (the user's, or one that Xcode Run started), which
+ * is the app under test. With no such copy, Spotlight's build is only a guess
+ * at the build that runs next, so its hardened runtime does not refuse: a Debug
+ * build can still run.
  */
 export async function macosLaunchRefusal(bundleId: string): Promise<string | undefined> {
   if (await runningTrackedApp(bundleId)) return undefined;
   const tracked = getTrackedMacosApp(bundleId)?.appPath;
   const appPath = tracked ?? (await findMacosAppByBundleId(bundleId));
   if (!appPath) return undefined;
-  let info: MacosAppInfo;
-  try {
-    info = await inspectMacosApp(appPath);
-  } catch {
-    return undefined;
-  }
-  if (info.bundleId !== bundleId) return undefined;
-  return chromiumRefusal(info) ?? (tracked ? hardenedRuntimeRefusal(info) : undefined) ?? undefined;
+  const inspect = (at: string) => inspectMacosApp(at).catch(() => undefined);
+  const info = await inspect(appPath);
+  if (info?.bundleId !== bundleId) return undefined;
+  const refusal = chromiumRefusal(info);
+  if (refusal || tracked) return refusal ?? hardenedRuntimeRefusal(info) ?? undefined;
+  const copies = await findRunningCopies(bundleId, info.executable);
+  const other = copies.otherBuilds[0];
+  const running = copies.same.length > 0 ? info : other && (await inspect(other.appPath));
+  if (!running) return undefined;
+  return chromiumRefusal(running) ?? hardenedRuntimeRefusal(running) ?? undefined;
 }
 
 function errorMessage(err: unknown): string {
@@ -1028,6 +1045,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   // each one while capture is on.
   let captureStarted = false;
   let captureStopped = false;
+  let captureMark: { lastRecord: number; metroPort: number } | undefined;
   let captureGap = false;
   /** argent launched the recorded process while capture was on, and capture stayed on. */
   let armedSinceLaunch = false;
@@ -1805,8 +1823,9 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     },
     isConnected: () => Boolean(channel?.isOpen && channel.handshake),
     handshake: () => (channel?.isOpen ? channel.handshake : null),
-    async startNetworkCapture() {
+    async startNetworkCapture(metroPort) {
       captureStopped = false;
+      captureMark = { lastRecord: lastIosRecordNumber(), metroPort };
       const startedNow = !captureStarted;
       captureStarted = true;
       if (channel) channel.stopUnconfirmed = false;
@@ -1902,8 +1921,18 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         if (ch.confirmDisabling === confirm) ch.confirmDisabling = undefined;
       }
     },
+    forgetNetworkCaptureStart() {
+      // A connected app is a copy that argent captures, and a stop keeps its mark.
+      if (liveChannel() || !captureStarted) return;
+      captureStarted = false;
+      captureGap = false;
+      armedSinceLaunch = false;
+      // await-network-request reads no layer whose capture is off.
+      captureMark = undefined;
+    },
     isNetworkCaptureStarted: () => captureStarted,
     isNetworkCaptureStopped: () => captureStopped,
+    networkCaptureMark: () => captureMark,
     isNetworkCaptureStopUnconfirmed: () => liveChannel()?.stopUnconfirmed === true,
     takeCaptureGap: () => {
       const gap = captureGap;

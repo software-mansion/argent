@@ -33,31 +33,45 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
 
-      # setup-node caches only the downloads; npm ci still takes 35-75s here.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
       - name: Restore node_modules
         id: node-modules
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             node_modules
             packages/*/node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+          key: bun-install-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
 
       - name: Install dependencies
         if: steps.node-modules.outputs.cache-hit != 'true'
-        run: npm ci
+        run: bun install --frozen-lockfile
+
+      # Saved before the tests run: Vitest writes its transform cache into
+      # node_modules, and that cache misses tsconfig changes.
+      - name: Save node_modules
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: ${{ steps.node-modules.outputs.cache-primary-key }}
 
       - name: Build workspace dependencies
-        run: npm run build
+        run: bun run build
 
       - name: Run tests
-        run: npm test -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        run: bun run test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Test root scripts
         if: matrix.shard == 1
-        run: npm run test:scripts
+        run: bun run test:scripts
 
   # Branch protection requires a check named "Unit tests"; this reports the
   # shards' combined result under that name. `!cancelled()` keeps it from being
@@ -88,26 +102,39 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
 
       - name: Restore node_modules
         id: node-modules
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             node_modules
             packages/*/node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+          key: bun-install-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('bun.lock') }}
 
       - name: Install dependencies
         if: steps.node-modules.outputs.cache-hit != 'true'
-        run: npm ci
+        run: bun install --frozen-lockfile
+
+      - name: Save node_modules
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            node_modules
+            packages/*/node_modules
+          key: ${{ steps.node-modules.outputs.cache-primary-key }}
 
       - name: Build workspace dependencies
-        run: npm run build
+        run: bun run build
 
       - name: Typecheck tests
-        run: npm run typecheck:tests --workspaces --if-present
+        run: bun run --workspaces --sequential --no-exit-on-error --if-present typecheck:tests
 
       - name: Typecheck scripts
-        run: npm run typecheck:scripts
+        run: bun run typecheck:scripts

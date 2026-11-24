@@ -9,8 +9,9 @@ import { scopeTempHome } from "./temp-home";
  * Runs every test of the calling scope with neither of the developer's flags
  * files: a fresh HOME holds the global one, and a fresh project folder, the
  * working directory during the test, holds the project one, which shadows the
- * global one. Under vitest the project file is otherwise
- * `packages/tool-server/.argent/flags.json`, which `.gitignore` hides.
+ * global one. Under vitest the project file is otherwise the `.argent/flags.json`
+ * of the directory the run starts in (the repo root under `bun run test`), which
+ * `.gitignore` hides.
  *
  * Call at file top level, or at the top of a describe.
  */

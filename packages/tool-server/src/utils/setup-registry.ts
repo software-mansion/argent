@@ -11,6 +11,7 @@ import { tvControlBlueprint } from "../blueprints/tv-control";
 import { androidTvControlBlueprint } from "../blueprints/android-tv-control";
 import { macosAppBlueprint } from "../blueprints/macos-app";
 import { androidNetworkInspectorBlueprint } from "../blueprints/android-network-inspector";
+import { androidNetworkShaperBlueprint } from "../blueprints/android-network-shaper";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { createNativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
@@ -62,6 +63,7 @@ import { createUiTreeTool } from "../tools/ui-tree";
 import { createForegroundAppTool } from "../tools/foreground-app";
 import { createFillTool } from "../tools/fill";
 import { createAwaitUiElementTool } from "../tools/await-ui-element";
+import { createAwaitNetworkRequestTool } from "../tools/await-network-request";
 import { createAwaitScreenIdleTool } from "../tools/await-screen-idle";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
@@ -148,6 +150,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(androidTvControlBlueprint);
   registry.registerBlueprint(macosAppBlueprint);
   registry.registerBlueprint(androidNetworkInspectorBlueprint);
+  registry.registerBlueprint(androidNetworkShaperBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
@@ -194,6 +197,7 @@ export function createRegistry(): Registry {
   registry.registerTool(networkRequestTool);
   registry.registerTool(createNetworkCaptureStartTool(registry));
   registry.registerTool(createNetworkCaptureStopTool(registry));
+  registry.registerTool(createAwaitNetworkRequestTool(registry));
   registry.registerTool(createDescribeTool(registry));
   registry.registerTool(createUiTreeTool(registry));
   registry.registerTool(createForegroundAppTool(registry));

@@ -10,7 +10,7 @@ first, and make sure it has a poster frame.
    write the same path). Encode from wherever it was recorded:
 
    ```bash
-   npm run encode:video -- ~/Desktop/my-recording.mov
+   bun run encode:video -- ~/Desktop/my-recording.mov
    ```
 
    This writes `static/video/my-recording.mp4` (H.264, `+faststart`,
@@ -21,7 +21,7 @@ first, and make sure it has a poster frame.
    and lower the CRF so the type stays sharp:
 
    ```bash
-   npm run encode:video -- -h 1080 -c 24 ~/Desktop/wizard.mov
+   bun run encode:video -- -h 1080 -c 24 ~/Desktop/wizard.mov
    ```
 
    Flags: `-h` output height (default 900), `-c` CRF (default 28, lower is

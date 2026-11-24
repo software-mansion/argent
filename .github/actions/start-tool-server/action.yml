@@ -22,11 +22,15 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
 
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version-file: package.json
+
     - name: Install deps + build
       shell: bash
       run: |
-        npm ci
-        npm run build
+        bun install --frozen-lockfile
+        bun run build
 
     - name: Start tool-server
       shell: bash
@@ -39,7 +43,7 @@ runs:
         # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
         # typecheck job already enforces types). Without it a cold start on a
         # loaded CI runner can take >60s to bind.
-        nohup env ARGENT_PORT="$ARGENT_PORT" TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
+        nohup env ARGENT_PORT="$ARGENT_PORT" TS_NODE_TRANSPILE_ONLY=1 bunx ts-node src/index.ts start \
           > ~/.argent/tool-server.log 2>&1 &
         for i in $(seq 1 180); do
           curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${ARGENT_PORT}/tools" | grep -q 200 \

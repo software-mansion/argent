@@ -43,7 +43,7 @@ export default tseslint.config(
       parserOptions: {
         // Explicit list rather than `projectService`, which would not pick up
         // the per-package tsconfig.test.json. The glob also matches
-        // packages/docs, which is outside the npm workspaces, so `npm ci` there
+        // packages/docs, which is outside the workspaces, so `bun install` there
         // has to run before this lint (see .github/workflows/lint.yml).
         project: ["packages/*/tsconfig.json", "packages/*/tsconfig.test.json"],
         tsconfigRootDir: import.meta.dirname,
